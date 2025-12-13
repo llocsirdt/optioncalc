@@ -63,3 +63,16 @@ pre {
   font-size: 13px;
   line-height: 1.4;
 }
+
+.tradingview-widget-container {
+  margin: 20px 0;
+  border: 1px solid #e0e3eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.blue-text {
+  color: #2962FF;
+  font-size: 12px;
+  text-decoration: none;
+}
