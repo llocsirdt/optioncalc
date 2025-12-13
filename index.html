@@ -38,10 +38,57 @@
 </pre>
 </div>
 
+  <!-- TradingView Script -->
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+
 
  <!-- TradingView Widget -->
-  <div class="tradingview-widget-container" style="margin: 20px 0;">
-    <div id="tradingview_chart" style="height: 500px; width: 100%;"></div>
+  <div class="tradingview-widget-container">
+    <div id="tradingview_chart" style="height: 300px;"></div>
+    <div class="tradingview-widget-copyright">
+      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+        <span class="blue-text">Track all markets on TradingView</span>
+      </a>
+    </div>
+  </div>  
+
+  <script type="text/javascript">
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": "NASDAQ:NDX",
+      "interval": "15",
+      "timezone": "Etc/UTC",
+      "theme": "light",
+      "style": "1",
+      "locale": "en",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_chart",
+      "studies": [
+        "MAExp@tv-basicstudies",  // Moving Average
+        "BB@tv-basicstudies"  // This adds Bollinger Bands
+      ],
+      "studies_overrides": {
+        "moving average.median.color": "#FF6D00",
+        "moving average.median.linewidth": 2,
+        "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
+        "bollinger bands.upper.linewidth": 2,       // Width of upper band
+        "bollinger bands.lower.linewidth": 2,       // Width of lower band
+        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.upper.value": 20,          // Period
+        "bollinger bands.lower.value": 20,          // Period
+        "bollinger bands.deviation.value": 2        // Standard deviations
+      }
+    });
+  </script>
+
+
+  <!-- Second TradingView Widget -->
+  <div class="tradingview-widget-container">
+    <div id="tradingview_chart2" style="height: 300px;"></div>
     <div class="tradingview-widget-copyright">
       <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
         <span class="blue-text">Track all markets on TradingView</span>
@@ -49,22 +96,40 @@
     </div>
   </div>
   
-  <!-- TradingView Script -->
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <!-- Second TradingView Script -->
   <script type="text/javascript">
     new TradingView.widget({
       "autosize": true,
-      "symbol": "NASDAQ:AAPL",
-      "interval": "D",
+      "symbol": "NASDAQ:NDX",
+      "interval": "60",  // 1-hour candles
       "timezone": "Etc/UTC",
       "theme": "light",
       "style": "1",
       "locale": "en",
       "enable_publishing": false,
       "allow_symbol_change": true,
-      "container_id": "tradingview_chart"
+      "container_id": "tradingview_chart2",
+      "studies": [
+        "MAExp@tv-basicstudies",  // Moving Average
+        "BB@tv-basicstudies"  // This adds Bollinger Bands
+      ],
+      "studies_overrides": {
+        "moving average.median.color": "#FF6D00",
+        "moving average.median.linewidth": 2,
+        "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
+        "bollinger bands.upper.linewidth": 2,       // Width of upper band
+        "bollinger bands.lower.linewidth": 2,       // Width of lower band
+        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.upper.value": 20,          // Period
+        "bollinger bands.lower.value": 20,          // Period
+        "bollinger bands.deviation.value": 2        // Standard deviations
+      }
     });
   </script>
+
 
 <script>
 
