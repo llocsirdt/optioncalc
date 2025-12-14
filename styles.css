@@ -20,18 +20,27 @@ body {
   pointer-events: none;
 }
 
+/* Chart container for better touch handling */
+#chart-container {
+  -webkit-tap-highlight-color: transparent; /* Remove tap highlight on iOS */
+  -webkit-touch-callout: none; /* Disable the iOS context menu */
+  user-select: none; /* Prevent text selection during touch */
+}
+
+/* Make sure the SVG is touch-friendly */
+#chart-container svg {
+  touch-action: none; /* Prevent default touch behaviors like pan/zoom */
+  width: 100%;
+  height: 100%;
+  pointer-events: all;
+}
+
 .chart-label-bg {
   fill: rgba(255, 255, 255, 0.7);
   stroke: #ccc;
   stroke-width: 0.5;
   rx: 3;
   ry: 3;
-}
-
-#chart-container svg {
-  width: 100%;
-  height: 100%;
-  pointer-events: all;
 }
 
 textarea {

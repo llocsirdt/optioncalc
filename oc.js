@@ -297,13 +297,14 @@ function drawChart(data, cost) {
     // Add a group for the interactive elements
     const interactionGroup = svg.append("g");
 
-    // Function to handle click/touch
-    function handleChartInteraction(event) {
+    // Function to handle both touch and mouse events
+    function handlePointerEvent(event) {
+        event.preventDefault(); // Prevent default touch behavior
+        const touch = event.type.includes('touch') ? event.changedTouches[0] : event;
+        const [xCoord] = d3.pointer(touch, this);
+        
         // Remove any existing vertical line and label
         interactionGroup.selectAll(".vertical-line, .chart-label, .chart-label-bg").remove();
-        
-        // Get the x-coordinate of the click/touch relative to the SVG
-        const [xCoord] = d3.pointer(event, this);
         
         // Find the closest data point to the x-coordinate
         const bisectDate = d3.bisector(d => d.closingPrice).left;
@@ -345,8 +346,9 @@ function drawChart(data, cost) {
             .attr("height", bbox.height + 4);
     }
 
-    // Add event listeners
-    svg.on("click", handleChartInteraction)
-       .on("touchstart", handleChartInteraction);
+    // Add event listeners for both mouse and touch events
+    svg.on("click", handlePointerEvent)
+       .on("touchstart", handlePointerEvent)
+       .on("touchmove", handlePointerEvent);
 }
 
