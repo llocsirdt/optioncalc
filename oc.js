@@ -16,8 +16,6 @@
 }
 */
 
-alert("hello oc.js");
-
 
 
    // Initialize input from local storage on page load

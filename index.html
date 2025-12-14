@@ -44,10 +44,10 @@
 
  <!-- TradingView Widget -->
   <div class="tradingview-widget-container">
-    <div id="tradingview_chart" style="height: 300px;"></div>
+    <div id="tradingview_chart1" style="height: 300px;"></div>
     <div class="tradingview-widget-copyright">
       <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span class="blue-text">Track all markets on TradingView</span>
+        <span>Track all markets on TradingView</span>
       </a>
     </div>
   </div>  
@@ -56,14 +56,14 @@
     new TradingView.widget({
       "autosize": true,
       "symbol": "NASDAQ:NDX",
-      "interval": "15",
+      "interval": "1",  // 1 min candles
       "timezone": "Etc/UTC",
       "theme": "light",
       "style": "1",
       "locale": "en",
       "enable_publishing": false,
       "allow_symbol_change": true,
-      "container_id": "tradingview_chart",
+      "container_id": "tradingview_chart1",
       "studies": [
         "MAExp@tv-basicstudies",  // Moving Average
         "BB@tv-basicstudies"  // This adds Bollinger Bands
@@ -91,7 +91,96 @@
     <div id="tradingview_chart2" style="height: 300px;"></div>
     <div class="tradingview-widget-copyright">
       <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span class="blue-text">Track all markets on TradingView</span>
+        <span>Track all markets on TradingView</span>
+      </a>
+    </div>
+  </div>
+  
+  <!-- Second TradingView Script -->
+  <script type="text/javascript">
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": "NASDAQ:NDX",
+      "interval": "5",  // 5 min candles
+      "timezone": "Etc/UTC",
+      "theme": "light",
+      "style": "1",
+      "locale": "en",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_chart2",
+      "studies": [
+        "MAExp@tv-basicstudies",  // Moving Average
+        "BB@tv-basicstudies"  // This adds Bollinger Bands
+      ],
+      "studies_overrides": {
+        "moving average.median.color": "#FF6D00",
+        "moving average.median.linewidth": 2,
+        "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
+        "bollinger bands.upper.linewidth": 2,       // Width of upper band
+        "bollinger bands.lower.linewidth": 2,       // Width of lower band
+        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.upper.value": 20,          // Period
+        "bollinger bands.lower.value": 20,          // Period
+        "bollinger bands.deviation.value": 2        // Standard deviations
+      }
+    });
+  </script>
+
+
+ <!-- TradingView Widget -->
+  <div class="tradingview-widget-container">
+    <div id="tradingview_chart3" style="height: 300px;"></div>
+    <div class="tradingview-widget-copyright">
+      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+        <span>Track all markets on TradingView</span>
+      </a>
+    </div>
+  </div>  
+
+  <script type="text/javascript">
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": "NASDAQ:NDX",
+      "interval": "15",  // 5 min candles
+      "timezone": "Etc/UTC",
+      "theme": "light",
+      "style": "1",
+      "locale": "en",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_chart3",
+      "studies": [
+        "MAExp@tv-basicstudies",  // Moving Average
+        "BB@tv-basicstudies"  // This adds Bollinger Bands
+      ],
+      "studies_overrides": {
+        "moving average.median.color": "#FF6D00",
+        "moving average.median.linewidth": 2,
+        "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
+        "bollinger bands.upper.linewidth": 2,       // Width of upper band
+        "bollinger bands.lower.linewidth": 2,       // Width of lower band
+        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+        "bollinger bands.upper.value": 20,          // Period
+        "bollinger bands.lower.value": 20,          // Period
+        "bollinger bands.deviation.value": 2        // Standard deviations
+      }
+    });
+  </script>
+
+
+  <!-- Second TradingView Widget -->
+  <div class="tradingview-widget-container">
+    <div id="tradingview_chart4" style="height: 300px;"></div>
+    <div class="tradingview-widget-copyright">
+      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+        <span>Track all markets on TradingView</span>
       </a>
     </div>
   </div>
@@ -108,7 +197,7 @@
       "locale": "en",
       "enable_publishing": false,
       "allow_symbol_change": true,
-      "container_id": "tradingview_chart2",
+      "container_id": "tradingview_chart4",
       "studies": [
         "MAExp@tv-basicstudies",  // Moving Average
         "BB@tv-basicstudies"  // This adds Bollinger Bands
