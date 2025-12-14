@@ -223,10 +223,8 @@ function drawChart(data, cost) {
     const width = document.getElementById('chart').offsetWidth - margin.left - margin.right;
     const height = document.getElementById('chart').offsetHeight - margin.top - margin.bottom;
 
-
     // Clear any existing SVG
     d3.select("#chart-container").select("svg").remove();
-
 
     const svg = d3.select("#chart-container")
         .append("svg")
@@ -235,27 +233,22 @@ function drawChart(data, cost) {
         .append("g")
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
-
     // Calculate the min and max of totalIntrinsicValue from data
     const minIntrinsicValue = d3.min(data, d => d.totalIntrinsicValue);
     const maxIntrinsicValue = d3.max(data, d => d.totalIntrinsicValue);
 
-
     // Determine the overall min and max for the Y-axis domain, including the cost
     const overallMinY = Math.min(minIntrinsicValue, cost);
     const overallMaxY = Math.max(maxIntrinsicValue, cost);
-
 
     // Set up scales
     const xScale = d3.scaleLinear()
         .domain(d3.extent(data, d => d.closingPrice))
         .range([0, width]);
 
-
     const yScale = d3.scaleLinear()
-        .domain([overallMinY, overallMaxY]) // Use the adjusted domain
+        .domain([overallMinY, overallMaxY])
         .range([height, 0]);
-
 
     // Add X axis
     svg.append("g")
@@ -268,7 +261,6 @@ function drawChart(data, cost) {
         .attr("text-anchor", "middle")
         .text("Closing Price ($)");
 
-
     // Add Y axis
     svg.append("g")
         .call(d3.axisLeft(yScale))
@@ -280,18 +272,17 @@ function drawChart(data, cost) {
         .attr("text-anchor", "middle")
         .text("Total Intrinsic Value ($)");
 
-
     // Add the line for option values
+    const line = d3.line()
+        .x(d => xScale(d.closingPrice))
+        .y(d => yScale(d.totalIntrinsicValue));
+
     svg.append("path")
         .datum(data)
         .attr("fill", "none")
         .attr("stroke", "steelblue")
         .attr("stroke-width", 1.5)
-        .attr("d", d3.line()
-            .x(d => xScale(d.closingPrice))
-            .y(d => yScale(d.totalIntrinsicValue))
-        );
-
+        .attr("d", line);
 
     // Add a horizontal line for the cost
     svg.append("line")
@@ -301,6 +292,61 @@ function drawChart(data, cost) {
         .attr("y2", yScale(cost))
         .attr("stroke", "red")
         .attr("stroke-width", 1.5)
-        .attr("stroke-dasharray", ("3, 3"));
+        .attr("stroke-dasharray", "3, 3");
+
+    // Add a group for the interactive elements
+    const interactionGroup = svg.append("g");
+
+    // Function to handle click/touch
+    function handleChartInteraction(event) {
+        // Remove any existing vertical line and label
+        interactionGroup.selectAll(".vertical-line, .chart-label, .chart-label-bg").remove();
+        
+        // Get the x-coordinate of the click/touch relative to the SVG
+        const [xCoord] = d3.pointer(event, this);
+        
+        // Find the closest data point to the x-coordinate
+        const bisectDate = d3.bisector(d => d.closingPrice).left;
+        const x0 = xScale.invert(xCoord);
+        const i = bisectDate(data, x0, 1);
+        const d0 = data[i - 1];
+        const d1 = data[i];
+        const d = x0 - d0.closingPrice > d1.closingPrice - x0 ? d1 : d0;
+        
+        // Add vertical line
+        interactionGroup.append("line")
+            .attr("class", "vertical-line")
+            .attr("x1", xScale(d.closingPrice))
+            .attr("y1", yScale.range()[0])
+            .attr("x2", xScale(d.closingPrice))
+            .attr("y2", yScale.range()[1]);
+        
+        // Add text label with background
+        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}`;
+        const labelX = xScale(d.closingPrice);
+        const labelY = yScale(d.totalIntrinsicValue) - 10;
+        
+        // Add background rectangle first
+        const textElement = interactionGroup.append("text")
+            .attr("class", "chart-label")
+            .attr("x", labelX)
+            .attr("y", labelY)
+            .text(labelText);
+        
+        // Get the bounding box of the text
+        const bbox = textElement.node().getBBox();
+        
+        // Add the background
+        interactionGroup.insert("rect", "text")
+            .attr("class", "chart-label-bg")
+            .attr("x", bbox.x - 2)
+            .attr("y", bbox.y - 2)
+            .attr("width", bbox.width + 4)
+            .attr("height", bbox.height + 4);
+    }
+
+    // Add event listeners
+    svg.on("click", handleChartInteraction)
+       .on("touchstart", handleChartInteraction);
 }
 

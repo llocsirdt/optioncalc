@@ -4,6 +4,36 @@ body {
   margin: 0;
 }
 
+/* Chart interaction styles */
+.vertical-line {
+  stroke: #87CEEB;
+  stroke-width: 1;
+  stroke-dasharray: 3,3;
+  pointer-events: none;
+}
+
+.chart-label {
+  font-size: 12px;
+  text-anchor: middle;
+  fill: #333;
+  font-weight: bold;
+  pointer-events: none;
+}
+
+.chart-label-bg {
+  fill: rgba(255, 255, 255, 0.7);
+  stroke: #ccc;
+  stroke-width: 0.5;
+  rx: 3;
+  ry: 3;
+}
+
+#chart-container svg {
+  width: 100%;
+  height: 100%;
+  pointer-events: all;
+}
+
 textarea {
   width: 100%;
   height: 30vh;
