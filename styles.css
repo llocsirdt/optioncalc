@@ -7,6 +7,11 @@ body {
   min-height: 100vh;
 }
 
+h1 {
+  font-size: 14px;
+}
+
+
 /* Chart interaction styles */
 .vertical-line {
   stroke: #87CEEB;
@@ -63,16 +68,6 @@ textarea {
   flex-shrink: 0;
 }
 
-/* Optional: Add a subtle border between the two sections */
-#left {
-  border-right: 1px solid #eee;
-  padding-right: 10px;
-}
-
-h1 {
-  font-size: 14px;
-}
-
 #buttonContainer {
   position: fixed;
   top: 20px;
@@ -119,7 +114,7 @@ pre {
 }
 
 .tradingview-widget-container {
-  margin: 20px 0;
+  margin: 0 0 0 20px;
   border: 1px solid #e0e3eb;
   border-radius: 4px;
   overflow: hidden;
