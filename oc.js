@@ -309,7 +309,13 @@ function drawChart(data, cost, optionArray = []) {
           .enter()
           .append("g")
           .attr("class", "option-circle")
-          .attr("transform", d => `translate(${xScale(d.strike)}, ${d.type === 'c' ? -10 : 10})`); // Position at top with 20px margin
+          .attr("transform", d => {
+            let yPos = -10; // Default y position; long puts
+            if (d.qty >= 0 && d.type === 'c') yPos = 0; // Move down for long puts
+            if (d.qty < 0 && d.type === 'p') yPos = 10; // Move down for short puts
+            if (d.qty < 0 && d.type === 'c') yPos = 20; // Move down for short calls
+            return `translate(${xScale(d.strike)}, ${yPos})`;
+          });
 
       // Add the circle
       optionCircles.append("circle")
