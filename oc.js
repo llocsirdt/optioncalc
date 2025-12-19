@@ -127,7 +127,7 @@
         
         // Draw the chart if the function exists
         if (typeof drawChart === 'function') {
-          drawChart(optionSetConfig, processedJSON.cost || 0);
+          drawChart(optionSetConfig, processedJSON.cost || 0, optionArray);
         }
       } catch (error) {
         console.error('Error:', error);
@@ -218,7 +218,7 @@ function calculatePortfolioValueAtExpiration(optionsPositions, minPrice, maxPric
 
 
 
-function drawChart(data, cost) {
+function drawChart(data, cost, optionArray = []) {
     const margin = { top: 30, right: 30, bottom: 60, left: 60 };
     const width = document.getElementById('chart').offsetWidth - margin.left - margin.right;
     const height = document.getElementById('chart').offsetHeight - margin.top - margin.bottom;
@@ -296,6 +296,42 @@ function drawChart(data, cost) {
 
     // Add a group for the interactive elements
     const interactionGroup = svg.append("g");
+
+    // Add circles for each option in the optionArray
+    if (optionArray && optionArray.length > 0) {
+      const optionCircles = svg.append("g")
+          .selectAll(".option-circle")
+          .data(optionArray)
+          .enter()
+          .append("g")
+          .attr("class", "option-circle")
+          .attr("transform", d => `translate(${xScale(d.strike)}, 20)`); // Position at top with 20px margin
+
+      // Add the circle
+      optionCircles.append("circle")
+          .attr("r", 10) // Slightly larger to fit quantity
+          .attr("fill", d => d.type === 'c' ? '#4CAF50' : '#F44336') // Green for calls, red for puts
+          .attr("stroke", "white")
+          .attr("stroke-width", 1.5);
+
+      // Add the text (qty + type, e.g. "2C")
+      optionCircles.append("text")
+          .attr("text-anchor", "middle")
+          .attr("dy", ".35em")
+          .attr("fill", "white")
+          .style("font-weight", "bold")
+          .style("font-size", "10px")
+          .text(d => `${Math.abs(d.qty)}${d.type.toUpperCase()}`);
+
+      // Add strike price below the circle
+      optionCircles.append("text")
+          .attr("y", 20) // Position below the circle
+          .attr("text-anchor", "middle")
+          .style("font-size", "10px")
+          .style("fill", "#333")
+          .style("font-weight", "500")
+          .text(d => d.strike);
+    }
 
     // Function to handle both touch and mouse events
     function handlePointerEvent(event) {
