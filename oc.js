@@ -309,8 +309,8 @@ function drawChart(data, cost, optionArray = []) {
 
       // Add the circle
       optionCircles.append("circle")
-          .attr("r", 10) // Slightly larger to fit quantity
-          .attr("fill", d => d.type === 'c' ? '#4CAF50' : '#F44336') // Green for calls, red for puts
+          .attr("r", 7) // Slightly larger to fit quantity
+          .attr("fill", d => d.qty >= 0 ? '#4CAF50' : '#F44336') // Green for positive, red for neg
           .attr("stroke", "white")
           .attr("stroke-width", 1.5);
 
@@ -320,17 +320,20 @@ function drawChart(data, cost, optionArray = []) {
           .attr("dy", ".35em")
           .attr("fill", "white")
           .style("font-weight", "bold")
-          .style("font-size", "10px")
+          .style("font-size", "8px")
           .text(d => `${Math.abs(d.qty)}${d.type.toUpperCase()}`);
 
-      // Add strike price below the circle
-      optionCircles.append("text")
-          .attr("y", 20) // Position below the circle
-          .attr("text-anchor", "middle")
-          .style("font-size", "10px")
-          .style("fill", "#333")
-          .style("font-weight", "500")
-          .text(d => d.strike);
+      // Add strike price - position based on option type
+      optionCircles.each(function(d) {
+        const isCall = d.type === 'c';
+        d3.select(this).append("text")
+            .attr("y", isCall ? -10 : 20) // Above for calls, below for puts
+            .attr("text-anchor", "middle")
+            .style("font-size", "10px")
+            .style("fill", "#333")
+            .style("font-weight", "500")
+            .text(d.strike);
+      });
     }
 
     // Function to handle both touch and mouse events
