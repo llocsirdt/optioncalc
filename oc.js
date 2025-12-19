@@ -240,6 +240,10 @@ function drawChart(data, cost, optionArray = []) {
     // Determine the overall min and max for the Y-axis domain, including the cost
     const overallMinY = Math.min(minIntrinsicValue, cost);
     const overallMaxY = Math.max(maxIntrinsicValue, cost);
+    
+    // Calculate 10% of the range for padding
+    const yRange = overallMaxY - overallMinY;
+    const yPadding = yRange * 0.2;
 
     // Set up scales
     const xScale = d3.scaleLinear()
@@ -247,7 +251,7 @@ function drawChart(data, cost, optionArray = []) {
         .range([0, width]);
 
     const yScale = d3.scaleLinear()
-        .domain([overallMinY, overallMaxY])
+        .domain([overallMinY - yPadding, overallMaxY + yPadding])
         .range([height, 0]);
 
     // Add X axis
