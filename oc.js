@@ -305,7 +305,7 @@ function drawChart(data, cost, optionArray = []) {
           .enter()
           .append("g")
           .attr("class", "option-circle")
-          .attr("transform", d => `translate(${xScale(d.strike)}, ${d.qty >= 0 ? 0 : 20})`); // Position at top with 20px margin
+          .attr("transform", d => `translate(${xScale(d.strike)}, ${d.qty >= 0 ? -10 : 10})`); // Position at top with 20px margin
 
       // Add the circle
       optionCircles.append("circle")
@@ -325,9 +325,9 @@ function drawChart(data, cost, optionArray = []) {
 
       // Add strike price - position based on option type
       optionCircles.each(function(d) {
-        const isCall = d.type === 'c';
+        const isLong = d.qty >= 0;
         d3.select(this).append("text")
-            .attr("y", isCall ? -10 : 15) // Above for calls, below for puts
+            .attr("y", isLong ? -10 : 15) // Above for calls, below for puts
             .attr("text-anchor", "middle")
             .style("font-size", "10px")
             .style("fill", "#333")
