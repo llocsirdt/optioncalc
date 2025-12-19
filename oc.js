@@ -309,7 +309,7 @@ function drawChart(data, cost, optionArray = []) {
           .enter()
           .append("g")
           .attr("class", "option-circle")
-          .attr("transform", d => `translate(${xScale(d.strike)}, ${d.qty >= 0 ? -10 : 10})`); // Position at top with 20px margin
+          .attr("transform", d => `translate(${xScale(d.strike)}, ${d.type === 'c' ? -10 : 10})`); // Position at top with 20px margin
 
       // Add the circle
       optionCircles.append("circle")
