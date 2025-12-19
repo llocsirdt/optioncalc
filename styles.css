@@ -70,9 +70,10 @@ textarea {
 
 #buttonContainer {
   position: fixed;
+  width: 91vw;
   top: 20px;
-  right: 20px;
   z-index: 1000;
+  text-align: right;
 }
 
 #output {
