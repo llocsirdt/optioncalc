@@ -49,58 +49,80 @@
         const processedJSON = JSON.parse(cleanInputText);
         console.log(processedJSON);
         
-        // Convert the option string to array of option objects if it's a string
-        let optionArray;
+        // Process options array, combining quantities for same type and strike
+        const optionMap = new Map();
+        
+        // Helper function to process a single option string
+        const processOptionString = (str) => {
+          const match = str.match(/^([+-]?\d+)([cp])(\d+)$/i);
+          if (!match) {
+            throw new Error(`Invalid option format: ${str}. Expected format like 1c100 or -1p110`);
+          }
+          return {
+            qty: parseInt(match[1], 10),
+            type: match[2].toLowerCase(),
+            strike: parseFloat(match[3])
+          };
+        };
+        
+        // Process the input based on its type
         if (typeof processedJSON.optionArray === 'string') {
-          optionArray = processedJSON.optionArray
+          // Handle comma-separated string format
+          processedJSON.optionArray
             .split(',')
             .map(optionStr => optionStr.trim())
-            .filter(optionStr => optionStr)  // Remove any empty strings
-            .map(optionStr => {
-              const match = optionStr.match(/^([+-]?\d+)([cp])(\d+)$/i);
-            if (!match) {
-              throw new Error(`Invalid option format: ${optionStr}. Expected format like 1c100 or -1p110`);
-            }
-            return {
-              qty: parseInt(match[1], 10),
-              type: match[2].toLowerCase(),
-              strike: parseFloat(match[3])
-            };
-          });
-        } else if (Array.isArray(processedJSON.optionArray)) {
-          // Process array format, ensuring string values are trimmed
-          optionArray = processedJSON.optionArray.map(option => {
-            if (typeof option === 'string') {
-              option = option.trim();
-              const match = option.match(/^([+-]?\d+)([cp])(\d+)$/i);
-              if (!match) {
-                throw new Error(`Invalid option format: ${option}. Expected format like 1c100 or -1p110`);
+            .filter(optionStr => optionStr)
+            .forEach(optionStr => {
+              const option = processOptionString(optionStr);
+              const key = `${option.type}${option.strike}`;
+              if (optionMap.has(key)) {
+                optionMap.get(key).qty += option.qty;
+              } else {
+                optionMap.set(key, { ...option });
               }
-              return {
-                qty: parseInt(match[1], 10),
-                type: match[2].toLowerCase(),
-                strike: parseFloat(match[3])
-              };
-            }
-            // If it's already an object, ensure type is lowercase and trim any string values
-            if (typeof option === 'object' && option !== null) {
-              return {
-                ...option,
+            });
+        } else if (Array.isArray(processedJSON.optionArray)) {
+          // Handle array format (strings or objects)
+          processedJSON.optionArray.forEach(option => {
+            let processedOption;
+            
+            if (typeof option === 'string') {
+              processedOption = processOptionString(option.trim());
+            } else if (typeof option === 'object' && option !== null) {
+              processedOption = {
+                qty: typeof option.qty === 'string' ? 
+                  parseInt(option.qty.trim(), 10) : (option.qty || 1),
                 type: option.type?.toString()?.toLowerCase()?.trim(),
-                strike: typeof option.strike === 'string' ? parseFloat(option.strike.trim()) : option.strike,
-                qty: typeof option.qty === 'string' ? parseInt(option.qty.trim(), 10) : (option.qty || 1)
+                strike: typeof option.strike === 'string' ? 
+                  parseFloat(option.strike.trim()) : option.strike
               };
+              
+              // Validate the processed option
+              if (!processedOption.type || !['c', 'p'].includes(processedOption.type) || 
+                  isNaN(processedOption.strike)) {
+                throw new Error(`Invalid option object: ${JSON.stringify(option)}`);
+              }
+            } else {
+              throw new Error(`Invalid option format: ${JSON.stringify(option)}`);
             }
-            return option;
+            
+            const key = `${processedOption.type}${processedOption.strike}`;
+            if (optionMap.has(key)) {
+              optionMap.get(key).qty += processedOption.qty;
+            } else {
+              optionMap.set(key, processedOption);
+            }
           });
         } else {
           throw new Error('optionArray must be either a string or an array');
         }
         
-        const optionArrayLength = optionArray.length;
-        
-        if (optionArrayLength === 0) {
-          throw new Error('No options provided in optionArray');
+        // Convert map to array and filter out zero quantities
+        const optionArray = Array.from(optionMap.values())
+          .filter(opt => opt.qty !== 0);
+          
+        if (optionArray.length === 0) {
+          throw new Error('No valid options provided in optionArray');
         }
   
         const optionSetConfig = calculatePortfolioValueAtExpiration(
@@ -113,7 +135,7 @@
   
         let outputStr = `
           <strong>Processed Output:</strong><br>
-          <strong>Position Count:</strong> ${optionArrayLength}<br><br>
+          <strong>Position Count:</strong> ${optionArray.length}<br><br>
         `;
   
         console.log("Processing complete");
@@ -311,7 +333,7 @@ function drawChart(data, cost, optionArray = []) {
           .attr("class", "option-circle")
           .attr("transform", d => {
             let yPos = 0; // Default y position; calls
-            if (d.type === 'p') yPos = 20; // Move down for puts
+            if (d.type === 'p') yPos = 25; // Move down for puts
             //if (d.qty >= 0 && d.type === 'c') yPos = 0; // Move down for long puts
             //if (d.qty < 0 && d.type === 'p') yPos = 10; // Move down for short puts
             //if (d.qty < 0 && d.type === 'c') yPos = 20; // Move down for short calls
@@ -339,7 +361,7 @@ function drawChart(data, cost, optionArray = []) {
         const isLong = d.qty >= 0;
         const isPuts = d.type === 'p';
         d3.select(this).append("text")
-            .attr("y", isPuts ? 14 : -7) // Above for calls, below for puts
+            .attr("y", isPuts ? -9 : 16) // Above for calls, below for puts
             //.attr("y", 15)
             .attr("text-anchor", "middle")
             .style("font-size", "10px")
