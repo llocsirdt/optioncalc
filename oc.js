@@ -310,10 +310,11 @@ function drawChart(data, cost, optionArray = []) {
           .append("g")
           .attr("class", "option-circle")
           .attr("transform", d => {
-            let yPos = -10; // Default y position; long puts
-            if (d.qty >= 0 && d.type === 'c') yPos = 0; // Move down for long puts
-            if (d.qty < 0 && d.type === 'p') yPos = 10; // Move down for short puts
-            if (d.qty < 0 && d.type === 'c') yPos = 20; // Move down for short calls
+            let yPos = 0; // Default y position; calls
+            if (d.type === 'p') yPos = 20; // Move down for puts
+            //if (d.qty >= 0 && d.type === 'c') yPos = 0; // Move down for long puts
+            //if (d.qty < 0 && d.type === 'p') yPos = 10; // Move down for short puts
+            //if (d.qty < 0 && d.type === 'c') yPos = 20; // Move down for short calls
             return `translate(${xScale(d.strike)}, ${yPos})`;
           });
 
@@ -336,8 +337,10 @@ function drawChart(data, cost, optionArray = []) {
       // Add strike price - position based on option type
       optionCircles.each(function(d) {
         const isLong = d.qty >= 0;
+        const isPuts = d.type === 'p';
         d3.select(this).append("text")
-            .attr("y", isLong ? -10 : 15) // Above for calls, below for puts
+            .attr("y", isPuts ? 14 : -7) // Above for calls, below for puts
+            //.attr("y", 15)
             .attr("text-anchor", "middle")
             .style("font-size", "10px")
             .style("fill", "#333")
