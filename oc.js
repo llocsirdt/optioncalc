@@ -1,165 +1,337 @@
+// Global variables to store the full option data
+let fullOptionArray = []; // Stores the original, uncombined options in the order they were entered
+let combinedOptionMap = new Map(); // Stores the combined options for chart rendering
+let fullCost = 0;
+let fullMinStrike = 0;
+let fullMaxStrike = 0;
+let fullStrikeIncrement = 0;
 
-
-
-/* input sample json
-{
-  "cost": 2000,
-  "minStrike": 22700,
-  "maxStrike": 22950,
-  "strikeIncrement": 10,
-  "optionArray": [
-    {"strike":22720, "type":"c", "qty":1 },
-    {"strike":22740, "type":"c", "qty":1 },
-    {"strike":22860, "type":"p", "qty":1 },
-    {"strike":22820, "type":"p", "qty":1 }
-      ]
-}
-*/
-
-
-
-   // Initialize input from local storage on page load
-    document.addEventListener('DOMContentLoaded', (event) => {
-      const savedInput = localStorage.getItem('savedOptionInput');
-      if (savedInput) {
-        document.getElementById('textInput').value = savedInput;
-      }
-    });
-
-
-
-
-    function processInput() {
-      const inputText = document.getElementById('textInput').value;
-      const outputDiv = document.getElementById('output');
-      
-      // Clear previous output
-      outputDiv.innerHTML = '';
-      
-      // Store the input in local storage
-      localStorage.setItem('savedOptionInput', inputText);
-
-      try {
-        // Clean the input text by removing newlines and other whitespace that could break JSON parsing
-        const cleanInputText = inputText
-          .replace(/\r\n|\r|\n/g, '')  // Remove all newline characters
-          .replace(/\s+/g, ' ')      // Replace multiple spaces with a single space
-          .trim();                    // Trim leading/trailing spaces
-          
-        const processedJSON = JSON.parse(cleanInputText);
-        console.log(processedJSON);
-        
-        // Process options array, combining quantities for same type and strike
-        const optionMap = new Map();
-        
-        // Helper function to process a single option string
-        const processOptionString = (str) => {
-          const match = str.match(/^([+-]?\d+)([cp])(\d+)$/i);
-          if (!match) {
-            throw new Error(`Invalid option format: ${str}. Expected format like 1c100 or -1p110`);
-          }
-          return {
-            qty: parseInt(match[1], 10),
-            type: match[2].toLowerCase(),
-            strike: parseFloat(match[3])
-          };
-        };
-        
-        // Process the input based on its type
-        if (typeof processedJSON.optionArray === 'string') {
-          // Handle comma-separated string format
-          processedJSON.optionArray
-            .split(',')
-            .map(optionStr => optionStr.trim())
-            .filter(optionStr => optionStr)
-            .forEach(optionStr => {
-              const option = processOptionString(optionStr);
-              const key = `${option.type}${option.strike}`;
-              if (optionMap.has(key)) {
-                optionMap.get(key).qty += option.qty;
-              } else {
-                optionMap.set(key, { ...option });
-              }
-            });
-        } else if (Array.isArray(processedJSON.optionArray)) {
-          // Handle array format (strings or objects)
-          processedJSON.optionArray.forEach(option => {
-            let processedOption;
-            
-            if (typeof option === 'string') {
-              processedOption = processOptionString(option.trim());
-            } else if (typeof option === 'object' && option !== null) {
-              processedOption = {
-                qty: typeof option.qty === 'string' ? 
-                  parseInt(option.qty.trim(), 10) : (option.qty || 1),
-                type: option.type?.toString()?.toLowerCase()?.trim(),
-                strike: typeof option.strike === 'string' ? 
-                  parseFloat(option.strike.trim()) : option.strike
-              };
-              
-              // Validate the processed option
-              if (!processedOption.type || !['c', 'p'].includes(processedOption.type) || 
-                  isNaN(processedOption.strike)) {
-                throw new Error(`Invalid option object: ${JSON.stringify(option)}`);
-              }
-            } else {
-              throw new Error(`Invalid option format: ${JSON.stringify(option)}`);
-            }
-            
-            const key = `${processedOption.type}${processedOption.strike}`;
-            if (optionMap.has(key)) {
-              optionMap.get(key).qty += processedOption.qty;
-            } else {
-              optionMap.set(key, processedOption);
-            }
-          });
-        } else {
-          throw new Error('optionArray must be either a string or an array');
-        }
-        
-        // Convert map to array and filter out zero quantities
-        const optionArray = Array.from(optionMap.values())
-          .filter(opt => opt.qty !== 0);
-          
-        if (optionArray.length === 0) {
-          throw new Error('No valid options provided in optionArray');
-        }
+// Function to update the chart based on slider value
+function updateChartWithSlider() {
+  const slider = document.getElementById('optionRange');
+  const count = parseInt(slider.value);
+  document.getElementById('optionCount').textContent = count;
   
-        const optionSetConfig = calculatePortfolioValueAtExpiration(
-          optionArray,
-          processedJSON.minStrike,
-          processedJSON.maxStrike,
-          processedJSON.strikeIncrement || 1,
-          processedJSON.contractMultiplier || 100
-        );
+  // Get a subset of the original options based on the slider value
+  const visibleOptions = fullOptionArray.slice(0, count);
   
-        let outputStr = `
-          <strong>Processed Output:</strong><br>
-          <strong>Position Count:</strong> ${optionArray.length}<br><br>
-        `;
+  // Create a map to combine the visible options for chart rendering
+  const visibleCombinedMap = new Map();
   
-        console.log("Processing complete");
-  
-        optionSetConfig.forEach(point => {
-          console.log(`  Closing: $${point.closingPrice.toFixed(2)} -- Value: $${point.totalIntrinsicValue.toFixed(2)}`);
-          outputStr += `  Closing: $${point.closingPrice.toFixed(2)} -- Value: $${point.totalIntrinsicValue.toFixed(2)}<br>`;
-        });
-  
-          outputDiv.innerHTML = outputStr;
-        
-        // Draw the chart if the function exists
-        if (typeof drawChart === 'function') {
-          drawChart(optionSetConfig, processedJSON.cost || 0, optionArray);
-        }
-      } catch (error) {
-        console.error('Error:', error);
-        outputDiv.innerHTML = `<span style="color: red">Error: ${error.message}</span>`;
-      }  
-
-
-
+  visibleOptions.forEach(option => {
+    const key = `${option.type}${option.strike}`;
+    if (visibleCombinedMap.has(key)) {
+      visibleCombinedMap.get(key).qty += option.qty;
+    } else {
+      visibleCombinedMap.set(key, { ...option });
     }
+  });
   
+  const visibleCombinedOptions = Array.from(visibleCombinedMap.values());
+  
+  // Calculate portfolio values with the filtered and combined options
+  const data = calculatePortfolioValueAtExpiration(
+    visibleCombinedOptions,
+    fullMinStrike,
+    fullMaxStrike,
+    fullStrikeIncrement
+  );
+  
+  // Draw the chart with the filtered data but show all original positions in the labels
+  drawChart(data, fullCost, visibleOptions);
+}
+
+// Function to show all options
+function showAllOptions() {
+  const slider = document.getElementById('optionRange');
+  slider.value = fullOptionArray.length;
+  document.getElementById('optionCount').textContent = fullOptionArray.length;
+  updateChartWithSlider();
+}
+
+// Initialize slider event listeners
+function initSlider() {
+  const slider = document.getElementById('optionRange');
+  const showAllBtn = document.getElementById('showAllBtn');
+  
+  if (slider) {
+    slider.addEventListener('input', updateChartWithSlider);
+  }
+  
+  if (showAllBtn) {
+    showAllBtn.addEventListener('click', showAllOptions);
+  }
+}
+
+// Initialize slider when the DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  initSlider();
+  
+  // Load saved input if it exists
+  const savedInput = localStorage.getItem('savedOptionInput');
+  if (savedInput) {
+    document.getElementById('textInput').value = savedInput;
+  }
+});
+
+// Process input from the text input field
+function processInput() {
+  const inputText = document.getElementById('textInput').value;
+  const outputDiv = document.getElementById('output');
+  
+  // Clear previous output
+  outputDiv.innerHTML = '';
+  
+  // Store the input in local storage
+  localStorage.setItem('savedOptionInput', inputText);
+
+  try {
+    // Clean the input text by removing newlines and other whitespace that could break JSON parsing
+    const cleanInputText = inputText
+      .replace(/\r\n|\r|\n/g, '')  // Remove all newline characters
+      .replace(/\s+/g, ' ')      // Replace multiple spaces with a single space
+      .trim();                    // Trim leading/trailing spaces
+      
+    const processedJSON = JSON.parse(cleanInputText);
+    console.log(processedJSON);
+    
+    // Process options array, combining quantities for same type and strike
+    const optionMap = new Map();
+    
+    // Helper function to process a single option string
+    const processOptionString = (str) => {
+      const match = str.match(/^([+-]?\d+)([cp])(\d+)$/i);
+      if (!match) {
+        throw new Error(`Invalid option format: ${str}. Expected format like 1c100 or -1p110`);
+      }
+      return {
+        qty: parseInt(match[1], 10),
+        type: match[2].toLowerCase(),
+        strike: parseFloat(match[3])
+      };
+    };
+    
+    // Process the input based on its type
+    if (typeof processedJSON.optionArray === 'string') {
+      // Handle comma-separated string format
+      processedJSON.optionArray
+        .split(',')
+        .map(optionStr => optionStr.trim())
+        .filter(optionStr => optionStr)
+        .forEach(optionStr => {
+          const option = processOptionString(optionStr);
+          const key = `${option.type}${option.strike}`;
+          if (optionMap.has(key)) {
+            optionMap.get(key).qty += option.qty;
+          } else {
+            optionMap.set(key, { ...option });
+          }
+        });
+    } else if (Array.isArray(processedJSON.optionArray)) {
+      // Handle array format (strings or objects)
+      processedJSON.optionArray.forEach(option => {
+        let processedOption;
+        
+        if (typeof option === 'string') {
+          processedOption = processOptionString(option.trim());
+        } else if (typeof option === 'object' && option !== null) {
+          processedOption = {
+            qty: typeof option.qty === 'string' ? 
+              parseInt(option.qty.trim(), 10) : (option.qty || 1),
+            type: option.type?.toString()?.toLowerCase()?.trim(),
+            strike: typeof option.strike === 'string' ? 
+              parseFloat(option.strike.trim()) : option.strike
+          };
+          
+          // Validate the processed option
+          if (!processedOption.type || !['c', 'p'].includes(processedOption.type) || 
+              isNaN(processedOption.strike)) {
+            throw new Error(`Invalid option object: ${JSON.stringify(option)}`);
+          }
+        } else {
+          throw new Error(`Invalid option format: ${JSON.stringify(option)}`);
+        }
+        
+        const key = `${processedOption.type}${processedOption.strike}`;
+        if (optionMap.has(key)) {
+          optionMap.get(key).qty += processedOption.qty;
+        } else {
+          optionMap.set(key, processedOption);
+        }
+      });
+    } else {
+      throw new Error('optionArray must be either a string or an array');
+    }
+    
+    // Convert map to array and filter out zero quantities
+    const combinedOptions = Array.from(optionMap.values())
+      .filter(opt => opt.qty !== 0);
+      
+    if (combinedOptions.length === 0) {
+      throw new Error('No valid options provided in optionArray');
+    }
+
+    // Store the combined options for chart rendering
+    combinedOptionMap = new Map(combinedOptions.map(opt => [`${opt.type}${opt.strike}`, { ...opt }]));
+    
+    // Store the original uncombined options in the order they were entered
+    fullOptionArray = [];
+    if (typeof processedJSON.optionArray === 'string') {
+      fullOptionArray = processedJSON.optionArray
+        .split(',')
+        .map(optionStr => optionStr.trim())
+        .filter(optionStr => optionStr)
+        .map(optionStr => processOptionString(optionStr));
+    } else if (Array.isArray(processedJSON.optionArray)) {
+      processedJSON.optionArray.forEach(option => {
+        if (typeof option === 'string') {
+          fullOptionArray.push(processOptionString(option.trim()));
+        } else if (typeof option === 'object' && option !== null) {
+          fullOptionArray.push({
+            qty: typeof option.qty === 'string' ? 
+              parseInt(option.qty.trim(), 10) : (option.qty || 1),
+            type: option.type?.toString()?.toLowerCase()?.trim(),
+            strike: typeof option.strike === 'string' ? 
+              parseFloat(option.strike.trim()) : option.strike
+          });
+        }
+      });
+    }
+    
+    // Process tempOptionArray if it exists
+    let tempOptionArray = [];
+    if (processedJSON.tempOptionArray) {
+      if (typeof processedJSON.tempOptionArray === 'string') {
+        tempOptionArray = processedJSON.tempOptionArray
+          .split(',')
+          .map(optionStr => optionStr.trim())
+          .filter(optionStr => optionStr)
+          .map(optionStr => processOptionString(optionStr));
+      } else if (Array.isArray(processedJSON.tempOptionArray)) {
+        processedJSON.tempOptionArray.forEach(option => {
+          if (typeof option === 'string') {
+            tempOptionArray.push(processOptionString(option.trim()));
+          } else if (typeof option === 'object' && option !== null) {
+            tempOptionArray.push({
+              qty: typeof option.qty === 'string' ? 
+                parseInt(option.qty.trim(), 10) : (option.qty || 1),
+              type: option.type?.toString()?.toLowerCase()?.trim(),
+              strike: typeof option.strike === 'string' ? 
+                parseFloat(option.strike.trim()) : option.strike
+            });
+          }
+        });
+      }
+    }
+    
+    fullCost = processedJSON.cost || 0;
+    fullMinStrike = processedJSON.minStrike || 0;
+    fullMaxStrike = processedJSON.maxStrike || 0;
+    fullStrikeIncrement = processedJSON.strikeIncrement || 10;
+
+    // Initialize the slider
+    const sliderContainer = document.getElementById('sliderContainer');
+    const slider = document.getElementById('optionRange');
+    
+    if (fullOptionArray.length > 1) {
+      // Show the slider if there are multiple options
+      sliderContainer.style.display = 'block';
+      slider.min = 1;
+      slider.max = fullOptionArray.length;
+      slider.value = fullOptionArray.length; // Default to showing all options
+      document.getElementById('optionCount').textContent = fullOptionArray.length;
+    } else {
+      // Hide the slider if there's only one option
+      sliderContainer.style.display = 'none';
+    }
+    
+    // Calculate and display the portfolio values with all options combined
+    const data = calculatePortfolioValueAtExpiration(
+      combinedOptions,
+      processedJSON.minStrike,
+      processedJSON.maxStrike,
+      processedJSON.strikeIncrement || 10
+    );
+    
+    // Calculate the combined portfolio values (optionArray + tempOptionArray)
+    let combinedData = [];
+    if (tempOptionArray.length > 0) {
+      // Create a map of all options (from both arrays)
+      const allOptionsMap = new Map();
+      
+      // First add all options from the main optionArray
+      combinedOptions.forEach(option => {
+        const key = `${option.type}${option.strike}`;
+        allOptionsMap.set(key, { ...option });
+      });
+      
+      // Then add or combine with options from tempOptionArray
+      tempOptionArray.forEach(option => {
+        const key = `${option.type}${option.strike}`;
+        if (allOptionsMap.has(key)) {
+          allOptionsMap.get(key).qty += option.qty;
+        } else {
+          allOptionsMap.set(key, { ...option });
+        }
+      });
+      
+      const allOptions = Array.from(allOptionsMap.values());
+      
+      // Calculate portfolio values for the combined options
+      combinedData = calculatePortfolioValueAtExpiration(
+        allOptions,
+        processedJSON.minStrike,
+        processedJSON.maxStrike,
+        processedJSON.strikeIncrement || 10
+      );
+    }
+    
+    // Draw the chart with both datasets if there's combined data, otherwise just the main data
+    if (combinedData.length > 0) {
+      drawChart(data, processedJSON.cost || 0, fullOptionArray, combinedData);
+    } else {
+      drawChart(data, processedJSON.cost || 0, fullOptionArray);
+    }
+    
+    // Display the processed output
+    let outputStr = `
+      <strong>Processed Output:</strong><br>
+      <strong>Position Count:</strong> ${fullOptionArray.length}<br><br>
+    `;
+    
+    fullOptionArray.forEach((opt, index) => {
+      const type = opt.type === 'c' ? 'Call' : 'Put';
+      outputStr += `
+        <strong>Position ${index + 1}:</strong> ${Math.abs(opt.qty)} ${opt.qty > 0 ? 'Long' : 'Short'} ${type} @ ${opt.strike}<br>
+      `;
+    });
+    
+    outputDiv.innerHTML = outputStr;
+    
+  } catch (error) {
+    console.error('Error processing input:', error);
+    outputDiv.innerHTML = `
+      <strong>Error:</strong> ${error.message}<br><br>
+      <strong>Expected format:</strong><br>
+      <pre>{
+  "cost": 10000,
+  "minStrike": 500,
+  "maxStrike": 1000,
+  "strikeIncrement": 10,
+  "optionArray": "
+1c620,-1c820,
+1c620,-1c800,
+1p960,-1p800,
+",
+"tempOptionArray": "
+1c650,-1c750,
+"
+}</pre>
+      Or as a comma-separated string in the optionArray: <code>"1c22720,1c22740,1p22860,1p22820"</code>
+    `;
+  }
+}
+
 /**
  * Calculates the total intrinsic value at expiration for an array of options positions
  * across a range of underlying asset prices. This does NOT include the initial premium paid/received.
@@ -240,7 +412,7 @@ function calculatePortfolioValueAtExpiration(optionsPositions, minPrice, maxPric
 
 
 
-function drawChart(data, cost, optionArray = []) {
+function drawChart(data, cost, optionArray = [], tempData = []) {
     const margin = { top: 30, right: 30, bottom: 60, left: 60 };
     const width = document.getElementById('chart').offsetWidth - margin.left - margin.right;
     const height = document.getElementById('chart').offsetHeight - margin.top - margin.bottom;
@@ -298,17 +470,29 @@ function drawChart(data, cost, optionArray = []) {
         .attr("text-anchor", "middle")
         .text("Total Intrinsic Value ($)");
 
-    // Add the line for option values
+    // Add the line for main option values
     const line = d3.line()
         .x(d => xScale(d.closingPrice))
         .y(d => yScale(d.totalIntrinsicValue));
 
+    // Draw main portfolio line
     svg.append("path")
         .datum(data)
         .attr("fill", "none")
         .attr("stroke", "steelblue")
         .attr("stroke-width", 1.5)
         .attr("d", line);
+        
+    // Draw temp portfolio line if data exists
+    if (tempData.length > 0) {
+      svg.append("path")
+          .datum(tempData)
+          .attr("fill", "none")
+          .attr("stroke", "#88c9ff")  // Lighter blue
+          .attr("stroke-width", 1.5)
+          .attr("stroke-dasharray", "3,3")  // Dotted line
+          .attr("d", line);
+    }
 
     // Add a horizontal line for the cost
     svg.append("line")
@@ -325,18 +509,35 @@ function drawChart(data, cost, optionArray = []) {
 
     // Add circles for each option in the optionArray
     if (optionArray && optionArray.length > 0) {
+      // First, group the options by strike and type
+      const groupedOptions = optionArray.reduce((acc, option) => {
+        const key = `${option.type}${option.strike}`;
+        if (!acc[key]) {
+          acc[key] = {
+            type: option.type,
+            strike: option.strike,
+            qty: 0,
+            elements: []
+          };
+        }
+        acc[key].qty += option.qty;
+        acc[key].elements.push(option);
+        return acc;
+      }, {});
+
+      // Convert the grouped options to an array
+      const uniqueOptions = Object.values(groupedOptions);
+
+      // Create circles for each unique option group
       const optionCircles = svg.append("g")
           .selectAll(".option-circle")
-          .data(optionArray)
+          .data(uniqueOptions)
           .enter()
           .append("g")
           .attr("class", "option-circle")
           .attr("transform", d => {
             let yPos = 0; // Default y position; calls
             if (d.type === 'p') yPos = 25; // Move down for puts
-            //if (d.qty >= 0 && d.type === 'c') yPos = 0; // Move down for long puts
-            //if (d.qty < 0 && d.type === 'p') yPos = 10; // Move down for short puts
-            //if (d.qty < 0 && d.type === 'c') yPos = 20; // Move down for short calls
             return `translate(${xScale(d.strike)}, ${yPos})`;
           });
 
@@ -362,7 +563,6 @@ function drawChart(data, cost, optionArray = []) {
         const isPuts = d.type === 'p';
         d3.select(this).append("text")
             .attr("y", isPuts ? -9 : 16) // Above for calls, below for puts
-            //.attr("y", 15)
             .attr("text-anchor", "middle")
             .style("font-size", "10px")
             .style("fill", "#333")

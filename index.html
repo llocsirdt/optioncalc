@@ -15,9 +15,13 @@
 
 </head>
 <body>
-  <h1>Option Calc v1.0.8</h1>
+  <h1>Option Calc v1.0.9</h1>
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
+  </div>
+  <div id="sliderContainer" style="display: none; margin: 15px 0;">
+    <label for="optionRange">Positions: <span id="optionCount">n</span></label>
+    <input type="range" id="optionRange" min="1" max="1" value="1" style="width: 70%; margin: 0; vertical-align: middle;">
   </div>
 <div id="container">
 <div id="left">
@@ -26,16 +30,18 @@
   <div id="output">
 <pre>
 {
-  "cost": 2000,
-  "minStrike": 22700,
-  "maxStrike": 22950,
+  "cost": 10000,
+  "minStrike": 500,
+  "maxStrike": 1000,
   "strikeIncrement": 10,
-  "optionArray": [
-    {"strike":22720, "type":"c", "qty":1 },
-    {"strike":22740, "type":"c", "qty":1 },
-    {"strike":22860, "type":"p", "qty":1 },
-    {"strike":22820, "type":"p", "qty":1 }
-      ]
+  "optionArray": "
+1c620,-1c820,
+1c620,-1c800,
+1p960,-1p800,
+",
+"tempOptionArray": "
+1c700,-2c800,1c900,
+"
 }
 </pre>
   </div>
