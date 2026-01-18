@@ -613,18 +613,21 @@ function calculatePortfolioValueAtExpiration(optionsPositions, minPrice, maxPric
 
 
 
-
-
-
 function drawChart(data, cost, optionArray = [], tempData = []) {
+    // Clear previous chart
+    d3.select("#chart").selectAll("*").remove();
+    
+    // Find key points for main curve
+    const keyPoints = findKeyPointsOnCurve(data, cost);
+    
+    // Find key points for temp curve if it exists
+    const tempKeyPoints = tempData.length > 0 ? findKeyPointsOnCurve(tempData, cost) : [];
+    
     const margin = { top: 30, right: 30, bottom: 60, left: 60 };
     const width = document.getElementById('chart').offsetWidth - margin.left - margin.right;
     const height = document.getElementById('chart').offsetHeight - margin.top - margin.bottom;
 
-    // Clear any existing SVG
-    d3.select("#chart-container").select("svg").remove();
-
-    const svg = d3.select("#chart-container")
+    const svg = d3.select("#chart")
         .append("svg")
         .attr("width", width + margin.left + margin.right)
         .attr("height", height + margin.top + margin.bottom)
@@ -846,6 +849,113 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("y", bbox.y - 2)
             .attr("width", bbox.width + 4)
             .attr("height", bbox.height + 4);
+    }
+
+    // Add key points markers for main curve
+    if (keyPoints.length > 0) {
+        const keyPointMarkers = svg.append("g")
+            .selectAll(".key-point")
+            .data(keyPoints)
+            .enter()
+            .append("g")
+            .attr("class", "key-point");
+
+        // Add markers based on type
+        keyPointMarkers.append("path")
+            .attr("d", d => {
+                const x = xScale(d.closingPrice);
+                const y = yScale(d.totalIntrinsicValue);
+                
+                if (d.type === 'low_point') {
+                    // Green triangle pointing up (in SVG coordinates, this means negative Y offset)
+                    return `M ${x},${y - 8} L ${x - 6},${y + 4} L ${x + 6},${y + 4} Z`;
+                } else if (d.type === 'high_point') {
+                    // Red triangle pointing down (in SVG coordinates, this means positive Y offset)
+                    return `M ${x},${y + 8} L ${x - 6},${y - 4} L ${x + 6},${y - 4} Z`;
+                } else if (d.type === 'zero_crossing') {
+                    // Gray circle
+                    return `M ${x + 6},${y} A 6,6 0 0,0 ${x - 6},${y} A 6,6 0 0,0 ${x + 6},${y} Z`;
+                }
+                return '';
+            })
+            .attr("fill", d => {
+                if (d.type === 'low_point') return '#4CAF50';
+                if (d.type === 'high_point') return '#F44336';
+                if (d.type === 'zero_crossing') return '#808080';
+                return '#666';
+            })
+            .attr("stroke", "white")
+            .attr("stroke-width", 1);
+
+        // Add labels for key points
+        keyPointMarkers.append("text")
+            .attr("x", d => xScale(d.closingPrice))
+            .attr("y", d => {
+                const y = yScale(d.totalIntrinsicValue);
+                if (d.type === 'low_point') return y + 15;
+                if (d.type === 'high_point') return y - 15;
+                if (d.type === 'zero_crossing') return y - 12;
+                return y;
+            })
+            .attr("text-anchor", "middle")
+            .attr("font-size", "11px")
+            .attr("font-weight", "bold")
+            .attr("fill", "#333")
+            .text(d => `$${d.closingPrice.toFixed(0)}`);
+    }
+
+    // Add key points markers for temp curve if it exists
+    if (tempKeyPoints.length > 0) {
+        const tempKeyPointMarkers = svg.append("g")
+            .selectAll(".temp-key-point")
+            .data(tempKeyPoints)
+            .enter()
+            .append("g")
+            .attr("class", "temp-key-point");
+
+        // Add markers for temp curve (lighter colors)
+        tempKeyPointMarkers.append("path")
+            .attr("d", d => {
+                const x = xScale(d.closingPrice);
+                const y = yScale(d.totalIntrinsicValue);
+                
+                if (d.type === 'low_point') {
+                    // Light green triangle pointing up (in SVG coordinates, this means negative Y offset)
+                    return `M ${x},${y - 8} L ${x - 6},${y + 4} L ${x + 6},${y + 4} Z`;
+                } else if (d.type === 'high_point') {
+                    // Light red triangle pointing down (in SVG coordinates, this means positive Y offset)
+                    return `M ${x},${y + 8} L ${x - 6},${y - 4} L ${x + 6},${y - 4} Z`;
+                } else if (d.type === 'zero_crossing') {
+                    // Light gray circle
+                    return `M ${x + 6},${y} A 6,6 0 0,0 ${x - 6},${y} A 6,6 0 0,0 ${x + 6},${y} Z`;
+                }
+                return '';
+            })
+            .attr("fill", d => {
+                if (d.type === 'low_point') return '#81C784';
+                if (d.type === 'high_point') return '#EF9A9A';
+                if (d.type === 'zero_crossing') return '#A0A0A0';
+                return '#999';
+            })
+            .attr("stroke", "white")
+            .attr("stroke-width", 1)
+            .attr("opacity", 0.8);
+
+        // Add labels for temp key points
+        tempKeyPointMarkers.append("text")
+            .attr("x", d => xScale(d.closingPrice))
+            .attr("y", d => {
+                const y = yScale(d.totalIntrinsicValue);
+                if (d.type === 'low_point') return y + 15;
+                if (d.type === 'high_point') return y - 15;
+                if (d.type === 'zero_crossing') return y - 12;
+                return y;
+            })
+            .attr("text-anchor", "middle")
+            .attr("font-size", "11px")
+            .attr("font-weight", "bold")
+            .attr("fill", "#333")
+            .text(d => `$${d.closingPrice.toFixed(0)}`);
     }
 
     // Add event listeners for both mouse and touch events
