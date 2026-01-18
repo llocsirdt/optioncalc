@@ -362,18 +362,41 @@ function processInput() {
       })
       .join('\n');
 
+    // Find key points on the main curve
+    const keyPoints = findKeyPointsOnCurve(data, fullCost);
+    const formatKeyPoints = (points) => points
+      .map(p => `${p.description}: $${p.closingPrice.toFixed(2)} (Value: $${p.totalIntrinsicValue.toFixed(2)})`)
+      .join('\n');
+
     let outputStr = `
       <strong>Processed Output:</strong><br>
-      <strong>Position Count:</strong> ${fullOptionArray.length}<br><br>
+      <strong>Position Count:</strong> ${fullOptionArray.length}<br>
+      <strong>Total Cost:</strong> $${fullCost.toFixed(2)}<br><br>
       <strong>Value Curve (optionArray):</strong><br>
       <pre>${formatCurve(data)}</pre>
     `;
+
+    if (keyPoints.length > 0) {
+      outputStr += `
+        <strong>Key Points on Curve:</strong><br>
+        <pre>${formatKeyPoints(keyPoints)}</pre>
+      `;
+    }
 
     if (combinedData.length > 0) {
       outputStr += `
         <strong>Value Curve (optionArray + tempOptionArray):</strong><br>
         <pre>${formatCurve(combinedData)}</pre>
       `;
+      
+      // Find key points on combined curve as well
+      const combinedKeyPoints = findKeyPointsOnCurve(combinedData, fullCost);
+      if (combinedKeyPoints.length > 0) {
+        outputStr += `
+          <strong>Key Points on Combined Curve:</strong><br>
+          <pre>${formatKeyPoints(combinedKeyPoints)}</pre>
+        `;
+      }
     }
 
     outputDiv.innerHTML = outputStr;
@@ -384,7 +407,7 @@ function processInput() {
       <strong>Error:</strong> ${error.message}<br><br>
       <strong>Expected format:</strong><br>
       <pre>{
-  "cost": 10000,
+  "cost": 20000,
   "range": "500-1000",
   "strikeIncrement": 10,
   "optionArray": "
@@ -399,6 +422,118 @@ function processInput() {
       Or as a comma-separated string in the optionArray: <code>"1c22720,1c22740,1p22860,1p22820"</code>
     `;
   }
+}
+
+/**
+ * Identifies key points on the value curve including low points, zero crossings, and high points/peaks
+ * @param {Array<object>} valueCurve - Array of objects with closingPrice and totalIntrinsicValue
+ * @param {number} cost - The total cost of the position
+ * @returns {Array<object>} Array of key points with type and value information
+ */
+function findKeyPointsOnCurve(valueCurve, cost) {
+    if (!Array.isArray(valueCurve) || valueCurve.length < 3) {
+        return [];
+    }
+    
+    const keyPoints = [];
+    
+    // Find zero crossings (where profit/loss changes sign)
+    for (let i = 0; i < valueCurve.length - 1; i++) {
+        const current = valueCurve[i];
+        const next = valueCurve[i + 1];
+        
+        const currentProfitLoss = current.totalIntrinsicValue - cost;
+        const nextProfitLoss = next.totalIntrinsicValue - cost;
+        
+        // Check for zero crossing (sign change in profit/loss)
+        if ((currentProfitLoss <= 0 && nextProfitLoss >= 0) ||
+            (currentProfitLoss >= 0 && nextProfitLoss <= 0)) {
+            
+            // Linear interpolation to find exact crossing point
+            if (currentProfitLoss !== nextProfitLoss) {
+                const ratio = Math.abs(currentProfitLoss) / 
+                             Math.abs(nextProfitLoss - currentProfitLoss);
+                const crossingPrice = current.closingPrice + 
+                                    (next.closingPrice - current.closingPrice) * ratio;
+                
+                keyPoints.push({
+                    type: 'zero_crossing',
+                    closingPrice: crossingPrice,
+                    totalIntrinsicValue: cost, // At zero crossing, intrinsic value equals cost
+                    description: 'Break Even'
+                });
+            }
+        }
+    }
+    
+    // Find local minima (low points) and maxima (high points) - only at direction changes
+    let trend = null; // 'up', 'down', or null
+    let lastNonFlatPoint = null;
+    
+    for (let i = 1; i < valueCurve.length; i++) {
+        const prev = valueCurve[i - 1];
+        const current = valueCurve[i];
+        
+        const currentDiff = current.totalIntrinsicValue - prev.totalIntrinsicValue;
+        const currentTrend = currentDiff > 0 ? 'up' : (currentDiff < 0 ? 'down' : null);
+        
+        // Check for trend change
+        if (trend !== null && currentTrend !== null && currentTrend !== trend) {
+            // Trend changed, previous point was a turning point
+            const turningPoint = valueCurve[i - 1];
+            
+            if (trend === 'down' && currentTrend === 'up') {
+                // Was going down, now going up - this is a low point
+                keyPoints.push({
+                    type: 'low_point',
+                    closingPrice: turningPoint.closingPrice,
+                    totalIntrinsicValue: turningPoint.totalIntrinsicValue,
+                    description: 'Low Point'
+                });
+            } else if (trend === 'up' && currentTrend === 'down') {
+                // Was going up, now going down - this is a high point
+                keyPoints.push({
+                    type: 'high_point',
+                    closingPrice: turningPoint.closingPrice,
+                    totalIntrinsicValue: turningPoint.totalIntrinsicValue,
+                    description: 'High Point'
+                });
+            }
+        }
+        
+        // Handle flat period ending and starting to trend
+        if (trend === null && currentTrend !== null && lastNonFlatPoint !== null) {
+            // Was flat, now trending - check if this is a turning point
+            if (currentTrend === 'up') {
+                // Flat period ended, now going up - the flat period was a low point
+                keyPoints.push({
+                    type: 'low_point',
+                    closingPrice: lastNonFlatPoint.closingPrice,
+                    totalIntrinsicValue: lastNonFlatPoint.totalIntrinsicValue,
+                    description: 'Low Point'
+                });
+            } else if (currentTrend === 'down') {
+                // Flat period ended, now going down - the flat period was a high point
+                keyPoints.push({
+                    type: 'high_point',
+                    closingPrice: lastNonFlatPoint.closingPrice,
+                    totalIntrinsicValue: lastNonFlatPoint.totalIntrinsicValue,
+                    description: 'High Point'
+                });
+            }
+        }
+        
+        // Update trend and track last non-flat point
+        if (currentTrend !== null) {
+            trend = currentTrend;
+            lastNonFlatPoint = current;
+        }
+    }
+    
+    // Sort by closing price
+    keyPoints.sort((a, b) => a.closingPrice - b.closingPrice);
+    
+    return keyPoints;
 }
 
 /**
@@ -609,7 +744,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
           .attr("class", "option-circle")
           .attr("transform", d => {
             let yPos = 0; // Default y position; calls
-            if (d.type === 'p') yPos = 25; // Move down for puts
+            if (d.type === 'p') yPos = -10; // Move up for puts
             return `translate(${xScale(d.strike)}, ${yPos})`;
           });
 
