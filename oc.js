@@ -225,8 +225,38 @@ function processInput() {
     }
     
     fullCost = processedJSON.cost || 0;
-    fullMinStrike = processedJSON.minStrike || 0;
-    fullMaxStrike = processedJSON.maxStrike || 0;
+    const rangeStr = processedJSON.range;
+    if (rangeStr != null && typeof rangeStr !== 'string') {
+      throw new Error('range must be a string like "500-1000"');
+    }
+    if (typeof rangeStr === 'string' && rangeStr.trim() !== '') {
+      const rangeMatch = rangeStr.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*$/);
+      if (!rangeMatch) {
+        throw new Error('Invalid range format. Expected "minStrike-maxStrike" (example: "500-1000")');
+      }
+      fullMinStrike = parseFloat(rangeMatch[1]);
+      fullMaxStrike = parseFloat(rangeMatch[2]);
+      if (!Number.isFinite(fullMinStrike) || !Number.isFinite(fullMaxStrike)) {
+        throw new Error('Invalid range values. minStrike and maxStrike must be numbers.');
+      }
+      if (fullMinStrike >= fullMaxStrike) {
+        throw new Error('Invalid range values. minStrike must be less than maxStrike.');
+      }
+    } else {
+      const strikes = [];
+      combinedOptions.forEach(opt => strikes.push(opt.strike));
+      tempOptionArray.forEach(opt => strikes.push(opt.strike));
+
+      const finiteStrikes = strikes.filter(s => Number.isFinite(s));
+      if (finiteStrikes.length === 0) {
+        throw new Error('Unable to infer range: no valid strikes found in optionArray/tempOptionArray');
+      }
+
+      const minStrikeProvided = Math.min(...finiteStrikes);
+      const maxStrikeProvided = Math.max(...finiteStrikes);
+      fullMinStrike = minStrikeProvided - 50;
+      fullMaxStrike = maxStrikeProvided + 50;
+    }
     fullStrikeIncrement = processedJSON.strikeIncrement || 10;
 
     // Initialize the slider
@@ -248,8 +278,8 @@ function processInput() {
     // Calculate and display the portfolio values with all options combined
     const data = calculatePortfolioValueAtExpiration(
       combinedOptions,
-      processedJSON.minStrike,
-      processedJSON.maxStrike,
+      fullMinStrike,
+      fullMaxStrike,
       processedJSON.strikeIncrement || 10
     );
     
@@ -280,8 +310,8 @@ function processInput() {
       // Calculate portfolio values for the combined options
       combinedData = calculatePortfolioValueAtExpiration(
         allOptions,
-        processedJSON.minStrike,
-        processedJSON.maxStrike,
+        fullMinStrike,
+        fullMaxStrike,
         processedJSON.strikeIncrement || 10
       );
     }
@@ -315,8 +345,7 @@ function processInput() {
       <strong>Expected format:</strong><br>
       <pre>{
   "cost": 10000,
-  "minStrike": 500,
-  "maxStrike": 1000,
+  "range": "500-1000",
   "strikeIncrement": 10,
   "optionArray": "
 1c620,-1c820,
