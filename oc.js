@@ -19,11 +19,14 @@ function updateChartWithSlider() {
   const visibleCombinedMap = new Map();
   
   visibleOptions.forEach(option => {
-    const key = `${option.type}${option.strike}`;
-    if (visibleCombinedMap.has(key)) {
-      visibleCombinedMap.get(key).qty += option.qty;
-    } else {
-      visibleCombinedMap.set(key, { ...option });
+    // Only process real options, not standalone cost adjustments
+    if (option.type && option.strike !== null) {
+      const key = `${option.type}${option.strike}`;
+      if (visibleCombinedMap.has(key)) {
+        visibleCombinedMap.get(key).qty += option.qty;
+      } else {
+        visibleCombinedMap.set(key, { ...option });
+      }
     }
   });
   
@@ -100,18 +103,33 @@ function processInput() {
     
     // Helper function to process a single option string
     const processOptionString = (str) => {
-      const match = str.match(/^([+-]?\d+)([cp])(\d+)$/i);
+      // Check for standalone cost adjustment
+      const costMatch = str.match(/^@([+-]?\d+(?:\.\d+)?)$/i);
+      if (costMatch) {
+        return {
+          qty: 0,
+          type: null,
+          strike: null,
+          costAdjustment: parseFloat(costMatch[1])
+        };
+      }
+      
+      // Check for option with optional cost adjustment
+      const match = str.match(/^([+-]?\d+)([cp])(\d+)(?:@([+-]?\d+(?:\.\d+)?))?$/i);
       if (!match) {
-        throw new Error(`Invalid option format: ${str}. Expected format like 1c100 or -1p110`);
+        throw new Error(`Invalid option format: ${str}. Expected format like 1c100, -1p110, 1c100@2000, or @2000`);
       }
       return {
         qty: parseInt(match[1], 10),
         type: match[2].toLowerCase(),
-        strike: parseFloat(match[3])
+        strike: parseFloat(match[3]),
+        costAdjustment: match[4] ? parseFloat(match[4]) : 0
       };
     };
     
     // Process the input based on its type
+    let totalCostAdjustment = 0;
+    
     if (typeof processedJSON.optionArray === 'string') {
       // Handle comma-separated string format
       processedJSON.optionArray
@@ -120,11 +138,16 @@ function processInput() {
         .filter(optionStr => optionStr)
         .forEach(optionStr => {
           const option = processOptionString(optionStr);
-          const key = `${option.type}${option.strike}`;
-          if (optionMap.has(key)) {
-            optionMap.get(key).qty += option.qty;
-          } else {
-            optionMap.set(key, { ...option });
+          totalCostAdjustment += option.costAdjustment;
+          
+          // Only add to optionMap if it's a real option (not standalone cost adjustment)
+          if (option.qty !== 0 && option.type && option.strike !== null) {
+            const key = `${option.type}${option.strike}`;
+            if (optionMap.has(key)) {
+              optionMap.get(key).qty += option.qty;
+            } else {
+              optionMap.set(key, { ...option });
+            }
           }
         });
     } else if (Array.isArray(processedJSON.optionArray)) {
@@ -134,29 +157,35 @@ function processInput() {
         
         if (typeof option === 'string') {
           processedOption = processOptionString(option.trim());
+          totalCostAdjustment += processedOption.costAdjustment;
         } else if (typeof option === 'object' && option !== null) {
           processedOption = {
             qty: typeof option.qty === 'string' ? 
               parseInt(option.qty.trim(), 10) : (option.qty || 1),
             type: option.type?.toString()?.toLowerCase()?.trim(),
             strike: typeof option.strike === 'string' ? 
-              parseFloat(option.strike.trim()) : option.strike
+              parseFloat(option.strike.trim()) : option.strike,
+            costAdjustment: option.costAdjustment ? parseFloat(option.costAdjustment) : 0
           };
+          totalCostAdjustment += processedOption.costAdjustment;
           
-          // Validate the processed option
-          if (!processedOption.type || !['c', 'p'].includes(processedOption.type) || 
-              isNaN(processedOption.strike)) {
+          // Validate the processed option (skip validation for standalone cost adjustments)
+          if (processedOption.type && (!['c', 'p'].includes(processedOption.type) || 
+              isNaN(processedOption.strike))) {
             throw new Error(`Invalid option object: ${JSON.stringify(option)}`);
           }
         } else {
           throw new Error(`Invalid option format: ${JSON.stringify(option)}`);
         }
         
-        const key = `${processedOption.type}${processedOption.strike}`;
-        if (optionMap.has(key)) {
-          optionMap.get(key).qty += processedOption.qty;
-        } else {
-          optionMap.set(key, processedOption);
+        // Only add to optionMap if it's a real option (not standalone cost adjustment)
+        if (processedOption.qty !== 0 && processedOption.type && processedOption.strike !== null) {
+          const key = `${processedOption.type}${processedOption.strike}`;
+          if (optionMap.has(key)) {
+            optionMap.get(key).qty += processedOption.qty;
+          } else {
+            optionMap.set(key, processedOption);
+          }
         }
       });
     } else {
@@ -217,14 +246,15 @@ function processInput() {
                 parseInt(option.qty.trim(), 10) : (option.qty || 1),
               type: option.type?.toString()?.toLowerCase()?.trim(),
               strike: typeof option.strike === 'string' ? 
-                parseFloat(option.strike.trim()) : option.strike
+                parseFloat(option.strike.trim()) : option.strike,
+              costAdjustment: option.costAdjustment ? parseFloat(option.costAdjustment) : 0
             });
           }
         });
       }
     }
     
-    fullCost = processedJSON.cost || 0;
+    fullCost = (processedJSON.cost || 0) + totalCostAdjustment;
     const rangeStr = processedJSON.range;
     if (rangeStr != null && typeof rangeStr !== 'string') {
       throw new Error('range must be a string like "500-1000"');
@@ -318,24 +348,34 @@ function processInput() {
     
     // Draw the chart with both datasets if there's combined data, otherwise just the main data
     if (combinedData.length > 0) {
-      drawChart(data, processedJSON.cost || 0, fullOptionArray, combinedData);
+      drawChart(data, fullCost, fullOptionArray, combinedData);
     } else {
-      drawChart(data, processedJSON.cost || 0, fullOptionArray);
+      drawChart(data, fullCost, fullOptionArray);
     }
     
     // Display the processed output
+    const formatCurve = (curve) => curve
+      .map(p => {
+        const diff = p.totalIntrinsicValue - fullCost;
+        const diffStr = diff >= 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
+        return `${p.closingPrice}: ${p.totalIntrinsicValue} (${diffStr})`;
+      })
+      .join('\n');
+
     let outputStr = `
       <strong>Processed Output:</strong><br>
       <strong>Position Count:</strong> ${fullOptionArray.length}<br><br>
+      <strong>Value Curve (optionArray):</strong><br>
+      <pre>${formatCurve(data)}</pre>
     `;
-    
-    fullOptionArray.forEach((opt, index) => {
-      const type = opt.type === 'c' ? 'Call' : 'Put';
+
+    if (combinedData.length > 0) {
       outputStr += `
-        <strong>Position ${index + 1}:</strong> ${Math.abs(opt.qty)} ${opt.qty > 0 ? 'Long' : 'Short'} ${type} @ ${opt.strike}<br>
+        <strong>Value Curve (optionArray + tempOptionArray):</strong><br>
+        <pre>${formatCurve(combinedData)}</pre>
       `;
-    });
-    
+    }
+
     outputDiv.innerHTML = outputStr;
     
   } catch (error) {
@@ -348,8 +388,8 @@ function processInput() {
   "range": "500-1000",
   "strikeIncrement": 10,
   "optionArray": "
-1c620,-1c820,
-1c620,-1c800,
+1c620,-1c820,@2000,
+1c620,-1c800,@-1000,
 1p960,-1p800,
 ",
 "tempOptionArray": "
@@ -538,8 +578,11 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
 
     // Add circles for each option in the optionArray
     if (optionArray && optionArray.length > 0) {
+      // Filter out standalone cost adjustments (where type is null or qty is 0)
+      const realOptions = optionArray.filter(option => option.type && option.strike !== null && option.qty !== 0);
+      
       // First, group the options by strike and type
-      const groupedOptions = optionArray.reduce((acc, option) => {
+      const groupedOptions = realOptions.reduce((acc, option) => {
         const key = `${option.type}${option.strike}`;
         if (!acc[key]) {
           acc[key] = {
@@ -626,7 +669,11 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("y2", yScale.range()[1]);
         
         // Add text label with background
-        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}`;
+        const profitLoss = d.totalIntrinsicValue - cost;
+        const profitLossText = profitLoss >= 0 ? `+$${profitLoss.toFixed(2)}` : `-$${Math.abs(profitLoss).toFixed(2)}`;
+        const profitLossColor = profitLoss >= 0 ? '#4CAF50' : '#F44336';
+        
+        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
         const labelX = xScale(d.closingPrice);
         const labelY = yScale(d.totalIntrinsicValue) - 10;
         
@@ -635,7 +682,24 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("class", "chart-label")
             .attr("x", labelX)
             .attr("y", labelY)
+            .attr("text-anchor", "middle")
+            .attr("alignment-baseline", "middle")
             .text(labelText);
+        
+        // Add profit/loss styling with tspan
+        const lines = labelText.split('\n');
+        textElement.text(''); // Clear the text
+        
+        lines.forEach((line, index) => {
+          const tspan = textElement.append("tspan")
+              .attr("x", labelX)
+              .attr("dy", index === 0 ? "0" : "1.2em")
+              .text(line);
+          
+          if (index === 1) {
+            tspan.attr("fill", profitLossColor).attr("font-size", "12px");
+          }
+        });
         
         // Get the bounding box of the text
         const bbox = textElement.node().getBBox();
