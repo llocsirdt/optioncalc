@@ -711,9 +711,6 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         .attr("stroke-width", 1.5)
         .attr("stroke-dasharray", "3, 3");
 
-    // Add a group for the interactive elements
-    const interactionGroup = svg.append("g");
-
     // Add circles for each option in the optionArray
     if (optionArray && optionArray.length > 0) {
       // Filter out standalone cost adjustments (where type is null or qty is 0)
@@ -779,76 +776,6 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .style("font-weight", "500")
             .text(d.strike);
       });
-    }
-
-    // Function to handle both touch and mouse events
-    function handlePointerEvent(event) {
-        event.preventDefault(); // Prevent default touch behavior
-        const touch = event.type.includes('touch') ? event.changedTouches[0] : event;
-        const [xCoord] = d3.pointer(touch, this);
-        
-        // Remove any existing vertical line and label
-        interactionGroup.selectAll(".vertical-line, .chart-label, .chart-label-bg").remove();
-        
-        // Find the closest data point to the x-coordinate
-        const bisectDate = d3.bisector(d => d.closingPrice).left;
-        const x0 = xScale.invert(xCoord);
-        const i = bisectDate(data, x0, 1);
-        const d0 = data[i - 1];
-        const d1 = data[i];
-        const d = x0 - d0.closingPrice > d1.closingPrice - x0 ? d1 : d0;
-        
-        // Add vertical line
-        interactionGroup.append("line")
-            .attr("class", "vertical-line")
-            .attr("x1", xScale(d.closingPrice))
-            .attr("y1", yScale.range()[0])
-            .attr("x2", xScale(d.closingPrice))
-            .attr("y2", yScale.range()[1]);
-        
-        // Add text label with background
-        const profitLoss = d.totalIntrinsicValue - cost;
-        const profitLossText = profitLoss >= 0 ? `+$${profitLoss.toFixed(2)}` : `-$${Math.abs(profitLoss).toFixed(2)}`;
-        const profitLossColor = profitLoss >= 0 ? '#4CAF50' : '#F44336';
-        
-        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
-        const labelX = xScale(d.closingPrice);
-        const labelY = yScale(d.totalIntrinsicValue) - 10;
-        
-        // Add background rectangle first
-        const textElement = interactionGroup.append("text")
-            .attr("class", "chart-label")
-            .attr("x", labelX)
-            .attr("y", labelY)
-            .attr("text-anchor", "middle")
-            .attr("alignment-baseline", "middle")
-            .text(labelText);
-        
-        // Add profit/loss styling with tspan
-        const lines = labelText.split('\n');
-        textElement.text(''); // Clear the text
-        
-        lines.forEach((line, index) => {
-          const tspan = textElement.append("tspan")
-              .attr("x", labelX)
-              .attr("dy", index === 0 ? "0" : "1.2em")
-              .text(line);
-          
-          if (index === 1) {
-            tspan.attr("fill", profitLossColor).attr("font-size", "12px");
-          }
-        });
-        
-        // Get the bounding box of the text
-        const bbox = textElement.node().getBBox();
-        
-        // Add the background
-        interactionGroup.insert("rect", "text")
-            .attr("class", "chart-label-bg")
-            .attr("x", bbox.x - 2)
-            .attr("y", bbox.y - 2)
-            .attr("width", bbox.width + 4)
-            .attr("height", bbox.height + 4);
     }
 
     // Add key points markers for main curve
@@ -956,6 +883,80 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("font-weight", "bold")
             .attr("fill", "#333")
             .text(d => `$${d.closingPrice.toFixed(0)}`);
+    }
+
+
+    // Add a group for the interactive elements (drawn last to appear on top)
+    const interactionGroup = svg.append("g");
+
+    // Function to handle both touch and mouse events
+    function handlePointerEvent(event) {
+        event.preventDefault(); // Prevent default touch behavior
+        const touch = event.type.includes('touch') ? event.changedTouches[0] : event;
+        const [xCoord] = d3.pointer(touch, this);
+        
+        // Remove any existing vertical line and label
+        interactionGroup.selectAll(".vertical-line, .chart-label, .chart-label-bg").remove();
+        
+        // Find the closest data point to the x-coordinate
+        const bisectDate = d3.bisector(d => d.closingPrice).left;
+        const x0 = xScale.invert(xCoord);
+        const i = bisectDate(data, x0, 1);
+        const d0 = data[i - 1];
+        const d1 = data[i];
+        const d = x0 - d0.closingPrice > d1.closingPrice - x0 ? d1 : d0;
+        
+        // Add vertical line
+        interactionGroup.append("line")
+            .attr("class", "vertical-line")
+            .attr("x1", xScale(d.closingPrice))
+            .attr("y1", yScale.range()[0])
+            .attr("x2", xScale(d.closingPrice))
+            .attr("y2", yScale.range()[1]);
+        
+        // Add text label with background
+        const profitLoss = d.totalIntrinsicValue - cost;
+        const profitLossText = profitLoss >= 0 ? `+$${profitLoss.toFixed(2)}` : `-$${Math.abs(profitLoss).toFixed(2)}`;
+        const profitLossColor = profitLoss >= 0 ? '#4CAF50' : '#F44336';
+        
+        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
+        const labelX = xScale(d.closingPrice);
+        const labelY = yScale(d.totalIntrinsicValue) - 10;
+        
+        // Add background rectangle first
+        const textElement = interactionGroup.append("text")
+            .attr("class", "chart-label")
+            .attr("x", labelX)
+            .attr("y", labelY)
+            .attr("text-anchor", "middle")
+            .attr("alignment-baseline", "middle")
+            .text(labelText);
+        
+        // Add profit/loss styling with tspan
+        const lines = labelText.split('\n');
+        textElement.text(''); // Clear the text
+        
+        lines.forEach((line, index) => {
+          const tspan = textElement.append("tspan")
+              .attr("x", labelX)
+              .attr("dy", index === 0 ? "0" : "1.2em")
+              .text(line);
+          
+          if (index === 1) {
+            tspan.attr("fill", profitLossColor).attr("font-size", "12px");
+          }
+        });
+        
+        // Get the bounding box of the text
+        const bbox = textElement.node().getBBox();
+        
+        // Add the background
+        interactionGroup.insert("rect", "text")
+            .attr("class", "chart-label-bg")
+            .attr("x", bbox.x - 2)
+            .attr("y", bbox.y - 2)
+            .attr("width", bbox.width + 4)
+            .attr("height", bbox.height + 4);
     }
 
     // Add event listeners for both mouse and touch events
