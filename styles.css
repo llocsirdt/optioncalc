@@ -24,7 +24,7 @@ textarea {
 
 #left, #center, #right {
   width: 30vw;
-  min-width: 400px;
+  min-width: 340px;
   margin-right: 20px;
   box-sizing: border-box;
   flex-shrink: 0;
