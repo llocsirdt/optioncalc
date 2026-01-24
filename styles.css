@@ -11,6 +11,194 @@ h1 {
   font-size: 14px;
 }
 
+/* Schwab API Integration Styles */
+#schwab-container {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.schwab-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.schwab-header h3 {
+  margin: 0;
+  color: #333;
+  font-size: 16px;
+}
+
+.schwab-status {
+  font-size: 14px;
+}
+
+.schwab-status .status-success {
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.schwab-status .status-error {
+  color: #F44336;
+  font-weight: bold;
+}
+
+.schwab-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.control-group.auth-group {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.control-group.auth-group label {
+  min-width: auto;
+  font-size: 12px;
+}
+
+.control-group label {
+  font-weight: bold;
+  min-width: 60px;
+}
+
+.control-group input[type="text"],
+.control-group input[type="password"] {
+  padding: 5px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  min-width: 80px;
+}
+
+.control-group input[type="password"] {
+  min-width: 200px;
+  font-family: monospace;
+}
+
+#auth-button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  background-color: #2196F3;
+  color: white;
+  transition: background-color 0.3s;
+}
+
+#auth-button:hover {
+  background-color: #1976D2;
+}
+
+#live-data-toggle {
+  padding: 5px 15px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  transition: background-color 0.3s;
+}
+
+#live-data-toggle.button-start {
+  background-color: #4CAF50;
+  color: white;
+}
+
+#live-data-toggle.button-start:hover {
+  background-color: #45a049;
+}
+
+#live-data-toggle.button-stop {
+  background-color: #F44336;
+  color: white;
+}
+
+#live-data-toggle.button-stop:hover {
+  background-color: #da190b;
+}
+
+.live-data-display {
+  margin-top: 10px;
+}
+
+.price-display {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.price-display span:last-child {
+  color: #2196F3;
+}
+
+/* Options Chain Styles */
+#options-chain-container {
+  margin: 20px 0;
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 15px;
+}
+
+#options-chain-container h4 {
+  margin: 0 0 10px 0;
+  color: #333;
+}
+
+.options-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.options-table th,
+.options-table td {
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid #ddd;
+}
+
+.options-table th {
+  background-color: #f0f0f0;
+  font-weight: bold;
+}
+
+.call-row {
+  background-color: #e8f5e8;
+}
+
+.put-row {
+  background-color: #ffe8e8;
+}
+
+.call-row:hover {
+  background-color: #d4edd4;
+}
+
+.put-row:hover {
+  background-color: #ffd4d4;
+}
+
 
 /* Chart interaction styles */
 .vertical-line {

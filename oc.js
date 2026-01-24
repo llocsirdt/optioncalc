@@ -6,6 +6,71 @@ let fullMinStrike = 0;
 let fullMaxStrike = 0;
 let fullStrikeIncrement = 0;
 
+// Schwab API integration variables
+let schwabConnected = false;
+let currentSymbol = '';
+let liveDataEnabled = false;
+
+// Browser-compatible Schwab API integration
+class SchwabBrowserService {
+  constructor() {
+    this.isAuthenticated = false;
+    this.accessToken = null;
+    this.refreshToken = null;
+  }
+
+  // Initialize with manual token input (browser-compatible)
+  async initializeWithTokens(accessToken, refreshToken) {
+    this.accessToken = accessToken;
+    this.refreshToken = refreshToken;
+    this.isAuthenticated = true;
+    return true;
+  }
+
+  // Simple API call wrapper for browser
+  async makeApiCall(url, options = {}) {
+    if (!this.isAuthenticated) {
+      throw new Error('Not authenticated');
+    }
+
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Authorization': `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+        ...options.headers
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`API call failed: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  // Get quote for a symbol
+  async getQuote(symbol) {
+    const url = `https://api.schwabapi.com/v1/marketdata/quotes?symbols=${symbol}`;
+    return this.makeApiCall(url);
+  }
+
+  // Get options chain
+  async getOptionsChain(symbol, expirationDate) {
+    const url = `https://api.schwabapi.com/v1/marketdata/chains?symbol=${symbol}&expirationDate=${expirationDate}`;
+    return this.makeApiCall(url);
+  }
+
+  // Get option expirations
+  async getOptionExpirations(symbol) {
+    const url = `https://api.schwabapi.com/v1/marketdata/expirationchain?symbol=${symbol}`;
+    return this.makeApiCall(url);
+  }
+}
+
+// Create global Schwab service instance
+const schwabService = new SchwabBrowserService();
+
 // Function to update the chart based on slider value
 function updateChartWithSlider() {
   const slider = document.getElementById('optionRange');
@@ -52,6 +117,272 @@ function showAllOptions() {
   updateChartWithSlider();
 }
 
+// Schwab API Integration Functions
+
+// Initialize Schwab API connection
+async function initializeSchwabAPI() {
+  try {
+    // For browser implementation, we'll use manual token input
+    // In a real implementation, you'd have an OAuth flow here
+    const accessToken = localStorage.getItem('schwab_access_token');
+    const refreshToken = localStorage.getItem('schwab_refresh_token');
+    
+    if (accessToken && refreshToken) {
+      const initialized = await schwabService.initializeWithTokens(accessToken, refreshToken);
+      schwabConnected = initialized;
+      
+      if (initialized) {
+        console.log('Schwab API connected successfully');
+        updateSchwabStatus('Connected', 'success');
+        return true;
+      }
+    }
+    
+    console.log('Schwab API not authenticated');
+    updateSchwabStatus('Not Connected', 'error');
+    return false;
+  } catch (error) {
+    console.error('Error initializing Schwab API:', error);
+    updateSchwabStatus('Error', 'error');
+    return false;
+  }
+}
+
+// Authenticate with Schwab API using manual token input
+async function authenticateSchwab() {
+  const accessToken = document.getElementById('access-token').value;
+  const refreshToken = document.getElementById('refresh-token').value;
+  
+  if (!accessToken || !refreshToken) {
+    alert('Please enter both access token and refresh token');
+    return;
+  }
+  
+  try {
+    const initialized = await schwabService.initializeWithTokens(accessToken, refreshToken);
+    schwabConnected = initialized;
+    
+    if (initialized) {
+      // Save tokens to localStorage
+      localStorage.setItem('schwab_access_token', accessToken);
+      localStorage.setItem('schwab_refresh_token', refreshToken);
+      
+      console.log('Schwab API connected successfully');
+      updateSchwabStatus('Connected', 'success');
+      alert('Successfully connected to Schwab API!');
+    } else {
+      updateSchwabStatus('Error', 'error');
+      alert('Failed to connect to Schwab API');
+    }
+  } catch (error) {
+    console.error('Error authenticating with Schwab API:', error);
+    updateSchwabStatus('Error', 'error');
+    alert('Error connecting to Schwab API: ' + error.message);
+  }
+}
+
+// Update Schwab connection status in UI
+function updateSchwabStatus(status, type) {
+  const statusElement = document.getElementById('schwab-status');
+  if (statusElement) {
+    statusElement.textContent = status;
+    statusElement.className = `status-${type}`;
+  }
+}
+
+// Get real-time quote for underlying symbol
+async function getUnderlyingQuote(symbol) {
+  if (!schwabConnected) {
+    console.log('Schwab API not connected');
+    return null;
+  }
+
+  try {
+    const quote = await schwabService.getQuote(symbol);
+    return quote;
+  } catch (error) {
+    console.error('Error getting quote:', error);
+    return null;
+  }
+}
+
+// Get options chain from Schwab
+async function getOptionsChainFromSchwab(symbol, expirationDate) {
+  if (!schwabConnected) {
+    console.log('Schwab API not connected');
+    return null;
+  }
+
+  try {
+    const chain = await schwabService.getOptionsChain(symbol, expirationDate);
+    return chain;
+  } catch (error) {
+    console.error('Error getting options chain:', error);
+    return null;
+  }
+}
+
+// Get option expirations from Schwab
+async function getOptionExpirationsFromSchwab(symbol) {
+  if (!schwabConnected) {
+    console.log('Schwab API not connected');
+    return null;
+  }
+
+  try {
+    const expirations = await schwabService.getOptionExpirations(symbol);
+    return expirations;
+  } catch (error) {
+    console.error('Error getting option expirations:', error);
+    return null;
+  }
+}
+
+// Parse Schwab options data and convert to calculator format
+function parseSchwabOptionsData(chainData) {
+  const options = [];
+  
+  if (chainData && chainData.callExp && chainData.putExp) {
+    // Process calls
+    chainData.callExp.forEach(call => {
+      if (call.strike && call.last !== null && call.last !== undefined) {
+        options.push({
+          type: 'c',
+          strike: call.strike,
+          last: call.last,
+          bid: call.bid,
+          ask: call.ask,
+          volume: call.totalVolume,
+          openInterest: call.openInterest
+        });
+      }
+    });
+    
+    // Process puts
+    chainData.putExp.forEach(put => {
+      if (put.strike && put.last !== null && put.last !== undefined) {
+        options.push({
+          type: 'p',
+          strike: put.strike,
+          last: put.last,
+          bid: put.bid,
+          ask: put.ask,
+          volume: put.totalVolume,
+          openInterest: put.openInterest
+        });
+      }
+    });
+  }
+  
+  return options;
+}
+
+// Update calculator with live Schwab data
+async function updateCalculatorWithLiveData(symbol) {
+  if (!schwabConnected) {
+    console.log('Schwab API not connected');
+    return;
+  }
+
+  try {
+    // Get underlying quote
+    const quote = await getUnderlyingQuote(symbol);
+    if (quote && quote.quote) {
+      updateUnderlyingPrice(quote.quote.lastPrice);
+    }
+
+    // Get options chain
+    const expirations = await getOptionExpirationsFromSchwab(symbol);
+    if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
+      const nearestExpiration = expirations.expirationList[0]; // Use nearest expiration
+      const chainData = await getOptionsChainFromSchwab(symbol, nearestExpiration);
+      
+      if (chainData) {
+        const options = parseSchwabOptionsData(chainData);
+        updateOptionsChain(options);
+      }
+    }
+  } catch (error) {
+    console.error('Error updating with live data:', error);
+  }
+}
+
+// Update underlying price in UI
+function updateUnderlyingPrice(price) {
+  const priceElement = document.getElementById('underlying-price');
+  if (priceElement) {
+    priceElement.textContent = `$${price.toFixed(2)}`;
+  }
+}
+
+// Update options chain in UI
+function updateOptionsChain(options) {
+  const chainElement = document.getElementById('options-chain');
+  if (chainElement && options.length > 0) {
+    // Sort options by strike
+    options.sort((a, b) => a.strike - b.strike);
+    
+    // Create HTML table
+    let html = '<table class="options-table"><thead><tr><th>Type</th><th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th><th>Volume</th><th>OI</th></tr></thead><tbody>';
+    
+    options.forEach(option => {
+      const rowClass = option.type === 'c' ? 'call-row' : 'put-row';
+      html += `<tr class="${rowClass}">
+        <td>${option.type.toUpperCase()}</td>
+        <td>$${option.strike}</td>
+        <td>$${option.last.toFixed(2)}</td>
+        <td>$${option.bid.toFixed(2)}</td>
+        <td>$${option.ask.toFixed(2)}</td>
+        <td>${option.volume || 0}</td>
+        <td>${option.openInterest || 0}</td>
+      </tr>`;
+    });
+    
+    html += '</tbody></table>';
+    chainElement.innerHTML = html;
+  }
+}
+
+// Toggle live data updates
+function toggleLiveData() {
+  liveDataEnabled = !liveDataEnabled;
+  const toggleButton = document.getElementById('live-data-toggle');
+  
+  if (toggleButton) {
+    toggleButton.textContent = liveDataEnabled ? 'Stop Live Data' : 'Start Live Data';
+    toggleButton.className = liveDataEnabled ? 'button-stop' : 'button-start';
+  }
+  
+  if (liveDataEnabled && currentSymbol) {
+    startLiveDataUpdates();
+  } else {
+    stopLiveDataUpdates();
+  }
+}
+
+// Start live data updates
+let liveDataInterval = null;
+function startLiveDataUpdates() {
+  if (liveDataInterval) {
+    clearInterval(liveDataInterval);
+  }
+  
+  // Update every 5 seconds
+  liveDataInterval = setInterval(() => {
+    if (liveDataEnabled && currentSymbol && schwabConnected) {
+      updateCalculatorWithLiveData(currentSymbol);
+    }
+  }, 5000);
+}
+
+// Stop live data updates
+function stopLiveDataUpdates() {
+  if (liveDataInterval) {
+    clearInterval(liveDataInterval);
+    liveDataInterval = null;
+  }
+}
+
 // Initialize slider event listeners
 function initSlider() {
   const slider = document.getElementById('optionRange');
@@ -67,8 +398,11 @@ function initSlider() {
 }
 
 // Initialize slider when the DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initSlider();
+  
+  // Initialize Schwab API
+  await initializeSchwabAPI();
   
   // Load saved input if it exists
   const savedInput = localStorage.getItem('savedOptionInput');
