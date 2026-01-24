@@ -17,7 +17,6 @@ h1 {
   border: 1px solid #ddd;
   border-radius: 8px;
   padding: 15px;
-  margin-bottom: 20px;
 }
 
 .schwab-header {
@@ -153,7 +152,6 @@ h1 {
 
 /* Options Chain Styles */
 #options-chain-container {
-  margin: 20px 0;
   background: #f9f9f9;
   border: 1px solid #ddd;
   border-radius: 8px;
@@ -249,9 +247,10 @@ textarea {
   display: flex;
 }
 
-#left, #right {
-  width: 33vw;
+#left, #center, #right {
+  width: 30vw;
   min-width: 500px;
+  margin-right: 20px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -303,7 +302,7 @@ pre {
 }
 
 .tradingview-widget-container {
-  margin: 0 0 0 20px;
+  margin: 0;
   border: 1px solid #e0e3eb;
   border-radius: 4px;
   overflow: hidden;

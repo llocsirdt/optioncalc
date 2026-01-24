@@ -15,41 +15,8 @@
 
 </head>
 <body>
-  <h1>Option Calc v1.2.3</h1>
-  
-  <!-- Schwab API Status -->
-  <div id="schwab-container">
-    <div class="schwab-header">
-      <h3>Schwab API Integration</h3>
-      <div class="schwab-status">
-        Status: <span id="schwab-status">Not Connected</span>
-      </div>
-    </div>
-    
-    <div class="schwab-controls">
-      <div class="control-group">
-        <label for="symbol-input">Symbol:</label>
-        <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
-        <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
-      </div>
-      
-      <div class="control-group auth-group">
-        <label for="access-token">Access Token:</label>
-        <input type="password" id="access-token" placeholder="Enter access token">
-        <label for="refresh-token">Refresh Token:</label>
-        <input type="password" id="refresh-token" placeholder="Enter refresh token">
-        <button id="auth-button" onclick="authenticateSchwab()">Authenticate</button>
-      </div>
-      
-      <div class="live-data-display">
-        <div class="price-display">
-          <span>Underlying Price: </span>
-          <span id="underlying-price">--</span>
-        </div>
-      </div>
-    </div>
-  </div>
-  
+  <h1>Option Calc v1.2.4</h1>
+
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
   </div>
@@ -57,19 +24,12 @@
     <label for="optionRange">Positions: <span id="optionCount">n</span></label>
     <input type="range" id="optionRange" min="1" max="1" value="1" style="width: 70%; margin: 0; vertical-align: middle;">
   </div>
+
 <div id="container">
-<div id="left">
+
+  <div id="left">
   <textarea id="textInput" placeholder="Enter option positions"></textarea><br>
   <div id="chart"><div id="chart-container"></div></div>
-  
-  <!-- Options Chain Display -->
-  <div id="options-chain-container">
-    <h4>Live Options Chain</h4>
-    <div id="options-chain">
-      <p>Options chain will appear here when live data is enabled</p>
-    </div>
-  </div>
-  
   <div id="output">
 <pre>
 {
@@ -87,8 +47,11 @@
 }
 </pre>
   </div>
+
 </div>
-<div id="right">
+<div id="center">
+
+  
   <!-- TradingView Script -->
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
@@ -269,6 +232,52 @@
       }
     });
   </script>
+
+
+</div>
+<div id="right">
+
+    
+  <!-- Schwab API Status -->
+  <div id="schwab-container">
+    <div class="schwab-header">
+      <h3>Schwab API Integration</h3>
+      <div class="schwab-status">
+        Status: <span id="schwab-status">Not Connected</span>
+      </div>
+    </div>
+    
+    <div class="schwab-controls">
+      <div class="control-group">
+        <label for="symbol-input">Symbol:</label>
+        <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
+        <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
+      </div>
+      
+      <div class="control-group auth-group">
+        <label for="access-token">Access Token:</label>
+        <input type="password" id="access-token" placeholder="Enter access token">
+        <label for="refresh-token">Refresh Token:</label>
+        <input type="password" id="refresh-token" placeholder="Enter refresh token">
+        <button id="auth-button" onclick="authenticateSchwab()">Authenticate</button>
+      </div>
+      
+      <div class="live-data-display">
+        <div class="price-display">
+          <span>Underlying Price: </span>
+          <span id="underlying-price">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Options Chain Display -->
+  <div id="options-chain-container">
+    <h4>Live Options Chain</h4>
+    <div id="options-chain">
+      <p>Options chain will appear here when live data is enabled</p>
+    </div>
+  </div>
 
 </div>
 </div>
