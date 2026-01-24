@@ -287,7 +287,7 @@ function processInput() {
       fullMinStrike = minStrikeProvided - 50;
       fullMaxStrike = maxStrikeProvided + 50;
     }
-    fullStrikeIncrement = processedJSON.strikeIncrement || 10;
+    fullStrikeIncrement = processedJSON.inc || 10;
 
     // Initialize the slider
     const sliderContainer = document.getElementById('sliderContainer');
@@ -310,7 +310,7 @@ function processInput() {
       combinedOptions,
       fullMinStrike,
       fullMaxStrike,
-      processedJSON.strikeIncrement || 10
+      processedJSON.inc || 10
     );
     
     // Calculate the combined portfolio values (optionArray + tempOptionArray)
@@ -342,7 +342,7 @@ function processInput() {
         allOptions,
         fullMinStrike,
         fullMaxStrike,
-        processedJSON.strikeIncrement || 10
+        processedJSON.inc || 10
       );
     }
     
@@ -409,7 +409,7 @@ function processInput() {
       <pre>{
   "cost": 20000,
   "range": "500-1000",
-  "strikeIncrement": 10,
+  "inc": 10,
   "optionArray": "
 1c620,-1c820,@2000,
 1c620,-1c800,@-1000,
