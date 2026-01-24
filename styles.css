@@ -62,8 +62,8 @@ textarea {
 }
 
 #left, #right {
-  width: 90vw;
-  max-width: 500px;
+  width: 95vw;
+  max-width: 450px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
