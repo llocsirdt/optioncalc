@@ -116,23 +116,23 @@ function findKeyPointsOnCurve(valueCurve, cost) {
 
         // Handle trend changes
         if (trend !== currentTrend) {
-            if (trend === 'down' && currentTrend === 'up') {
+            if (trend !== 'up' && currentTrend === 'up') {
                 // Low point (trend changes from down to up)
                 keyPoints.push({
                     type: 'low_point',
-                    closingPrice: current.closingPrice,
-                    totalIntrinsicValue: current.totalIntrinsicValue,
+                    closingPrice: prev.closingPrice,
+                    totalIntrinsicValue: prev.totalIntrinsicValue,
                     description: 'Low point'
                 });
-            } else if (trend === 'up' && currentTrend === 'down') {
+            } else if (trend !== 'down' && currentTrend === 'down') {
                 // High point (trend changes from up to down)
                 keyPoints.push({
                     type: 'high_point',
-                    closingPrice: current.closingPrice,
-                    totalIntrinsicValue: current.totalIntrinsicValue,
+                    closingPrice: prev.closingPrice,
+                    totalIntrinsicValue: prev.totalIntrinsicValue,
                     description: 'High point'
                 });
-            } else if (trend === 'flat' && (currentTrend === 'up' || currentTrend === 'down')) {
+            } else if (trend === 'flat' && currentTrend !== 'flat') {
                 // Transition from flat to trend - use the last non-flat point as the turning point
                 if (lastNonFlatPoint) {
                     const pointType = currentTrend === 'up' ? 'low_point' : 'high_point';
@@ -381,10 +381,10 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("x", d => xScale(d.closingPrice))
             .attr("y", d => {
                 const y = yScale(d.totalIntrinsicValue);
-                if (d.type === 'low_point') return y + 15;
-                if (d.type === 'high_point') return y - 5;
-                if (d.type === 'zero_crossing') return y - 10;
-                if (d.type === 'curve_endpoint') return y - 12;
+                if (d.type === 'low_point') return y + 12;
+                if (d.type === 'high_point') return y - 8;
+                if (d.type === 'zero_crossing') return y - 8;
+                if (d.type === 'curve_endpoint') return y - 8;
                 return y;
             })
             .attr("text-anchor", "middle")
@@ -440,10 +440,10 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
             .attr("x", d => xScale(d.closingPrice))
             .attr("y", d => {
                 const y = yScale(d.totalIntrinsicValue);
-                if (d.type === 'low_point') return y + 15;
-                if (d.type === 'high_point') return y - 15;
-                if (d.type === 'zero_crossing') return y - 12;
-                if (d.type === 'curve_endpoint') return y - 12;
+                if (d.type === 'low_point') return y + 12;
+                if (d.type === 'high_point') return y - 8;
+                if (d.type === 'zero_crossing') return y - 8;
+                if (d.type === 'curve_endpoint') return y - 8;
                 return y;
             })
             .attr("text-anchor", "middle")
