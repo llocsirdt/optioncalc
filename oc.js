@@ -35,6 +35,8 @@ class SchwabBrowserService {
 
     // Use CORS proxy for testing
     const proxyUrl = `https://cors-anywhere.herokuapp.com/${url}`;
+    console.log('Original URL:', url);
+    console.log('Proxy URL:', proxyUrl);
     
     const response = await fetch(proxyUrl, {
       ...options,
