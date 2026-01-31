@@ -345,6 +345,22 @@ function updateOptionsChain(options) {
 
 // Toggle live data updates
 function toggleLiveData() {
+  // Get the symbol from the input field
+  const symbolInput = document.getElementById('symbol-input');
+  if (symbolInput) {
+    currentSymbol = symbolInput.value.trim().toUpperCase();
+  }
+  
+  if (!currentSymbol) {
+    alert('Please enter a symbol');
+    return;
+  }
+  
+  if (!schwabConnected) {
+    alert('Please connect to Schwab API first');
+    return;
+  }
+  
   liveDataEnabled = !liveDataEnabled;
   const toggleButton = document.getElementById('live-data-toggle');
   
