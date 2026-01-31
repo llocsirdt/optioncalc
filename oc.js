@@ -33,7 +33,10 @@ class SchwabBrowserService {
       throw new Error('Not authenticated');
     }
 
-    const response = await fetch(url, {
+    // Use CORS proxy for testing
+    const proxyUrl = `https://cors-anywhere.herokuapp.com/${url}`;
+    
+    const response = await fetch(proxyUrl, {
       ...options,
       headers: {
         'Authorization': `Bearer ${this.accessToken}`,
