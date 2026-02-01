@@ -373,4 +373,97 @@ pre {
   color: #666;
 }
 
+.offsetting-trades {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.offsetting-trades h4 {
+  margin: 0 0 10px 0;
+  color: #333;
+  font-size: 14px;
+}
+
+.offset-trade {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  margin: 4px 0;
+  border-radius: 6px;
+  background: white;
+  border: 1px solid #e9ecef;
+  font-size: 12px;
+}
+
+.offset-trade.single_leg {
+  border-left: 4px solid #4CAF50;
+}
+
+.offset-trade.spread {
+  border-left: 4px solid #2196F3;
+}
+
+.trade-description {
+  flex: 1;
+}
+
+.trade-description strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.trade-action {
+  font-size: 10px;
+  color: #666;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trade-metrics {
+  align-items: center;
+}
+
+.trade-cost {
+  font-size: 10px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.trade-locked-profit {
+  font-size: 10px;
+  color: #4CAF50;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.trade-additional-profit {
+  font-size: 10px;
+  color: #2196F3;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.trade-total-profit {
+  font-weight: bold;
+  font-size: 11px;
+  white-space: nowrap;
+  padding-left: 8px;
+  border-left: 1px solid #ddd;
+}
+
+.profit-positive {
+  color: #4CAF50;
+}
+
+.profit-neutral {
+  color: #FF9800;
+}
+
 
