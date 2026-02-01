@@ -242,9 +242,9 @@
   <!-- Schwab API Status -->
   <div id="schwab-container">
     <div class="schwab-header">
-      <h3>Schwab API Integration</h3>
+      <h3>API Integration</h3>
       <div class="schwab-status">
-        Status: <span id="schwab-status">Not Connected</span>
+        Status: <span id="schwab-status">Not Connected</span> <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button>
       </div>
     </div>
     
@@ -252,7 +252,6 @@
       <div class="control-group">
         <label for="symbol-input">Symbol:</label>
         <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
-        <button id="test-connection" onclick="testSchwabConnection()">Test Connection</button>
         <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
       </div>      
       <div class="live-data-display">

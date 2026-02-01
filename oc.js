@@ -549,6 +549,18 @@ function updateOptionsChain(options) {
         strikeGroups.get(strike)[option.type] = option;
       });
       
+      // Group fullOptionArray by strike and type to get position quantities
+      const positionMap = new Map();
+      if (fullOptionArray && fullOptionArray.length > 0) {
+        fullOptionArray.forEach(option => {
+          const key = `${option.type}${option.strike}`;
+          if (!positionMap.has(key)) {
+            positionMap.set(key, 0);
+          }
+          positionMap.set(key, positionMap.get(key) + option.qty);
+        });
+      }
+      
       // Sort strikes
       const sortedStrikes = Array.from(strikeGroups.keys()).sort((a, b) => a - b);
       
@@ -567,12 +579,12 @@ function updateOptionsChain(options) {
       html += `</div>`;
       
       html += '<table class="options-table"><thead><tr>';
-      html += '<th colspan="4" class="call-header">CALLS</th>';
+      html += '<th colspan="5" class="call-header">CALLS</th>';
       html += '<th class="strike-header">STRIKE</th>';
-      html += '<th colspan="4" class="put-header">PUTS</th>';
+      html += '<th colspan="5" class="put-header">PUTS</th>';
       html += '</tr><tr>';
       html += '<th>OI</th><th>Vol</th><th>Bid</th><th>Ask</th>';
-      html += '<th></th>';
+      html += '<th>P</th><th></th><th>P</th>';
       html += '<th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th>';
       html += '</tr></thead><tbody>';
       
@@ -580,6 +592,12 @@ function updateOptionsChain(options) {
         const group = strikeGroups.get(strike);
         const call = group.c;
         const put = group.p;
+        
+        // Get position quantities for this strike
+        const callPositionKey = `c${strike}`;
+        const putPositionKey = `p${strike}`;
+        const callPositionQty = positionMap.get(callPositionKey) || 0;
+        const putPositionQty = positionMap.get(putPositionKey) || 0;
         
         // Determine if options are in-the-money
         const callITM = strike < underlyingPrice; // Calls below underlying are ITM
@@ -598,8 +616,13 @@ function updateOptionsChain(options) {
           html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
         }
         
-        // Strike (middle)
-        html += `<td class="strike-cell">$${strike.toFixed(2)}</td>`;
+        // Strike (middle) with P columns showing positions
+        const callPClass = callPositionQty > 0 ? 'position-long' : callPositionQty < 0 ? 'position-short' : 'strike-cell-p';
+        const putPClass = putPositionQty > 0 ? 'position-long' : putPositionQty < 0 ? 'position-short' : 'strike-cell-p';
+        
+        html += `<td class="${callPClass}">${callPositionQty !== 0 ? callPositionQty : ''}</td>`; // P column for calls
+        html += `<td class="strike-cell">$${strike.toFixed(2)}</td>`; // Strike
+        html += `<td class="${putPClass}">${putPositionQty !== 0 ? putPositionQty : ''}</td>`; // P column for puts
         
         // Put side (right)
         if (put) {

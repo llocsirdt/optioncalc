@@ -307,9 +307,37 @@ pre {
 }
 
 .strike-cell {
-  background-color: #fff3e0 !important;
-  font-weight: bold;
+  background-color: #fff3e0;
   color: #f57c00;
+  font-weight: bold;
+  text-align: center;
+}
+
+.strike-cell-p {
+  background-color: #fff3e0;
+  color: #f57c00;
+  font-weight: bold;
+  text-align: center;
+  min-width: 20px;
+  max-width: 20px;
+}
+
+.position-long {
+  background-color: #4CAF50;
+  color: white;
+  font-weight: bold;
+  text-align: center;
+  min-width: 20px;
+  max-width: 20px;
+}
+
+.position-short {
+  background-color: #F44336;
+  color: white;
+  font-weight: bold;
+  text-align: center;
+  min-width: 20px;
+  max-width: 20px;
 }
 
 .itm-cell {
