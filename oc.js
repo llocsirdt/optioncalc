@@ -27,37 +27,56 @@ class SchwabBrowserService {
     return true;
   }
 
-  // Simple API call wrapper for browser
+  // Simple API call wrapper using local proxy
   async makeApiCall(url, options = {}) {
     if (!this.isAuthenticated) {
       throw new Error('Not authenticated');
     }
 
-    // Use CORS proxy for testing
-    const proxyUrl = `https://cors-anywhere.herokuapp.com/${url}`;
-    console.log('Original URL:', url);
-    console.log('Proxy URL:', proxyUrl);
+    // Use local proxy server
+    const proxyUrl = url.replace('https://api.schwabapi.com', 'http://localhost:3001/api');
+    console.log('Making API call via local proxy:', proxyUrl);
+    console.log('Access token present:', !!this.accessToken);
+    console.log('Access token length:', this.accessToken?.length || 0);
+    
+    const headers = {
+      'Authorization': `Bearer ${this.accessToken}`,
+      'Content-Type': 'application/json',
+      ...options.headers
+    };
+    
+    console.log('Request headers:', headers);
     
     const response = await fetch(proxyUrl, {
       ...options,
-      headers: {
-        'Authorization': `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
+      headers: headers
     });
 
     if (!response.ok) {
-      throw new Error(`API call failed: ${response.status}`);
+      throw new Error(`API call failed: ${response.status} ${response.statusText}`);
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('Proxy response:', data);
+    return data;
   }
 
   // Get quote for a symbol
   async getQuote(symbol) {
-    const url = `https://api.schwabapi.com/v1/marketdata/quotes?symbols=${symbol}`;
-    return this.makeApiCall(url);
+    // Try different symbol formats
+    const testSymbols = [symbol, `$${symbol}`, `${symbol}.X`];
+    
+    for (const testSymbol of testSymbols) {
+      try {
+        const url = `https://api.schwabapi.com/v1/marketdata/quotes?symbols=${testSymbol}`;
+        console.log(`Trying symbol format: ${testSymbol}`);
+        return this.makeApiCall(url);
+      } catch (error) {
+        console.log(`Failed with ${testSymbol}:`, error.message);
+      }
+    }
+    
+    throw new Error(`All symbol formats failed for ${symbol}`);
   }
 
   // Get options chain
@@ -164,21 +183,53 @@ async function authenticateSchwab() {
   }
   
   try {
+    // Initialize service with tokens
     const initialized = await schwabService.initializeWithTokens(accessToken, refreshToken);
-    schwabConnected = initialized;
     
-    if (initialized) {
+    if (!initialized) {
+      updateSchwabStatus('Error', 'error');
+      alert('Failed to initialize Schwab service');
+      return;
+    }
+    
+    // Test the tokens with a real API call
+    console.log('Testing tokens with API call...');
+    updateSchwabStatus('Testing...', 'pending');
+    
+    try {
+      // Try a simple API call to validate tokens
+      const testResponse = await schwabService.getQuote('SPY');
+      console.log('Token validation successful:', testResponse);
+      
+      // If we get here, tokens are valid
+      schwabConnected = true;
+      
       // Save tokens to localStorage
       localStorage.setItem('schwab_access_token', accessToken);
       localStorage.setItem('schwab_refresh_token', refreshToken);
       
-      console.log('Schwab API connected successfully');
       updateSchwabStatus('Connected', 'success');
-      alert('Successfully connected to Schwab API!');
-    } else {
-      updateSchwabStatus('Error', 'error');
-      alert('Failed to connect to Schwab API');
+      alert('Successfully connected to Schwab API! Tokens are valid.');
+      
+    } catch (apiError) {
+      console.error('Token validation failed:', apiError);
+      
+      // Check if it's an auth error
+      if (apiError.message.includes('401') || apiError.message.includes('403') || apiError.message.includes('Unauthorized')) {
+        updateSchwabStatus('Invalid Tokens', 'error');
+        alert('Token validation failed: Access token appears to be invalid or expired. Please get fresh tokens.');
+      } else if (apiError.message.includes('404')) {
+        updateSchwabStatus('API Issue', 'error');
+        alert('Token validation failed: API endpoint not found. This might be an API configuration issue.');
+      } else {
+        updateSchwabStatus('Error', 'error');
+        alert('Token validation failed: ' + apiError.message);
+      }
+      
+      // Don't set schwabConnected to true
+      return;
     }
+    
   } catch (error) {
     console.error('Error authenticating with Schwab API:', error);
     updateSchwabStatus('Error', 'error');

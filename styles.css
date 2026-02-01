@@ -164,6 +164,12 @@ pre {
   font-weight: bold;
 }
 
+.schwab-status .status-pending {
+  color: #FF9800;
+  font-weight: bold;
+  font-style: italic;
+}
+
 .schwab-controls {
   display: flex;
   flex-direction: column;
