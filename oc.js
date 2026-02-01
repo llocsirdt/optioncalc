@@ -197,25 +197,32 @@ async function getOptionsChainFromSchwab(symbol, expirationDate) {
   }
 
   try {
+    console.log('⛓️ Getting options chain for:', symbol, 'exp:', expirationDate);
     const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?symbol=${symbol}&expirationDate=${expirationDate}`);
     
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error getting options chain:', error);
-    
-    // Special handling for 502/503 errors (Schwab API issues)
-    if (error.message.includes('502') || error.message.includes('503') || error.message.includes('temporarily unavailable')) {
-      console.log('Options chain temporarily unavailable - this is a known Schwab API issue');
-      // Don't update options chain, but continue with other data
+      console.error('❌ Options chain API error:', response.status, response.statusText);
       return null;
     }
     
-    throw error;
+    // Safely parse JSON response
+    let data;
+    try {
+      const responseText = await response.text();
+      console.log('📄 Raw response text (first 500 chars):', responseText.substring(0, 500));
+      
+      data = JSON.parse(responseText);
+      console.log('⛓️ Chain data:', data);
+    } catch (parseError) {
+      console.error('❌ JSON parse error in options chain:', parseError);
+      console.error('❌ Response was not valid JSON');
+      return null;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error getting options chain:', error);
+    return null;
   }
 }
 
@@ -246,7 +253,27 @@ function parseSchwabOptionsData(chainData) {
   const options = [];
   
   console.log('🔍 Parsing chain data structure:', Object.keys(chainData));
-  console.log('📊 Raw chain data sample:', JSON.stringify(chainData, null, 2).substring(0, 1000) + '...');
+  console.log('📊 Raw chain data type:', typeof chainData);
+  
+  // Safely stringify the data for debugging
+  try {
+    const jsonString = JSON.stringify(chainData, null, 2);
+    console.log('📊 Raw chain data sample:', jsonString.substring(0, 1000) + '...');
+  } catch (error) {
+    console.error('❌ Error stringifying chainData:', error);
+    console.log('📊 Raw chain data (string fallback):', String(chainData).substring(0, 1000) + '...');
+  }
+  
+  // Validate input data
+  if (!chainData) {
+    console.log('❌ chainData is null or undefined');
+    return options;
+  }
+  
+  if (typeof chainData !== 'object') {
+    console.log('❌ chainData is not an object:', typeof chainData);
+    return options;
+  }
   
   if (chainData && chainData.callExpDateMap && chainData.putExpDateMap) {
     // Get the first (closest) expiration date for calls and puts
@@ -254,7 +281,7 @@ function parseSchwabOptionsData(chainData) {
     const putDates = Object.keys(chainData.putExpDateMap).sort();
     
     console.log('📅 All call expiration dates:', callDates);
-    console.log('� All put expiration dates:', putDates);
+    console.log('📅 All put expiration dates:', putDates);
     
     // Use the first (closest) date - they should be the same for calls and puts
     const closestDate = callDates[0];
@@ -301,20 +328,24 @@ function parseSchwabOptionsData(chainData) {
     // Process calls from the closest date only
     if (callStrikes && typeof callStrikes === 'object') {
       Object.entries(callStrikes).forEach(([strike, callArray]) => {
-        if (Array.isArray(callArray) && callArray.length > 0) {
-          const call = callArray[0];
-          if (call.strikePrice && (call.last !== null && call.last !== undefined || call.bid || call.ask)) {
-            options.push({
-              type: 'c',
-              strike: call.strikePrice,
-              last: call.last || 0,
-              bid: call.bid || 0,
-              ask: call.ask || 0,
-              volume: call.totalVolume || 0,
-              openInterest: call.openInterest || 0,
-              expirationDate: call.expirationDate // Add expiration date
-            });
+        try {
+          if (Array.isArray(callArray) && callArray.length > 0) {
+            const call = callArray[0];
+            if (call.strikePrice && (call.last !== null && call.last !== undefined || call.bid || call.ask)) {
+              options.push({
+                type: 'c',
+                strike: call.strikePrice,
+                last: call.last || 0,
+                bid: call.bid || 0,
+                ask: call.ask || 0,
+                volume: call.totalVolume || 0,
+                openInterest: call.openInterest || 0,
+                expirationDate: call.expirationDate // Add expiration date
+              });
+            }
           }
+        } catch (error) {
+          console.error('❌ Error processing call data for strike:', strike, error);
         }
       });
     }
@@ -322,20 +353,24 @@ function parseSchwabOptionsData(chainData) {
     // Process puts from the closest date only
     if (putStrikes && typeof putStrikes === 'object') {
       Object.entries(putStrikes).forEach(([strike, putArray]) => {
-        if (Array.isArray(putArray) && putArray.length > 0) {
-          const put = putArray[0];
-          if (put.strikePrice && (put.last !== null && put.last !== undefined || put.bid || put.ask)) {
-            options.push({
-              type: 'p',
-              strike: put.strikePrice,
-              last: put.last || 0,
-              bid: put.bid || 0,
-              ask: put.ask || 0,
-              volume: put.totalVolume || 0,
-              openInterest: put.openInterest || 0,
-              expirationDate: put.expirationDate // Add expiration date
-            });
+        try {
+          if (Array.isArray(putArray) && putArray.length > 0) {
+            const put = putArray[0];
+            if (put.strikePrice && (put.last !== null && put.last !== undefined || put.bid || put.ask)) {
+              options.push({
+                type: 'p',
+                strike: put.strikePrice,
+                last: put.last || 0,
+                bid: put.bid || 0,
+                ask: put.ask || 0,
+                volume: put.totalVolume || 0,
+                openInterest: put.openInterest || 0,
+                expirationDate: put.expirationDate // Add expiration date
+              });
+            }
           }
+        } catch (error) {
+          console.error('❌ Error processing put data for strike:', strike, error);
         }
       });
     }
@@ -683,9 +718,6 @@ function initSlider() {
 // Initialize slider when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
   initSlider();
-  
-  // Initialize Schwab API
-  await initializeSchwabAPI();
   
   // Load saved input if it exists
   const savedInput = localStorage.getItem('savedOptionInput');

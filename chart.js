@@ -306,7 +306,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         
         svg.append("circle")
           .attr("cx", xScale(option.strike))
-          .attr("cy", 0) // Place at y=0 (intrinsic value = 0)
+          .attr("cy", isPuts ? -16 : 8) // puts above
           .attr("r", 7)
           .attr("fill", isLong ? "#4CAF50" : "#F44336")
           .append("title")
@@ -315,7 +315,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         // Add quantity label
         svg.append("text")
           .attr("x", xScale(option.strike))
-          .attr("y", 1)
+          .attr("y", isPuts ? -15 : 9) // puts above
           .attr("text-anchor", "middle")
           .attr("dominant-baseline", "middle")
           .style("font-weight", "bold")
@@ -326,7 +326,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         // Add strike price - position based on option type
         svg.append("text")
           .attr("x", xScale(option.strike))
-          .attr("y", isPuts ? -9 : 16) // Above for calls, below for puts
+          .attr("y", isPuts ? 0 : 0) // strike label all in line
           .attr("text-anchor", "middle")
           .style("font-size", "10px")
           .style("fill", "#333")
