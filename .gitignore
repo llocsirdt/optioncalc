@@ -5,6 +5,9 @@
 .env.test.local
 .env.production.local
 
+# Files with sensitive credentials
+SCHWAB_SETUP_UNSAFE.md
+
 # Node.js dependencies
 node_modules/
 npm-debug.log*
