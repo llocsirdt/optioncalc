@@ -16,7 +16,7 @@
 
 </head>
 <body>
-  <h1>Option Calc v1.4.5</h1>
+  <h1>Option Calc v1.5.5</h1>
 
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
@@ -252,17 +252,9 @@
       <div class="control-group">
         <label for="symbol-input">Symbol:</label>
         <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
+        <button id="test-connection" onclick="testSchwabConnection()">Test Connection</button>
         <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
-      </div>
-      
-      <div class="control-group auth-group">
-        <label for="access-token">Access Token:</label>
-        <input type="password" id="access-token" placeholder="Enter access token">
-        <label for="refresh-token">Refresh Token:</label>
-        <input type="password" id="refresh-token" placeholder="Enter refresh token">
-        <button id="auth-button" onclick="authenticateSchwab()">Authenticate</button>
-      </div>
-      
+      </div>      
       <div class="live-data-display">
         <div class="price-display">
           <span>Underlying Price: </span>

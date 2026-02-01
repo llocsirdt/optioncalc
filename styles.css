@@ -183,54 +183,35 @@ pre {
   flex-wrap: wrap;
 }
 
-.control-group.auth-group {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px;
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}
-
-.control-group.auth-group label {
-  min-width: auto;
-  font-size: 12px;
-}
-
 .control-group label {
   font-weight: bold;
   min-width: 60px;
 }
 
-.control-group input[type="text"],
-.control-group input[type="password"] {
+.control-group input[type="text"] {
   padding: 5px 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 14px;
-  min-width: 80px;
+  min-width: 150px;
 }
 
-.control-group input[type="password"] {
-  min-width: 200px;
-  font-family: monospace;
-}
 
-#auth-button {
-  padding: 8px 16px;
+#test-connection {
+  padding: 5px 15px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
   font-weight: bold;
-  background-color: #2196F3;
+  background-color: #4CAF50;
   color: white;
   transition: background-color 0.3s;
+  margin-right: 5px;
 }
 
-#auth-button:hover {
-  background-color: #1976D2;
+#test-connection:hover {
+  background-color: #45a049;
 }
 
 #live-data-toggle {
@@ -287,37 +268,81 @@ pre {
   color: #333;
 }
 
+/* Options table styling */
 .options-table {
   width: 100%;
   border-collapse: collapse;
+  margin-top: 10px;
   font-size: 12px;
-}
-
-.options-table th,
-.options-table td {
-  padding: 4px 8px;
-  text-align: center;
-  border: 1px solid #ddd;
 }
 
 .options-table th {
   background-color: #f0f0f0;
+  padding: 8px 4px;
+  text-align: center;
+  border: 1px solid #ddd;
   font-weight: bold;
 }
 
-.call-row {
-  background-color: #e8f5e8;
+.options-table td {
+  padding: 6px 4px;
+  text-align: center;
+  border: 1px solid #ddd;
 }
 
-.put-row {
-  background-color: #ffe8e8;
+.call-header {
+  background-color: #e8f5e8 !important;
+  color: #2e7d32;
 }
 
-.call-row:hover {
-  background-color: #d4edd4;
+.put-header {
+  background-color: #ffebee !important;
+  color: #c62828;
 }
 
-.put-row:hover {
-  background-color: #ffd4d4;
+.strike-header {
+  background-color: #fff3e0 !important;
+  color: #f57c00;
+  font-weight: bold;
 }
+
+.strike-cell {
+  background-color: #fff3e0 !important;
+  font-weight: bold;
+  color: #f57c00;
+}
+
+.itm-cell {
+  background-color: #ddd !important;
+}
+
+.options-header {
+  margin-bottom: 10px;
+}
+
+.options-header h3 {
+  margin: 0;
+  padding: 10px;
+  background-color: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+  color: #333;
+  text-align: center;
+}
+
+.options-unavailable {
+  padding: 20px;
+  text-align: center;
+  background-color: #fff8e1;
+  border: 1px solid #ffcc02;
+  border-radius: 4px;
+  margin-top: 10px;
+}
+
+.options-unavailable p {
+  margin: 5px 0;
+  color: #666;
+}
+
 

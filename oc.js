@@ -11,89 +11,27 @@ let schwabConnected = false;
 let currentSymbol = '';
 let liveDataEnabled = false;
 
-// Browser-compatible Schwab API integration
-class SchwabBrowserService {
-  constructor() {
-    this.isAuthenticated = false;
-    this.accessToken = null;
-    this.refreshToken = null;
-  }
-
-  // Initialize with manual token input (browser-compatible)
-  async initializeWithTokens(accessToken, refreshToken) {
-    this.accessToken = accessToken;
-    this.refreshToken = refreshToken;
-    this.isAuthenticated = true;
-    return true;
-  }
-
-  // Simple API call wrapper using local proxy
-  async makeApiCall(url, options = {}) {
-    if (!this.isAuthenticated) {
-      throw new Error('Not authenticated');
+// Restore last used symbol on page load
+function restoreLastSymbol() {
+  const lastSymbol = localStorage.getItem('lastSymbol');
+  if (lastSymbol) {
+    const symbolInput = document.getElementById('symbol-input');
+    if (symbolInput) {
+      symbolInput.value = lastSymbol;
+      currentSymbol = lastSymbol;
+      console.log('🔄 Restored last symbol:', lastSymbol);
     }
-
-    // Use local proxy server
-    const proxyUrl = url.replace('https://api.schwabapi.com', 'http://localhost:3001/api');
-    console.log('Making API call via local proxy:', proxyUrl);
-    console.log('Access token present:', !!this.accessToken);
-    console.log('Access token length:', this.accessToken?.length || 0);
-    
-    const headers = {
-      'Authorization': `Bearer ${this.accessToken}`,
-      'Content-Type': 'application/json',
-      ...options.headers
-    };
-    
-    console.log('Request headers:', headers);
-    
-    const response = await fetch(proxyUrl, {
-      ...options,
-      headers: headers
-    });
-
-    if (!response.ok) {
-      throw new Error(`API call failed: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    console.log('Proxy response:', data);
-    return data;
-  }
-
-  // Get quote for a symbol
-  async getQuote(symbol) {
-    // Try different symbol formats
-    const testSymbols = [symbol, `$${symbol}`, `${symbol}.X`];
-    
-    for (const testSymbol of testSymbols) {
-      try {
-        const url = `https://api.schwabapi.com/v1/marketdata/quotes?symbols=${testSymbol}`;
-        console.log(`Trying symbol format: ${testSymbol}`);
-        return this.makeApiCall(url);
-      } catch (error) {
-        console.log(`Failed with ${testSymbol}:`, error.message);
-      }
-    }
-    
-    throw new Error(`All symbol formats failed for ${symbol}`);
-  }
-
-  // Get options chain
-  async getOptionsChain(symbol, expirationDate) {
-    const url = `https://api.schwabapi.com/v1/marketdata/chains?symbol=${symbol}&expirationDate=${expirationDate}`;
-    return this.makeApiCall(url);
-  }
-
-  // Get option expirations
-  async getOptionExpirations(symbol) {
-    const url = `https://api.schwabapi.com/v1/marketdata/expirationchain?symbol=${symbol}`;
-    return this.makeApiCall(url);
   }
 }
 
-// Create global Schwab service instance
-const schwabService = new SchwabBrowserService();
+// Save current symbol to localStorage
+function saveCurrentSymbol(symbol) {
+  if (symbol) {
+    localStorage.setItem('lastSymbol', symbol);
+    console.log('💾 Saved symbol:', symbol);
+  }
+}
+
 
 // Function to update the chart based on slider value
 function updateChartWithSlider() {
@@ -144,27 +82,11 @@ function showAllOptions() {
 // Schwab API Integration Functions
 
 // Initialize Schwab API connection
-async function initializeSchwabAPI() {
+async function initializeSchwab() {
   try {
-    // For browser implementation, we'll use manual token input
-    // In a real implementation, you'd have an OAuth flow here
-    const accessToken = localStorage.getItem('schwab_access_token');
-    const refreshToken = localStorage.getItem('schwab_refresh_token');
-    
-    if (accessToken && refreshToken) {
-      const initialized = await schwabService.initializeWithTokens(accessToken, refreshToken);
-      schwabConnected = initialized;
-      
-      if (initialized) {
-        console.log('Schwab API connected successfully');
-        updateSchwabStatus('Connected', 'success');
-        return true;
-      }
-    }
-    
-    console.log('Schwab API not authenticated');
-    updateSchwabStatus('Not Connected', 'error');
-    return false;
+    // The proxy server handles authentication automatically
+    console.log('Schwab service ready - authentication handled by proxy server');
+    return true;
   } catch (error) {
     console.error('Error initializing Schwab API:', error);
     updateSchwabStatus('Error', 'error');
@@ -172,70 +94,37 @@ async function initializeSchwabAPI() {
   }
 }
 
-// Authenticate with Schwab API using manual token input
-async function authenticateSchwab() {
-  const accessToken = document.getElementById('access-token').value;
-  const refreshToken = document.getElementById('refresh-token').value;
-  
-  if (!accessToken || !refreshToken) {
-    alert('Please enter both access token and refresh token');
-    return;
-  }
+// Test Schwab API connection
+async function testSchwabConnection() {
+  console.log('Testing Schwab API connection...');
+  updateSchwabStatus('Testing...');
   
   try {
-    // Initialize service with tokens
-    const initialized = await schwabService.initializeWithTokens(accessToken, refreshToken);
+    // Test with a simple quote request
+    const response = await fetch('http://localhost:3001/api/v1/marketdata/quotes?symbols=SPY');
     
-    if (!initialized) {
-      updateSchwabStatus('Error', 'error');
-      alert('Failed to initialize Schwab service');
-      return;
-    }
-    
-    // Test the tokens with a real API call
-    console.log('Testing tokens with API call...');
-    updateSchwabStatus('Testing...', 'pending');
-    
-    try {
-      // Try a simple API call to validate tokens
-      const testResponse = await schwabService.getQuote('SPY');
-      console.log('Token validation successful:', testResponse);
-      
-      // If we get here, tokens are valid
+    if (response.ok) {
+      const data = await response.json();
+      console.log('✅ Schwab API connection successful');
+      updateSchwabStatus('Connected');
       schwabConnected = true;
-      
-      // Save tokens to localStorage
-      localStorage.setItem('schwab_access_token', accessToken);
-      localStorage.setItem('schwab_refresh_token', refreshToken);
-      
-      updateSchwabStatus('Connected', 'success');
-      alert('Successfully connected to Schwab API! Tokens are valid.');
-      
-    } catch (apiError) {
-      console.error('Token validation failed:', apiError);
-      
-      // Check if it's an auth error
-      if (apiError.message.includes('401') || apiError.message.includes('403') || apiError.message.includes('Unauthorized')) {
-        updateSchwabStatus('Invalid Tokens', 'error');
-        alert('Token validation failed: Access token appears to be invalid or expired. Please get fresh tokens.');
-      } else if (apiError.message.includes('404')) {
-        updateSchwabStatus('API Issue', 'error');
-        alert('Token validation failed: API endpoint not found. This might be an API configuration issue.');
-      } else {
-        updateSchwabStatus('Error', 'error');
-        alert('Token validation failed: ' + apiError.message);
-      }
-      
-      // Don't set schwabConnected to true
-      return;
+    } else {
+      console.error('❌ Schwab API connection failed:', response.status);
+      updateSchwabStatus('Error');
+      schwabConnected = false;
     }
-    
   } catch (error) {
-    console.error('Error authenticating with Schwab API:', error);
-    updateSchwabStatus('Error', 'error');
-    alert('Error connecting to Schwab API: ' + error.message);
+    console.error('❌ Schwab API connection error:', error);
+    updateSchwabStatus('Error');
+    schwabConnected = false;
   }
 }
+
+// Authenticate Schwab (simplified - just tests connection)
+async function authenticateSchwab() {
+  return testSchwabConnection();
+}
+
 
 // Update Schwab connection status in UI
 function updateSchwabStatus(status, type) {
@@ -248,14 +137,52 @@ function updateSchwabStatus(status, type) {
 
 // Get real-time quote for underlying symbol
 async function getUnderlyingQuote(symbol) {
-  if (!schwabConnected) {
-    console.log('Schwab API not connected');
-    return null;
-  }
-
   try {
-    const quote = await schwabService.getQuote(symbol);
-    return quote;
+    console.log(' Getting quote for symbol:', symbol);
+    const response = await fetch(`http://localhost:3001/api/v1/marketdata/quotes?symbols=${symbol}`);
+    
+    if (!response.ok) {
+      console.error('Quote API error:', response.status, response.statusText);
+      return null;
+    }
+    
+    const data = await response.json();
+    console.log(' Raw quote response:', data);
+    
+    // Check if we got errors and try fallback symbol formats
+    if (data.errors && data.errors.invalidSymbols) {
+      console.log(' Invalid symbols:', data.errors.invalidSymbols);
+      
+      // Try alternative formats for index symbols
+      const alternatives = [];
+      if (symbol === 'NDX') {
+        alternatives.push('NDX', '$NDX', 'NDX.X');
+      } else if (symbol === 'SPX') {
+        alternatives.push('SPX', '$SPX', 'SPX.X');
+      } else if (symbol === 'DJX') {
+        alternatives.push('DJX', '$DJX', 'DJX.X');
+      }
+      
+      for (const altSymbol of alternatives) {
+        console.log(` Trying alternative symbol: ${altSymbol}`);
+        try {
+          const altResponse = await fetch(`http://localhost:3001/api/v1/marketdata/quotes?symbols=${altSymbol}`);
+          if (altResponse.ok) {
+            const altData = await altResponse.json();
+            if (!altData.errors) {
+              console.log(` Alternative symbol worked: ${altSymbol}`);
+              return altData;
+            }
+          }
+        } catch (error) {
+          console.log(` Alternative ${altSymbol} failed:`, error);
+        }
+      }
+      
+      return null; // All alternatives failed
+    }
+    
+    return data;
   } catch (error) {
     console.error('Error getting quote:', error);
     return null;
@@ -270,11 +197,25 @@ async function getOptionsChainFromSchwab(symbol, expirationDate) {
   }
 
   try {
-    const chain = await schwabService.getOptionsChain(symbol, expirationDate);
-    return chain;
+    const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?symbol=${symbol}&expirationDate=${expirationDate}`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data;
   } catch (error) {
     console.error('Error getting options chain:', error);
-    return null;
+    
+    // Special handling for 502/503 errors (Schwab API issues)
+    if (error.message.includes('502') || error.message.includes('503') || error.message.includes('temporarily unavailable')) {
+      console.log('Options chain temporarily unavailable - this is a known Schwab API issue');
+      // Don't update options chain, but continue with other data
+      return null;
+    }
+    
+    throw error;
   }
 }
 
@@ -286,8 +227,14 @@ async function getOptionExpirationsFromSchwab(symbol) {
   }
 
   try {
-    const expirations = await schwabService.getOptionExpirations(symbol);
-    return expirations;
+    const response = await fetch(`http://localhost:3001/api/v1/marketdata/expirationchain?symbol=${symbol}`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data;
   } catch (error) {
     console.error('Error getting option expirations:', error);
     return null;
@@ -298,39 +245,156 @@ async function getOptionExpirationsFromSchwab(symbol) {
 function parseSchwabOptionsData(chainData) {
   const options = [];
   
-  if (chainData && chainData.callExp && chainData.putExp) {
-    // Process calls
-    chainData.callExp.forEach(call => {
-      if (call.strike && call.last !== null && call.last !== undefined) {
-        options.push({
-          type: 'c',
-          strike: call.strike,
-          last: call.last,
-          bid: call.bid,
-          ask: call.ask,
-          volume: call.totalVolume,
-          openInterest: call.openInterest
-        });
-      }
-    });
+  console.log('🔍 Parsing chain data structure:', Object.keys(chainData));
+  console.log('📊 Raw chain data sample:', JSON.stringify(chainData, null, 2).substring(0, 1000) + '...');
+  
+  if (chainData && chainData.callExpDateMap && chainData.putExpDateMap) {
+    // Get the first (closest) expiration date for calls and puts
+    const callDates = Object.keys(chainData.callExpDateMap).sort();
+    const putDates = Object.keys(chainData.putExpDateMap).sort();
     
-    // Process puts
-    chainData.putExp.forEach(put => {
-      if (put.strike && put.last !== null && put.last !== undefined) {
-        options.push({
-          type: 'p',
-          strike: put.strike,
-          last: put.last,
-          bid: put.bid,
-          ask: put.ask,
-          volume: put.totalVolume,
-          openInterest: put.openInterest
-        });
-      }
-    });
+    console.log('📅 All call expiration dates:', callDates);
+    console.log('� All put expiration dates:', putDates);
+    
+    // Use the first (closest) date - they should be the same for calls and puts
+    const closestDate = callDates[0];
+    console.log('🎯 Using closest expiration date:', closestDate);
+    
+    // Show raw call data structure for the closest date
+    console.log('🔍 Raw call data for closest date:');
+    const callStrikes = chainData.callExpDateMap[closestDate];
+    if (callStrikes && typeof callStrikes === 'object') {
+      Object.entries(callStrikes).forEach(([strike, callArray]) => {
+        if (Array.isArray(callArray) && callArray.length > 0) {
+          const call = callArray[0];
+          console.log(`    Strike ${strike}:`, {
+            strike: call.strikePrice,
+            bid: call.bid,
+            ask: call.ask,
+            last: call.last,
+            volume: call.totalVolume,
+            oi: call.openInterest
+          });
+        }
+      });
+    }
+    
+    // Show raw put data structure for the closest date
+    console.log('🔍 Raw put data for closest date:');
+    const putStrikes = chainData.putExpDateMap[closestDate];
+    if (putStrikes && typeof putStrikes === 'object') {
+      Object.entries(putStrikes).forEach(([strike, putArray]) => {
+        if (Array.isArray(putArray) && putArray.length > 0) {
+          const put = putArray[0];
+          console.log(`    Strike ${strike}:`, {
+            strike: put.strikePrice,
+            bid: put.bid,
+            ask: put.ask,
+            last: put.last,
+            volume: put.totalVolume,
+            oi: put.openInterest
+          });
+        }
+      });
+    }
+    
+    // Process calls from the closest date only
+    if (callStrikes && typeof callStrikes === 'object') {
+      Object.entries(callStrikes).forEach(([strike, callArray]) => {
+        if (Array.isArray(callArray) && callArray.length > 0) {
+          const call = callArray[0];
+          if (call.strikePrice && (call.last !== null && call.last !== undefined || call.bid || call.ask)) {
+            options.push({
+              type: 'c',
+              strike: call.strikePrice,
+              last: call.last || 0,
+              bid: call.bid || 0,
+              ask: call.ask || 0,
+              volume: call.totalVolume || 0,
+              openInterest: call.openInterest || 0,
+              expirationDate: call.expirationDate // Add expiration date
+            });
+          }
+        }
+      });
+    }
+    
+    // Process puts from the closest date only
+    if (putStrikes && typeof putStrikes === 'object') {
+      Object.entries(putStrikes).forEach(([strike, putArray]) => {
+        if (Array.isArray(putArray) && putArray.length > 0) {
+          const put = putArray[0];
+          if (put.strikePrice && (put.last !== null && put.last !== undefined || put.bid || put.ask)) {
+            options.push({
+              type: 'p',
+              strike: put.strikePrice,
+              last: put.last || 0,
+              bid: put.bid || 0,
+              ask: put.ask || 0,
+              volume: put.totalVolume || 0,
+              openInterest: put.openInterest || 0,
+              expirationDate: put.expirationDate // Add expiration date
+            });
+          }
+        }
+      });
+    }
+    
+  } else {
+    console.log('❌ Expected chainData structure not found');
+    console.log('callExpDateMap exists:', !!chainData?.callExpDateMap);
+    console.log('putExpDateMap exists:', !!chainData?.putExpDateMap);
   }
   
+  console.log(`📊 Parsed ${options.length} options from single expiration date`);
+  if (options.length > 0) {
+    console.log('📊 Sample option:', options[0]);
+  }
   return options;
+}
+
+// Map display symbols to API symbols for special cases
+function mapSymbolForAPI(displaySymbol, endpoint) {
+  // Different endpoints may need different symbol formats
+  const quoteMap = {
+    'NDX': '$NDX',     // Quotes use $ symbol without .X
+    'SPX': '$SPX',
+    'DJX': '$DJX',
+    'RUT': '$RUT',
+    'VIX': '$VIX'
+  };
+  
+  const expirationsMap = {
+    'NDX': '$NDX.X',   // Expirations need $ symbol with .X
+    'SPX': '$SPX.X',
+    'DJX': '$DJX.X',
+    'RUT': '$RUT.X',
+    'VIX': '$VIX.X'
+  };
+  
+  const chainsMap = {
+    'NDX': '$NDX',     // Chains use $ symbol without .X (502 error vs 400)
+    'SPX': '$SPX',
+    'DJX': '$DJX',
+    'RUT': '$RUT',
+    'VIX': '$VIX'
+  };
+  
+  let apiSymbol = displaySymbol;
+  
+  if (endpoint === 'quote') {
+    apiSymbol = quoteMap[displaySymbol] || displaySymbol;
+  } else if (endpoint === 'expirations') {
+    apiSymbol = expirationsMap[displaySymbol] || displaySymbol;
+  } else if (endpoint === 'chains') {
+    apiSymbol = chainsMap[displaySymbol] || displaySymbol;
+  } else {
+    // Default to options format for general use
+    apiSymbol = expirationsMap[displaySymbol] || displaySymbol;
+  }
+  
+  console.log(`🔄 Symbol mapping for ${endpoint}: ${displaySymbol} → ${apiSymbol}`);
+  return apiSymbol;
 }
 
 // Update calculator with live Schwab data
@@ -340,26 +404,70 @@ async function updateCalculatorWithLiveData(symbol) {
     return;
   }
 
+  console.log('🔄 Updating with live data for:', symbol);
+
   try {
-    // Get underlying quote
-    const quote = await getUnderlyingQuote(symbol);
-    if (quote && quote.quote) {
-      updateUnderlyingPrice(quote.quote.lastPrice);
+    // Get underlying quote - use quote mapping
+    const quoteSymbol = mapSymbolForAPI(symbol, 'quote');
+    const quote = await getUnderlyingQuote(quoteSymbol);
+    console.log('📊 Quote data:', quote);
+    
+    if (quote && quote[quoteSymbol] && quote[quoteSymbol].quote) {
+      const lastPrice = quote[quoteSymbol].quote.lastPrice;
+      console.log('💰 Last price:', lastPrice);
+      updateUnderlyingPrice(lastPrice);
+    } else {
+      console.log('❌ Invalid quote data structure');
+      console.log('Available keys in quote:', quote ? Object.keys(quote) : 'quote is null');
+      console.log('Tried symbol:', quoteSymbol);
     }
 
-    // Get options chain
-    const expirations = await getOptionExpirationsFromSchwab(symbol);
+    // Get options chain - use chains mapping
+    const chainsSymbol = mapSymbolForAPI(symbol, 'chains');
+    const expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
+    console.log('📅 Expirations data:', expirations);
+    
     if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
       const nearestExpiration = expirations.expirationList[0]; // Use nearest expiration
-      const chainData = await getOptionsChainFromSchwab(symbol, nearestExpiration);
+      console.log('🎯 Nearest expiration:', nearestExpiration);
+      
+      const chainData = await getOptionsChainFromSchwab(chainsSymbol, nearestExpiration.expirationDate);
+      console.log('⛓️ Chain data:', chainData);
       
       if (chainData) {
         const options = parseSchwabOptionsData(chainData);
+        console.log('📈 Parsed options:', options);
         updateOptionsChain(options);
+      } else {
+        // Handle case where chains API fails (common for index options like NDX)
+        console.log('⚠️ Options chain data not available - this is common for index options');
+        const chainElement = document.getElementById('options-chain');
+        if (chainElement) {
+          chainElement.innerHTML = `
+            <div class="options-header">
+              <h3>Options Chain - Not Available</h3>
+            </div>
+            <div class="options-unavailable">
+              <p>Options data is not available for ${symbol} through the Schwab API.</p>
+              <p>This is common for index symbols like NDX, SPX, etc.</p>
+              <p>Quote data is available and shown above.</p>
+            </div>
+          `;
+        }
+      }
+    } else {
+      console.log('❌ No expirations found');
+      const chainElement = document.getElementById('options-chain');
+      if (chainElement) {
+        chainElement.innerHTML = '<p>No options expirations available for this symbol</p>';
       }
     }
   } catch (error) {
     console.error('Error updating with live data:', error);
+    const chainElement = document.getElementById('options-chain');
+    if (chainElement) {
+      chainElement.innerHTML = '<p>Error loading options data</p>';
+    }
   }
 }
 
@@ -373,29 +481,117 @@ function updateUnderlyingPrice(price) {
 
 // Update options chain in UI
 function updateOptionsChain(options) {
+  console.log('🎨 Updating options chain UI with', options.length, 'options');
+  
   const chainElement = document.getElementById('options-chain');
-  if (chainElement && options.length > 0) {
-    // Sort options by strike
-    options.sort((a, b) => a.strike - b.strike);
+  console.log('🔍 Chain element found:', !!chainElement);
+  
+  if (chainElement) {
+    console.log('📋 Options array length:', options.length);
+    console.log('📊 First option sample:', options[0]);
     
-    // Create HTML table
-    let html = '<table class="options-table"><thead><tr><th>Type</th><th>Strike</th><th>Last</th><th>Bid</th><th>Ask</th><th>Volume</th><th>OI</th></tr></thead><tbody>';
-    
-    options.forEach(option => {
-      const rowClass = option.type === 'c' ? 'call-row' : 'put-row';
-      html += `<tr class="${rowClass}">
-        <td>${option.type.toUpperCase()}</td>
-        <td>$${option.strike}</td>
-        <td>$${option.last.toFixed(2)}</td>
-        <td>$${option.bid.toFixed(2)}</td>
-        <td>$${option.ask.toFixed(2)}</td>
-        <td>${option.volume || 0}</td>
-        <td>${option.openInterest || 0}</td>
-      </tr>`;
-    });
-    
-    html += '</tbody></table>';
-    chainElement.innerHTML = html;
+    if (options.length > 0) {
+      // Get the expiration date from the first option (they're all from the same date)
+      let expirationDate = 'Unknown';
+      if (options.length > 0 && options[0].expirationDate) {
+        // Format the date nicely
+        const date = new Date(options[0].expirationDate);
+        expirationDate = date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          year: 'numeric' 
+        });
+      }
+      
+      // Group options by strike price
+      const strikeGroups = new Map();
+      
+      options.forEach(option => {
+        const strike = option.strike;
+        if (!strikeGroups.has(strike)) {
+          strikeGroups.set(strike, {});
+        }
+        strikeGroups.get(strike)[option.type] = option;
+      });
+      
+      // Sort strikes
+      const sortedStrikes = Array.from(strikeGroups.keys()).sort((a, b) => a - b);
+      
+      // Get current underlying price from the UI
+      const priceElement = document.getElementById('underlying-price');
+      let underlyingPrice = 0;
+      if (priceElement) {
+        const priceText = priceElement.textContent;
+        underlyingPrice = parseFloat(priceText.replace('$', '')) || 0;
+      }
+      console.log('💰 Current underlying price:', underlyingPrice);
+      
+      // Create HTML table with calls and puts side by side
+      let html = `<div class="options-header">`;
+      html += `<h3>Options Chain - ${expirationDate}</h3>`;
+      html += `</div>`;
+      
+      html += '<table class="options-table"><thead><tr>';
+      html += '<th colspan="4" class="call-header">CALLS</th>';
+      html += '<th class="strike-header">STRIKE</th>';
+      html += '<th colspan="4" class="put-header">PUTS</th>';
+      html += '</tr><tr>';
+      html += '<th>OI</th><th>Vol</th><th>Bid</th><th>Ask</th>';
+      html += '<th></th>';
+      html += '<th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th>';
+      html += '</tr></thead><tbody>';
+      
+      sortedStrikes.forEach(strike => {
+        const group = strikeGroups.get(strike);
+        const call = group.c;
+        const put = group.p;
+        
+        // Determine if options are in-the-money
+        const callITM = strike < underlyingPrice; // Calls below underlying are ITM
+        const putITM = strike > underlyingPrice;  // Puts above underlying are ITM
+        
+        html += '<tr>';
+        
+        // Call side (left)
+        if (call) {
+          const callClass = callITM ? 'itm-cell' : '';
+          html += `<td class="${callClass}">${call.openInterest || 0}</td>`;
+          html += `<td class="${callClass}">${call.volume || 0}</td>`;
+          html += `<td class="${callClass}">$${call.bid.toFixed(2)}</td>`;
+          html += `<td class="${callClass}">$${call.ask.toFixed(2)}</td>`;
+        } else {
+          html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
+        }
+        
+        // Strike (middle)
+        html += `<td class="strike-cell">$${strike.toFixed(2)}</td>`;
+        
+        // Put side (right)
+        if (put) {
+          const putClass = putITM ? 'itm-cell' : '';
+          html += `<td class="${putClass}">$${put.bid.toFixed(2)}</td>`;
+          html += `<td class="${putClass}">$${put.ask.toFixed(2)}</td>`;
+          html += `<td class="${putClass}">${put.volume || 0}</td>`;
+          html += `<td class="${putClass}">${put.openInterest || 0}</td>`;
+        } else {
+          html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
+        }
+        
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      console.log('🖼️ Generated HTML length:', html.length);
+      console.log('🖼️ Generated HTML sample:', html.substring(0, 200) + '...');
+      
+      chainElement.innerHTML = html;
+      console.log('✅ Options chain updated in UI');
+    } else {
+      console.log('❌ No options to display');
+      chainElement.innerHTML = '<p>No options data available</p>';
+    }
+  } else {
+    console.log('❌ Chain element not found in DOM');
   }
 }
 
@@ -405,6 +601,8 @@ function toggleLiveData() {
   const symbolInput = document.getElementById('symbol-input');
   if (symbolInput) {
     currentSymbol = symbolInput.value.trim().toUpperCase();
+    // Save the symbol for next time
+    saveCurrentSymbol(currentSymbol);
   }
   
   if (!currentSymbol) {
@@ -412,11 +610,24 @@ function toggleLiveData() {
     return;
   }
   
+  // Auto-test connection if not already connected
   if (!schwabConnected) {
-    alert('Please connect to Schwab API first');
-    return;
+    console.log('🔄 Auto-testing connection before starting live data...');
+    testSchwabConnection().then(() => {
+      // Only proceed with live data if connection was successful
+      if (schwabConnected) {
+        proceedWithLiveData();
+      } else {
+        console.log('❌ Cannot start live data - connection failed');
+      }
+    });
+  } else {
+    proceedWithLiveData();
   }
-  
+}
+
+// Separate function to handle live data toggle after connection check
+function proceedWithLiveData() {
   liveDataEnabled = !liveDataEnabled;
   const toggleButton = document.getElementById('live-data-toggle');
   
@@ -824,8 +1035,29 @@ function processInput() {
 "tempOptionArray": "
 1c650,-1c750,
 "
-}</pre>
-      Or as a comma-separated string in the optionArray: <code>"1c22720,1c22740,1p22860,1p22820"</code>
-    `;
+}"</pre>
+      Or as a comma-separated string in the optionArray: <code>"1c22720,1c22740,1p22860,1p22820"</code>                                                                                         `;
   }
 }
+
+// Initialize the page when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  console.log('🚀 Page loaded, initializing...');
+  restoreLastSymbol();
+  initSlider();
+  
+  // Auto-test connection on page load
+  console.log('🔄 Auto-testing connection on page load...');
+  testSchwabConnection();
+  
+  // Add event listener to save symbol when input changes
+  const symbolInput = document.getElementById('symbol-input');
+  if (symbolInput) {
+    symbolInput.addEventListener('input', function() {
+      const symbol = this.value.trim().toUpperCase();
+      if (symbol) {
+        saveCurrentSymbol(symbol);
+      }
+    });
+  }
+});
