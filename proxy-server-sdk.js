@@ -60,26 +60,44 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       result = await marketClient.expirationChain(symbol);
       
     } else if (path.startsWith('/chains')) {
-      const symbol = query.includes('symbol=') ? 
-        query.split('symbol=')[1].split('&')[0] : 'SPY';
-      const expirationDate = query.includes('expirationDate=') ? 
-        query.split('expirationDate=')[1].split('&')[0] : null;
-      console.log(`Getting options chain for: ${symbol}, exp: ${expirationDate}`);
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      const symbol = url.searchParams.get('symbol') || 'SPY';
+      const expirationDate = url.searchParams.get('expirationDate') || null;
       
-      if (expirationDate) {
-        result = await marketClient.chains(symbol, expirationDate);
-      } else {
-        // Get nearest expiration if none specified
-        console.log('No expiration date provided, getting nearest...');
-        const expirations = await marketClient.expirationChain(symbol);
-        const nearestExp = expirations.expirationList[0]?.expirationDate;
-        console.log(`Nearest expiration found: ${nearestExp}`);
-        if (nearestExp) {
-          result = await marketClient.chains(symbol, nearestExp);
-        } else {
-          throw new Error('No expirations available');
+      // Extract optional parameters using SDK documentation names
+      const strikeCountParam = url.searchParams.get('strikeCount') || url.searchParams.get('strike_count');
+      const optionalParams = {
+        strikeCount: strikeCountParam ? parseInt(strikeCountParam) : 100, // Default to 100 strikes if not provided
+        contractType: url.searchParams.get('contractType') || url.searchParams.get('contract_type') || undefined, // From SDK docs
+        includeUnderlyingQuote: url.searchParams.get('includeUnderlyingQuote') === 'true' || url.searchParams.get('include_underlying_quote') === 'true',
+        strategy: url.searchParams.get('strategy') || undefined,
+        range: url.searchParams.get('range') || url.searchParams.get('strike_range') || undefined, // From SDK docs
+        optionType: url.searchParams.get('optionType') || url.searchParams.get('option_type') || undefined,
+        strike: parseFloat(url.searchParams.get('strike')) || undefined,
+        interval: parseInt(url.searchParams.get('interval')) || undefined
+        // No fromDate/toDate - just pass expiration date
+      };
+      
+      // Remove undefined parameters (but keep strikeCount)
+      Object.keys(optionalParams).forEach(key => {
+        if (optionalParams[key] === undefined && key !== 'strikeCount') {
+          delete optionalParams[key];
         }
-      }
+      });
+      
+      console.log(`Getting options chain for: ${symbol}, exp: ${expirationDate}`);
+      console.log(`Optional params:`, optionalParams);
+      
+      // Build the chain options object for schwab-client-js SDK
+      const chainOptions = {
+        ...optionalParams
+        // Don't include expirationDate - use fromDate/toDate instead
+      };
+      
+      console.log(`Final chain options:`, chainOptions);
+      
+      // Pass expiration date separately like the original implementation
+      result = await marketClient.chains(symbol, expirationDate, optionalParams);
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
@@ -152,5 +170,7 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
   console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
-  console.log(`💼 Trading API: http://localhost:${PORT}/api/v1/trading/accounts`);
+  console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
+  console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);
+  console.log(`📊 Trading API: http://localhost:${PORT}/api/v1/trading/accounts`);
 });

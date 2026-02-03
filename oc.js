@@ -189,8 +189,52 @@ async function getUnderlyingQuote(symbol) {
   }
 }
 
+// Test function to demonstrate new optional parameters
+async function testEnhancedOptionsChain() {
+  if (!schwabConnected) {
+    console.log('❌ Schwab API not connected');
+    return;
+  }
+  
+  console.log('🧪 Testing enhanced options chain parameters...');
+  
+  // Example 1: Get only 5 strikes, calls only
+  console.log('\n📞 Example 1: 5 strikes, calls only');
+  const callsOnly = await getOptionsChainFromSchwab('SPY', '2024-02-16', {
+    strike_count: 5,
+    contract_type: 'CALL'
+  });
+  
+  // Example 2: Get ITM options only with underlying quote
+  console.log('\n💰 Example 2: ITM options with underlying quote');
+  const itmOnly = await getOptionsChainFromSchwab('SPY', '2024-02-16', {
+    strike_range: 'ITM',
+    include_underlying_quote: true
+  });
+  
+  // Example 3: Get specific strike
+  console.log('\n🎯 Example 3: Specific strike only');
+  const specificStrike = await getOptionsChainFromSchwab('SPY', '2024-02-16', {
+    strike: 450
+  });
+  
+  console.log('✅ Enhanced options chain tests completed');
+}
+
+// Add this to your browser console to test: testEnhancedOptionsChain()
+
 // Get options chain from Schwab
-async function getOptionsChainFromSchwab(symbol, expirationDate) {
+// Available optional parameters:
+// strike_count - Number of strikes above/below ATM (e.g., 10)
+// contract_type - CALL, PUT, ALL (e.g., CALL)
+// include_underlying_quote - true/false (e.g., true)
+// strategy - COVERED_CALL, VERTICAL_SPREAD, etc.
+// strike_range - ITM, OTM, ITM_OTM, ALL (e.g., ITM)
+// option_type - S, W, NS, ALL (Standard, Weekly, Non-Standard)
+// strike - Specific strike price (e.g., 450)
+// interval - Strike interval for spreads (e.g., 5)
+// Example: ?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL&strike_range=ITM
+async function getOptionsChainFromSchwab(symbol, expirationDate, optionalParams = {}) {
   if (!schwabConnected) {
     console.log('Schwab API not connected');
     return null;
@@ -198,7 +242,21 @@ async function getOptionsChainFromSchwab(symbol, expirationDate) {
 
   try {
     console.log('⛓️ Getting options chain for:', symbol, 'exp:', expirationDate);
-    const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?symbol=${symbol}&expirationDate=${expirationDate}`);
+    
+    // Build query string with optional parameters
+    let queryString = `symbol=${encodeURIComponent(symbol)}&expirationDate=${encodeURIComponent(expirationDate)}`;
+    
+    // Add optional parameters if provided
+    if (Object.keys(optionalParams).length > 0) {
+      Object.entries(optionalParams).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          queryString += `&${key}=${encodeURIComponent(value)}`;
+        }
+      });
+      console.log('🎯 Using optional parameters:', optionalParams);
+    }
+    
+    const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?${queryString}`);
     
     if (!response.ok) {
       console.error('❌ Options chain API error:', response.status, response.statusText);
@@ -466,8 +524,10 @@ async function updateCalculatorWithLiveData(symbol) {
       const nearestExpiration = expirations.expirationList[0]; // Use nearest expiration
       console.log('🎯 Nearest expiration:', nearestExpiration);
       
-      const chainData = await getOptionsChainFromSchwab(chainsSymbol, nearestExpiration.expirationDate);
-      console.log('⛓️ Chain data:', chainData);
+      const chainData = await getOptionsChainFromSchwab(chainsSymbol, nearestExpiration.expirationDate, {
+      strike_count: 100
+    });
+    console.log('⛓️ Chain data (limited to 200 strikes):', chainData);
       
       if (chainData) {
         const options = parseSchwabOptionsData(chainData);
