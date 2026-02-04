@@ -256,6 +256,9 @@ async function getOptionsChainFromSchwab(symbol, expirationDate, optionalParams 
       console.log('🎯 Using optional parameters:', optionalParams);
     }
     
+    console.log('🔗 DEBUG: Final query string:', queryString);
+    console.log('🔗 DEBUG: Full URL:', `http://localhost:3001/api/v1/marketdata/chains?${queryString}`);
+    
     const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?${queryString}`);
     
     if (!response.ok) {
@@ -517,6 +520,7 @@ async function updateCalculatorWithLiveData(symbol) {
 
     // Get options chain - use chains mapping
     const chainsSymbol = mapSymbolForAPI(symbol, 'chains');
+    console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
     const expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
     console.log('📅 Expirations data:', expirations);
     
@@ -525,9 +529,9 @@ async function updateCalculatorWithLiveData(symbol) {
       console.log('🎯 Nearest expiration:', nearestExpiration);
       
       const chainData = await getOptionsChainFromSchwab(chainsSymbol, nearestExpiration.expirationDate, {
-      strike_count: 100
+      strike_count: 50
     });
-    console.log('⛓️ Chain data (limited to 200 strikes):', chainData);
+    console.log('⛓️ Chain data (limited to 50 strikes):', chainData);
       
       if (chainData) {
         const options = parseSchwabOptionsData(chainData);
