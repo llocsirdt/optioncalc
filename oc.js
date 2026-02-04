@@ -244,7 +244,7 @@ async function getOptionsChainFromSchwab(symbol, expirationDate, optionalParams 
     console.log('⛓️ Getting options chain for:', symbol, 'exp:', expirationDate);
     
     // Build query string with optional parameters
-    let queryString = `symbol=${encodeURIComponent(symbol)}&expirationDate=${encodeURIComponent(expirationDate)}`;
+    let queryString = `symbol=${symbol}&expirationDate=${encodeURIComponent(expirationDate)}`;
     
     // Add optional parameters if provided
     if (Object.keys(optionalParams).length > 0) {
@@ -466,11 +466,11 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
   };
   
   const chainsMap = {
-    'NDX': '$NDX',     // Chains use $ symbol without .X (502 error vs 400)
-    'SPX': '$SPX',
-    'DJX': '$DJX',
-    'RUT': '$RUT',
-    'VIX': '$VIX'
+    'NDX': '%24NDX',     // Chains API requires %24 prefix
+    'SPX': '%24SPX',
+    'DJX': '%24DJX',
+    'RUT': '%24RUT',
+    'VIX': '%24VIX'
   };
   
   let apiSymbol = displaySymbol;

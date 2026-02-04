@@ -35,34 +35,88 @@ app.get('/health', (req, res) => {
 
 // Proxy endpoint for Schwab Market Data API
 app.all('/api/v1/marketdata/*', async (req, res) => {
-  console.log('=== MARKET DATA REQUEST ===');
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] === MARKET DATA REQUEST ===`);
   try {
     const path = req.path.replace('/api/v1/marketdata', '');
     const query = new URL(req.url, `http://localhost:${PORT}`).search;
     
-    console.log(`Path: ${path}`);
-    console.log(`Query: ${query}`);
-    console.log(`Method: ${req.method}`);
+    console.log(`[${timestamp}] Path: ${path}`);
+    console.log(`[${timestamp}] Query: ${query}`);
+    console.log(`[${timestamp}] Method: ${req.method}`);
 
     let result;
 
     // Route to appropriate SDK method
     if (path.startsWith('/quotes')) {
       const symbols = query.includes('symbols=') ? 
-        query.split('symbols=')[1].split('&')[0].split(',') : ['SPY'];
-      console.log(`Getting quotes for: ${symbols.join(', ')}`);
+        query.split('symbols=')[1].split('&')[0].split(',') : null;
+      
+      if (!symbols || symbols.length === 0 || symbols[0] === '') {
+        console.error(`[${timestamp}] ❌ ERROR: No symbols parameter provided for quotes API`);
+        res.status(400).json({
+          error: 'Missing required parameter',
+          message: 'symbols parameter is required (e.g., ?symbols=AAPL,SPY)',
+          path: req.path
+        });
+        return;
+      }
+      
+      console.log(`[${timestamp}] Getting quotes for: ${symbols.join(', ')}`);
+      console.log(`[${timestamp}] 🔗 API Request: marketClient.quotes(["${symbols.join('", "')}"])`);
       result = await marketClient.quotes(symbols);
       
     } else if (path.startsWith('/expirationchain')) {
       const symbol = query.includes('symbol=') ? 
-        query.split('symbol=')[1].split('&')[0] : 'SPY';
-      console.log(`Getting expirations for: ${symbol}`);
+        query.split('symbol=')[1].split('&')[0] : null;
+      
+      if (!symbol || symbol === '') {
+        console.error(`[${timestamp}] ❌ ERROR: No symbol parameter provided for expirations API`);
+        res.status(400).json({
+          error: 'Missing required parameter',
+          message: 'symbol parameter is required (e.g., ?symbol=AAPL)',
+          path: req.path
+        });
+        return;
+      }
+      
+      console.log(`[${timestamp}] Getting expirations for: ${symbol}`);
+      console.log(`[${timestamp}] 🔗 API Request: marketClient.expirationChain("${symbol}")`);
       result = await marketClient.expirationChain(symbol);
       
     } else if (path.startsWith('/chains')) {
       const url = new URL(req.url, `http://localhost:${PORT}`);
-      const symbol = url.searchParams.get('symbol') || 'SPY';
+      // Parse raw query string to avoid auto-decoding
+      const queryString = url.searchParams.toString();
+      const symbolMatch = queryString.match(/symbol=([^&]+)/);
+      const rawSymbol = symbolMatch ? symbolMatch[1] : null;
       const expirationDate = url.searchParams.get('expirationDate') || null;
+      
+      console.log(`[${timestamp}] 🔍 DEBUG: Raw query string: ${queryString}`);
+      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol from query: "${rawSymbol}"`);
+      console.log(`[${timestamp}] 🔍 DEBUG: Parsed expiration date: "${expirationDate}"`);
+      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol type: ${typeof rawSymbol}`);
+      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol length: ${rawSymbol ? rawSymbol.length : 'null'}`);
+      
+      if (!rawSymbol || rawSymbol === '') {
+        console.error(`[${timestamp}] ❌ ERROR: No symbol parameter provided for chains API`);
+        res.status(400).json({
+          error: 'Missing required parameter',
+          message: 'symbol parameter is required (e.g., ?symbol=AAPL&expirationDate=2024-01-19)',
+          path: req.path
+        });
+        return;
+      }
+      
+      if (!expirationDate || expirationDate === '') {
+        console.error(`[${timestamp}] ❌ ERROR: No expirationDate parameter provided for chains API`);
+        res.status(400).json({
+          error: 'Missing required parameter',
+          message: 'expirationDate parameter is required (e.g., ?symbol=AAPL&expirationDate=2024-01-19)',
+          path: req.path
+        });
+        return;
+      }
       
       // Extract optional parameters using SDK documentation names
       const strikeCountParam = url.searchParams.get('strikeCount') || url.searchParams.get('strike_count');
@@ -85,8 +139,8 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
         }
       });
       
-      console.log(`Getting options chain for: ${symbol}, exp: ${expirationDate}`);
-      console.log(`Optional params:`, optionalParams);
+      console.log(`[${timestamp}] Getting options chain for: ${rawSymbol}, exp: ${expirationDate}`);
+      console.log(`[${timestamp}] Optional params:`, optionalParams);
       
       // Build the chain options object for schwab-client-js SDK
       const chainOptions = {
@@ -94,20 +148,27 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
         // Don't include expirationDate - use fromDate/toDate instead
       };
       
-      console.log(`Final chain options:`, chainOptions);
+      console.log(`[${timestamp}] Final chain options:`, chainOptions);
       
-      // Pass expiration date separately like the original implementation
-      result = await marketClient.chains(symbol, expirationDate, optionalParams);
+      // Log the exact API request being made
+      console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${rawSymbol}", "${expirationDate}", ${JSON.stringify(optionalParams)})`);
+      
+      // Pass the raw symbol directly to Schwab SDK (should be %24NDX)
+      console.log(`[${timestamp}] 🔍 DEBUG: Passing raw symbol to SDK: "${rawSymbol}"`);
+      
+      // Test NDX without optional parameters
+      console.log(`[${timestamp}] 🔍 DEBUG: Testing NDX without optional params`);
+      result = await marketClient.chains(rawSymbol, expirationDate, {});
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
     }
 
-    console.log('✅ Market data request successful');
+    console.log(`[${timestamp}] ✅ Market data request successful`);
     res.json(result);
 
   } catch (error) {
-    console.error('❌ Market data request failed:', error.message);
+    console.error(`[${timestamp}] ❌ Market data request failed:`, error.message);
     
     // Special handling for options chain 502 errors
     if (req.path.includes('/chains') && error.message.includes('502')) {
