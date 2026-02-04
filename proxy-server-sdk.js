@@ -92,12 +92,6 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       const rawSymbol = symbolMatch ? symbolMatch[1] : null;
       const expirationDate = url.searchParams.get('expirationDate') || null;
       
-      console.log(`[${timestamp}] 🔍 DEBUG: Raw query string: ${queryString}`);
-      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol from query: "${rawSymbol}"`);
-      console.log(`[${timestamp}] 🔍 DEBUG: Parsed expiration date: "${expirationDate}"`);
-      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol type: ${typeof rawSymbol}`);
-      console.log(`[${timestamp}] 🔍 DEBUG: Raw symbol length: ${rawSymbol ? rawSymbol.length : 'null'}`);
-      
       if (!rawSymbol || rawSymbol === '') {
         console.error(`[${timestamp}] ❌ ERROR: No symbol parameter provided for chains API`);
         res.status(400).json({
@@ -128,7 +122,9 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
         range: url.searchParams.get('range') || url.searchParams.get('strike_range') || undefined, // From SDK docs
         optionType: url.searchParams.get('optionType') || url.searchParams.get('option_type') || undefined,
         strike: parseFloat(url.searchParams.get('strike')) || undefined,
-        interval: parseInt(url.searchParams.get('interval')) || undefined
+        interval: parseInt(url.searchParams.get('interval')) || undefined,
+        // Include expirationDate in the options object
+        expirationDate: expirationDate
         // No fromDate/toDate - just pass expiration date
       };
       
@@ -151,14 +147,15 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       console.log(`[${timestamp}] Final chain options:`, chainOptions);
       
       // Log the exact API request being made
-      console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${rawSymbol}", "${expirationDate}", ${JSON.stringify(optionalParams)})`);
+      console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${rawSymbol}", ${JSON.stringify(optionalParams)})`);
       
-      // Pass the raw symbol directly to Schwab SDK (should be %24NDX)
-      console.log(`[${timestamp}] 🔍 DEBUG: Passing raw symbol to SDK: "${rawSymbol}"`);
+      // Decode the symbol for Schwab SDK (e.g., %24NDX -> $NDX)
+      const decodedSymbol = decodeURIComponent(rawSymbol);
+      console.log(`[${timestamp}] Getting options chain for: ${decodedSymbol}`);
+      console.log(`[${timestamp}] Options object:`, optionalParams);
       
-      // Test NDX without optional parameters
-      console.log(`[${timestamp}] 🔍 DEBUG: Testing NDX without optional params`);
-      result = await marketClient.chains(rawSymbol, expirationDate, {});
+      // Pass symbol and options object to Schwab SDK
+      result = await marketClient.chains(decodedSymbol, optionalParams);
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
