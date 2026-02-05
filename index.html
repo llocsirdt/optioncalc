@@ -11,12 +11,12 @@
 
   <script src="chart.js"></script>
   <script src="oc.js"></script>
-
+  <script src="expiration-dropdown.js"></script>
 
 
 </head>
 <body>
-  <h1>Option Calc v1.7.0</h1>
+  <h1>Option Calc v1.7.1</h1>
 
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
@@ -79,11 +79,13 @@
       "enable_publishing": false,
       "allow_symbol_change": true,
       "container_id": "tradingview_chart1",
+      "volume": false,
       "studies": [
         "MAExp@tv-basicstudies",  // Moving Average
         "BB@tv-basicstudies"  // This adds Bollinger Bands
       ],
       "studies_overrides": {
+        "volume.volume.show": false,  // Add this line
         "moving average.median.color": "#FF6D00",
         "moving average.median.linewidth": 2,
         "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
@@ -124,11 +126,13 @@
       "enable_publishing": false,
       "allow_symbol_change": true,
       "container_id": "tradingview_chart2",
+      "volume": false,
       "studies": [
         "MAExp@tv-basicstudies",  // Moving Average
         "BB@tv-basicstudies"  // This adds Bollinger Bands
       ],
       "studies_overrides": {
+        "volume.volume.show": false,  // Add this line
         "moving average.median.color": "#FF6D00",
         "moving average.median.linewidth": 2,
         "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
@@ -168,11 +172,13 @@
       "enable_publishing": false,
       "allow_symbol_change": true,
       "container_id": "tradingview_chart3",
+      "volume": false,
       "studies": [
         "MAExp@tv-basicstudies",  // Moving Average
         "BB@tv-basicstudies"  // This adds Bollinger Bands
       ],
       "studies_overrides": {
+        "volume.volume.show": false,  // Add this line
         "moving average.median.color": "#FF6D00",
         "moving average.median.linewidth": 2,
         "bollinger bands.median.color": "#3A68CC",  // Color of the middle line
@@ -266,6 +272,11 @@
   <!-- Options Chain Display -->
   <div id="options-chain-container">
     <h4>Live Options Chain</h4>
+      <label for="expiration-dropdown">Expiration:</label>
+      <select id="expiration-dropdown" onchange="updateExpirationDate()">
+        <option value="">Loading expirations...</option>
+      </select>
+      <button id="refresh-expirations" onclick="loadExpirations()">Refresh</button>
     <div id="options-chain">
       <p>Options chain will appear here when live data is enabled</p>
     </div>

@@ -256,6 +256,12 @@ pre {
 }
 
 /* Options Chain Styles */
+
+#expiration-dropdown {
+  font-size: 14px;
+  padding: 5px;
+}
+
 #options-chain-container {
   background: #f9f9f9;
   border: 1px solid #ddd;

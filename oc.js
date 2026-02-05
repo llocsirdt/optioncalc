@@ -132,6 +132,11 @@ function updateSchwabStatus(status, type) {
   if (statusElement) {
     statusElement.textContent = status;
     statusElement.className = `status-${type}`;
+    
+    // Update test-connection button visibility
+    if (typeof updateConnectionButtonVisibility === 'function') {
+      updateConnectionButtonVisibility();
+    }
   }
 }
 
@@ -645,28 +650,44 @@ async function updateCalculatorWithLiveData(symbol) {
     console.log('📅 Expirations data:', expirations);
     
     if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
-      // Use today's date as default expiration
-      const today = new Date();
-      const todayString = today.toISOString().split('T')[0]; // Format as YYYY-MM-DD
-      // console.log('🎯 Using today as expiration:', todayString);
+      // Check if user has selected an expiration from dropdown
+      const selectedExpiration = getSelectedExpiration ? getSelectedExpiration() : null;
       
-      // Debug: Show all available expirations
-      // console.log('📅 Available expirations:');
-      expirations.expirationList.forEach((exp, index) => {
-        // console.log(`  ${index + 1}. ${exp.expirationDate} (days: ${exp.daysToExpiration})`);
-      });
+      let targetExpiration = null;
       
-      // Try to find today's expiration in the available list
-      let targetExpiration = expirations.expirationList.find(exp => exp.expirationDate === todayString);
-      
-      // If today's expiration not found, fall back to nearest expiration
-      if (!targetExpiration) {
-        targetExpiration = expirations.expirationList[0]; // Use nearest expiration
-        // console.log('🎯 Today not available, using nearest expiration:', targetExpiration.expirationDate);
-        // console.log(`🔍 Nearest expiration details: ${targetExpiration.expirationDate}, days: ${targetExpiration.daysToExpiration}`);
+      if (selectedExpiration) {
+        // Use the user-selected expiration
+        targetExpiration = expirations.expirationList.find(exp => exp.expirationDate === selectedExpiration);
+        if (targetExpiration) {
+          console.log('🎯 Using user-selected expiration:', targetExpiration.expirationDate);
+        } else {
+          console.log('⚠️ Selected expiration not found, falling back to nearest');
+          targetExpiration = expirations.expirationList[0];
+        }
       } else {
-        // console.log('🎯 Found today in expirations list:', targetExpiration.expirationDate);
-        // console.log(`🔍 Today expiration details: ${targetExpiration.expirationDate}, days: ${targetExpiration.daysToExpiration}`);
+        // Fallback to today's date logic if no dropdown selection
+        const today = new Date();
+        const todayString = today.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD format in EST/EDT
+        // console.log('🎯 Using today as expiration:', todayString);
+        
+        // Debug: Show all available expirations
+        // console.log('📅 Available expirations:');
+        expirations.expirationList.forEach((exp, index) => {
+          // console.log(`  ${index + 1}. ${exp.expirationDate} (days: ${exp.daysToExpiration})`);
+        });
+        
+        // Try to find today's expiration in the available list
+        targetExpiration = expirations.expirationList.find(exp => exp.expirationDate === todayString);
+        
+        // If today's expiration not found, fall back to nearest expiration
+        if (!targetExpiration) {
+          targetExpiration = expirations.expirationList[0]; // Use nearest expiration
+          // console.log('🎯 Today not available, using nearest expiration:', targetExpiration.expirationDate);
+          // console.log(`🔍 Nearest expiration details: ${targetExpiration.expirationDate}, days: ${targetExpiration.daysToExpiration}`);
+        } else {
+          // console.log('🎯 Found today in expirations list:', targetExpiration.expirationDate);
+          // console.log(`🔍 Today expiration details: ${targetExpiration.expirationDate}, days: ${targetExpiration.daysToExpiration}`);
+        }
       }
       
       const chainData = await getOptionsChainFromSchwab(chainsSymbol, targetExpiration.expirationDate, {
@@ -1498,7 +1519,33 @@ function findOffsettingTrades(currentPositions, marketData) {
 // ... (rest of the code remains the same)
 }
 
-// Update options chain in UI
+// Control test-connection button visibility based on status
+function updateConnectionButtonVisibility() {
+  const statusElement = document.getElementById('schwab-status');
+  const testButton = document.getElementById('test-connection');
+  
+  if (statusElement && testButton) {
+    const currentStatus = statusElement.textContent.trim();
+    
+    if (currentStatus === 'Not Connected') {
+      testButton.style.display = 'inline-block';
+    } else {
+      testButton.style.display = 'none';
+    }
+    
+    console.log(`🔍 Connection status: ${currentStatus}, button visibility: ${testButton.style.display}`);
+  }
+}
+
+// Update the testSchwabConnection function to update button visibility
+const originalTestSchwabConnection = testSchwabConnection;
+if (typeof originalTestSchwabConnection === 'function') {
+  testSchwabConnection = function() {
+    originalTestSchwabConnection();
+    // Update button visibility after connection test
+    setTimeout(updateConnectionButtonVisibility, 1000);
+  };
+}
 function updateOptionsChain(options) {
   console.log('🎨 Updating options chain UI with', options.length, 'options');
   
