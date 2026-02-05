@@ -157,6 +157,15 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       // Pass symbol and options object to Schwab SDK
       result = await marketClient.chains(decodedSymbol, optionalParams);
       
+      // Debug: Check what expiration date we actually got back
+      if (result && result.callExpDateMap) {
+        const expirationDates = Object.keys(result.callExpDateMap);
+        console.log(`[${timestamp}] 🎯 DEBUG: Schwab SDK returned expirations:`, expirationDates);
+        if (expirationDates.length > 0) {
+          console.log(`[${timestamp}] 🎯 DEBUG: Requested: ${expirationDate}, Got: ${expirationDates[0]}`);
+        }
+      }
+      
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
     }
