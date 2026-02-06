@@ -1220,22 +1220,41 @@ function findOffsettingTrades(currentPositions, marketData) {
     
     // Find the long put strike (higher strike) for range calculation
     const higherPutStrike = longPut ? longPut.strike : highestPutStrike;
+    
+    // For single leg calls: look at calls with strikes LOWER than the highest put position
+    const singleLegCallRange = 0; // Start from lowest available call
+    const maxSingleLegCallStrike = higherPutStrike; // Upper limit is highest put strike
+    
+    console.log(`🔍 Looking for single leg calls up to $${maxSingleLegCallStrike} (lower than highest put $${higherPutStrike})`);
+    
+    // For call spreads: start 10 strikes HIGHER than the highest put position
+    // but also include calls BELOW that point to build spreads
     const callStrikeRange = higherPutStrike + 100; // Start 100 points above higher put strike
     
-    console.log(`🔍 Looking for calls starting $${callStrikeRange} (100 points above higher put $${higherPutStrike})`);
+    console.log(`🔍 Looking for call spreads starting $${callStrikeRange} (100 points above highest put $${higherPutStrike})`);
     
-    // Call spread offset: bull call spread (buy lower strike, sell higher strike)
-    const availableCalls = marketData.filter(opt => {
+    // For bear put spreads, we need calls starting from the starting point AND below it
+    // Get calls from the starting point and above for the short leg
+    const availableCallsForShort = marketData.filter(opt => {
       return opt.type === 'c' && opt.strike >= callStrikeRange && Number.isInteger(opt.strike) && opt.strike % 10 === 0;
     });
     
-    console.log(`🔍 Found ${availableCalls.length} call strikes for bull call spreads:`, availableCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+    // Get calls below the starting point for the long leg
+    const availableCallsForLong = marketData.filter(opt => {
+      return opt.type === 'c' && opt.strike < callStrikeRange && opt.strike >= 0 && Number.isInteger(opt.strike) && opt.strike % 10 === 0;
+    });
     
-    // Extract call strikes from availableCalls
-    const callStrikes = availableCalls.map(c => c.strike);
+    console.log(`🔍 Found ${availableCallsForShort.length} call strikes for short leg:`, availableCallsForShort.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+    console.log(`🔍 Found ${availableCallsForLong.length} call strikes for long leg:`, availableCallsForLong.slice(-10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+    
+    // Combine both sets for processing
+    const allAvailableCalls = [...availableCallsForLong, ...availableCallsForShort];
+    
+    // Extract call strikes from all available calls
+    const callStrikes = allAvailableCalls.map(c => c.strike);
     
     // Sort calls by strike (ascending) for proper spread construction
-    const sortedCalls = availableCalls.sort((a, b) => a.strike - b.strike);
+    const sortedCalls = allAvailableCalls.sort((a, b) => a.strike - b.strike);
     console.log(`🔍 Sorted calls:`, sortedCalls.map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`));
     
     // Check multiple spread combinations
@@ -1249,11 +1268,14 @@ function findOffsettingTrades(currentPositions, marketData) {
     console.log(`  callStrikes length: ${callStrikes.length}`);
     console.log(`  maxSpreadsToCheck: ${maxSpreadsToCheck}`);
     
+    // For bear put spreads: find spreads where the HIGHER strike is the starting point
+    // and the LOWER strike is below it
     for (let i = 0; i < callStrikes.length && spreadCount < maxSpreadsToCheck; i++) {
-      const longCallStrike = callStrikes[i]; // Lower strike (buy)
+      const shortCallStrike = callStrikes[i]; // Higher strike (sell) - this is our starting point
       
-      for (let j = i + 1; j < callStrikes.length && spreadCount < maxSpreadsToCheck; j++) {
-        const shortCallStrike = callStrikes[j]; // Higher strike (sell)
+      // Look for lower strikes to pair with this higher strike
+      for (let j = i - 1; j >= 0 && spreadCount < maxSpreadsToCheck; j--) {
+        const longCallStrike = callStrikes[j]; // Lower strike (buy)
         const spreadWidth = shortCallStrike - longCallStrike;
         
         console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
@@ -1349,16 +1371,14 @@ function findOffsettingTrades(currentPositions, marketData) {
     console.log(`  Offsetting trades so far: ${offsettingTrades.length}`);
     
     // Also consider single leg long calls for simpler hedge
-    // For single leg hedges, use the long put strike (not expanded range)
-    const singleLegCallRange = higherPutStrike; // Start at long put strike
-    
-    console.log(`🔍 Looking for calls starting $${singleLegCallRange} (at long put strike $${higherPutStrike})`);
+    // For single leg hedges, use calls with strikes LOWER than the highest put position
+    console.log(`🔍 Looking for single leg calls up to $${maxSingleLegCallStrike} (lower than highest put $${higherPutStrike})`);
     
     const qualifyingCalls = marketData.filter(option => {
-      return option.type === 'c' && option.strike >= singleLegCallRange && Number.isInteger(option.strike) && option.strike % 10 === 0;
+      return option.type === 'c' && option.strike >= singleLegCallRange && option.strike <= maxSingleLegCallStrike && Number.isInteger(option.strike) && option.strike % 10 === 0;
     });
     
-    console.log(`🔍 Found ${qualifyingCalls.length} calls at or above ${singleLegCallRange} for single leg hedge:`, qualifyingCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+    console.log(`🔍 Found ${qualifyingCalls.length} calls up to $${maxSingleLegCallStrike} for single leg hedge:`, qualifyingCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
     
     qualifyingCalls.forEach(option => {
       const callPrice = (option.bid + option.ask) / 2;
@@ -1639,22 +1659,41 @@ function findOffsettingTrades(currentPositions, marketData) {
       
       // For long puts, we want bullish offsets: bull call spreads or long calls
       const putStrike = longPutStrike;
+      
+      // For single leg calls: look at calls with strikes LOWER than the put position
+      const singleLegCallRange = 0; // Start from lowest available call
+      const maxSingleLegCallStrike = putStrike; // Upper limit is put strike
+      
+      console.log(`🔍 Looking for single leg calls up to $${maxSingleLegCallStrike} (lower than put $${putStrike})`);
+      
+      // For call spreads: start 10 strikes HIGHER than the put position
+      // but also include calls BELOW that point to build spreads
       const callStrikeRange = putStrike + 100; // Start 100 points above put strike
       
-      console.log(`🔍 Looking for calls starting $${callStrikeRange} (100 points above put $${putStrike})`);
+      console.log(`🔍 Looking for call spreads starting $${callStrikeRange} (100 points above put $${putStrike})`);
       
-      // Call spread offset: bull call spread (buy lower strike, sell higher strike)
-      const availableCalls = marketData.filter(opt => {
+      // For long puts, we need calls starting from the starting point AND below it
+      // Get calls from the starting point and above for the short leg
+      const availableCallsForShort = marketData.filter(opt => {
         return opt.type === 'c' && opt.strike >= callStrikeRange && Number.isInteger(opt.strike) && opt.strike % 10 === 0;
       });
       
-      console.log(`🔍 Found ${availableCalls.length} call strikes for bull call spreads:`, availableCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+      // Get calls below the starting point for the long leg
+      const availableCallsForLong = marketData.filter(opt => {
+        return opt.type === 'c' && opt.strike < callStrikeRange && opt.strike >= 0 && Number.isInteger(opt.strike) && opt.strike % 10 === 0;
+      });
       
-      // Extract call strikes from availableCalls
-      const callStrikes = availableCalls.map(c => c.strike);
+      console.log(`🔍 Found ${availableCallsForShort.length} call strikes for short leg:`, availableCallsForShort.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+      console.log(`🔍 Found ${availableCallsForLong.length} call strikes for long leg:`, availableCallsForLong.slice(-10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+      
+      // Combine both sets for processing
+      const allAvailableCalls = [...availableCallsForLong, ...availableCallsForShort];
+      
+      // Extract call strikes from all available calls
+      const callStrikes = allAvailableCalls.map(c => c.strike);
       
       // Sort calls by strike (ascending) for proper spread construction
-      const sortedCalls = availableCalls.sort((a, b) => a.strike - b.strike);
+      const sortedCalls = allAvailableCalls.sort((a, b) => a.strike - b.strike);
       console.log(`🔍 Sorted calls:`, sortedCalls.map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`));
       
       // Check multiple spread combinations
@@ -1668,11 +1707,14 @@ function findOffsettingTrades(currentPositions, marketData) {
       console.log(`  callStrikes length: ${callStrikes.length}`);
       console.log(`  maxSpreadsToCheck: ${maxSpreadsToCheck}`);
       
+      // For long puts: find spreads where the HIGHER strike is the starting point
+      // and the LOWER strike is below it
       for (let i = 0; i < callStrikes.length && spreadCount < maxSpreadsToCheck; i++) {
-        const longCallStrike = callStrikes[i]; // Lower strike (buy)
+        const shortCallStrike = callStrikes[i]; // Higher strike (sell) - this is our starting point
         
-        for (let j = i + 1; j < callStrikes.length && spreadCount < maxSpreadsToCheck; j++) {
-          const shortCallStrike = callStrikes[j]; // Higher strike (sell)
+        // Look for lower strikes to pair with this higher strike
+        for (let j = i - 1; j >= 0 && spreadCount < maxSpreadsToCheck; j--) {
+          const longCallStrike = callStrikes[j]; // Lower strike (buy)
           const spreadWidth = shortCallStrike - longCallStrike;
           
           console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
@@ -1762,16 +1804,14 @@ function findOffsettingTrades(currentPositions, marketData) {
       console.log(`  Offsetting trades so far: ${offsettingTrades.length}`);
       
       // Also consider single leg long calls for simpler hedge
-      // For single leg hedges, use the put strike (not expanded range)
-      const singleLegCallRange = putStrike; // Start at put strike
-      
-      console.log(`🔍 Looking for calls starting $${singleLegCallRange} (at put strike $${putStrike})`);
+      // For single leg hedges, use calls with strikes LOWER than the put position
+      console.log(`🔍 Looking for single leg calls up to $${maxSingleLegCallStrike} (lower than put $${putStrike})`);
       
       const qualifyingCalls = marketData.filter(option => {
-        return option.type === 'c' && option.strike >= singleLegCallRange && Number.isInteger(option.strike) && option.strike % 10 === 0;
+        return option.type === 'c' && option.strike >= singleLegCallRange && option.strike <= maxSingleLegCallStrike && Number.isInteger(option.strike) && option.strike % 10 === 0;
       });
       
-      console.log(`🔍 Found ${qualifyingCalls.length} calls at or above ${singleLegCallRange} for single leg hedge:`, qualifyingCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
+      console.log(`🔍 Found ${qualifyingCalls.length} calls up to $${maxSingleLegCallStrike} for single leg hedge:`, qualifyingCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
       
       qualifyingCalls.forEach(option => {
         const callPrice = (option.bid + option.ask) / 2;
