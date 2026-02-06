@@ -127,6 +127,82 @@ async function authenticateSchwab() {
 }
 
 
+// Calculate true locked-in value by finding minimum combined position value
+function calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, originalCost = 0) {
+  console.log('🔍 Calculating true locked-in value...');
+  console.log('📊 Original positions:', originalPositions);
+  console.log('📊 Offsetting positions:', offsettingPositions);
+  console.log('💰 Original position cost:', originalCost);
+  
+  // Combine all positions
+  const allPositions = [...originalPositions, ...offsettingPositions];
+  
+  console.log('🔍 All positions being analyzed:', allPositions);
+  
+  // Find relevant price range to analyze
+  const strikes = allPositions.map(p => p.strike).filter(s => s && typeof s === 'number');
+  console.log('🔍 Valid strikes found:', strikes);
+  
+  const minStrike = Math.max(0, Math.min(...strikes, underlyingPrice) - 20);
+  const maxStrike = Math.max(...strikes, underlyingPrice) + 20;
+  
+  console.log(`📈 Analyzing price range: $${minStrike} - $${maxStrike}`);
+  
+  // Calculate combined position value at different underlying prices
+  let minValue = Infinity;
+  let minPrice = underlyingPrice;
+  
+  // Test key price points: all strikes and current price
+  const testPrices = [
+    ...strikes,
+    underlyingPrice,
+    minStrike,
+    maxStrike,
+    // Add some intermediate points
+    ...Array.from({length: 10}, (_, i) => minStrike + (maxStrike - minStrike) * i / 9)
+  ].sort((a, b) => a - b);
+  
+  for (const price of testPrices) {
+    let totalValue = 0;
+    
+    for (const position of allPositions) {
+      if (position.type === 'c') {
+        // Call option value
+        const intrinsicValue = Math.max(0, price - position.strike) * 100;
+        const positionValue = intrinsicValue * position.qty;
+        totalValue += positionValue;
+        console.log(`  📈 Call ${position.strike}: qty ${position.qty}, intrinsic $${intrinsicValue.toFixed(2)}, position value $${positionValue.toFixed(2)} at price $${price}`);
+      } else if (position.type === 'p') {
+        // Put option value  
+        const intrinsicValue = Math.max(0, position.strike - price) * 100;
+        const positionValue = intrinsicValue * position.qty;
+        totalValue += positionValue;
+        console.log(`  📉 Put ${position.strike}: qty ${position.qty}, intrinsic $${intrinsicValue.toFixed(2)}, position value $${positionValue.toFixed(2)} at price $${price}`);
+      }
+    }
+    
+    console.log(`💰 Total combined value at $${price}: $${totalValue.toFixed(2)}`);
+    
+    if (totalValue < minValue) {
+      minValue = totalValue;
+      minPrice = price;
+    }
+  }
+  
+  console.log(`🔒 Minimum combined value: $${minValue.toFixed(2)} at underlying price $${minPrice.toFixed(2)}`);
+  
+  // The locked-in value is the minimum combined position value minus total costs
+  // Total costs = original position cost + offsetting position cost
+  const offsettingCost = offsettingPositions.reduce((sum, pos) => sum + (pos.cost || 0), 0);
+  const totalCost = originalCost + offsettingCost;
+  const rawLockedInValue = minValue - totalCost;
+  const lockedInValue = Math.max(0, rawLockedInValue);
+  
+  console.log(`💰 Locked-in value: $${lockedInValue.toFixed(2)} (min value $${minValue.toFixed(2)} - total cost $${totalCost.toFixed(2)} = original $${originalCost.toFixed(2)} + offset $${offsettingCost.toFixed(2)}, raw: $${rawLockedInValue.toFixed(2)})`);
+  
+  return lockedInValue;
+}
+
 // Update Schwab connection status in UI
 function updateSchwabStatus(status, type) {
   const statusElement = document.getElementById('schwab-status');
@@ -135,8 +211,24 @@ function updateSchwabStatus(status, type) {
     statusElement.className = `status-${type}`;
     
     // Update test-connection button visibility
-    if (typeof updateConnectionButtonVisibility === 'function') {
-      updateConnectionButtonVisibility();
+    updateConnectionButtonVisibility();
+  }
+}
+
+// Update connection button visibility based on connection status
+function updateConnectionButtonVisibility() {
+  const testButton = document.getElementById('test-connection');
+  const statusElement = document.getElementById('schwab-status');
+  
+  if (testButton && statusElement) {
+    const currentStatus = statusElement.textContent;
+    
+    if (currentStatus === 'Connected') {
+      testButton.style.display = 'none';
+      console.log('🔗 Connection active - hiding test button');
+    } else {
+      testButton.style.display = 'inline-block';
+      console.log('🔗 Not connected - showing test button');
     }
   }
 }
@@ -811,9 +903,10 @@ function getAverageAskPrice(currentStrike, positions) {
 }
 
 // Find offsetting trades that neutralize risk
-function findOffsettingTrades(currentPositions, marketData) {
+function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   console.log('🔍 Analyzing offsetting trades for:', currentPositions);
   console.log('📊 Market data available:', marketData.length, 'options');
+  console.log('💰 Underlying price:', underlyingPrice);
   
   // Debug: Log the structure of currentPositions
   console.log('🔍 Current positions structure:');
@@ -884,6 +977,9 @@ function findOffsettingTrades(currentPositions, marketData) {
         
         maxPotentialProfit = Math.max(maxPotentialProfit, spreadProfit);
         
+        // Store the original spread width for offsetting trade limits
+        const originalSpreadWidth = spreadWidth;
+        
         console.log(`📈 Found call spread: long ${longCall.qty} ${longCall.strike}c @ $${longCallPremium.toFixed(2)}, short ${shortCall.qty} ${shortCall.strike}c @ $${shortCallPremium.toFixed(2)}`);
         console.log(`💰 Spread width: $${spreadWidth}, max value: $${spreadMaxValue.toFixed(2)}`);
         console.log(`💸 Spread cost: long $${longCallCost.toFixed(2)} + short $${shortCallCredit.toFixed(2)} = $${spreadCost.toFixed(2)}`);
@@ -926,6 +1022,9 @@ function findOffsettingTrades(currentPositions, marketData) {
         
         maxPotentialProfit = Math.max(maxPotentialProfit, spreadProfit);
         
+        // Store the original spread width for offsetting trade limits
+        const originalSpreadWidth = spreadWidth;
+        
         console.log(`📉 Found put spread: long ${longPut.qty} ${longPut.strike}p @ $${longPutPremium.toFixed(2)}, short ${shortPut.qty} ${shortPut.strike}p @ $${shortPutPremium.toFixed(2)}`);
         console.log(`💰 Spread width: $${spreadWidth}, max value: $${spreadMaxValue.toFixed(2)}`);
         console.log(`💸 Spread cost: long $${longPutCost.toFixed(2)} + short $${shortPutCredit.toFixed(2)} = $${spreadCost.toFixed(2)}`);
@@ -946,6 +1045,9 @@ function findOffsettingTrades(currentPositions, marketData) {
   });
   
   console.log('💰 Maximum potential profit (offset budget):', maxPotentialProfit);
+
+  // Set default spread width for individual positions (no spread detected)
+  let originalSpreadWidth = 20; // Default for individual positions
   
   // Detect if this is a bull call spread position
   const hasLongCall = callPositions.some(cp => cp.qty > 0);
@@ -1012,18 +1114,20 @@ function findOffsettingTrades(currentPositions, marketData) {
     // Check multiple spread combinations
     const minSpreadWidth = 10;  // Minimum $10 spread width
     const spreadIncrement = 10; // Check in $10 increments
-    const maxSpreadsToCheck = 20; // Increase limit to check more spreads
+    const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
     
     let spreadCount = 0;
     
     console.log(`🔍 Starting bear put spread analysis:`);
     console.log(`  putStrikes length: ${putStrikes.length}`);
-    console.log(`  maxSpreadsToCheck: ${maxSpreadsToCheck}`);
+    console.log(`  Original spread width: $${originalSpreadWidth}`);
+    console.log(`  Max spread width: $${maxSpreadWidth} (2x original)`);
+    console.log(`  No limit on number of spreads to check`);
     
-    for (let i = 0; i < putStrikes.length && spreadCount < maxSpreadsToCheck; i++) {
+    for (let i = 0; i < putStrikes.length; i++) {
       const shortPutStrike = putStrikes[i]; // Lower strike (sell)
       
-      for (let j = i + 1; j < putStrikes.length && spreadCount < maxSpreadsToCheck; j++) {
+      for (let j = i + 1; j < putStrikes.length; j++) {
         const longPutStrike = putStrikes[j]; // Higher strike (buy)
         const spreadWidth = longPutStrike - shortPutStrike;
         
@@ -1032,11 +1136,18 @@ function findOffsettingTrades(currentPositions, marketData) {
         // Only check spreads within minimum width range and in $10 increments
         if (spreadWidth >= minSpreadWidth && spreadWidth % spreadIncrement === 0) {
           
-          console.log(`✅ Processing spread ${shortPutStrike}/${longPutStrike} (width: $${spreadWidth})`);
+          // For bull call spreads: offsetting bear put spread must have at least one leg at or above highest call strike
+          const highestCallStrike = shortCall ? shortCall.strike : longCallStrike;
+          if (longPutStrike < highestCallStrike && shortPutStrike < highestCallStrike) {
+            console.log(`⏭️ Skipping spread ${shortPutStrike}/${longPutStrike} - both legs below highest call strike $${highestCallStrike}`);
+            continue;
+          }
+          
+          console.log(`✅ Processing spread ${shortPutStrike}/${longPutStrike} (width: $${spreadWidth}) - meets protection requirement`);
             
-          // Only process spreads up to $500 width to avoid excessive calculations
-          if (spreadWidth > 500) {
-            console.log(`⏭️ Skipping spread ${shortPutStrike}/${longPutStrike} - width $${spreadWidth} exceeds $500 limit`);
+          // Only process spreads up to the calculated maximum width
+          if (spreadWidth > maxSpreadWidth) {
+            console.log(`⏭️ Skipping spread ${shortPutStrike}/${longPutStrike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
             continue;
           }
           
@@ -1078,8 +1189,18 @@ function findOffsettingTrades(currentPositions, marketData) {
             // Maximum potential value of the new put spread (value at lower strike)
             const potentialValue = spreadMaxValue;
             
-            // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-            const lockedProfit = Math.min(offsetBudget - spreadCost, potentialValue - offsetBudget - spreadCost);
+            // Calculate true locked-in value by analyzing combined position
+            const originalPositions = [
+              { type: 'c', strike: longCallStrike, qty: spreadQty },
+              { type: 'c', strike: shortCall ? shortCall.strike : 260, qty: -spreadQty }
+            ];
+            
+            const offsettingPositions = [
+              { type: 'p', strike: shortPutStrike, qty: Math.abs(spreadQty), cost: spreadCost },
+              { type: 'p', strike: longPutStrike, qty: -Math.abs(spreadQty) }
+            ];
+            
+            const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
             
             // Calculate additional profit potential for the spread based on realistic scenarios
             // For bear put spreads: maximum value is the spread width (difference between strikes)
@@ -1157,8 +1278,17 @@ function findOffsettingTrades(currentPositions, marketData) {
         return; // Skip this put
       }
       
-      // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-      const lockedProfit = Math.min(offsetBudget - offsetCost, potentialValue - offsetBudget - offsetCost);
+      // Calculate true locked-in value by analyzing combined position
+      const originalPositions = [
+        { type: 'c', strike: longCallStrike, qty: spreadQty },
+        { type: 'c', strike: shortCall ? shortCall.strike : 0, qty: -spreadQty }
+      ];
+      
+      const offsettingPositions = [
+        { type: 'p', strike: option.strike, qty: Math.abs(spreadQty) }
+      ];
+      
+      const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
       
       // Upside is the potential value minus locked profit minus cost
       const upside = potentialValue - lockedProfit - offsetCost;
@@ -1260,21 +1390,23 @@ function findOffsettingTrades(currentPositions, marketData) {
     // Check multiple spread combinations
     const minSpreadWidth = 10;  // Minimum $10 spread width
     const spreadIncrement = 10; // Check in $10 increments
-    const maxSpreadsToCheck = 20; // Increase limit to check more spreads
+    const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
     
     let spreadCount = 0;
     
     console.log(`🔍 Starting bull call spread analysis for bear put spread hedge:`);
     console.log(`  callStrikes length: ${callStrikes.length}`);
-    console.log(`  maxSpreadsToCheck: ${maxSpreadsToCheck}`);
+    console.log(`  Original spread width: $${originalSpreadWidth}`);
+    console.log(`  Max spread width: $${maxSpreadWidth} (2x original)`);
+    console.log(`  No limit on number of spreads to check`);
     
     // For bear put spreads: find spreads where the HIGHER strike is the starting point
     // and the LOWER strike is below it
-    for (let i = 0; i < callStrikes.length && spreadCount < maxSpreadsToCheck; i++) {
+    for (let i = 0; i < callStrikes.length; i++) {
       const shortCallStrike = callStrikes[i]; // Higher strike (sell) - this is our starting point
       
       // Look for lower strikes to pair with this higher strike
-      for (let j = i - 1; j >= 0 && spreadCount < maxSpreadsToCheck; j--) {
+      for (let j = i - 1; j >= 0; j--) {
         const longCallStrike = callStrikes[j]; // Lower strike (buy)
         const spreadWidth = shortCallStrike - longCallStrike;
         
@@ -1283,11 +1415,18 @@ function findOffsettingTrades(currentPositions, marketData) {
         // Only check spreads within minimum width range and in $10 increments
         if (spreadWidth >= minSpreadWidth && spreadWidth % spreadIncrement === 0) {
           
-          console.log(`✅ Processing spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
+          // For bear put spreads: offsetting bull call spread must have at least one leg at or below lowest put strike
+          const lowestPutStrike = shortPut ? shortPut.strike : longPutStrike;
+          if (shortCallStrike > lowestPutStrike && longCallStrike > lowestPutStrike) {
+            console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - both legs above lowest put strike $${lowestPutStrike}`);
+            continue;
+          }
           
-          // Only process spreads up to $500 width to avoid excessive calculations
-          if (spreadWidth > 500) {
-            console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds $500 limit`);
+          console.log(`✅ Processing spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth}) - meets protection requirement (at or below lowest put $${lowestPutStrike})`);
+          
+          // Only process spreads up to the calculated maximum width
+          if (spreadWidth > maxSpreadWidth) {
+            console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
             continue;
           }
           
@@ -1330,8 +1469,18 @@ function findOffsettingTrades(currentPositions, marketData) {
             // Maximum potential value of the new call spread (value at higher strike)
             const potentialValue = spreadMaxValue;
             
-            // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-            const lockedProfit = Math.min(offsetBudget - spreadCost, potentialValue - offsetBudget - spreadCost);
+            // Calculate true locked-in value by analyzing combined position
+            const originalPositions = [
+              { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: spreadQty },
+              { type: 'p', strike: longPutStrike, qty: -spreadQty }
+            ];
+            
+            const offsettingPositions = [
+              { type: 'c', strike: longCallStrike, qty: Math.abs(spreadQty), cost: spreadCost },
+              { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty) }
+            ];
+            
+            const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
             
             // Calculate additional profit potential for the spread based on realistic scenarios
             // For bull call spreads: maximum value is the spread width (difference between strikes)
@@ -1385,22 +1534,31 @@ function findOffsettingTrades(currentPositions, marketData) {
       const offsetCost = callPrice * Math.abs(spreadQty) * 100; // Cost to buy calls
       
       // For bear put spreads, calculate additional profit potential based on realistic scenarios
-      // For calls: calculate value at the lowest put strike (most bearish scenario for the original position)
-      const lowestPutStrike = Math.min(...putPositions.map(pp => pp.strike));
-      const callValueAtLowestPut = Math.max(0, option.strike - lowestPutStrike) * 100 * Math.abs(spreadQty);
+      // For calls: calculate value at the highest put strike (most bullish scenario for the original position)
+      const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
+      const callValueAtHighestPut = Math.max(0, highestPutStrike - option.strike) * 100 * Math.abs(spreadQty);
       
-      // Potential value is the call's value at the lowest put strike
-      const potentialValue = callValueAtLowestPut;
+      // Potential value is the call's value at the highest put strike
+      const potentialValue = callValueAtHighestPut;
       
-      // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-      const lockedProfit = Math.min(offsetBudget - offsetCost, potentialValue - offsetBudget - offsetCost);
+      // Calculate true locked-in value by analyzing combined position
+      const originalPositions = [
+        { type: 'p', strike: higherPutStrike, qty: spreadQty },
+        { type: 'p', strike: highestPutStrike, qty: -spreadQty }
+      ];
       
-      const upside = callValueAtLowestPut - lockedProfit - offsetCost; // Additional profit beyond locked profit
+      const offsettingPositions = [
+        { type: 'c', strike: option.strike, qty: Math.abs(spreadQty) }
+      ];
+      
+      const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+      
+      const upside = callValueAtHighestPut - lockedProfit - offsetCost; // Additional profit beyond locked profit
       
       // Total profit potential = locked profit + upside
       const totalProfitPotential = lockedProfit + upside;
       
-      console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${lowestPutStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
+      console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${highestPutStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
       
       if (offsetCost <= offsetBudget && lockedProfit >= 0) {
         console.log(`✅ Risk-free call offset found!`);
@@ -1499,7 +1657,7 @@ function findOffsettingTrades(currentPositions, marketData) {
         
         // Filter out puts where potential value is less than the position being offset
         // For short calls, the position's potential value is the premium received
-        const shortCall = callPositions.find(cp => cp.strike === shortCallStrike);
+        const shortCall = callPositions.find(cp => cp.strike === higherCallStrike);
         const positionPotentialValue = shortCall ? shortCall.premium * 100 * Math.abs(shortCall.qty) : 0;
         
         if (potentialValue < positionPotentialValue) {
@@ -1507,8 +1665,16 @@ function findOffsettingTrades(currentPositions, marketData) {
           return; // Skip this put
         }
         
-        // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-        const lockedProfit = Math.min(offsetBudget - offsetCost, potentialValue - offsetBudget - offsetCost);
+        // Calculate true locked-in value by analyzing combined position
+        const originalPositions = [
+          { type: 'c', strike: higherCallStrike, qty: positionQty }
+        ];
+        
+        const offsettingPositions = [
+          { type: 'p', strike: option.strike, qty: Math.abs(positionQty) }
+        ];
+        
+        const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
         
         const upside = putValueAtLowestCall - lockedProfit - offsetCost; // Additional profit beyond locked profit
         
@@ -1552,19 +1718,37 @@ function findOffsettingTrades(currentPositions, marketData) {
       // Check multiple spread combinations
       const minSpreadWidth = 10;  // Minimum $10 spread width
       const spreadIncrement = 10; // Check in $10 increments
-      const maxSpreadsToCheck = 50; // Increase limit to show more options
+      const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
       
       let spreadCount = 0;
       
-      for (let i = 0; i < sortedPuts.length && spreadCount < maxSpreadsToCheck; i++) {
+      console.log(`🔍 Starting bear put spread analysis for individual long put hedge:`);
+      console.log(`  sortedPuts length: ${sortedPuts.length}`);
+      console.log(`  Original spread width: $${originalSpreadWidth}`);
+      console.log(`  Max spread width: $${maxSpreadWidth} (2x original)`);
+      console.log(`  No limit on number of spreads to check`);
+      
+      for (let i = 0; i < sortedPuts.length; i++) {
         const shortPut = sortedPuts[i]; // Lower strike (sell)
         
-        for (let j = i + 1; j < sortedPuts.length && spreadCount < maxSpreadsToCheck; j++) {
+        for (let j = i + 1; j < sortedPuts.length; j++) {
           const longPut = sortedPuts[j]; // Higher strike (buy)
           const spreadWidth = longPut.strike - shortPut.strike;
           
           // Only check spreads within minimum width range and in $10 increments
           if (spreadWidth >= minSpreadWidth && spreadWidth % spreadIncrement === 0) {
+            
+            // For individual long puts hedging short calls: offsetting bear put spread must have at least one leg at or above the short call strike
+            if (longPut.strike < higherCallStrike && shortPut.strike < higherCallStrike) {
+              console.log(`⏭️ Skipping spread ${shortPut.strike}/${longPut.strike} - both legs below short call strike $${higherCallStrike}`);
+              continue;
+            }
+            
+            // Only process spreads up to the calculated maximum width
+            if (spreadWidth > maxSpreadWidth) {
+              console.log(`⏭️ Skipping spread ${shortPut.strike}/${longPut.strike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
+              continue;
+            }
             
             //console.log(`🔍 Checking spread: buy ${longPut.strike} put, sell ${shortPut.strike} put (width: $${spreadWidth})`);
             
@@ -1597,8 +1781,17 @@ function findOffsettingTrades(currentPositions, marketData) {
             // Maximum potential value of the new put spread (value at lower strike)
             const potentialValue = spreadMaxValue;
             
-            // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-            const lockedProfit = Math.min(offsetBudget - spreadCost, potentialValue - offsetBudget - spreadCost);
+            // Calculate true locked-in value by analyzing combined position
+            const originalPositions = [
+              { type: 'p', strike: putStrike, qty: positionQty }
+            ];
+            
+            const offsettingPositions = [
+              { type: 'p', strike: shortPut.strike, qty: Math.abs(positionQty), cost: spreadCost },
+              { type: 'p', strike: longPut.strike, qty: -Math.abs(positionQty) }
+            ];
+            
+            const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
             
             // Calculate additional profit potential for the spread based on realistic scenarios
             // For bear put spreads: maximum value is the spread width (difference between strikes)
@@ -1699,21 +1892,23 @@ function findOffsettingTrades(currentPositions, marketData) {
       // Check multiple spread combinations
       const minSpreadWidth = 10;  // Minimum $10 spread width
       const spreadIncrement = 10; // Check in $10 increments
-      const maxSpreadsToCheck = 20; // Increase limit to check more spreads
+      const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
       
       let spreadCount = 0;
       
       console.log(`🔍 Starting bull call spread analysis for long put hedge:`);
       console.log(`  callStrikes length: ${callStrikes.length}`);
-      console.log(`  maxSpreadsToCheck: ${maxSpreadsToCheck}`);
+      console.log(`  Original spread width: $${originalSpreadWidth}`);
+      console.log(`  Max spread width: $${maxSpreadWidth} (2x original)`);
+      console.log(`  No limit on number of spreads to check`);
       
       // For long puts: find spreads where the HIGHER strike is the starting point
       // and the LOWER strike is below it
-      for (let i = 0; i < callStrikes.length && spreadCount < maxSpreadsToCheck; i++) {
+      for (let i = 0; i < callStrikes.length; i++) {
         const shortCallStrike = callStrikes[i]; // Higher strike (sell) - this is our starting point
         
         // Look for lower strikes to pair with this higher strike
-        for (let j = i - 1; j >= 0 && spreadCount < maxSpreadsToCheck; j--) {
+        for (let j = i - 1; j >= 0; j--) {
           const longCallStrike = callStrikes[j]; // Lower strike (buy)
           const spreadWidth = shortCallStrike - longCallStrike;
           
@@ -1722,11 +1917,17 @@ function findOffsettingTrades(currentPositions, marketData) {
           // Only check spreads within minimum width range and in $10 increments
           if (spreadWidth >= minSpreadWidth && spreadWidth % spreadIncrement === 0) {
             
-            console.log(`✅ Processing spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
+            // For individual long puts: offsetting bull call spread must have at least one leg at or above the put strike
+            if (shortCallStrike < putStrike && longCallStrike < putStrike) {
+              console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - both legs below put strike $${putStrike}`);
+              continue;
+            }
             
-            // Only process spreads up to $500 width to avoid excessive calculations
-            if (spreadWidth > 500) {
-              console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds $500 limit`);
+            console.log(`✅ Processing spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth}) - meets protection requirement`);
+            
+            // Only process spreads up to the calculated maximum width
+            if (spreadWidth > maxSpreadWidth) {
+              console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
               continue;
             }
             
@@ -1763,8 +1964,17 @@ function findOffsettingTrades(currentPositions, marketData) {
               // Maximum potential value of the new call spread (value at higher strike)
               const potentialValue = spreadMaxValue;
               
-              // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-              const lockedProfit = Math.min(offsetBudget - spreadCost, potentialValue - offsetBudget - spreadCost);
+              // Calculate true locked-in value by analyzing combined position
+              const originalPositions = [
+                { type: 'c', strike: shortCallStrike, qty: positionQty }
+              ];
+              
+              const offsettingPositions = [
+                { type: 'c', strike: longCallStrike, qty: Math.abs(positionQty), cost: spreadCost },
+                { type: 'c', strike: shortCallStrike, qty: -Math.abs(positionQty) }
+              ];
+              
+              const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
               
               // Calculate additional profit potential for the spread based on realistic scenarios
               // For bull call spreads: maximum value is the spread width (difference between strikes)
@@ -1824,8 +2034,16 @@ function findOffsettingTrades(currentPositions, marketData) {
         // Potential value is the call's value at the put strike
         const potentialValue = callValueAtPutStrike;
         
-        // Locked profit is the minimum of (budget - cost) or (potential - budget - cost)
-        const lockedProfit = Math.min(offsetBudget - offsetCost, potentialValue - offsetBudget - offsetCost);
+        // Calculate true locked-in value by analyzing combined position
+        const originalPositions = [
+          { type: 'p', strike: putStrike, qty: positionQty }
+        ];
+        
+        const offsettingPositions = [
+          { type: 'c', strike: option.strike, qty: Math.abs(positionQty) }
+        ];
+        
+        const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
         
         const upside = callValueAtPutStrike - lockedProfit - offsetCost; // Additional profit beyond locked profit
         
@@ -2113,7 +2331,7 @@ function updateOptionsChain(options) {
         console.log('📊 fullOptionArray length:', fullOptionArray.length);
         console.log('📊 options length:', options.length);
         
-        const offsettingTrades = findOffsettingTrades(fullOptionArray, options);
+        const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
         console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
         console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
         

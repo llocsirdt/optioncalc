@@ -145,7 +145,5 @@ window.addEventListener('load', function() {
   }
   
   // Update connection button visibility on page load
-  if (typeof updateConnectionButtonVisibility === 'function') {
-    updateConnectionButtonVisibility();
-  }
+  updateConnectionButtonVisibility();
 });
