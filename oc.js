@@ -1864,26 +1864,47 @@ function findOffsettingTrades(currentPositions, marketData) {
   const negativeCostTrades = offsettingTrades.filter(trade => trade.cost < 0);
   console.log(`💰 Cost separation: ${positiveCostTrades.length} positive cost, ${negativeCostTrades.length} negative cost`);
   
-  // Apply Pareto optimization to positive cost trades
+  // Apply Pareto optimization to positive cost trades (for sorting only, no filtering)
   let positiveParetoOptimal = [];
   let positiveDominated = [];
   
-  if (positiveCostTrades.length > 0) {
+  // DEBUG: Set this to false to see all trades without Pareto filtering
+  const enableParetoOptimization = false;
+  
+  if (positiveCostTrades.length > 0 && enableParetoOptimization) {
     positiveParetoOptimal = findParetoOptimal(positiveCostTrades);
     positiveDominated = positiveCostTrades.filter(trade => !positiveParetoOptimal.includes(trade));
     
     console.log(`📈 Positive cost trades: ${positiveParetoOptimal.length} Pareto optimal, ${positiveDominated.length} dominated`);
+  } else if (positiveCostTrades.length > 0) {
+    // Skip Pareto optimization filtering - keep all trades but sort them by quality
+    positiveParetoOptimal = [...positiveCostTrades].sort((a, b) => {
+      // Sort by combined score (locked profit + total profit potential) descending
+      const scoreA = a.lockedProfit + a.totalProfitPotential;
+      const scoreB = b.lockedProfit + b.totalProfitPotential;
+      return scoreB - scoreA;
+    });
+    console.log(`📈 Positive cost trades: ${positiveParetoOptimal.length} (sorted by quality, no filtering)`);
   }
   
-  // Apply Pareto optimization to negative cost trades
+  // Apply Pareto optimization to negative cost trades (for sorting only, no filtering)
   let negativeParetoOptimal = [];
   let negativeDominated = [];
   
-  if (negativeCostTrades.length > 0) {
+  if (negativeCostTrades.length > 0 && enableParetoOptimization) {
     negativeParetoOptimal = findParetoOptimal(negativeCostTrades);
     negativeDominated = negativeCostTrades.filter(trade => !negativeParetoOptimal.includes(trade));
     
     console.log(`📉 Negative cost trades: ${negativeParetoOptimal.length} Pareto optimal, ${negativeDominated.length} dominated`);
+  } else if (negativeCostTrades.length > 0) {
+    // Skip Pareto optimization filtering - keep all trades but sort them by quality
+    negativeParetoOptimal = [...negativeCostTrades].sort((a, b) => {
+      // Sort by combined score (locked profit + total profit potential) descending
+      const scoreA = a.lockedProfit + a.totalProfitPotential;
+      const scoreB = b.lockedProfit + b.totalProfitPotential;
+      return scoreB - scoreA;
+    });
+    console.log(`📉 Negative cost trades: ${negativeParetoOptimal.length} (sorted by quality, no filtering)`);
   }
   
   // Combine results: Pareto optimal positive cost first, then Pareto optimal negative cost
@@ -1900,6 +1921,14 @@ function findOffsettingTrades(currentPositions, marketData) {
   
   console.log('🎯 Found offsetting trades:', sortedTrades);
   console.log(`📊 Total offsetting opportunities: ${sortedTrades.length}`);
+  
+  // Debug: Show sorting results (no filtering applied)
+  const totalFound = offsettingTrades.length;
+  const totalSorted = sortedTrades.length;
+  
+  console.log(`📊 Sorted ${totalSorted} trades by quality (no filtering applied)`);
+  console.log(`🔍 Best trade: ${sortedTrades[0]?.description} (Score: ${(sortedTrades[0]?.lockedProfit + sortedTrades[0]?.totalProfitPotential).toFixed(2)})`);
+  console.log(`🔍 Worst trade: ${sortedTrades[sortedTrades.length-1]?.description} (Score: ${(sortedTrades[sortedTrades.length-1]?.lockedProfit + sortedTrades[sortedTrades.length-1]?.totalProfitPotential).toFixed(2)})`);
   
   // Return the final sorted offsetting trades
   console.log('🔍 Returning offsetting trades array:', sortedTrades);
