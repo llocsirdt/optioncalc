@@ -181,8 +181,8 @@ function processBearPutSpreadOffsetting(
           ];
           
           const offsettingPositions = [
-            { type: 'c', strike: longCallStrike, qty: Math.abs(spreadQty), cost: spreadCost },
-            { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty) }
+            { type: 'c', strike: longCallStrike, qty: Math.abs(spreadQty), cost: longCallPrice * Math.abs(spreadQty) * 100 },
+            { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty), cost: -(shortCallPrice * Math.abs(spreadQty) * 100) }
           ];
           
           const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -240,13 +240,19 @@ function processBearPutSpreadOffsetting(
   console.log(`🔍 Found ${qualifyingCalls.length} calls up to $${maxSingleLegCallStrike} for single leg hedge:`, qualifyingCalls.slice(0, 10).map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`).join(', '));
   
   qualifyingCalls.forEach(option => {
+    console.log(`🔍 Analyzing single leg call offset: ${option.strike}c`);
+    
     const callPrice = (option.bid + option.ask) / 2;
     const offsetCost = callPrice * Math.abs(spreadQty) * 100; // Cost to buy calls
+    
+    console.log(`   Call price: $${callPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
     
     // For bear put spreads, calculate additional profit potential based on realistic scenarios
     // For calls: calculate value at the highest put strike (most bullish scenario for the original position)
     const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
     const callValueAtHighestPut = Math.max(0, highestPutStrike - option.strike) * 100 * Math.abs(spreadQty);
+    
+    console.log(`   Highest put strike: $${highestPutStrike}, call value at that strike: $${callValueAtHighestPut.toFixed(2)}`);
     
     // Potential value is the call's value at the highest put strike
     const potentialValue = callValueAtHighestPut;
@@ -257,11 +263,29 @@ function processBearPutSpreadOffsetting(
       { type: 'p', strike: highestPutStrike, qty: -spreadQty }
     ];
     
+    console.log(`   Original spread: long ${higherPutStrike}p, short ${highestPutStrike}p`);
+    
+    // Filter out calls where potential value is less than the position being offset
+    // For bear put spreads, the position's potential value is the spread width
+    const longPut = putPositions.find(pp => pp.strike === higherPutStrike && pp.qty > 0);
+    const shortPut = putPositions.find(pp => pp.strike === highestPutStrike && pp.qty < 0);
+    
+    let positionPotentialValue = 0;
+    if (longPut && shortPut) {
+      positionPotentialValue = (higherPutStrike - highestPutStrike) * 100 * Math.abs(spreadQty);
+      console.log(`   Potential Value: $${potentialValue.toFixed(2)} VS Position potential value: $${positionPotentialValue.toFixed(2)} (spread width: $${higherPutStrike - highestPutStrike})`);
+    }
+    
+    if (potentialValue < positionPotentialValue) {
+      console.log(`   Skipping call ${option.strike}c: potential value $${potentialValue.toFixed(2)} < position potential value $${positionPotentialValue.toFixed(2)}`);
+      return; // Skip this call
+    }
+    
     const offsettingPositions = [
-      { type: 'c', strike: option.strike, qty: Math.abs(spreadQty) }
+      { type: 'c', strike: option.strike, qty: Math.abs(spreadQty), cost: callPrice * Math.abs(spreadQty) * 100 }
     ];
     
-    const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+    const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
     const spreadDifference = lockedValueResult.spreadDifference;
     const lockedProfit = lockedValueResult.lockedProfit;
     const potentialProfit = lockedValueResult.potentialProfit;

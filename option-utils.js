@@ -32,49 +32,43 @@ function calculateSingleLegLockedValue(originalPositions, offsettingPositions, u
   console.log('📊 Offsetting positions:', offsettingPositions);
   console.log('💰 Original position cost:', originalCost);
   
-  const originalPos = originalPositions[0];
+  const originalLongPos = originalPositions[0]; // this should be the long leg of the original position
+  const originalShortPos = originalPositions[1]; // this should be the short leg of the original position
   const offsettingPos = offsettingPositions[0];
   
   // Calculate offsetting cost
   const offsettingCost = offsettingPos.cost || 0;
   const totalCost = originalCost + offsettingCost;
   
-  // For single leg offsets, the locked value is based on the value at the overlap point
-  // where both positions would have intrinsic value
+  // For single leg offsets, the locked value is based on the initial position's maximum value minus total cost
   let lockedValue = 0;
   let potentialValue = 0;
   
-  if (originalPos.type === 'c' && offsettingPos.type === 'p') {
+  if (originalLongPos.type === 'c' && offsettingPos.type === 'p') {
     // Original: Short call, Offsetting: Long put
-    // Overlap point is at the put strike (below underlying price)
-    const overlapPrice = offsettingPos.strike;
-    const callValueAtOverlap = Math.max(0, overlapPrice - originalPos.strike) * 100 * Math.abs(originalPos.qty);
-    const putValueAtOverlap = Math.max(0, offsettingPos.strike - overlapPrice) * 100 * Math.abs(offsettingPos.qty);
+    // Initial position max value is the spread width (short call strike - long call strike)
+    const initialPositionMaxValue = Math.max(0, originalShortPos.strike - originalLongPos.strike) * 100 * Math.abs(originalLongPos.qty);
     
-    lockedValue = putValueAtOverlap - callValueAtOverlap; // Long put value - Short call value
-    potentialValue = putValueAtOverlap; // Maximum value is put value at its strike
+    lockedValue = initialPositionMaxValue; // Initial max value
+    potentialValue = 2 * Math.max(0, offsettingPos.strike - originalLongPos.strike) * 100 * Math.abs(offsettingPos.qty); // Put value at long call strike * 2 since it's not capped
     
     console.log(`🔄 Single leg overlap analysis:`);
-    console.log(`  Overlap price: $${overlapPrice}`);
-    console.log(`  Call value at overlap: $${callValueAtOverlap.toFixed(2)}`);
-    console.log(`  Put value at overlap: $${putValueAtOverlap.toFixed(2)}`);
-    console.log(`  Locked value: $${putValueAtOverlap.toFixed(2)} - $${callValueAtOverlap.toFixed(2)} = $${lockedValue.toFixed(2)}`);
+    console.log(`  Initial position max value: $${initialPositionMaxValue.toFixed(2)}`);
+    console.log(`  Total cost: $${totalCost.toFixed(2)}`);
+    console.log(`  Locked value: $${initialPositionMaxValue.toFixed(2)} - $${totalCost.toFixed(2)} = $${lockedValue.toFixed(2)}`);
     
-  } else if (originalPos.type === 'p' && offsettingPos.type === 'c') {
+  } else if (originalLongPos.type === 'p' && offsettingPos.type === 'c') {
     // Original: Long put, Offsetting: Long call
-    // Overlap point is at the call strike (above underlying price)
-    const overlapPrice = offsettingPos.strike;
-    const putValueAtOverlap = Math.max(0, originalPos.strike - overlapPrice) * 100 * Math.abs(originalPos.qty);
-    const callValueAtOverlap = Math.max(0, overlapPrice - offsettingPos.strike) * 100 * Math.abs(offsettingPos.qty);
+    // Initial position max value is the put intrinsic value (put strike - underlying price)
+    const initialPositionMaxValue = Math.max(0, originalLongPos.strike - originalShortPos.strike) * 100 * Math.abs(originalLongPos.qty);
     
-    lockedValue = callValueAtOverlap + putValueAtOverlap; // Both legs have value
-    potentialValue = callValueAtOverlap; // Maximum value is call value at its strike
+    lockedValue = initialPositionMaxValue; // Initial max value
+    potentialValue = 2 * Math.max(0, originalLongPos.strike - offsettingPos.strike) * 100 * Math.abs(offsettingPos.qty); // Call value at long put strike * 2 since it's not capped
     
     console.log(`🔄 Single leg overlap analysis:`);
-    console.log(`  Overlap price: $${overlapPrice}`);
-    console.log(`  Put value at overlap: $${putValueAtOverlap.toFixed(2)}`);
-    console.log(`  Call value at overlap: $${callValueAtOverlap.toFixed(2)}`);
-    console.log(`  Locked value: $${callValueAtOverlap.toFixed(2)} + $${putValueAtOverlap.toFixed(2)} = $${lockedValue.toFixed(2)}`);
+    console.log(`  Initial position max value: $${initialPositionMaxValue.toFixed(2)}`);
+    console.log(`  Total cost: $${totalCost.toFixed(2)}`);
+    console.log(`  Locked value: $${initialPositionMaxValue.toFixed(2)} - $${totalCost.toFixed(2)} = $${lockedValue.toFixed(2)}`);
   }
   
   // Calculate locked profit and potential profit
@@ -165,9 +159,9 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
     console.log(`🔄 Short leg overlap: ${shortCall.strike} - ${shortPut.strike} = $${shortLegOverlap.toFixed(2)}`);
   }
   
-  // Calculate potential profit: sum of max profits minus short leg overlap minus total cost
+  // Calculate potential profit: max of individual spread profits minus total cost
   const totalCost = originalCost + offsettingCost;
-  const potentialProfit = bullCallMaxProfit + bearPutMaxProfit - shortLegOverlap - totalCost;
+  const potentialProfit = Math.max(bullCallMaxProfit, bearPutMaxProfit) - totalCost;
   
   // Locked profit is the MIN of the two spread max profits, minus costs
   const minMaxProfit = Math.min(bullCallMaxProfit, bearPutMaxProfit);
@@ -186,7 +180,7 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   console.log(`  Original cost: $${originalCost}`);
   console.log(`  Offsetting cost: $${offsettingCost}`);
   console.log(`  Total cost: $${totalCost.toFixed(2)}`);
-  console.log(`  Potential profit: $${bullCallMaxProfit.toFixed(2)} + $${bearPutMaxProfit.toFixed(2)} - $${shortLegOverlap.toFixed(2)} - $${totalCost.toFixed(2)} = $${potentialProfit.toFixed(2)}`);
+  console.log(`  Potential profit: max($${bullCallMaxProfit.toFixed(2)}, $${bearPutMaxProfit.toFixed(2)}) - $${totalCost.toFixed(2)} = $${potentialProfit.toFixed(2)}`);
   console.log(`  Min of max profits: $${minMaxProfit.toFixed(2)}`);
   console.log(`  Total spread width: $${totalSpreadWidth}`);
   console.log(`  Spread difference value: $${spreadDifferenceValue.toFixed(2)}`);

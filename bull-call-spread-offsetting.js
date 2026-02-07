@@ -158,8 +158,8 @@ function processBullCallSpreadOffsetting(
           ];
           
           const offsettingPositions = [
-            { type: 'p', strike: shortPutStrike, qty: -Math.abs(spreadQty), cost: spreadCost },  // Short put (lower strike)
-            { type: 'p', strike: longPutStrike, qty: Math.abs(spreadQty) }  // Long put (higher strike)
+            { type: 'p', strike: shortPutStrike, qty: -Math.abs(spreadQty), cost: -(shortPutPrice * Math.abs(spreadQty) * 100) },  // Short put (lower strike)
+            { type: 'p', strike: longPutStrike, qty: Math.abs(spreadQty), cost: longPutPrice * Math.abs(spreadQty) * 100 }  // Long put (higher strike)
           ];
           
           const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -220,13 +220,19 @@ function processBullCallSpreadOffsetting(
     qualifyingPuts.map(p => `${p.strike}@$${((p.bid + p.ask) / 2).toFixed(2)}`));
   
   qualifyingPuts.forEach(option => {
+    console.log(`🔍 Analyzing single leg put offset: ${option.strike}p`);
+    
     const putPrice = (option.bid + option.ask) / 2;
     const offsetCost = putPrice * Math.abs(spreadQty) * 100; // Cost to buy puts
+    
+    console.log(`   Put price: $${putPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
     
     // For bull call spreads, calculate additional profit potential based on realistic scenarios
     // For puts: calculate value at the lowest call strike (most bearish scenario for the original position)
     const lowestCallStrike = Math.min(...callPositions.map(cp => cp.strike));
     const putValueAtLowestCall = Math.max(0, option.strike - lowestCallStrike) * 100 * Math.abs(spreadQty);
+    
+    console.log(`   Lowest call strike: $${lowestCallStrike}, put value at that strike: $${putValueAtLowestCall.toFixed(2)}`);
     
     // Maximum potential value of the new put trade
     const potentialValue = putValueAtLowestCall;
@@ -236,12 +242,16 @@ function processBullCallSpreadOffsetting(
     const longCall = callPositions.find(cp => cp.strike === longCallStrike && cp.qty > 0);
     const shortCall = callPositions.find(cp => cp.strike > longCallStrike && cp.qty < 0);
     
+    console.log(`   Original spread: long ${longCallStrike}c, short ${shortCall ? shortCall.strike : 'N/A'}c`);
+    
     let positionPotentialValue = 0;
     if (longCall && shortCall) {
       positionPotentialValue = (shortCall.strike - longCall.strike) * 100 * Math.abs(spreadQty);
+      console.log(`   Potential Value: $${potentialValue.toFixed(2)} VS Position potential value: $${positionPotentialValue.toFixed(2)} (spread width: $${shortCall.strike - longCallStrike})`);
     }
     
     if (potentialValue < positionPotentialValue) {
+      console.log(`   Skipping put ${option.strike}p: potential value $${potentialValue.toFixed(2)} < position potential value $${positionPotentialValue.toFixed(2)}`);
       return; // Skip this put
     }
     
@@ -252,10 +262,10 @@ function processBullCallSpreadOffsetting(
     ];
     
     const offsettingPositions = [
-      { type: 'p', strike: option.strike, qty: Math.abs(spreadQty) }
+      { type: 'p', strike: option.strike, qty: Math.abs(spreadQty), cost: putPrice * Math.abs(spreadQty) * 100 }
     ];
     
-    const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+    const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
     const spreadDifference = lockedValueResult.spreadDifference;
     const lockedProfit = lockedValueResult.lockedProfit;
     const potentialProfit = lockedValueResult.potentialProfit;
