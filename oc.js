@@ -408,14 +408,17 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           { type: 'p', strike: option.strike, qty: Math.abs(positionQty) }
         ];
         
-        const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const spreadDifference = lockedValueResult.spreadDifference;
+        const lockedProfit = lockedValueResult.lockedProfit;
+        const potentialProfit = lockedValueResult.potentialProfit;
         
         const upside = putValueAtLowestCall - lockedProfit - offsetCost; // Additional profit beyond locked profit
         
         // Total profit potential = locked profit + upside
         const totalProfitPotential = lockedProfit + upside;
         
-        console.log(`🤔 Put ${option.strike}: cost $${offsetCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${lowestCallStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
+        console.log(`🤔 Put ${option.strike}: cost $${offsetCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${lowestCallStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
         
         if (offsetCost <= offsetBudget && lockedProfit >= 0) {
           console.log(`✅ Risk-free single leg offset found!`);
@@ -426,8 +429,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             description: `Long ${Math.abs(positionQty)} ${option.strike} puts`,
             action: `BUY ${Math.abs(positionQty)} ${option.strike} PUT @ $${putPrice.toFixed(2)}`,
             cost: offsetCost,
+            potentialValue: potentialValue, // Keep original logic
+            spreadDifference: spreadDifference, // Add new field for spread difference value
+            potentialProfit: potentialProfit, // Add new field for correct potential profit
             lockedProfit: lockedProfit,
-            potentialValue: potentialValue,
             additionalProfitPotential: upside,
             totalProfitPotential: totalProfitPotential,
             riskNeutralized: true,
@@ -521,11 +526,14 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             ];
             
             const offsettingPositions = [
-              { type: 'p', strike: shortPut.strike, qty: Math.abs(positionQty), cost: spreadCost },
-              { type: 'p', strike: longPut.strike, qty: -Math.abs(positionQty) }
+              { type: 'p', strike: shortPut.strike, qty: -Math.abs(positionQty), cost: spreadCost },  // Short put (lower strike)
+              { type: 'p', strike: longPut.strike, qty: Math.abs(positionQty) }  // Long put (higher strike)
             ];
             
-            const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+            const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+            const spreadDifference = lockedValueResult.spreadDifference;
+            const lockedProfit = lockedValueResult.lockedProfit;
+            const potentialProfit = lockedValueResult.potentialProfit;
             
             // Calculate additional profit potential for the spread based on realistic scenarios
             // For bear put spreads: maximum value is the spread width (difference between strikes)
@@ -534,7 +542,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             // Total profit potential = locked profit + upside
             const totalProfitPotential = lockedProfit + upside;
             
-            console.log(`🤔 Spread ${shortPut.strike}/${longPut.strike}: cost $${spreadCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
+            console.log(`🤔 Spread ${shortPut.strike}/${longPut.strike}: cost $${spreadCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
             //console.log(`🔍 Spread conditions: cost < budget? ${spreadCost < offsetBudget}, locked profit > 0? ${lockedProfit > 0}`);
             
             if (spreadCost <= offsetBudget && lockedProfit >= 0) {
@@ -546,8 +554,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
                 description: `Bear ${Math.abs(positionQty)} ${shortPut.strike}/${longPut.strike} put spread`,
                 action: `BUY ${Math.abs(positionQty)} ${longPut.strike} PUT @ $${longPutPrice.toFixed(2)} & <br/>SELL ${Math.abs(positionQty)} ${shortPut.strike} PUT @ $${shortPutPrice.toFixed(2)}`,
                 cost: spreadCost,
+                potentialValue: potentialValue, // Keep original logic
+                spreadDifference: spreadDifference, // Add new field for spread difference value
+                potentialProfit: potentialProfit, // Add new field for correct potential profit
                 lockedProfit: lockedProfit,
-                potentialValue: potentialValue,
                 additionalProfitPotential: upside,
                 totalProfitPotential: totalProfitPotential,
                 riskNeutralized: true,
@@ -712,7 +722,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
                 { type: 'c', strike: shortCallStrike, qty: -Math.abs(positionQty) }
               ];
               
-              const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+              const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+              const spreadDifference = lockedValueResult.spreadDifference;
+              const lockedProfit = lockedValueResult.lockedProfit;
+              const potentialProfit = lockedValueResult.potentialProfit;
               
               // Calculate additional profit potential for the spread based on realistic scenarios
               // For bull call spreads: maximum value is the spread width (difference between strikes)
@@ -721,7 +734,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
               // Total profit potential = locked profit + upside
               const totalProfitPotential = lockedProfit + upside;
               
-              console.log(`🤔 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
+              console.log(`🤔 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
               
               if (spreadCost <= offsetBudget && lockedProfit >= 0) {
                 console.log(`✅ Risk-free spread offset found!`);
@@ -732,8 +745,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
                   description: `Bull ${Math.abs(positionQty)} ${longCallStrike}/${shortCallStrike} call spread`,
                   action: `BUY ${Math.abs(positionQty)} ${longCallStrike} CALL @ $${longCallPrice.toFixed(2)} & <br/>SELL ${Math.abs(positionQty)} ${shortCallStrike} CALL @ $${shortCallPrice.toFixed(2)}`,
                   cost: spreadCost,
+                  potentialValue: potentialValue, // Keep original logic
+                  spreadDifference: spreadDifference, // Add new field for spread difference value
+                  potentialProfit: potentialProfit, // Add new field for correct potential profit
                   lockedProfit: lockedProfit,
-                  potentialValue: potentialValue,
                   additionalProfitPotential: upside,
                   totalProfitPotential: totalProfitPotential,
                   riskNeutralized: true,
@@ -781,14 +796,17 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           { type: 'c', strike: option.strike, qty: Math.abs(positionQty) }
         ];
         
-        const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const spreadDifference = lockedValueResult.spreadDifference;
+        const lockedProfit = lockedValueResult.lockedProfit;
+        const potentialProfit = lockedValueResult.potentialProfit;
         
         const upside = callValueAtPutStrike - lockedProfit - offsetCost; // Additional profit beyond locked profit
         
         // Total profit potential = locked profit + upside
         const totalProfitPotential = lockedProfit + upside;
         
-        console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${putStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
+        console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${putStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
         
         if (offsetCost <= offsetBudget && lockedProfit >= 0) {
           console.log(`✅ Risk-free call offset found!`);
@@ -799,8 +817,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             description: `Long ${Math.abs(positionQty)} ${option.strike} calls`,
             action: `BUY ${Math.abs(positionQty)} ${option.strike} CALL @ $${callPrice.toFixed(2)}`,
             cost: offsetCost,
+            potentialValue: potentialValue, // Keep original logic
+            spreadDifference: spreadDifference, // Add new field for spread difference value
+            potentialProfit: potentialProfit, // Add new field for correct potential profit
             lockedProfit: lockedProfit,
-            potentialValue: potentialValue,
             additionalProfitPotential: upside,
             totalProfitPotential: totalProfitPotential,
             riskNeutralized: true,
@@ -1079,7 +1099,7 @@ function updateOptionsChain(options) {
                   <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
                 </div>
                 <div class="trade-metrics">
-                  <div class="trade-potential">Potential: $${trade.potentialValue.toFixed(2)}</div>
+                  <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
                   <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
                   <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
                 </div>

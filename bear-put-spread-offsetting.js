@@ -185,7 +185,10 @@ function processBearPutSpreadOffsetting(
             { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty) }
           ];
           
-          const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+          const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+          const spreadDifference = lockedValueResult.spreadDifference;
+          const lockedProfit = lockedValueResult.lockedProfit;
+          const potentialProfit = lockedValueResult.potentialProfit;
           
           // Calculate additional profit potential for the spread based on realistic scenarios
           // For bull call spreads: maximum value is the spread width (difference between strikes)
@@ -194,7 +197,7 @@ function processBearPutSpreadOffsetting(
           // Total profit potential = locked profit + upside
           const totalProfitPotential = lockedProfit + upside;
           
-          console.log(`🤔 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
+          console.log(`🤔 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (max value: $${spreadMaxValue.toFixed(2)}), total potential $${totalProfitPotential.toFixed(2)}`);
           
           if (spreadCost <= offsetBudget && lockedProfit >= 0) {
             console.log(`✅ Risk-free spread offset found!`);
@@ -205,8 +208,10 @@ function processBearPutSpreadOffsetting(
               description: `Bull ${Math.abs(spreadQty)} ${longCallStrike}/${shortCallStrike} call spread`,
               action: `BUY ${Math.abs(spreadQty)} ${longCallStrike} CALL @ $${longCallPrice.toFixed(2)} & <br/>SELL ${Math.abs(spreadQty)} ${shortCallStrike} CALL @ $${shortCallPrice.toFixed(2)}`,
               cost: spreadCost,
+              potentialValue: spreadMaxValue, // Keep original logic: max value of offsetting spread
+              spreadDifference: spreadDifference, // Add new field for spread difference value
+              potentialProfit: potentialProfit, // Add new field for correct potential profit
               lockedProfit: lockedProfit,
-              potentialValue: potentialValue,
               additionalProfitPotential: upside,
               totalProfitPotential: totalProfitPotential,
               riskNeutralized: true,
@@ -256,14 +261,17 @@ function processBearPutSpreadOffsetting(
       { type: 'c', strike: option.strike, qty: Math.abs(spreadQty) }
     ];
     
-    const lockedProfit = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+    const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+    const spreadDifference = lockedValueResult.spreadDifference;
+    const lockedProfit = lockedValueResult.lockedProfit;
+    const potentialProfit = lockedValueResult.potentialProfit;
     
     const upside = callValueAtHighestPut - lockedProfit - offsetCost; // Additional profit beyond locked profit
     
     // Total profit potential = locked profit + upside
     const totalProfitPotential = lockedProfit + upside;
     
-    console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${highestPutStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
+    console.log(`🤔 Call ${option.strike}: cost $${offsetCost.toFixed(2)}, spread difference $${spreadDifference.toFixed(2)}, potential profit $${potentialProfit.toFixed(2)}, locked profit $${lockedProfit.toFixed(2)}, upside $${upside.toFixed(2)} (value at $${highestPutStrike}), total potential $${totalProfitPotential.toFixed(2)}`);
     
     if (offsetCost <= offsetBudget && lockedProfit >= 0) {
       console.log(`✅ Risk-free call offset found!`);
@@ -274,12 +282,14 @@ function processBearPutSpreadOffsetting(
         description: `Long ${Math.abs(spreadQty)} ${option.strike} calls`,
         action: `BUY ${Math.abs(spreadQty)} ${option.strike} CALL @ $${callPrice.toFixed(2)}`,
         cost: offsetCost,
+        potentialValue: potentialValue, // Keep original logic
+        spreadDifference: spreadDifference, // Add new field for spread difference value
+        potentialProfit: potentialProfit, // Add new field for correct potential profit
         lockedProfit: lockedProfit,
-        potentialValue: potentialValue,
         additionalProfitPotential: upside,
         totalProfitPotential: totalProfitPotential,
         riskNeutralized: true,
-        originalPosition: `Bear put spread ${spreadQty} ${shortPut ? shortPut.strike : 'N/A'}/${longPutStrike}p`,
+        originalPosition: `Bear put spread ${spreadQty} ${higherPutStrike}/${highestPutStrike}p`,
         offsettingPosition: `Long ${Math.abs(spreadQty)} ${option.strike} calls`
       });
     }
