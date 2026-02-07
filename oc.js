@@ -408,7 +408,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           { type: 'p', strike: option.strike, qty: Math.abs(positionQty) }
         ];
         
-        const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
         const spreadDifference = lockedValueResult.spreadDifference;
         const lockedProfit = lockedValueResult.lockedProfit;
         const potentialProfit = lockedValueResult.potentialProfit;
@@ -796,7 +796,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           { type: 'c', strike: option.strike, qty: Math.abs(positionQty) }
         ];
         
-        const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
+        const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
         const spreadDifference = lockedValueResult.spreadDifference;
         const lockedProfit = lockedValueResult.lockedProfit;
         const potentialProfit = lockedValueResult.potentialProfit;
