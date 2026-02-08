@@ -6,7 +6,7 @@ echo "📦 Creating deployment ZIP..."
 # Create ZIP with only necessary files
 zip -r schwab-proxy.zip \
   package.json \
-  proxy-server.js \
+  proxy-server-sdk.js \
   -x "*.git*" \
   -x "node_modules/*" \
   -x "*.log" \

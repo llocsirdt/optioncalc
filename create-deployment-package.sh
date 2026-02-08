@@ -11,7 +11,7 @@ mkdir $DEPLOY_DIR
 # Copy necessary files
 echo "📁 Copying files..."
 cp package.json $DEPLOY_DIR/
-cp proxy-server.js $DEPLOY_DIR/
+cp proxy-server-sdk.js $DEPLOY_DIR/
 
 # Create .ebignore to exclude unnecessary files
 echo "📝 Creating .ebignore..."

@@ -2,10 +2,10 @@
   "name": "schwab-proxy",
   "version": "1.0.0",
   "description": "Proxy server for Schwab API to bypass CORS",
-  "main": "proxy-server.js",
+  "main": "proxy-server-sdk.js",
   "scripts": {
-    "start": "node proxy-server.js",
-    "dev": "nodemon proxy-server.js"
+    "start": "node proxy-server-sdk.js",
+    "dev": "nodemon proxy-server-sdk.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
