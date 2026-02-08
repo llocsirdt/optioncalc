@@ -228,7 +228,6 @@ function processBullCallSpreadOffsetting(
     
     // For bull call spreads, calculate additional profit potential based on realistic scenarios
     // For puts: calculate value at the lowest call strike (most bearish scenario for the original position)
-    const lowestCallStrike = Math.min(...callPositions.map(cp => cp.strike));
     const putValueAtLowestCall = Math.max(0, option.strike - lowestCallStrike) * 100 * Math.abs(spreadQty);
     
     console.log(`   Lowest call strike: $${lowestCallStrike}, put value at that strike: $${putValueAtLowestCall.toFixed(2)}`);

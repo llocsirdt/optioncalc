@@ -248,7 +248,6 @@ function processBearPutSpreadOffsetting(
 
     // For bear put spreads, calculate additional profit potential based on realistic scenarios
     // For calls: calculate value at the highest put strike (most bullish scenario for the original position)
-    const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
     const callValueAtHighestPut = Math.max(0, highestPutStrike - option.strike) * 100 * Math.abs(spreadQty);
     
     console.log(`   Highest put strike: $${highestPutStrike}, call value at that strike: $${callValueAtHighestPut.toFixed(2)}`);
