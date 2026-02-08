@@ -190,3 +190,30 @@ If you prefer a more automated setup, you can:
 4. Proxy API calls through your server
 
 This provides better security and automatic token refresh, but requires additional server setup.
+
+---
+
+## 🚀 AWS Elastic Beanstalk Deployment
+
+### 📦 Creating Deployment Package
+
+#### **Option 1: Full Script (Recommended)**
+```bash
+# Navigate to your project directory
+cd /path/to/optioncalc
+
+# Make executable and run
+chmod +x create-deployment-package.sh
+./create-deployment-package.sh
+```
+
+#### **Option 2: Quick Script (Recommended)** OR
+
+```bash
+# Navigate to your project directory
+cd /path/to/optioncalc
+
+# Make executable and run
+chmod +x quick-zip.sh
+./quick-zip.sh
+```

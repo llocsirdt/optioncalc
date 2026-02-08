@@ -8,6 +8,7 @@
 # Files with sensitive credentials
 SCHWAB_SETUP_UNSAFE.md
 restart-proxy.sh
+schwab-proxy.zip
 
 # Node.js dependencies
 node_modules/
