@@ -136,6 +136,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   console.log('📊 Market data available:', marketData.length, 'options');
   console.log('💰 Underlying price:', underlyingPrice);
   
+  // Calculate dynamic strike increment once and pass to all functions
+  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
+  console.log(`🔧 Using global strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+  
   // Debug: Log the structure of currentPositions
   console.log('🔍 Current positions structure:');
   currentPositions.forEach((pos, index) => {
@@ -312,7 +316,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       totalCostPaid, 
       originalSpreadWidth, 
       offsettingTrades, 
-      calculateLockedInValue
+      calculateLockedInValue,
+      strikeIncrement
     );
   }
   
@@ -326,7 +331,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       totalCostPaid, 
       originalSpreadWidth, 
       offsettingTrades, 
-      calculateLockedInValue
+      calculateLockedInValue,
+      strikeIncrement
     );
   }
   
@@ -382,7 +388,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         totalCostPaid,
         originalSpreadWidth,
         offsettingTrades,
-        calculateSingleLegLockedValue
+        calculateSingleLegLockedValue,
+        strikeIncrement
       );
       
       // Spread offset: bear put spread (buy higher strike, sell lower strike)
@@ -719,7 +726,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         totalCostPaid,
         originalSpreadWidth,
         offsettingTrades,
-        calculateSingleLegLockedValue
+        calculateSingleLegLockedValue,
+        strikeIncrement
       );
       
       console.log(`🔍 Long put offsetting analysis completed`);

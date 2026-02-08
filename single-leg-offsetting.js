@@ -19,7 +19,8 @@ function processSingleLegCallOffsetting(
   totalCostPaid,
   originalSpreadWidth,
   offsettingTrades,
-  calculateSingleLegLockedValue
+  calculateSingleLegLockedValue,
+  strikeIncrement
 ) {
   console.log('🔍 Processing single leg call offsetting for long put positions...');
   
@@ -48,9 +49,8 @@ function processSingleLegCallOffsetting(
   // Any offsetting trade that costs less than the max profit creates locked-in profit
   console.log(`🎯 Any offsetting trade costing less than $${offsetBudget.toFixed(2)} creates locked-in profit`);
   
-  // Calculate dynamic strike increment based on underlying price
-  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
-  console.log(`🔧 Using strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+  // Use the passed strikeIncrement parameter
+  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
   
   // For single leg hedges, use calls with strikes LOWER than the put position
   const singleLegCallRange = putStrike - 100; // Start 100 points below put strike
@@ -160,7 +160,8 @@ function processSingleLegPutOffsetting(
   totalCostPaid,
   originalSpreadWidth,
   offsettingTrades,
-  calculateSingleLegLockedValue
+  calculateSingleLegLockedValue,
+  strikeIncrement
 ) {
   console.log('🔍 Processing single leg put offsetting for short call positions...');
   
@@ -189,9 +190,8 @@ function processSingleLegPutOffsetting(
   // Any offsetting trade that costs less than the max profit creates locked-in profit
   console.log(`🎯 Any offsetting trade costing less than $${offsetBudget.toFixed(2)} creates locked-in profit`);
   
-  // Calculate dynamic strike increment based on underlying price
-  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
-  console.log(`🔧 Using strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+  // Use the passed strikeIncrement parameter
+  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
   
   // Find the short call strike (higher strike) for range calculation
   const highestCallStrike = Math.max(...callPositions.map(cp => cp.strike));

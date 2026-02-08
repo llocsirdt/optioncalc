@@ -22,7 +22,8 @@ function processBullCallSpreadOffsetting(
   totalCostPaid, 
   originalSpreadWidth, 
   offsettingTrades, 
-  calculateLockedInValue
+  calculateLockedInValue,
+  strikeIncrement
 ) {
   console.log('🎯 Detected bull call spread position - using spread offsetting logic only');
   
@@ -45,9 +46,8 @@ function processBullCallSpreadOffsetting(
   
   console.log(`💰 Offset budget for bull call spread: $${offsetBudget.toFixed(2)}`);
   
-  // Calculate dynamic strike increment based on underlying price
-  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
-  console.log(`🔧 Using strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+  // Use the passed strikeIncrement parameter
+  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
   
   // For bull call spreads, we want bearish offsets: bear put spreads or long puts
   const lowestCallStrike = Math.min(...callPositions.map(cp => cp.strike));

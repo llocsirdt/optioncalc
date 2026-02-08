@@ -22,7 +22,8 @@ function processBearPutSpreadOffsetting(
   totalCostPaid, 
   originalSpreadWidth, 
   offsettingTrades, 
-  calculateLockedInValue
+  calculateLockedInValue,
+  strikeIncrement
 ) {
   console.log('🎯 Detected bear put spread position - using spread offsetting logic only');
   
@@ -45,9 +46,8 @@ function processBearPutSpreadOffsetting(
   
   console.log(`💰 Offset budget for bear put spread: $${offsetBudget.toFixed(2)}`);
   
-  // Calculate dynamic strike increment based on underlying price
-  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
-  console.log(`🔧 Using strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+  // Use the passed strikeIncrement parameter
+  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
   
   // For bear put spreads, we want bullish offsets: bull call spreads or long calls
   const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
