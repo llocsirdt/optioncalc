@@ -1,5 +1,10 @@
 // Schwab API Integration Functions
 
+// Proxy server configuration, Dynamically detect environment and set appropriate proxy URL
+// For local development: 'http://localhost:3001'
+// For AWS deployment: 'https://your-env-name.eba-region.amazonaws.com'
+const PROXY_URL = (window.location.href.startsWith('http') ? "http://llocsirdt-optioncalc.us-east-1.elasticbeanstalk.com" : "http://localhost:3001");
+
 // Schwab API integration variables
 let schwabConnected = false;
 let currentSymbol = '';
@@ -48,7 +53,7 @@ async function testSchwabConnection() {
   
   try {
     // Test with a simple quote request
-    const response = await fetch('http://localhost:3001/api/v1/marketdata/quotes?symbols=SPY');
+    const response = await fetch(`${PROXY_URL}/api/v1/marketdata/quotes?symbols=SPY`);
     
     if (response.ok) {
       const data = await response.json();
@@ -111,7 +116,7 @@ function updateConnectionButtonVisibility() {
 async function getUnderlyingQuote(symbol) {
   try {
     console.log(' Getting quote for symbol:', symbol);
-    const response = await fetch(`http://localhost:3001/api/v1/marketdata/quotes?symbols=${symbol}`);
+    const response = await fetch(`${PROXY_URL}/api/v1/marketdata/quotes?symbols=${symbol}`);
     
     if (!response.ok) {
       console.error('Quote API error:', response.status, response.statusText);
@@ -138,7 +143,7 @@ async function getUnderlyingQuote(symbol) {
       for (const altSymbol of alternatives) {
         console.log(` Trying alternative symbol: ${altSymbol}`);
         try {
-          const altResponse = await fetch(`http://localhost:3001/api/v1/marketdata/quotes?symbols=${altSymbol}`);
+          const altResponse = await fetch(`${PROXY_URL}/api/v1/marketdata/quotes?symbols=${altSymbol}`);
           if (altResponse.ok) {
             const altData = await altResponse.json();
             if (!altData.errors) {
@@ -229,9 +234,9 @@ async function getOptionsChainFromSchwab(symbol, expirationDate, optionalParams 
     }
     
     console.log('🔗 DEBUG: Final query string:', queryString);
-    console.log('🔗 DEBUG: Full URL:', `http://localhost:3001/api/v1/marketdata/chains?${queryString}`);
+    console.log('🔗 DEBUG: Full URL:', `${PROXY_URL}/api/v1/marketdata/chains?${queryString}`);
     
-    const response = await fetch(`http://localhost:3001/api/v1/marketdata/chains?${queryString}`);
+    const response = await fetch(`${PROXY_URL}/api/v1/marketdata/chains?${queryString}`);
     
     if (!response.ok) {
       console.error('❌ Options chain API error:', response.status, response.statusText);
@@ -267,7 +272,7 @@ async function getOptionExpirationsFromSchwab(symbol) {
   }
 
   try {
-    const response = await fetch(`http://localhost:3001/api/v1/marketdata/expirationchain?symbol=${symbol}`);
+    const response = await fetch(`${PROXY_URL}/api/v1/marketdata/expirationchain?symbol=${symbol}`);
     
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
