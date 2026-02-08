@@ -4,15 +4,30 @@ const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
 require('dotenv').config();
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
+
+// Debug: Log environment variables (without exposing secrets)
+console.log('🔍 Environment Variables Check:');
+console.log('✅ SCHWAB_API_KEY:', process.env.SCHWAB_API_KEY ? 'SET' : 'MISSING');
+console.log('✅ SCHWAB_SECRET:', process.env.SCHWAB_SECRET ? 'SET' : 'MISSING');
+console.log('✅ SCHWAB_REFRESH_TOKEN:', process.env.SCHWAB_REFRESH_TOKEN ? 'SET' : 'MISSING');
+console.log('✅ PORT:', process.env.PORT || '3001 (default)');
 
 // Enable CORS for all routes
 app.use(cors());
 app.use(express.json());
 
 // Initialize Schwab clients
-const marketClient = new MarketApiClient('', '', process.env.SCHWAB_REFRESH_TOKEN);
-const tradingClient = new TradingApiClient('', '', process.env.SCHWAB_REFRESH_TOKEN);
+const marketClient = new MarketApiClient(
+  process.env.SCHWAB_API_KEY, 
+  process.env.SCHWAB_SECRET, 
+  process.env.SCHWAB_REFRESH_TOKEN
+);
+const tradingClient = new TradingApiClient(
+  process.env.SCHWAB_API_KEY, 
+  process.env.SCHWAB_SECRET, 
+  process.env.SCHWAB_REFRESH_TOKEN
+);
 
 // Debug middleware to log all requests
 app.use((req, res, next) => {
