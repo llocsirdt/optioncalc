@@ -175,9 +175,10 @@ function processBearPutSpreadOffsetting(
           const potentialValue = spreadMaxValue;
           
           // Calculate true locked-in value by analyzing combined position
+          // todo: get rid of the default 160 in "shortPut ? shortPut.strike : 160"
           const originalPositions = [
-            { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: spreadQty },
-            { type: 'p', strike: longPutStrike, qty: -spreadQty }
+            { type: 'p', strike: longPutStrike, qty: spreadQty },        // Long put at higher strike
+            { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: -spreadQty }  // Short put at lower strike
           ];
           
           const offsettingPositions = [
@@ -246,29 +247,30 @@ function processBearPutSpreadOffsetting(
     const offsetCost = callPrice * Math.abs(spreadQty) * 100; // Cost to buy calls
     
     console.log(`   Call price: $${callPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
-    
+
     // For bear put spreads, calculate additional profit potential based on realistic scenarios
     // For calls: calculate value at the highest put strike (most bullish scenario for the original position)
     const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
     const callValueAtHighestPut = Math.max(0, highestPutStrike - option.strike) * 100 * Math.abs(spreadQty);
     
     console.log(`   Highest put strike: $${highestPutStrike}, call value at that strike: $${callValueAtHighestPut.toFixed(2)}`);
-    
+
+    // Filter out calls where potential value is less than the position being offset
+    // For bear put spreads, the position's potential value is the spread width
+    const longPut = putPositions.find(pp => pp.strike === longPutStrike && pp.qty > 0);
+    const shortPut = putPositions.find(pp => pp.strike < longPutStrike && pp.qty < 0);
+
     // Potential value is the call's value at the highest put strike
     const potentialValue = callValueAtHighestPut;
     
     // Calculate true locked-in value by analyzing combined position
     const originalPositions = [
-      { type: 'p', strike: higherPutStrike, qty: spreadQty },
-      { type: 'p', strike: highestPutStrike, qty: -spreadQty }
+      { type: 'p', strike: longPutStrike, qty: spreadQty },        // Long put at higher strike
+      { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: -spreadQty }  // Short put at lower strike
     ];
     
-    console.log(`   Original spread: long ${higherPutStrike}p, short ${highestPutStrike}p`);
+    console.log(`   Original spread: long ${longPutStrike}p, short ${shortPut.strike}p`);
     
-    // Filter out calls where potential value is less than the position being offset
-    // For bear put spreads, the position's potential value is the spread width
-    const longPut = putPositions.find(pp => pp.strike === higherPutStrike && pp.qty > 0);
-    const shortPut = putPositions.find(pp => pp.strike === highestPutStrike && pp.qty < 0);
     
     let positionPotentialValue = 0;
     if (longPut && shortPut) {

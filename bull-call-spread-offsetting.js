@@ -152,6 +152,7 @@ function processBullCallSpreadOffsetting(
           const potentialValue = spreadMaxValue;
           
           // Calculate true locked-in value by analyzing combined position
+          // todo: get rid of the default 260 in "shortCall ? shortCall.strike : 260"
           const originalPositions = [
             { type: 'c', strike: longCallStrike, qty: spreadQty },
             { type: 'c', strike: shortCall ? shortCall.strike : 260, qty: -spreadQty }
