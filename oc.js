@@ -10,8 +10,22 @@ let fullStrikeIncrement = 0;
 let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {strike, type, bid, ask, side}
 let selectedPositionsCost = 0;
 
-// Function to handle clicking on bid/ask cells
+// Function to handle clicking/tapping on bid/ask cells
 function handleOptionCellClick(event) {
+  // Prevent default behavior for touch events to avoid interference
+  if (event.type === 'touchstart' || event.type === 'touchend') {
+    event.preventDefault();
+    // Prevent multiple rapid touches
+    const cell = event.target;
+    if (cell.dataset.touchProcessed === 'true') {
+      return;
+    }
+    cell.dataset.touchProcessed = 'true';
+    setTimeout(() => {
+      delete cell.dataset.touchProcessed;
+    }, 300);
+  }
+  
   const cell = event.target;
   const cellClass = cell.className;
   
@@ -1187,8 +1201,8 @@ function updateOptionsChain(options) {
           const callClass = callITM ? 'itm-cell' : '';
           html += `<td class="${callClass}">${call.openInterest || 0}</td>`;
           html += `<td class="${callClass}">${call.volume || 0}</td>`;
-          html += `<td class="${callClass} bid-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.bid.toFixed(2)}">$${call.bid.toFixed(2)}</td>`;
-          html += `<td class="${callClass} ask-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.ask.toFixed(2)}">$${call.ask.toFixed(2)}</td>`;
+          html += `<td class="${callClass} bid-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.bid.toFixed(2)}">${call.bid.toFixed(2)}</td>`;
+          html += `<td class="${callClass} ask-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.ask.toFixed(2)}">${call.ask.toFixed(2)}</td>`;
         } else {
           html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
         }
@@ -1204,8 +1218,8 @@ function updateOptionsChain(options) {
         // Put side (right)
         if (put) {
           const putClass = putITM ? 'itm-cell' : '';
-          html += `<td class="${putClass} bid-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.bid.toFixed(2)}">$${put.bid.toFixed(2)}</td>`;
-          html += `<td class="${putClass} ask-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.ask.toFixed(2)}">$${put.ask.toFixed(2)}</td>`;
+          html += `<td class="${putClass} bid-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.bid.toFixed(2)}">${put.bid.toFixed(2)}</td>`;
+          html += `<td class="${putClass} ask-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.ask.toFixed(2)}">${put.ask.toFixed(2)}</td>`;
           html += `<td class="${putClass}">${put.volume || 0}</td>`;
           html += `<td class="${putClass}">${put.openInterest || 0}</td>`;
         } else {
@@ -1260,10 +1274,14 @@ function updateOptionsChain(options) {
       chainElement.innerHTML = html;
       console.log('✅ Options chain updated in UI');
       
-      // Set up click handlers for bid/ask cells
+      // Set up click and touch handlers for bid/ask cells
       const clickableCells = chainElement.querySelectorAll('.clickable');
       clickableCells.forEach(cell => {
+        // Mouse events for desktop
         cell.addEventListener('click', handleOptionCellClick);
+        
+        // Touch events for mobile devices (only touchstart to prevent double-firing)
+        cell.addEventListener('touchstart', handleOptionCellClick, { passive: false });
       });
       
       // Restore selections after table is rendered

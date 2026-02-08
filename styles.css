@@ -17,6 +17,31 @@ textarea {
   height: 30vh;
 }
 
+button {
+  padding: 8px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+button:hover {
+  background-color: #45a049;
+}
+
+pre {
+  background-color: #f5f5f5;
+  padding: 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+
 /* Layout for column sections */
 #container {
   display: flex;
@@ -56,31 +81,6 @@ textarea {
   width: 100%;
   box-sizing: border-box;
 }
-
-button {
-  padding: 8px 16px;
-  background-color: #4CAF50;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-button:hover {
-  background-color: #45a049;
-}
-
-pre {
-  background-color: #f5f5f5;
-  padding: 10px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
 
 
 /* Chart interaction styles */
@@ -139,7 +139,7 @@ pre {
   background: #f5f5f5;
   border: 1px solid #ddd;
   border-radius: 8px;
-  padding: 15px;
+  padding: 10px;
 }
 
 .schwab-header {
@@ -220,7 +220,6 @@ pre {
 }
 
 #live-data-toggle {
-  padding: 5px 15px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -265,6 +264,11 @@ pre {
 #expiration-dropdown {
   font-size: 14px;
   padding: 5px;
+}
+
+#refresh-expirations {
+  font-size: 24px;
+  padding: 0 5px 5px;
 }
 
 #options-chain-container {
@@ -562,6 +566,35 @@ pre {
 .clickable {
   cursor: pointer;
   transition: background-color 0.2s ease;
+  /* Touch-friendly sizing */
+  min-height: 44px; /* iOS recommended minimum touch target */
+  position: relative;
+}
+
+/* Touch device specific styles */
+@media (hover: none) and (pointer: coarse) {
+  .clickable {
+    /* Larger touch targets for mobile */
+    padding: 12px 8px;
+    min-height: 48px;
+    /* Add visual feedback for touch */
+    -webkit-tap-highlight-color: rgba(33, 150, 243, 0.3);
+  }
+  
+  .clickable:hover {
+    background-color: transparent !important; /* Disable hover on touch devices */
+  }
+  
+  .clickable:active {
+    background-color: #bbdefb !important; /* Touch feedback color */
+    transform: scale(0.98); /* Subtle scale effect */
+  }
+  
+  /* Make selected cells more prominent on touch */
+  .selected-bid:active,
+  .selected-ask:active {
+    transform: scale(0.95);
+  }
 }
 
 .clickable:hover {
