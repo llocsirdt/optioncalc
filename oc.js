@@ -405,7 +405,6 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       console.log(`🔍 Sorted puts:`, sortedPuts.map(p => `${p.strike}@$${((p.bid + p.ask) / 2).toFixed(2)}`));
       
       // Check multiple spread combinations
-      const minSpreadWidth = strikeIncrement;  // Minimum spread width equals strike increment
       const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
       
       let spreadCount = 0;
@@ -424,7 +423,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           const spreadWidth = longPut.strike - shortPut.strike;
           
           // Only check spreads within minimum width range and in $10 increments
-          if (spreadWidth >= minSpreadWidth && spreadWidth % strikeIncrement === 0) {
+          if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {
             
             // For individual long puts hedging short calls: offsetting bear put spread must have at least one leg at or above the short call strike
             if (longPut.strike < higherCallStrike && shortPut.strike < higherCallStrike) {
@@ -543,9 +542,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       
       console.log(`💰 Offset budget for long put: $${offsetBudget.toFixed(2)}`);
       
-      // Calculate dynamic strike increment based on underlying price
-      const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
-      console.log(`🔧 Using strike increment: $${strikeIncrement} (based on underlying price $${underlyingPrice})`);
+      // Use the global strikeIncrement parameter
+      console.log(`🔧 Using global strike increment: $${strikeIncrement}`);
       
       // For long puts, we want bullish offsets: bull call spreads or long calls
       const putStrike = longPutStrike;
@@ -587,7 +585,6 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       console.log(`🔍 Sorted calls:`, sortedCalls.map(c => `${c.strike}@$${((c.bid + c.ask) / 2).toFixed(2)}`));
       
       // Check multiple spread combinations
-      const minSpreadWidth = strikeIncrement;  // Minimum spread width equals strike increment
       const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
       
       let spreadCount = 0;
@@ -611,7 +608,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
           console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
           
           // Only check spreads within minimum width range and in $10 increments
-          if (spreadWidth >= minSpreadWidth && spreadWidth % strikeIncrement === 0) {
+          if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {
             
             // For individual long puts: offsetting bull call spread must have at least one leg at or above the put strike
             if (shortCallStrike < putStrike && longCallStrike < putStrike) {
