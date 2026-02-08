@@ -315,11 +315,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       maxPotentialProfit, 
       totalCostPaid, 
       originalSpreadWidth, 
-      offsettingTrades, 
-      calculateLockedInValue,
-      strikeIncrement,
-      calculateOffsetCost,
-      calculateVerticalSpreadCost
+      offsettingTrades
     );
   }
   
@@ -332,11 +328,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       maxPotentialProfit, 
       totalCostPaid, 
       originalSpreadWidth, 
-      offsettingTrades, 
-      calculateLockedInValue,
-      strikeIncrement,
-      calculateOffsetCost,
-      calculateVerticalSpreadCost
+      offsettingTrades
     );
   }
   
@@ -391,10 +383,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         maxPotentialProfit,
         totalCostPaid,
         originalSpreadWidth,
-        offsettingTrades,
-        calculateSingleLegLockedValue,
-        strikeIncrement,
-        calculateOffsetCost
+        offsettingTrades
       );
       
       // Spread offset: bear put spread (buy higher strike, sell lower strike)
@@ -725,10 +714,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         maxPotentialProfit,
         totalCostPaid,
         originalSpreadWidth,
-        offsettingTrades,
-        calculateSingleLegLockedValue,
-        strikeIncrement,
-        calculateOffsetCost
+        offsettingTrades
       );
       
       console.log(`🔍 Long put offsetting analysis completed`);
@@ -1159,6 +1145,9 @@ function initSlider() {
     showAllBtn.addEventListener('click', showAllOptions);
   }
 }
+
+// Use global utility functions (for file:// protocol compatibility)
+// Functions are available via window object from option-utils.js and other files
 
 // Initialize slider when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1623,3 +1612,9 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 });
+
+// Export functions for use in other files (global approach)
+window.restoreAppropriateInput = restoreAppropriateInput;
+window.debugStoredInputs = debugStoredInputs;
+window.testInputRestoration = testInputRestoration;
+window.processInput = processInput;

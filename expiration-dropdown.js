@@ -1,3 +1,6 @@
+// Use global functions (for file:// protocol compatibility)
+// restoreAppropriateInput is available via window object from oc.js
+
 // Expiration dropdown functionality
 let selectedExpiration = null;
 let availableExpirations = [];

@@ -226,14 +226,11 @@ function calculateTotalCost(originalCost, offsettingCost) {
   return originalCost + offsettingCost;
 }
 
-// Export functions for use in other modules
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    calculateStrikeIncrement,
-    calculateLockedInValue,
-    calculateSingleLegLockedValue,
-    calculateOffsetCost,
-    calculateVerticalSpreadCost,
-    calculateTotalCost
-  };
-}
+// Export all functions for use in other files (global approach for file:// protocol)
+window.calculateStrikeIncrement = calculateStrikeIncrement;
+window.calculateVerticalSpreadCost = calculateVerticalSpreadCost;
+window.calculateOffsetCost = calculateOffsetCost;
+window.calculateTotalCost = calculateTotalCost;
+window.calculateLockedInValue = calculateLockedInValue;
+window.calculateSingleLegLockedValue = calculateSingleLegLockedValue;
+window.formatCurrency = formatCurrency;

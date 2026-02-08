@@ -1,17 +1,19 @@
 // Bear Put Spread Offsetting Logic
 // Extracted from findOffsettingTrades function
 
+// Use global utility functions (for file:// protocol compatibility)
+// Functions are available via window object from option-utils.js
+
 /**
- * Process bear put spread offsetting logic
- * @param {Array} callPositions - Call positions (for context)
- * @param {Array} putPositions - Put positions in the spread
- * @param {Array} marketData - Available options data
+ * Process bear put spread offsetting for long put spreads
+ * @param {Array} callPositions - Array of call positions
+ * @param {Array} putPositions - Array of put positions
+ * @param {Object} marketData - Market data object
  * @param {number} underlyingPrice - Current underlying price
- * @param {number} maxPotentialProfit - Maximum profit of the original spread
- * @param {number} totalCostPaid - Cost paid for the original spread
- * @param {number} originalSpreadWidth - Width of the original spread
+ * @param {number} maxPotentialProfit - Maximum potential profit
+ * @param {number} totalCostPaid - Total cost paid for original positions
+ * @param {number} originalSpreadWidth - Original spread width (if applicable)
  * @param {Array} offsettingTrades - Array to store offsetting trades
- * @param {Function} calculateLockedInValue - Function to calculate locked-in value
  */
 function processBearPutSpreadOffsetting(
   callPositions, 
@@ -21,11 +23,7 @@ function processBearPutSpreadOffsetting(
   maxPotentialProfit, 
   totalCostPaid, 
   originalSpreadWidth, 
-  offsettingTrades, 
-  calculateLockedInValue,
-  strikeIncrement,
-  calculateOffsetCost,
-  calculateVerticalSpreadCost
+  offsettingTrades
 ) {
   console.log('🎯 Detected bear put spread position - using spread offsetting logic only');
   
@@ -34,9 +32,10 @@ function processBearPutSpreadOffsetting(
   const longPut = putPositions.find(pp => pp.qty > 0);
   const shortPut = putPositions.find(pp => pp.qty < 0);
   const longPutStrike = longPut ? longPut.strike : Math.max(...putPositions.map(pp => pp.strike));
+  const shortPutStrike = shortPut ? shortPut.strike : Math.min(...putPositions.map(pp => pp.strike));
   const spreadQty = longPut ? longPut.qty : 1;
   
-  console.log(`🔍 Looking for offsets for bear put spread: long ${spreadQty} ${longPutStrike}p / short ${shortPut ? shortPut.strike : 'N/A'}p`);
+  console.log(`🔍 Looking for offsets for bear put spread: long ${spreadQty} ${longPutStrike}p / short ${shortPutStrike}p`);
   
   // For bear put spreads, the offset budget should be based on the actual cost paid
   const offsetBudget = Math.max(0, maxPotentialProfit - Math.abs(totalCostPaid));
@@ -48,8 +47,9 @@ function processBearPutSpreadOffsetting(
   
   console.log(`💰 Offset budget for bear put spread: $${offsetBudget.toFixed(2)}`);
   
-  // Use the passed strikeIncrement parameter
-  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
+  // Use the imported calculateStrikeIncrement function
+  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
+  console.log(`🔧 Using calculated strike increment: $${strikeIncrement}`);
   
   // For bear put spreads, we want bullish offsets: bull call spreads or long calls
   const highestPutStrike = Math.max(...putPositions.map(pp => pp.strike));
@@ -121,7 +121,7 @@ function processBearPutSpreadOffsetting(
       if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {
         
         // For bear put spreads: offsetting bull call spread must have at least one leg at or below lowest put strike
-        const lowestPutStrike = shortPut ? shortPut.strike : longPutStrike;
+        const lowestPutStrike = shortPut ? shortPutStrike : longPutStrike;
         if (shortCallStrike > lowestPutStrike && longCallStrike > lowestPutStrike) {
           console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - both legs above lowest put strike $${lowestPutStrike}`);
           continue;
@@ -178,7 +178,7 @@ function processBearPutSpreadOffsetting(
           // todo: get rid of the default 160 in "shortPut ? shortPut.strike : 160"
           const originalPositions = [
             { type: 'p', strike: longPutStrike, qty: spreadQty },        // Long put at higher strike
-            { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: -spreadQty }  // Short put at lower strike
+            { type: 'p', strike: shortPutStrike, qty: -spreadQty }  // Short put at lower strike
           ];
           
           const offsettingPositions = [
@@ -216,7 +216,7 @@ function processBearPutSpreadOffsetting(
               additionalProfitPotential: upside,
               totalProfitPotential: totalProfitPotential,
               riskNeutralized: true,
-              originalPosition: `Bear put spread ${spreadQty} ${shortPut ? shortPut.strike : 'N/A'}/${longPutStrike}p`,
+              originalPosition: `Bear put spread ${spreadQty} ${shortPutStrike}/${longPutStrike}p`,
               offsettingPosition: `Bull ${Math.abs(spreadQty)} ${longCallStrike}/${shortCallStrike} call spread`
             });
             spreadCount++;
@@ -264,10 +264,10 @@ function processBearPutSpreadOffsetting(
     // Calculate true locked-in value by analyzing combined position
     const originalPositions = [
       { type: 'p', strike: longPutStrike, qty: spreadQty },        // Long put at higher strike
-      { type: 'p', strike: shortPut ? shortPut.strike : 160, qty: -spreadQty }  // Short put at lower strike
+      { type: 'p', strike: shortPutStrike, qty: -spreadQty }  // Short put at lower strike
     ];
     
-    console.log(`   Original spread: long ${longPutStrike}p, short ${shortPut.strike}p`);
+    console.log(`   Original spread: long ${longPutStrike}p, short ${shortPutStrike}p`);
     
     
     let positionPotentialValue = 0;
@@ -322,9 +322,5 @@ function processBearPutSpreadOffsetting(
   console.log(`🔍 Bear put spread offsetting analysis completed`);
 }
 
-// Export for use in main file
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    processBearPutSpreadOffsetting
-  };
-}
+// Export functions for use in other files (global approach)
+window.processBearPutSpreadOffsetting = processBearPutSpreadOffsetting;

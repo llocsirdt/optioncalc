@@ -1,17 +1,19 @@
 // Bull Call Spread Offsetting Logic
 // Extracted from findOffsettingTrades function
 
+// Use global utility functions (for file:// protocol compatibility)
+// Functions are available via window object from option-utils.js
+
 /**
- * Process bull call spread offsetting logic
- * @param {Array} callPositions - Call positions in the spread
- * @param {Array} putPositions - Put positions (for context)
- * @param {Array} marketData - Available options data
+ * Process bull call spread offsetting for long call spreads
+ * @param {Array} callPositions - Array of call positions
+ * @param {Array} putPositions - Array of put positions
+ * @param {Object} marketData - Market data object
  * @param {number} underlyingPrice - Current underlying price
- * @param {number} maxPotentialProfit - Maximum profit of the original spread
- * @param {number} totalCostPaid - Cost paid for the original spread
- * @param {number} originalSpreadWidth - Width of the original spread
+ * @param {number} maxPotentialProfit - Maximum potential profit
+ * @param {number} totalCostPaid - Total cost paid for original positions
+ * @param {number} originalSpreadWidth - Original spread width (if applicable)
  * @param {Array} offsettingTrades - Array to store offsetting trades
- * @param {Function} calculateLockedInValue - Function to calculate locked-in value
  */
 function processBullCallSpreadOffsetting(
   callPositions, 
@@ -21,11 +23,7 @@ function processBullCallSpreadOffsetting(
   maxPotentialProfit, 
   totalCostPaid, 
   originalSpreadWidth, 
-  offsettingTrades, 
-  calculateLockedInValue,
-  strikeIncrement,
-  calculateOffsetCost,
-  calculateVerticalSpreadCost
+  offsettingTrades
 ) {
   console.log('🎯 Detected bull call spread position - using spread offsetting logic only');
   
@@ -34,9 +32,10 @@ function processBullCallSpreadOffsetting(
   const longCall = callPositions.find(cp => cp.qty > 0);
   const shortCall = callPositions.find(cp => cp.qty < 0);
   const longCallStrike = longCall ? longCall.strike : Math.min(...callPositions.map(cp => cp.strike));
+  const shortCallStrike = shortCall ? shortCall.strike : Math.max(...callPositions.map(cp => cp.strike));
   const spreadQty = longCall ? longCall.qty : 1;
   
-  console.log(`🔍 Looking for offsets for bull call spread: long ${spreadQty} ${longCallStrike}c / short ${shortCall ? shortCall.strike : 'N/A'}c`);
+  console.log(`🔍 Looking for offsets for bull call spread: long ${spreadQty} ${longCallStrike}c / short ${shortCallStrike}c`);
   
   // For bull call spreads, the offset budget should be based on the actual cost paid, not calculated spread profit
   const offsetBudget = Math.max(0, maxPotentialProfit - Math.abs(totalCostPaid));
@@ -48,8 +47,9 @@ function processBullCallSpreadOffsetting(
   
   console.log(`💰 Offset budget for bull call spread: $${offsetBudget.toFixed(2)}`);
   
-  // Use the passed strikeIncrement parameter
-  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
+  // Use the imported calculateStrikeIncrement function
+  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
+  console.log(`🔧 Using calculated strike increment: $${strikeIncrement}`);
   
   // For bull call spreads, we want bearish offsets: bear put spreads or long puts
   const lowestCallStrike = Math.min(...callPositions.map(cp => cp.strike));
@@ -155,7 +155,7 @@ function processBullCallSpreadOffsetting(
           // todo: get rid of the default 260 in "shortCall ? shortCall.strike : 260"
           const originalPositions = [
             { type: 'c', strike: longCallStrike, qty: spreadQty },
-            { type: 'c', strike: shortCall ? shortCall.strike : 260, qty: -spreadQty }
+            { type: 'c', strike: shortCallStrike, qty: -spreadQty }
           ];
           
           const offsettingPositions = [
@@ -193,7 +193,7 @@ function processBullCallSpreadOffsetting(
               additionalProfitPotential: upside,
               totalProfitPotential: totalProfitPotential,
               riskNeutralized: true,
-              originalPosition: `Bull call spread ${spreadQty} ${longCallStrike}/${shortCall ? shortCall.strike : 260} call spread`,
+              originalPosition: `Bull call spread ${spreadQty} ${longCallStrike}/${shortCallStrike} call spread`,
               offsettingPosition: `Bear ${Math.abs(spreadQty)} ${shortPutStrike}/${longPutStrike} put spread`
             });
             spreadCount++;
@@ -241,12 +241,12 @@ function processBullCallSpreadOffsetting(
     const longCall = callPositions.find(cp => cp.strike === longCallStrike && cp.qty > 0);
     const shortCall = callPositions.find(cp => cp.strike > longCallStrike && cp.qty < 0);
     
-    console.log(`   Original spread: long ${longCallStrike}c, short ${shortCall ? shortCall.strike : 'N/A'}c`);
+    console.log(`   Original spread: long ${longCallStrike}c, short ${shortCallStrike}c`);
     
     let positionPotentialValue = 0;
     if (longCall && shortCall) {
       positionPotentialValue = (shortCall.strike - longCall.strike) * 100 * Math.abs(spreadQty);
-      console.log(`   Potential Value: $${potentialValue.toFixed(2)} VS Position potential value: $${positionPotentialValue.toFixed(2)} (spread width: $${shortCall.strike - longCallStrike})`);
+      console.log(`   Potential Value: $${potentialValue.toFixed(2)} VS Position potential value: $${positionPotentialValue.toFixed(2)} (spread width: $${shortCallStrike - longCallStrike})`);
     }
     
     if (potentialValue < positionPotentialValue) {
@@ -257,7 +257,7 @@ function processBullCallSpreadOffsetting(
     // Calculate true locked-in value by analyzing combined position
     const originalPositions = [
       { type: 'c', strike: longCallStrike, qty: spreadQty },
-      { type: 'c', strike: shortCall ? shortCall.strike : 0, qty: -spreadQty }
+      { type: 'c', strike: shortCallStrike, qty: -spreadQty }
     ];
     
     const offsettingPositions = [
@@ -293,7 +293,7 @@ function processBullCallSpreadOffsetting(
         additionalProfitPotential: upside,
         totalProfitPotential: totalProfitPotential,
         riskNeutralized: true,
-        originalPosition: `Bull call spread ${spreadQty} ${longCallStrike}/${shortCall ? shortCall.strike : 0} call spread`,
+        originalPosition: `Bull call spread ${spreadQty} ${longCallStrike}/${shortCallStrike} call spread`,
         offsettingPosition: `Long ${Math.abs(spreadQty)} ${option.strike} puts`
       });
     }
@@ -302,9 +302,5 @@ function processBullCallSpreadOffsetting(
   console.log(`🔍 Bull call spread offsetting analysis completed`);
 }
 
-// Export for use in main file
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    processBullCallSpreadOffsetting
-  };
-}
+// Export functions for use in other files (global approach)
+window.processBullCallSpreadOffsetting = processBullCallSpreadOffsetting;

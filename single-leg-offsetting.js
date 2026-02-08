@@ -1,3 +1,6 @@
+// Use global utility functions (for file:// protocol compatibility)
+// Functions are available via window object from option-utils.js
+
 /**
  * Process single leg call offsetting for long put positions
  * @param {Array} putPositions - Put positions array
@@ -8,7 +11,6 @@
  * @param {number} totalCostPaid - Total cost paid for original positions
  * @param {number} originalSpreadWidth - Original spread width (if applicable)
  * @param {Array} offsettingTrades - Array to store offsetting trades
- * @param {Function} calculateSingleLegLockedValue - Function to calculate single leg locked-in value
  */
 function processSingleLegCallOffsetting(
   putPositions,
@@ -18,10 +20,7 @@ function processSingleLegCallOffsetting(
   maxPotentialProfit,
   totalCostPaid,
   originalSpreadWidth,
-  offsettingTrades,
-  calculateSingleLegLockedValue,
-  strikeIncrement,
-  calculateOffsetCost
+  offsettingTrades
 ) {
   console.log('🔍 Processing single leg call offsetting for long put positions...');
   
@@ -50,8 +49,9 @@ function processSingleLegCallOffsetting(
   // Any offsetting trade that costs less than the max profit creates locked-in profit
   console.log(`🎯 Any offsetting trade costing less than $${offsetBudget.toFixed(2)} creates locked-in profit`);
   
-  // Use the passed strikeIncrement parameter
-  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
+  // Use the imported calculateStrikeIncrement function
+  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
+  console.log(`🔧 Using calculated strike increment: $${strikeIncrement}`);
   
   // For single leg hedges, use calls with strikes LOWER than the put position
   const singleLegCallRange = putStrike - 100; // Start 100 points below put strike
@@ -159,10 +159,7 @@ function processSingleLegPutOffsetting(
   maxPotentialProfit,
   totalCostPaid,
   originalSpreadWidth,
-  offsettingTrades,
-  calculateSingleLegLockedValue,
-  strikeIncrement,
-  calculateOffsetCost
+  offsettingTrades
 ) {
   console.log('🔍 Processing single leg put offsetting for short call positions...');
   
@@ -191,8 +188,9 @@ function processSingleLegPutOffsetting(
   // Any offsetting trade that costs less than the max profit creates locked-in profit
   console.log(`🎯 Any offsetting trade costing less than $${offsetBudget.toFixed(2)} creates locked-in profit`);
   
-  // Use the passed strikeIncrement parameter
-  console.log(`🔧 Using passed strike increment: $${strikeIncrement}`);
+  // Use the imported calculateStrikeIncrement function
+  const strikeIncrement = calculateStrikeIncrement(underlyingPrice);
+  console.log(`🔧 Using calculated strike increment: $${strikeIncrement}`);
   
   // Find the short call strike (higher strike) for range calculation
   const highestCallStrike = Math.max(...callPositions.map(cp => cp.strike));
@@ -283,10 +281,6 @@ function processSingleLegPutOffsetting(
   console.log(`  Offsetting trades so far: ${offsettingTrades.length}`);
 }
 
-// Export for use in main file
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    processSingleLegCallOffsetting,
-    processSingleLegPutOffsetting
-  };
-}
+// Export functions for use in other files (global approach)
+window.processSingleLegCallOffsetting = processSingleLegCallOffsetting;
+window.processSingleLegPutOffsetting = processSingleLegPutOffsetting;
