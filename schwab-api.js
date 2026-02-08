@@ -546,6 +546,65 @@ function parseSchwabOptionsData(chainData, requestedExpiration = null) {
   return options;
 }
 
+// Market hours tracking (shared with oc.js)
+let lastApiSymbol = '';
+let lastApiExpiration = '';
+let hasCalledApiToday = false;
+
+// Check if current time is within market hours (9 AM - 4 PM EST)
+function isMarketHours() {
+  const now = new Date();
+  // Convert to EST (UTC-5 or UTC-4 during EDT)
+  const estTime = new Date(now.toLocaleString("en-US", {timeZone: "America/New_York"}));
+  const hour = estTime.getHours();
+  const day = estTime.getDay();
+  
+  // Check if it's a weekday (Monday = 1, Friday = 5)
+  if (day < 1 || day > 5) {
+    console.log(`🕐 Weekend detected (day ${day}), market closed`);
+    return false; // Weekend
+  }
+  
+  // Market hours: 9 AM (9) to 4 PM (16) EST
+  const inMarketHours = hour >= 9 && hour < 16;
+  console.log(`🕐 Current EST time: ${hour}:00, market hours: ${inMarketHours ? 'OPEN' : 'CLOSED'}`);
+  return inMarketHours;
+}
+
+// Check if we should make an API call based on market hours and data changes
+function shouldMakeApiCall(symbol, expiration) {
+  const marketHours = isMarketHours();
+  
+  console.log(`🤔 API Call Check - Symbol: "${symbol}", Expiration: "${expiration}", HasCalledToday: ${hasCalledApiToday}, LastSymbol: "${lastApiSymbol}", LastExpiration: "${lastApiExpiration}"`);
+  
+  // Always make initial call or if symbol/expiration changed
+  if (!hasCalledApiToday || symbol !== lastApiSymbol || expiration !== lastApiExpiration) {
+    console.log('✅ Making API call - initial call or data changed');
+    hasCalledApiToday = true;
+    lastApiSymbol = symbol;
+    lastApiExpiration = expiration;
+    return true;
+  }
+  
+  // Outside market hours, skip additional calls
+  if (!marketHours) {
+    console.log('🕐 Outside market hours (9 AM - 4 PM EST), skipping API call');
+    return false;
+  }
+  
+  // During market hours, allow calls
+  console.log('✅ During market hours, allowing API call');
+  return true;
+}
+
+// Reset API call tracking (call when symbol or expiration changes intentionally)
+function resetApiCallTracking() {
+  hasCalledApiToday = false;
+  lastApiSymbol = '';
+  lastApiExpiration = '';
+  console.log('🔄 API call tracking reset');
+}
+
 // Map display symbols to API symbols for special cases
 function mapSymbolForAPI(displaySymbol, endpoint) {
   // Different endpoints may need different symbol formats
@@ -595,6 +654,14 @@ async function updateCalculatorWithLiveData(symbol) {
   if (!schwabConnected) {
     console.log('Schwab API not connected');
     return;
+  }
+
+  // Get current selected expiration
+  const selectedExpiration = getSelectedExpiration ? getSelectedExpiration() : null;
+  
+  // Check if we should make an API call based on market hours and data changes
+  if (!shouldMakeApiCall(symbol, selectedExpiration)) {
+    return; // Skip API call if outside market hours and no data changes
   }
 
   console.log('🔄 Updating with live data for:', symbol);
@@ -712,26 +779,7 @@ function updateUnderlyingPrice(price) {
   }
 }
 
-// Export functions for use in main file
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    initializeSchwab,
-    testSchwabConnection,
-    authenticateSchwab,
-    updateSchwabStatus,
-    getOptionsChainFromSchwab,
-    getOptionExpirationsFromSchwab,
-    parseSchwabOptionsData,
-    restoreLastSymbol,
-    saveCurrentSymbol,
-    getUnderlyingQuote,
-    adjustBidAskSpread,
-    mapSymbolForAPI,
-    updateCalculatorWithLiveData,
-    updateUnderlyingPrice,
-    schwabConnected,
-    currentSymbol,
-    liveDataEnabled,
-    liveDataIntervalDuration
-  };
-}
+// Global exports for browser
+window.resetApiCallTracking = resetApiCallTracking;
+window.isMarketHours = isMarketHours;
+window.shouldMakeApiCall = shouldMakeApiCall;

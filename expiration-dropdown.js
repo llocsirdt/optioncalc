@@ -217,9 +217,12 @@ function updateExpirationDate() {
     }
     
     // Trigger options chain refresh with new expiration
-    if (symbol) {
-      // console.log(`🔄 Refreshing options chain for ${symbol} with expiration ${selectedExpiration}`);
-      // This will be used by the existing options chain logic
+    if (typeof updateCalculatorWithLiveData === 'function') {
+      // Reset API call tracking since expiration changed
+      if (typeof resetApiCallTracking === 'function') {
+        resetApiCallTracking();
+      }
+      updateCalculatorWithLiveData(symbol);
     }
   } else {
     // console.log('⚠️ No expiration selected');
@@ -255,6 +258,12 @@ document.addEventListener('DOMContentLoaded', function() {
   if (symbolInput) {
     symbolInput.addEventListener('change', function() {
       // console.log(`🔄 Symbol changed to: "${symbolInput.value.trim()}"`);
+      
+      // Reset API call tracking since symbol changed
+      if (typeof resetApiCallTracking === 'function') {
+        resetApiCallTracking();
+      }
+      
       debouncedLoadExpirations();
       
       // Restore appropriate input for new symbol

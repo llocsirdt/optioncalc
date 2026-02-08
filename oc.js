@@ -1515,6 +1515,7 @@ function testInputRestoration() {
 
 // Process input from the text input field
 function processInput() {
+
   const inputText = document.getElementById('textInput').value;
   const outputDiv = document.getElementById('output');
   
@@ -1531,6 +1532,11 @@ function processInput() {
     const symbolExpirationKey = `${symbol.toUpperCase()}-${expiration}`;
     localStorage.setItem(symbolExpirationKey, inputText);
     // console.log(`💾 Saved input for ${symbol} ${expiration} with key: ${symbolExpirationKey}`);
+  }
+
+  // Reset API call tracking since positions changed
+  if (typeof resetApiCallTracking === 'function') {
+    resetApiCallTracking();
   }
 
   try {
