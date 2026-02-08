@@ -34,6 +34,29 @@ function handleOptionCellClick(event) {
     return;
   }
   
+  // For touch events, verify the touch is actually within the cell bounds
+  if (event.type === 'touchstart' && event.touches && event.touches.length > 0) {
+    const touch = event.touches[0];
+    const rect = cell.getBoundingClientRect();
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    
+    // Check if touch is within cell bounds (with some tolerance for zoom)
+    const tolerance = 10; // 10px tolerance
+    const touchX = touch.clientX + scrollX;
+    const touchY = touch.clientY + scrollY;
+    const cellLeft = rect.left + scrollX;
+    const cellRight = rect.right + scrollX;
+    const cellTop = rect.top + scrollY;
+    const cellBottom = rect.bottom + scrollY;
+    
+    if (touchX < cellLeft - tolerance || touchX > cellRight + tolerance ||
+        touchY < cellTop - tolerance || touchY > cellBottom + tolerance) {
+      console.log('🚫 Touch outside cell bounds, ignoring');
+      return;
+    }
+  }
+  
   const row = cell.closest('tr');
   const cells = row.getElementsByTagName('td');
   
@@ -1281,7 +1304,22 @@ function updateOptionsChain(options) {
         cell.addEventListener('click', handleOptionCellClick);
         
         // Touch events for mobile devices (only touchstart to prevent double-firing)
-        cell.addEventListener('touchstart', handleOptionCellClick, { passive: false });
+        cell.addEventListener('touchstart', function(event) {
+          // Additional verification using elementFromPoint for zoomed scenarios
+          if (event.touches && event.touches.length > 0) {
+            const touch = event.touches[0];
+            const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
+            
+            // Check if the element at touch point is the same cell or a child of it
+            if (elementAtPoint !== cell && !cell.contains(elementAtPoint)) {
+              console.log('🚫 Touch target mismatch, ignoring');
+              event.preventDefault();
+              return;
+            }
+          }
+          
+          handleOptionCellClick.call(this, event);
+        }, { passive: false });
       });
       
       // Restore selections after table is rendered

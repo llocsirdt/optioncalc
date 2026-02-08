@@ -579,6 +579,13 @@ pre {
     min-height: 48px;
     /* Add visual feedback for touch */
     -webkit-tap-highlight-color: rgba(33, 150, 243, 0.3);
+    /* Prevent text selection during touch */
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    /* Ensure proper touch handling */
+    touch-action: manipulation;
   }
   
   .clickable:hover {
@@ -594,6 +601,17 @@ pre {
   .selected-bid:active,
   .selected-ask:active {
     transform: scale(0.95);
+  }
+  
+  /* Improve table cell borders for better touch targeting */
+  .options-table td {
+    border-right: 1px solid #e0e0e0;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  
+  /* Prevent zoom on double-tap for clickable cells */
+  .clickable {
+    touch-action: manipulation;
   }
 }
 
