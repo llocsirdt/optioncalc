@@ -33,11 +33,23 @@ async function loadExpirations() {
         dropdown.value = todayExpiration.expirationDate;
         selectedExpiration = todayExpiration.expirationDate;
         console.log(`🎯 Auto-selected today's expiration: ${selectedExpiration}`);
+        // Trigger input restoration for auto-selected expiration
+        const symbol = document.getElementById('symbol-input').value.trim();
+        if (symbol && typeof restoreAppropriateInput === 'function') {
+          // console.log(`🔄 Auto-selection - restoring input for ${symbol} ${selectedExpiration}`);
+          restoreAppropriateInput(symbol, selectedExpiration);
+        }
       } else if (availableExpirations.length > 0) {
         // Select the nearest expiration
         dropdown.value = availableExpirations[0].expirationDate;
         selectedExpiration = availableExpirations[0].expirationDate;
         console.log(`🎯 Selected nearest expiration: ${selectedExpiration}`);
+        // Trigger input restoration for auto-selected expiration
+        const symbol = document.getElementById('symbol-input').value.trim();
+        if (symbol && typeof restoreAppropriateInput === 'function') {
+          // console.log(`🔄 Auto-selection - restoring input for ${symbol} ${selectedExpiration}`);
+          restoreAppropriateInput(symbol, selectedExpiration);
+        }
       }
     } else {
       dropdown.innerHTML = '<option value="">No expirations available</option>';
@@ -89,17 +101,36 @@ function updateExpirationDate() {
   const dropdown = document.getElementById('expiration-dropdown');
   selectedExpiration = dropdown.value;
   
+  // console.log(`🎯 updateExpirationDate called - selected expiration: "${selectedExpiration}"`);
+  
   if (selectedExpiration) {
-    console.log(`🎯 Selected expiration: ${selectedExpiration}`);
+    // console.log(`🎯 Selected expiration: ${selectedExpiration}`);
+    
+    // Restore appropriate input for this symbol+expiration combination
+    const symbol = document.getElementById('symbol-input').value.trim();
+    // console.log(`🔍 Current symbol: "${symbol}"`);
+    
+    if (symbol && typeof restoreAppropriateInput === 'function') {
+      // console.log(`🔍 Calling restoreAppropriateInput...`);
+      restoreAppropriateInput(symbol, selectedExpiration);
+    } else {
+      // console.log(`❌ Cannot restore input - symbol: "${symbol}", function exists: ${typeof restoreAppropriateInput === 'function'}`);
+    }
     
     // Trigger options chain refresh with new expiration
-    const symbol = document.getElementById('symbol-input').value.trim();
     if (symbol) {
-      console.log(`🔄 Refreshing options chain for ${symbol} with expiration ${selectedExpiration}`);
+      // console.log(`🔄 Refreshing options chain for ${symbol} with expiration ${selectedExpiration}`);
       // This will be used by the existing options chain logic
     }
   } else {
-    console.log('⚠️ No expiration selected');
+    // console.log('⚠️ No expiration selected');
+    
+    // If no expiration selected, restore default input
+    const symbol = document.getElementById('symbol-input').value.trim();
+    if (symbol && typeof restoreAppropriateInput === 'function') {
+      // console.log(`🔍 No expiration - restoring default input for symbol: ${symbol}`);
+      restoreAppropriateInput(symbol, '');
+    }
   }
 }
 
@@ -113,7 +144,20 @@ document.addEventListener('DOMContentLoaded', function() {
   const symbolInput = document.getElementById('symbol-input');
   if (symbolInput) {
     symbolInput.addEventListener('change', function() {
+      // console.log(`🔄 Symbol changed to: "${symbolInput.value.trim()}"`);
       loadExpirations();
+      
+      // Restore appropriate input for new symbol
+      const symbol = symbolInput.value.trim();
+      const expiration = document.getElementById('expiration-dropdown')?.value;
+      // console.log(`🔍 After symbol change - symbol: "${symbol}", expiration: "${expiration}"`);
+      
+      if (typeof restoreAppropriateInput === 'function') {
+        // console.log(`🔍 Calling restoreAppropriateInput from symbol change handler...`);
+        restoreAppropriateInput(symbol, expiration);
+      } else {
+        // console.log(`❌ restoreAppropriateInput function not available`);
+      }
     });
     
     // Load expirations for initial symbol on page load

@@ -1164,12 +1164,88 @@ function initSlider() {
 document.addEventListener('DOMContentLoaded', async () => {
   initSlider();
   
-  // Load saved input if it exists
-  const savedInput = localStorage.getItem('savedOptionInput');
-  if (savedInput) {
-    document.getElementById('textInput').value = savedInput;
-  }
+  // Load appropriate input on page load
+  const symbol = document.getElementById('symbol-input')?.value.trim();
+  const expiration = document.getElementById('expiration-dropdown')?.value;
+  restoreAppropriateInput(symbol, expiration);
 });
+
+// Helper function to restore appropriate input based on symbol and expiration
+function restoreAppropriateInput(symbol, expiration) {
+  // console.log(`🔍 restoreAppropriateInput called with symbol: "${symbol}", expiration: "${expiration}"`);
+  
+  const textInput = document.getElementById('textInput');
+  if (!textInput) {
+    // console.log('❌ textInput element not found');
+    return;
+  }
+  
+  if (symbol && expiration) {
+    // Try to get symbol+expiration specific input (case-insensitive)
+    const symbolExpirationKey = `${symbol.toUpperCase()}-${expiration}`;
+    const specificInput = localStorage.getItem(symbolExpirationKey);
+    
+    // console.log(`🔍 Checking specific key: ${symbolExpirationKey}`);
+    // console.log(`🔍 Found specific input: ${specificInput ? 'YES' : 'NO'}`);
+    
+    if (specificInput) {
+      textInput.value = specificInput;
+      // console.log(`📥 Restored specific input for ${symbol} ${expiration} from key: ${symbolExpirationKey}`);
+      return;
+    }
+  }
+  
+  // Fallback to default saved input
+  const defaultInput = localStorage.getItem('savedOptionInput');
+  // console.log(`🔍 Checking default key: savedOptionInput`);
+  // console.log(`🔍 Found default input: ${defaultInput ? 'YES' : 'NO'}`);
+  
+  if (defaultInput) {
+    textInput.value = defaultInput;
+    // console.log('📥 Restored default saved input');
+  } else {
+    // console.log('⚠️ No saved input found');
+  }
+}
+
+// Debug function to show all stored option inputs
+function debugStoredInputs() {
+  console.log('🔍 Debug: Stored option inputs in localStorage:');
+  const keys = Object.keys(localStorage).filter(key => 
+    key === 'savedOptionInput' || (key.includes('-') && key.length > 10 && !key.includes('schwab') && !key.includes('lastSymbol'))
+  );
+  keys.forEach(key => {
+    const type = key === 'savedOptionInput' ? '(Default)' : '(Symbol-Expiration)';
+    console.log(`  ${key} ${type}: ${localStorage.getItem(key)}`);
+  });
+  console.log('💡 Tip: Symbol keys are stored in UPPERCASE for case-insensitive matching');
+}
+
+// Test function for manual debugging
+function testInputRestoration() {
+  console.log('🧪 Testing input restoration...');
+  
+  // Test current values
+  const symbol = document.getElementById('symbol-input')?.value.trim();
+  const expiration = document.getElementById('expiration-dropdown')?.value;
+  const currentInput = document.getElementById('textInput')?.value;
+  
+  console.log(`Current state:`);
+  console.log(`  Symbol: "${symbol}"`);
+  console.log(`  Expiration: "${expiration}"`);
+  console.log(`  Current input: "${currentInput}"`);
+  
+  // Show all stored inputs
+  debugStoredInputs();
+  
+  // Test restoration
+  if (typeof restoreAppropriateInput === 'function') {
+    console.log('🧪 Calling restoreAppropriateInput...');
+    restoreAppropriateInput(symbol, expiration);
+  } else {
+    console.log('❌ restoreAppropriateInput function not found');
+  }
+}
 
 // Process input from the text input field
 function processInput() {
@@ -1179,8 +1255,17 @@ function processInput() {
   // Clear previous output
   outputDiv.innerHTML = '';
   
-  // Store the input in local storage
+  // Store the input in local storage with default key
   localStorage.setItem('savedOptionInput', inputText);
+  
+  // Also store with symbol+expiration key if applicable
+  const symbol = document.getElementById('symbol-input')?.value.trim();
+  const expiration = document.getElementById('expiration-dropdown')?.value;
+  if (symbol && expiration) {
+    const symbolExpirationKey = `${symbol.toUpperCase()}-${expiration}`;
+    localStorage.setItem(symbolExpirationKey, inputText);
+    // console.log(`💾 Saved input for ${symbol} ${expiration} with key: ${symbolExpirationKey}`);
+  }
 
   try {
     // Clean the input text by removing newlines and other whitespace that could break JSON parsing
