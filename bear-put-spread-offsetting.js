@@ -94,7 +94,6 @@ function processBearPutSpreadOffsetting(
   
   // Check multiple spread combinations
   const minSpreadWidth = strikeIncrement;  // Minimum spread width equals strike increment
-  const spreadIncrement = strikeIncrement; // Dynamic increment based on price
   const maxSpreadWidth = originalSpreadWidth * 2; // Limit to twice the original spread width
   
   let spreadCount = 0;
@@ -118,7 +117,7 @@ function processBearPutSpreadOffsetting(
       console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
       
       // Only check spreads within minimum width range and in $10 increments
-      if (spreadWidth >= minSpreadWidth && spreadWidth % spreadIncrement === 0) {
+      if (spreadWidth >= minSpreadWidth && spreadWidth % strikeIncrement === 0) {
         
         // For bear put spreads: offsetting bull call spread must have at least one leg at or below lowest put strike
         const lowestPutStrike = shortPut ? shortPut.strike : longPutStrike;
