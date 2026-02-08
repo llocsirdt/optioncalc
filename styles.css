@@ -44,6 +44,11 @@ textarea {
   border-radius: 4px;
 }
 
+#optionRange {
+  width: 70%; margin: 0 20px; vertical-align: middle;
+}
+
+
 #chart {
   border: 1px solid #ccc;
   background-color: #f9f9f9;
@@ -397,12 +402,15 @@ pre {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 10px;
-  margin: 4px 0;
-  border-radius: 6px;
-  background: white;
-  border: 1px solid #e9ecef;
-  font-size: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f9f9f9;
+}
+
+.offset-trade.low-locked-profit {
+  opacity: 0.5;
 }
 
 .offset-trade.single_leg {
@@ -466,6 +474,124 @@ pre {
 
 .profit-neutral {
   color: #FF9800;
+}
+
+/* Position Selection Styles */
+.selected-positions-container {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.selected-positions-empty {
+  text-align: center;
+  color: #6c757d;
+  font-style: italic;
+}
+
+.selected-positions-header {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.selected-positions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.selected-position-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.position-type {
+  font-weight: 500;
+  color: #333;
+}
+
+.position-side {
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.position-side.long {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.position-side.short {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.position-cost {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.position-cost.credit {
+  color: #28a745;
+}
+
+.position-cost.debit {
+  color: #dc3545;
+}
+
+.selected-positions-total {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #dee2e6;
+  font-weight: bold;
+  font-size: 14px;
+  text-align: right;
+}
+
+/* Clickable cell styles */
+.clickable {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.clickable:hover {
+  background-color: #e3f2fd !important;
+}
+
+.selected-bid {
+  background-color: #ffebee !important;
+  border: 2px solid #f44336;
+  font-weight: bold;
+}
+
+.selected-ask {
+  background-color: #e8f5e8 !important;
+  border: 2px solid #4caf50;
+  font-weight: bold;
+}
+
+/* Ensure bid/ask cells maintain their ITM styling when selected */
+.itm-cell.selected-bid,
+.itm-cell.selected-ask {
+  background-color: inherit !important;
+}
+
+.itm-cell.selected-bid {
+  background-color: #ffcdd2 !important;
+}
+
+.itm-cell.selected-ask {
+  background-color: #c8e6c9 !important;
 }
 
 

@@ -4,6 +4,63 @@
 // Expiration dropdown functionality
 let selectedExpiration = null;
 let availableExpirations = [];
+let loadExpirationsTimeout = null;
+
+// Save selected expiration to localStorage
+function saveSelectedExpiration(symbol, expiration) {
+  if (!symbol || !expiration) return;
+  
+  // Only save if symbol is reasonably complete (at least 2 characters)
+  if (symbol.length < 2) {
+    console.log(`⚠️ Symbol too short to save: "${symbol}"`);
+    return;
+  }
+  
+  const key = `selectedExpiration_${symbol.toUpperCase()}`;
+  console.log(`💾 Attempting to save - Key: ${key}, Value: ${expiration}`);
+  localStorage.setItem(key, expiration);
+  
+  // Verify it was saved
+  const verify = localStorage.getItem(key);
+  console.log(`💾 Verification - Saved: ${verify}, Expected: ${expiration}, Match: ${verify === expiration}`);
+  console.log(`💾 Saved selected expiration for ${symbol}: ${expiration}`);
+}
+
+// Get saved expiration for symbol
+function getSavedExpiration(symbol) {
+  if (!symbol) return null;
+  
+  const key = `selectedExpiration_${symbol.toUpperCase()}`;
+  const saved = localStorage.getItem(key);
+  console.log(`📖 Retrieving - Key: ${key}, Found: ${saved || 'none'}`);
+  console.log(`📖 Retrieved saved expiration for ${symbol}: ${saved || 'none'}`);
+  return saved;
+}
+
+// Clear saved expiration for symbol
+function clearSavedExpiration(symbol) {
+  if (!symbol) return;
+  
+  const key = `selectedExpiration_${symbol.toUpperCase()}`;
+  localStorage.removeItem(key);
+  console.log(`🗑️ Cleared saved expiration for ${symbol}`);
+}
+
+// Clear all saved expirations (for debugging/reset)
+function clearAllSavedExpirations() {
+  const keys = Object.keys(localStorage);
+  let clearedCount = 0;
+  
+  keys.forEach(key => {
+    if (key.startsWith('selectedExpiration_')) {
+      localStorage.removeItem(key);
+      clearedCount++;
+    }
+  });
+  
+  console.log(`🗑️ Cleared ${clearedCount} saved expirations`);
+  return clearedCount;
+}
 
 // Load expirations for current symbol
 async function loadExpirations() {
@@ -12,6 +69,12 @@ async function loadExpirations() {
   
   if (!symbol) {
     console.log('❌ No symbol entered');
+    return;
+  }
+  
+  // Only proceed if symbol is reasonably complete
+  if (symbol.length < 2) {
+    console.log(`⚠️ Symbol too short to load expirations: "${symbol}"`);
     return;
   }
   
@@ -27,31 +90,58 @@ async function loadExpirations() {
       availableExpirations = expirations.expirationList;
       populateExpirationDropdown(availableExpirations);
       
-      // Auto-select today's expiration if available
-      const today = new Date();
-      const todayString = today.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD format in EST/EDT
-      const todayExpiration = availableExpirations.find(exp => exp.expirationDate === todayString);
+      // Try to restore previously selected expiration first
+      const savedExpiration = getSavedExpiration(symbol);
+      let selectedDate = null;
       
-      if (todayExpiration) {
-        dropdown.value = todayExpiration.expirationDate;
-        selectedExpiration = todayExpiration.expirationDate;
-        console.log(`🎯 Auto-selected today's expiration: ${selectedExpiration}`);
-        // Trigger input restoration for auto-selected expiration
-        const symbol = document.getElementById('symbol-input').value.trim();
-        if (symbol && typeof restoreAppropriateInput === 'function') {
-          // console.log(`🔄 Auto-selection - restoring input for ${symbol} ${selectedExpiration}`);
-          restoreAppropriateInput(symbol, selectedExpiration);
+      // Debug: Show all available expirations
+      console.log(`🔍 Available expirations for ${symbol}:`);
+      availableExpirations.forEach((exp, index) => {
+        console.log(`  [${index}] ${exp.expirationDate}`);
+      });
+      
+      if (savedExpiration) {
+        // Check if saved expiration is still available
+        const savedExpirationObj = availableExpirations.find(exp => exp.expirationDate === savedExpiration);
+        if (savedExpirationObj) {
+          selectedDate = savedExpiration;
+          dropdown.value = savedExpiration;
+          selectedExpiration = savedExpiration;
+          console.log(`🔄 Restored saved expiration: ${selectedExpiration}`);
+        } else {
+          console.log(`⚠️ Saved expiration ${savedExpiration} not available for ${symbol}`);
+          console.log(`⚠️ Available dates: ${availableExpirations.map(exp => exp.expirationDate).join(', ')}`);
+          clearSavedExpiration(symbol); // Clear invalid saved expiration
         }
-      } else if (availableExpirations.length > 0) {
-        // Select the nearest expiration
-        dropdown.value = availableExpirations[0].expirationDate;
-        selectedExpiration = availableExpirations[0].expirationDate;
-        console.log(`🎯 Selected nearest expiration: ${selectedExpiration}`);
-        // Trigger input restoration for auto-selected expiration
-        const symbol = document.getElementById('symbol-input').value.trim();
-        if (symbol && typeof restoreAppropriateInput === 'function') {
-          // console.log(`🔄 Auto-selection - restoring input for ${symbol} ${selectedExpiration}`);
-          restoreAppropriateInput(symbol, selectedExpiration);
+      }
+      
+      // If no valid saved expiration, auto-select today's or nearest
+      if (!selectedDate) {
+        const today = new Date();
+        const todayString = today.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD format in EST/EDT
+        const todayExpiration = availableExpirations.find(exp => exp.expirationDate === todayString);
+        
+        if (todayExpiration) {
+          selectedDate = todayExpiration.expirationDate;
+          dropdown.value = todayExpiration.expirationDate;
+          selectedExpiration = todayExpiration.expirationDate;
+          console.log(`🎯 Auto-selected today's expiration: ${selectedExpiration}`);
+        } else if (availableExpirations.length > 0) {
+          // Select the nearest expiration
+          selectedDate = availableExpirations[0].expirationDate;
+          dropdown.value = availableExpirations[0].expirationDate;
+          selectedExpiration = availableExpirations[0].expirationDate;
+          console.log(`🎯 Selected nearest expiration: ${selectedExpiration}`);
+        }
+      }
+      
+      // Save the selected expiration and trigger input restoration
+      if (selectedDate) {
+        saveSelectedExpiration(symbol, selectedDate);
+        const symbolInput = document.getElementById('symbol-input').value.trim();
+        if (symbolInput && typeof restoreAppropriateInput === 'function') {
+          // console.log(`🔄 Auto-selection - restoring input for ${symbolInput} ${selectedDate}`);
+          restoreAppropriateInput(symbolInput, selectedDate);
         }
       }
     } else {
@@ -107,10 +197,16 @@ function updateExpirationDate() {
   // console.log(`🎯 updateExpirationDate called - selected expiration: "${selectedExpiration}"`);
   
   if (selectedExpiration) {
+    // Save the selected expiration for the current symbol
+    const symbol = document.getElementById('symbol-input').value.trim();
+    if (symbol) {
+      saveSelectedExpiration(symbol, selectedExpiration);
+      console.log(`💾 Updated selected expiration for ${symbol}: ${selectedExpiration}`);
+    }
+    
     // console.log(`🎯 Selected expiration: ${selectedExpiration}`);
     
     // Restore appropriate input for this symbol+expiration combination
-    const symbol = document.getElementById('symbol-input').value.trim();
     // console.log(`🔍 Current symbol: "${symbol}"`);
     
     if (symbol && typeof restoreAppropriateInput === 'function') {
@@ -142,13 +238,24 @@ function getSelectedExpiration() {
   return selectedExpiration;
 }
 
+// Debounced version of loadExpirations to prevent rapid calls
+function debouncedLoadExpirations() {
+  if (loadExpirationsTimeout) {
+    clearTimeout(loadExpirationsTimeout);
+  }
+  
+  loadExpirationsTimeout = setTimeout(() => {
+    loadExpirations();
+  }, 300); // Wait 300ms after typing stops
+}
+
 // Initialize expirations when symbol changes and on page load
 document.addEventListener('DOMContentLoaded', function() {
   const symbolInput = document.getElementById('symbol-input');
   if (symbolInput) {
     symbolInput.addEventListener('change', function() {
       // console.log(`🔄 Symbol changed to: "${symbolInput.value.trim()}"`);
-      loadExpirations();
+      debouncedLoadExpirations();
       
       // Restore appropriate input for new symbol
       const symbol = symbolInput.value.trim();
@@ -184,6 +291,14 @@ window.addEventListener('load', function() {
   const symbolInput = document.getElementById('symbol-input');
   const dropdown = document.getElementById('expiration-dropdown');
   
+  // Debug: Show all localStorage keys
+  console.log('🔍 localStorage contents on page load:');
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('selectedExpiration_')) {
+      console.log(`  ${key}: ${localStorage.getItem(key)}`);
+    }
+  });
+  
   if (symbolInput && dropdown && symbolInput.value.trim() && dropdown.options.length === 1) {
     console.log('🔄 Fallback: Loading expirations after window load');
     setTimeout(() => {
@@ -194,3 +309,12 @@ window.addEventListener('load', function() {
   // Update connection button visibility on page load
   updateConnectionButtonVisibility();
 });
+
+// Export functions for use in other files (global approach)
+window.loadExpirations = loadExpirations;
+window.debouncedLoadExpirations = debouncedLoadExpirations;
+window.updateExpirationDate = updateExpirationDate;
+window.saveSelectedExpiration = saveSelectedExpiration;
+window.getSavedExpiration = getSavedExpiration;
+window.clearSavedExpiration = clearSavedExpiration;
+window.clearAllSavedExpirations = clearAllSavedExpirations;

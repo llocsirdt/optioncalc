@@ -6,6 +6,208 @@ let fullMinStrike = 0;
 let fullMaxStrike = 0;
 let fullStrikeIncrement = 0;
 
+// Position selection tracking
+let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {strike, type, bid, ask, side}
+let selectedPositionsCost = 0;
+
+// Function to handle clicking on bid/ask cells
+function handleOptionCellClick(event) {
+  const cell = event.target;
+  const cellClass = cell.className;
+  
+  // Only handle bid/ask cells
+  if (!cellClass.includes('bid') && !cellClass.includes('ask')) {
+    return;
+  }
+  
+  const row = cell.closest('tr');
+  const cells = row.getElementsByTagName('td');
+  
+  // Find the strike price (middle column)
+  let strikeCell = null;
+  let strikeIndex = -1;
+  
+  // The strike is in the middle column (index varies based on table structure)
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i].className.includes('strike-cell') && !cells[i].className.includes('strike-cell-p')) {
+      strikeCell = cells[i];
+      strikeIndex = i;
+      break;
+    }
+  }
+  
+  if (!strikeCell) return;
+  
+  const strikeText = strikeCell.textContent.replace('$', '');
+  const strike = parseFloat(strikeText);
+  
+  // Determine if this is a call or put based on cell position
+  const isCall = cell.cellIndex < strikeIndex;
+  const optionType = isCall ? 'c' : 'p';
+  
+  // Determine if this is bid or ask
+  const isBid = cellClass.includes('bid');
+  const side = isBid ? 'short' : 'long'; // Clicking bid = short, ask = long
+  
+  // Get the price from the cell
+  const priceText = cell.textContent.replace('$', '');
+  const price = parseFloat(priceText);
+  
+  // Create position key
+  const positionKey = `${optionType}${strike}`;
+  
+  // Toggle selection
+  if (selectedTablePositions.has(positionKey)) {
+    // Remove selection
+    selectedTablePositions.delete(positionKey);
+    cell.classList.remove('selected-bid', 'selected-ask');
+  } else {
+    // Add selection
+    const position = {
+      strike: strike,
+      type: optionType,
+      bid: isBid ? price : null,
+      ask: !isBid ? price : null,
+      side: side,
+      price: price
+    };
+    selectedTablePositions.set(positionKey, position);
+    
+    // Add highlighting class
+    if (isBid) {
+      cell.classList.add('selected-bid');
+    } else {
+      cell.classList.add('selected-ask');
+    }
+  }
+  
+  // Update the display
+  updateSelectedPositionsDisplay();
+}
+
+// Function to update the selected positions display
+function updateSelectedPositionsDisplay() {
+  const displayArea = document.getElementById('selected-positions-display');
+  if (!displayArea) return;
+  
+  if (selectedTablePositions.size === 0) {
+    displayArea.innerHTML = '<div class="selected-positions-empty">Click bid/ask cells to select positions</div>';
+    selectedPositionsCost = 0;
+    return;
+  }
+  
+  let html = '<div class="selected-positions-header">Selected Positions: <button onclick="clearSelectedPositions()" style="font-size: 12px; padding: 4px 8px; margin-left: 10px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer;">Clear All</button></div>';
+  html += '<div class="selected-positions-list">';
+  
+  let totalCost = 0;
+  
+  // Sort by strike then type
+  const sortedPositions = Array.from(selectedTablePositions.entries()).sort((a, b) => {
+    const [keyA, posA] = a;
+    const [keyB, posB] = b;
+    if (posA.strike !== posB.strike) {
+      return posA.strike - posB.strike;
+    }
+    return posA.type.localeCompare(posB.type);
+  });
+  
+  sortedPositions.forEach(([key, position]) => {
+    const optionName = position.type === 'c' ? 'Call' : 'Put';
+    const sideSymbol = position.side === 'long' ? '+' : '-';
+    const cost = position.side === 'long' ? -position.price : position.price; // Long = debit, Short = credit
+    totalCost += cost;
+    
+    html += `
+      <div class="selected-position-item">
+        <span class="position-type">${optionName} $${position.strike.toFixed(2)}</span>
+        <span class="position-side ${position.side}">${sideSymbol}${position.price.toFixed(2)}</span>
+        <span class="position-cost ${cost >= 0 ? 'credit' : 'debit'}">${cost >= 0 ? '+' : ''}$${Math.abs(cost).toFixed(2)}</span>
+      </div>
+    `;
+  });
+  
+  html += '</div>';
+  html += `<div class="selected-positions-total">Total Cost: <span class="${totalCost >= 0 ? 'credit' : 'debit'}">${totalCost >= 0 ? '+' : ''}$${Math.abs(totalCost).toFixed(2)}</span></div>`;
+  
+  displayArea.innerHTML = html;
+  selectedPositionsCost = totalCost;
+}
+
+// Function to preserve selections when table is redrawn
+function preserveTableSelections() {
+  // This function will be called before table redraw to save current selections
+  // The selections are already stored in selectedTablePositions map
+  console.log('Preserving', selectedTablePositions.size, ' table selections');
+}
+
+// Function to restore selections after table is redrawn
+function restoreTableSelections() {
+  // Re-apply highlighting to the new table
+  selectedTablePositions.forEach((position, key) => {
+    // Find cells in the new table and re-apply classes
+    const table = document.querySelector('.options-table');
+    if (!table) return;
+    
+    const rows = table.getElementsByTagName('tr');
+    for (let row of rows) {
+      const cells = row.getElementsByTagName('td');
+      
+      // Find strike cell
+      let strikeCell = null;
+      let strikeIndex = -1;
+      
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i].className.includes('strike-cell') && !cells[i].className.includes('strike-cell-p')) {
+          const strikeText = cells[i].textContent.replace('$', '');
+          const strike = parseFloat(strikeText);
+          if (Math.abs(strike - position.strike) < 0.01) {
+            strikeCell = cells[i];
+            strikeIndex = i;
+            break;
+          }
+        }
+      }
+      
+      if (strikeCell && Math.abs(parseFloat(strikeCell.textContent.replace('$', '')) - position.strike) < 0.01) {
+        // Found the correct row, now find and highlight the bid/ask cell
+        const isCall = position.type === 'c';
+        const targetCellIndex = isCall ? 
+          (position.side === 'short' ? strikeIndex - 3 : strikeIndex - 2) : // Call side: bid(2), ask(3) from strike
+          (position.side === 'short' ? strikeIndex + 2 : strikeIndex + 3); // Put side: bid(7), ask(8) from strike
+        
+        console.log(`🎯 Restoring selection: ${position.type}${position.strike} ${position.side}, strikeIndex: ${strikeIndex}, targetCellIndex: ${targetCellIndex}`);
+        
+        if (targetCellIndex >= 0 && targetCellIndex < cells.length) {
+          const targetCell = cells[targetCellIndex];
+          if (position.side === 'short') {
+            targetCell.classList.add('selected-bid');
+          } else {
+            targetCell.classList.add('selected-ask');
+          }
+        }
+        break;
+      }
+    }
+  });
+  
+  // Update display
+  updateSelectedPositionsDisplay();
+}
+
+// Function to clear all selected positions
+function clearSelectedPositions() {
+  selectedTablePositions.clear();
+  
+  // Remove highlighting from all cells
+  const selectedCells = document.querySelectorAll('.selected-bid, .selected-ask');
+  selectedCells.forEach(cell => {
+    cell.classList.remove('selected-bid', 'selected-ask');
+  });
+  
+  // Update display
+  updateSelectedPositionsDisplay();
+}
+
 // Import single leg offsetting functions
 // Note: In browser environment, these will be loaded via script tags
 
@@ -158,6 +360,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   // Calculate net exposure and find total cost adjustment
   const netExposure = new Map();
   let totalCostPaid = 0;
+
+  // Set default spread width for individual positions (no spread detected)
+  let originalSpreadWidth = 100; // Default for individual positions
+
   
   currentPositions.forEach(pos => {
     const key = `${pos.type}${pos.strike}`;
@@ -216,7 +422,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         maxPotentialProfit = Math.max(maxPotentialProfit, spreadProfit);
         
         // Store the original spread width for offsetting trade limits
-        const originalSpreadWidth = spreadWidth;
+        originalSpreadWidth = spreadWidth;
         
         console.log(`📈 Found call spread: long ${longCall.qty} ${longCall.strike}c @ $${longCallPremium.toFixed(2)}, short ${shortCall.qty} ${shortCall.strike}c @ $${shortCallPremium.toFixed(2)}`);
         console.log(`💰 Spread width: $${spreadWidth}, max value: $${spreadMaxValue.toFixed(2)}`);
@@ -270,7 +476,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         maxPotentialProfit = Math.max(maxPotentialProfit, spreadProfit);
         
         // Store the original spread width for offsetting trade limits
-        const originalSpreadWidth = spreadWidth;
+        originalSpreadWidth = spreadWidth;
         
         console.log(`📉 Found put spread: long ${longPut.qty} ${longPut.strike}p @ $${longPutPremium.toFixed(2)}, short ${shortPut.qty} ${shortPut.strike}p @ $${shortPutPremium.toFixed(2)}`);
         console.log(`💰 Spread width: $${spreadWidth}, max value: $${spreadMaxValue.toFixed(2)}`);
@@ -283,10 +489,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   
   console.log('💰 Maximum potential profit (offset budget):', maxPotentialProfit);
 
-  
-  // Set default spread width for individual positions (no spread detected)
-  let originalSpreadWidth = 20; // Default for individual positions
-  
+    
   // Detect if this is a bull call spread position
   const hasLongCall = callPositions.some(cp => cp.qty > 0);
   const hasShortCall = callPositions.some(cp => cp.qty < 0);
@@ -944,6 +1147,14 @@ function updateOptionsChain(options) {
       html += `<h3>Options Chain - ${expirationDate}</h3>`;
       html += `</div>`;
       
+      // Add selected positions display area
+      html += `<div id="selected-positions-display" class="selected-positions-container">`;
+      html += '<div class="selected-positions-empty">Click bid/ask cells to select positions</div>';
+      html += `</div>`;
+      
+      // Preserve current selections before redrawing
+      preserveTableSelections();
+      
       html += '<table class="options-table"><thead><tr>';
       html += '<th colspan="5" class="call-header">CALLS</th>';
       html += '<th class="strike-header">STRIKE</th>';
@@ -976,8 +1187,8 @@ function updateOptionsChain(options) {
           const callClass = callITM ? 'itm-cell' : '';
           html += `<td class="${callClass}">${call.openInterest || 0}</td>`;
           html += `<td class="${callClass}">${call.volume || 0}</td>`;
-          html += `<td class="${callClass}">$${call.bid.toFixed(2)}</td>`;
-          html += `<td class="${callClass}">$${call.ask.toFixed(2)}</td>`;
+          html += `<td class="${callClass} bid-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.bid.toFixed(2)}">$${call.bid.toFixed(2)}</td>`;
+          html += `<td class="${callClass} ask-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.ask.toFixed(2)}">$${call.ask.toFixed(2)}</td>`;
         } else {
           html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
         }
@@ -993,8 +1204,8 @@ function updateOptionsChain(options) {
         // Put side (right)
         if (put) {
           const putClass = putITM ? 'itm-cell' : '';
-          html += `<td class="${putClass}">$${put.bid.toFixed(2)}</td>`;
-          html += `<td class="${putClass}">$${put.ask.toFixed(2)}</td>`;
+          html += `<td class="${putClass} bid-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.bid.toFixed(2)}">$${put.bid.toFixed(2)}</td>`;
+          html += `<td class="${putClass} ask-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.ask.toFixed(2)}">$${put.ask.toFixed(2)}</td>`;
           html += `<td class="${putClass}">${put.volume || 0}</td>`;
           html += `<td class="${putClass}">${put.openInterest || 0}</td>`;
         } else {
@@ -1022,8 +1233,9 @@ function updateOptionsChain(options) {
           
           offsettingTrades.forEach(trade => {
             const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+            const lowLockedClass = trade.lockedProfit < 100 ? 'low-locked-profit' : '';
             html += `
-              <div class="offset-trade ${trade.type}">
+              <div class="offset-trade ${trade.type} ${lowLockedClass}">
                 <div class="trade-description">
                   <strong>${trade.description}</strong>
                   <div class="trade-action">${trade.action}</div>
@@ -1047,6 +1259,15 @@ function updateOptionsChain(options) {
       
       chainElement.innerHTML = html;
       console.log('✅ Options chain updated in UI');
+      
+      // Set up click handlers for bid/ask cells
+      const clickableCells = chainElement.querySelectorAll('.clickable');
+      clickableCells.forEach(cell => {
+        cell.addEventListener('click', handleOptionCellClick);
+      });
+      
+      // Restore selections after table is rendered
+      restoreTableSelections();
     } else {
       console.log('❌ No options to display');
       chainElement.innerHTML = '<p>No options data available</p>';
@@ -1618,3 +1839,6 @@ window.restoreAppropriateInput = restoreAppropriateInput;
 window.debugStoredInputs = debugStoredInputs;
 window.testInputRestoration = testInputRestoration;
 window.processInput = processInput;
+window.handleOptionCellClick = handleOptionCellClick;
+window.updateSelectedPositionsDisplay = updateSelectedPositionsDisplay;
+window.clearSelectedPositions = clearSelectedPositions;
