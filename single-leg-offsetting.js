@@ -96,7 +96,7 @@ function processSingleLegCallOffsetting(
     ];
     
     const offsettingPositions = [
-      { type: 'c', strike: option.strike, qty: Math.abs(positionQty), cost: callPrice * Math.abs(positionQty) * 100 }
+      { type: 'c', strike: option.strike, qty: Math.abs(positionQty), cost: calculateOffsetCost(option, positionQty) }
     ];
     
     const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -118,7 +118,7 @@ function processSingleLegCallOffsetting(
       offsettingTrades.push({
         type: 'single_leg',
         description: `Long ${Math.abs(positionQty)} ${option.strike} calls`,
-        action: `BUY ${Math.abs(positionQty)} ${option.strike} CALL @ $${callPrice.toFixed(2)}`,
+        action: `BUY ${Math.abs(positionQty)} ${option.strike} CALL @ $${((option.bid + option.ask) / 2).toFixed(2)}`,
         cost: offsetCost,
         potentialValue: potentialValue, // Keep original logic
         spreadDifference: spreadDifference, // Add new field for spread difference value
@@ -240,7 +240,7 @@ function processSingleLegPutOffsetting(
     ];
     
     const offsettingPositions = [
-      { type: 'p', strike: option.strike, qty: Math.abs(positionQty), cost: putPrice * Math.abs(positionQty) * 100 }
+      { type: 'p', strike: option.strike, qty: Math.abs(positionQty), cost: calculateOffsetCost(option, positionQty) }
     ];
     
     const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -262,7 +262,7 @@ function processSingleLegPutOffsetting(
       offsettingTrades.push({
         type: 'single_leg',
         description: `Long ${Math.abs(positionQty)} ${option.strike} puts`,
-        action: `BUY ${Math.abs(positionQty)} ${option.strike} PUT @ $${putPrice.toFixed(2)}`,
+        action: `BUY ${Math.abs(positionQty)} ${option.strike} PUT @ $${((option.bid + option.ask) / 2).toFixed(2)}`,
         cost: offsetCost,
         potentialValue: potentialValue, // Keep original logic
         spreadDifference: spreadDifference, // Add new field for spread difference value

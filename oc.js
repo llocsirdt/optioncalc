@@ -479,8 +479,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             ];
             
             const offsettingPositions = [
-              { type: 'p', strike: shortPut.strike, qty: -Math.abs(positionQty), cost: -(shortPutPrice * Math.abs(positionQty) * 100) },  // Short put (lower strike)
-              { type: 'p', strike: longPut.strike, qty: Math.abs(positionQty), cost: longPutPrice * Math.abs(positionQty) * 100 }  // Long put (higher strike)
+              { type: 'p', strike: shortPut.strike, qty: -Math.abs(positionQty), cost: -calculateOffsetCost({bid: shortPut.bid, ask: shortPut.ask}, positionQty) },  // Short put (lower strike)
+              { type: 'p', strike: longPut.strike, qty: Math.abs(positionQty), cost: calculateOffsetCost({bid: longPut.bid, ask: longPut.ask}, positionQty) }  // Long put (higher strike)
             ];
             
             const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -668,8 +668,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
               ];
               
               const offsettingPositions = [
-                { type: 'c', strike: longCallStrike, qty: Math.abs(positionQty), cost: longCallPrice * Math.abs(positionQty) * 100 },
-                { type: 'c', strike: shortCallStrike, qty: -Math.abs(positionQty), cost: -(shortCallPrice * Math.abs(positionQty) * 100) }
+                { type: 'c', strike: longCallStrike, qty: Math.abs(positionQty), cost: calculateOffsetCost({bid: longCall.bid, ask: longCall.ask}, positionQty) },
+                { type: 'c', strike: shortCallStrike, qty: -Math.abs(positionQty), cost: -calculateOffsetCost({bid: shortCall.bid, ask: shortCall.ask}, positionQty) }
               ];
               
               const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);

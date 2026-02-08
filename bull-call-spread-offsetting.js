@@ -159,8 +159,8 @@ function processBullCallSpreadOffsetting(
           ];
           
           const offsettingPositions = [
-            { type: 'p', strike: shortPutStrike, qty: -Math.abs(spreadQty), cost: -(shortPutPrice * Math.abs(spreadQty) * 100) },  // Short put (lower strike)
-            { type: 'p', strike: longPutStrike, qty: Math.abs(spreadQty), cost: longPutPrice * Math.abs(spreadQty) * 100 }  // Long put (higher strike)
+            { type: 'p', strike: shortPutStrike, qty: -Math.abs(spreadQty), cost: -calculateOffsetCost({bid: shortPut.bid, ask: shortPut.ask}, spreadQty) },  // Short put (lower strike)
+            { type: 'p', strike: longPutStrike, qty: Math.abs(spreadQty), cost: calculateOffsetCost({bid: longPut.bid, ask: longPut.ask}, spreadQty) }  // Long put (higher strike)
           ];
           
           const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -261,7 +261,7 @@ function processBullCallSpreadOffsetting(
     ];
     
     const offsettingPositions = [
-      { type: 'p', strike: option.strike, qty: Math.abs(spreadQty), cost: putPrice * Math.abs(spreadQty) * 100 }
+      { type: 'p', strike: option.strike, qty: Math.abs(spreadQty), cost: calculateOffsetCost(option, spreadQty) }
     ];
     
     const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -284,7 +284,7 @@ function processBullCallSpreadOffsetting(
       offsettingTrades.push({
         type: 'single_leg',
         description: `Long ${Math.abs(spreadQty)} ${option.strike} puts`,
-        action: `BUY ${Math.abs(spreadQty)} ${option.strike} PUT @ $${putPrice.toFixed(2)}`,
+        action: `BUY ${Math.abs(spreadQty)} ${option.strike} PUT @ $${((option.bid + option.ask) / 2).toFixed(2)}`,
         cost: offsetCost,
         potentialValue: potentialValue, // Keep original logic
         spreadDifference: spreadDifference, // Add new field for spread difference value

@@ -182,8 +182,8 @@ function processBearPutSpreadOffsetting(
           ];
           
           const offsettingPositions = [
-            { type: 'c', strike: longCallStrike, qty: Math.abs(spreadQty), cost: longCallPrice * Math.abs(spreadQty) * 100 },
-            { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty), cost: -(shortCallPrice * Math.abs(spreadQty) * 100) }
+            { type: 'c', strike: longCallStrike, qty: Math.abs(spreadQty), cost: calculateOffsetCost({bid: longCall.bid, ask: longCall.ask}, spreadQty) },
+            { type: 'c', strike: shortCallStrike, qty: -Math.abs(spreadQty), cost: -calculateOffsetCost({bid: shortCall.bid, ask: shortCall.ask}, spreadQty) }
           ];
           
           const lockedValueResult = calculateLockedInValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -282,7 +282,7 @@ function processBearPutSpreadOffsetting(
     }
     
     const offsettingPositions = [
-      { type: 'c', strike: option.strike, qty: Math.abs(spreadQty), cost: callPrice * Math.abs(spreadQty) * 100 }
+      { type: 'c', strike: option.strike, qty: Math.abs(spreadQty), cost: calculateOffsetCost(option, spreadQty) }
     ];
     
     const lockedValueResult = calculateSingleLegLockedValue(originalPositions, offsettingPositions, underlyingPrice, marketData, totalCostPaid);
@@ -304,7 +304,7 @@ function processBearPutSpreadOffsetting(
       offsettingTrades.push({
         type: 'single_leg',
         description: `Long ${Math.abs(spreadQty)} ${option.strike} calls`,
-        action: `BUY ${Math.abs(spreadQty)} ${option.strike} CALL @ $${callPrice.toFixed(2)}`,
+        action: `BUY ${Math.abs(spreadQty)} ${option.strike} CALL @ $${((option.bid + option.ask) / 2).toFixed(2)}`,
         cost: offsetCost,
         potentialValue: potentialValue, // Keep original logic
         spreadDifference: spreadDifference, // Add new field for spread difference value
