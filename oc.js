@@ -317,7 +317,9 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       originalSpreadWidth, 
       offsettingTrades, 
       calculateLockedInValue,
-      strikeIncrement
+      strikeIncrement,
+      calculateOffsetCost,
+      calculateVerticalSpreadCost
     );
   }
   
@@ -332,7 +334,9 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       originalSpreadWidth, 
       offsettingTrades, 
       calculateLockedInValue,
-      strikeIncrement
+      strikeIncrement,
+      calculateOffsetCost,
+      calculateVerticalSpreadCost
     );
   }
   
@@ -389,7 +393,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         originalSpreadWidth,
         offsettingTrades,
         calculateSingleLegLockedValue,
-        strikeIncrement
+        strikeIncrement,
+        calculateOffsetCost
       );
       
       // Spread offset: bear put spread (buy higher strike, sell lower strike)
@@ -444,7 +449,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             
             // Bear put spread: buy higher strike, sell lower strike
             // This costs money: (higher strike price - lower strike price) * quantity * 100
-            const spreadCost = (longPutPrice - shortPutPrice) * Math.abs(positionQty) * 100;
+            const spreadCost = calculateVerticalSpreadCost(longPutPrice, shortPutPrice, positionQty);
             const spreadMaxValue = (longPut.strike - shortPut.strike) * 100 * Math.abs(positionQty);
             
             console.log(`💰 Spread ${shortPut.strike}/${longPut.strike}: cost $${spreadCost.toFixed(2)}, max value $${spreadMaxValue.toFixed(2)}`);
@@ -634,7 +639,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
               
               // Bull call spread: buy lower strike, sell higher strike
               // This costs money: (higher strike price - lower strike price) * quantity * 100
-              const spreadCost = (longCallPrice - shortCallPrice) * Math.abs(positionQty) * 100;
+              const spreadCost = calculateVerticalSpreadCost(longCallPrice, shortCallPrice, positionQty);
               const spreadMaxValue = (shortCallStrike - longCallStrike) * 100 * Math.abs(positionQty);
               
               console.log(`💰 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, max value $${spreadMaxValue.toFixed(2)}`);
@@ -722,7 +727,8 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         originalSpreadWidth,
         offsettingTrades,
         calculateSingleLegLockedValue,
-        strikeIncrement
+        strikeIncrement,
+        calculateOffsetCost
       );
       
       console.log(`🔍 Long put offsetting analysis completed`);

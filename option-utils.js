@@ -38,7 +38,7 @@ function calculateSingleLegLockedValue(originalPositions, offsettingPositions, u
   
   // Calculate offsetting cost
   const offsettingCost = offsettingPos.cost || 0;
-  const totalCost = originalCost + offsettingCost;
+  const totalCost = calculateTotalCost(originalCost, offsettingCost);
   
   // For single leg offsets, the locked value is based on the initial position's maximum value minus total cost
   let lockedValue = 0;
@@ -160,7 +160,7 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   }
   
   // Calculate potential profit: max of individual spread profits minus total cost
-  const totalCost = originalCost + offsettingCost;
+  const totalCost = calculateTotalCost(originalCost, offsettingCost);
   const potentialProfit = Math.max(bullCallMaxProfit, bearPutMaxProfit) - totalCost;
   
   // Locked profit is the MIN of the two spread max profits, minus costs
@@ -194,11 +194,46 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   };
 }
 
-// Export functions for use in other files
+/**
+ * Calculate offset cost for single leg options
+ * @param {Object} option - Option object with bid and ask prices
+ * @param {number} quantity - Quantity of contracts (absolute value)
+ * @returns {number} Total cost (price × quantity × 100)
+ */
+function calculateOffsetCost(option, quantity) {
+  const optionPrice = (option.bid + option.ask) / 2;
+  return optionPrice * Math.abs(quantity) * 100;
+}
+
+/**
+ * Calculate vertical spread cost (debit spread)
+ * @param {number} longOptionPrice - Price of the long option (higher premium)
+ * @param {number} shortOptionPrice - Price of the short option (lower premium)
+ * @param {number} quantity - Quantity of contracts (absolute value)
+ * @returns {number} Net cost (longPrice - shortPrice) × quantity × 100
+ */
+function calculateVerticalSpreadCost(longOptionPrice, shortOptionPrice, quantity) {
+  return (longOptionPrice - shortOptionPrice) * Math.abs(quantity) * 100;
+}
+
+/**
+ * Calculate total cost for offsetting positions
+ * @param {number} originalCost - Cost of original position
+ * @param {number} offsettingCost - Cost of offsetting position
+ * @returns {number} Total cost (originalCost + offsettingCost)
+ */
+function calculateTotalCost(originalCost, offsettingCost) {
+  return originalCost + offsettingCost;
+}
+
+// Export functions for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     calculateStrikeIncrement,
     calculateLockedInValue,
-    calculateSingleLegLockedValue
+    calculateSingleLegLockedValue,
+    calculateOffsetCost,
+    calculateVerticalSpreadCost,
+    calculateTotalCost
   };
 }

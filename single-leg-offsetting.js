@@ -20,7 +20,8 @@ function processSingleLegCallOffsetting(
   originalSpreadWidth,
   offsettingTrades,
   calculateSingleLegLockedValue,
-  strikeIncrement
+  strikeIncrement,
+  calculateOffsetCost
 ) {
   console.log('🔍 Processing single leg call offsetting for long put positions...');
   
@@ -69,10 +70,9 @@ function processSingleLegCallOffsetting(
   qualifyingCalls.forEach(option => {
     console.log(`🔍 Analyzing single leg call offset: ${option.strike}c`);
     
-    const callPrice = (option.bid + option.ask) / 2;
-    const offsetCost = callPrice * Math.abs(positionQty) * 100; // Cost to buy calls
+    const offsetCost = calculateOffsetCost(option, positionQty); // Cost to buy calls
     
-    console.log(`   Call price: $${callPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
+    console.log(`   Call price: $${((option.bid + option.ask) / 2).toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
     
     // For long puts, calculate additional profit potential based on realistic scenarios
     // For calls: calculate value at the put strike (most bearish scenario for the original position)
@@ -161,7 +161,8 @@ function processSingleLegPutOffsetting(
   originalSpreadWidth,
   offsettingTrades,
   calculateSingleLegLockedValue,
-  strikeIncrement
+  strikeIncrement,
+  calculateOffsetCost
 ) {
   console.log('🔍 Processing single leg put offsetting for short call positions...');
   
@@ -212,10 +213,9 @@ function processSingleLegPutOffsetting(
   qualifyingPuts.forEach(option => {
     console.log(`🔍 Analyzing single leg put offset: ${option.strike}p`);
     
-    const putPrice = (option.bid + option.ask) / 2;
-    const offsetCost = putPrice * Math.abs(positionQty) * 100; // Cost to buy puts
+    const offsetCost = calculateOffsetCost(option, positionQty); // Cost to buy puts
     
-    console.log(`   Put price: $${putPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
+    console.log(`   Put price: $${((option.bid + option.ask) / 2).toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
     
     // Calculate additional profit potential based on realistic scenarios
     // For puts: calculate value at the lowest call strike (most bullish scenario for the original position)

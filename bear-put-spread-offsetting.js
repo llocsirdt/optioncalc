@@ -23,7 +23,9 @@ function processBearPutSpreadOffsetting(
   originalSpreadWidth, 
   offsettingTrades, 
   calculateLockedInValue,
-  strikeIncrement
+  strikeIncrement,
+  calculateOffsetCost,
+  calculateVerticalSpreadCost
 ) {
   console.log('🎯 Detected bear put spread position - using spread offsetting logic only');
   
@@ -143,7 +145,7 @@ function processBearPutSpreadOffsetting(
           
           // Bull call spread: buy lower strike, sell higher strike
           // This costs money: (higher strike price - lower strike price) * quantity * 100
-          const spreadCost = (longCallPrice - shortCallPrice) * Math.abs(spreadQty) * 100;
+          const spreadCost = calculateVerticalSpreadCost(longCallPrice, shortCallPrice, spreadQty);
           const spreadMaxValue = (shortCallStrike - longCallStrike) * 100 * Math.abs(spreadQty);
           
           console.log(`💰 Spread ${longCallStrike}/${shortCallStrike}: cost $${spreadCost.toFixed(2)}, max value $${spreadMaxValue.toFixed(2)}`);
@@ -241,10 +243,9 @@ function processBearPutSpreadOffsetting(
   qualifyingCalls.forEach(option => {
     console.log(`🔍 Analyzing single leg call offset: ${option.strike}c`);
     
-    const callPrice = (option.bid + option.ask) / 2;
-    const offsetCost = callPrice * Math.abs(spreadQty) * 100; // Cost to buy calls
+    const offsetCost = calculateOffsetCost(option, spreadQty); // Cost to buy calls
     
-    console.log(`   Call price: $${callPrice.toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
+    console.log(`   Call price: $${((option.bid + option.ask) / 2).toFixed(2)}, offset cost: $${offsetCost.toFixed(2)}`);
 
     // For bear put spreads, calculate additional profit potential based on realistic scenarios
     // For calls: calculate value at the highest put strike (most bullish scenario for the original position)
