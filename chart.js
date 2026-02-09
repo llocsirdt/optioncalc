@@ -182,8 +182,9 @@ function findKeyPointsOnCurve(valueCurve, cost) {
  * @param {number} cost - The cost basis
  * @param {Array} optionArray - Array of option positions for labeling
  * @param {Array} tempData - Optional temporary data for comparison
+ * @param {number} underlyingPrice - Current underlying price for vertical line
  */
-function drawChart(data, cost, optionArray = [], tempData = []) {
+function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice = null) {
     // Clear previous chart
     d3.select("#chart").selectAll("*").remove();
     
@@ -191,7 +192,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
     const keyPoints = findKeyPointsOnCurve(data, cost);
     
     // Find key points for temp curve if it exists
-    const tempKeyPoints = tempData.length > 0 ? findKeyPointsOnCurve(tempData, cost) : [];
+    const tempKeyPoints = (tempData && tempData.length > 0) ? findKeyPointsOnCurve(tempData, cost) : [];
     
     const margin = { top: 30, right: 30, bottom: 60, left: 60 };
     const width = document.getElementById('chart').offsetWidth - margin.left - margin.right;
@@ -268,7 +269,7 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         .attr("d", line);
 
     // Add temp portfolio line if it exists
-    if (tempData.length > 0) {
+    if (tempData && tempData.length > 0) {
         const tempLine = d3.line()
             .x(d => xScale(d.closingPrice))
             .y(d => yScale(d.totalIntrinsicValue))
@@ -292,6 +293,58 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         .attr("stroke", "red")
         .attr("stroke-width", 1.5)
         .attr("stroke-dasharray", "3, 3");
+
+    // Add vertical line for current underlying price if provided
+    if (underlyingPrice !== null && underlyingPrice !== undefined) {
+        // Check if underlying price is within the chart range
+        const minPrice = d3.min(data, d => d.closingPrice);
+        const maxPrice = d3.max(data, d => d.closingPrice);
+        
+        if (underlyingPrice >= minPrice && underlyingPrice <= maxPrice) {
+            svg.append("line")
+                .attr("x1", xScale(underlyingPrice))
+                .attr("y1", yScale(d3.min(data, d => d.totalIntrinsicValue)))
+                .attr("x2", xScale(underlyingPrice))
+                .attr("y2", yScale(d3.max(data, d => d.totalIntrinsicValue)))
+                .attr("stroke", "gray")
+                .attr("stroke-width", 1)  // Thinner line (was 2)
+                .attr("stroke-dasharray", "8, 4")
+                .style("opacity", 0.7);
+            
+            // Add label box below x-axis
+            const labelGroup = svg.append("g")
+                .attr("transform", `translate(${xScale(underlyingPrice)}, ${height + margin.bottom - 5})`);
+            
+            // Add background rectangle for label
+            const labelText = `$${underlyingPrice.toFixed(2)}`;
+            const textWidth = labelText.length * 7; // Approximate text width
+            const textHeight = 16;
+            
+            labelGroup.append("rect")
+                .attr("x", -textWidth/2 - 4)
+                .attr("y", -textHeight - 2)
+                .attr("width", textWidth + 8)
+                .attr("height", textHeight + 4)
+                .attr("fill", "white")
+                .attr("stroke", "lightgray")
+                .attr("stroke-width", 1)
+                .attr("rx", 3)  // Rounded corners
+                .style("opacity", 0.9);
+            
+            // Add text label
+            labelGroup.append("text")
+                .attr("text-anchor", "middle")
+                .attr("dy", "0")  // Center vertically in the box
+                .style("font-size", "11px")
+                .style("fill", "gray")
+                .style("font-weight", "bold")
+                .text(labelText);
+            
+            console.log(`📍 Added underlying price line at $${underlyingPrice.toFixed(2)} with label box`);
+        } else {
+            console.log(`⚠️ Underlying price $${underlyingPrice.toFixed(2)} is outside chart range ($${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)})`);
+        }
+    }
 
     // Add circles for each option in the optionArray
     if (optionArray && optionArray.length > 0) {

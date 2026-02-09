@@ -524,8 +524,16 @@ function updateChartWithSlider() {
     fullStrikeIncrement
   );
   
+  // Get current underlying price from the UI for chart
+  const priceElement = document.getElementById('underlying-price');
+  let underlyingPrice = 0;
+  if (priceElement) {
+    const priceText = priceElement.textContent;
+    underlyingPrice = parseFloat(priceText.replace('$', '')) || 0;
+  }
+  
   // Draw the chart with the filtered data but show all original positions in the labels
-  ChartModule.drawChart(data, fullCost, visibleOptions);
+  ChartModule.drawChart(data, fullCost, visibleOptions, null, underlyingPrice);
 }
 
 // Function to show all options
@@ -1509,7 +1517,14 @@ function updateOptionsChain(options) {
           
           offsettingTrades.forEach((trade, index) => {
             const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
-            const lowLockedClass = trade.lockedProfit < 100 ? 'low-locked-profit' : '';
+            
+            // Check if locked profit is less than 10% of the cost
+            const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
+            const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+            
+            if (lowLockedClass) {
+              console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);
+            }
             
             // Check if cost is less than locked in value for green background
             const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
@@ -2084,11 +2099,20 @@ function processInput() {
       );
     }
     
+    // Get current underlying price from the UI for chart
+    const priceElement = document.getElementById('underlying-price');
+    let underlyingPrice = 0;
+    if (priceElement) {
+      const priceText = priceElement.textContent;
+      underlyingPrice = parseFloat(priceText.replace('$', '')) || 0;
+    }
+    console.log('💰 Using underlying price for chart:', underlyingPrice);
+    
     // Draw the chart with both datasets if there's combined data, otherwise just the main data
     if (combinedData.length > 0) {
-      ChartModule.drawChart(data, fullCost, fullOptionArray, combinedData);
+      ChartModule.drawChart(data, fullCost, fullOptionArray, combinedData, underlyingPrice);
     } else {
-      ChartModule.drawChart(data, fullCost, fullOptionArray);
+      ChartModule.drawChart(data, fullCost, fullOptionArray, null, underlyingPrice);
     }
     
     // Display the processed output
