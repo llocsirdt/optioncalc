@@ -114,6 +114,11 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   console.log('📈 Call positions:', callPositions.map(pos => `${pos.type}${pos.strike}(qty:${pos.qty})`));
   console.log('📉 Put positions:', putPositions.map(pos => `${pos.type}${pos.strike}(qty:${pos.qty})`));
   
+  // Calculate offsetting cost
+  const offsettingCost = offsettingPositions.reduce((sum, pos) => sum + (pos.cost || 0), 0);
+  // Calculate potential profit: max of individual spread profits minus total cost
+  const totalCost = calculateTotalCost(originalCost, offsettingCost);
+
   // Calculate Bull Call Spread Max Profit (if present)
   let bullCallMaxValue = 0;
   let bullCallMaxProfit = 0;
@@ -127,7 +132,7 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
       const spreadWidth = shortCall.strike - longCall.strike;
       const callCost = Math.abs(longCall.qty) * (longCall.cost || 0) + Math.abs(shortCall.qty) * (shortCall.cost || 0);
       bullCallMaxValue = spreadWidth * 100;
-      bullCallMaxProfit = bullCallMaxValue - (callCost<=0 ? originalCost : callCost);
+      bullCallMaxProfit = bullCallMaxValue - totalCost;
       console.log(`🐂 Bull Call Spread: ${longCall.strike}/${shortCall.strike}, width: $${spreadWidth}, cost: $${callCost.toFixed(2)}, max profit: $${bullCallMaxProfit.toFixed(2)}`);
     }
   }
@@ -145,13 +150,11 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
       const spreadWidth = longPut.strike - shortPut.strike;
       const putCost = Math.abs(longPut.qty) * (longPut.cost || 0) + Math.abs(shortPut.qty) * (shortPut.cost || 0);
       bearPutMaxValue = spreadWidth * 100;
-      bearPutMaxProfit = bearPutMaxValue - (putCost<=0 ? originalCost : putCost);
+      bearPutMaxProfit = bearPutMaxValue - totalCost;
       console.log(`🐻 Bear Put Spread: ${shortPut.strike}/${longPut.strike}, width: $${spreadWidth}, cost: $${putCost.toFixed(2)}, max profit: $${bearPutMaxProfit.toFixed(2)}`);
     }
   }
   
-  // Calculate offsetting cost
-  const offsettingCost = offsettingPositions.reduce((sum, pos) => sum + (pos.cost || 0), 0);
   
   // Calculate short call/short put overlap (if both exist)
   let shortLegOverlap = 0;
@@ -163,8 +166,6 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
     console.log(`🔄 Short leg overlap: ${shortCall.strike} - ${shortPut.strike} = $${shortLegOverlap.toFixed(2)}`);
   }
   
-  // Calculate potential profit: max of individual spread profits minus total cost
-  const totalCost = calculateTotalCost(originalCost, offsettingCost);
   const potentialProfit = Math.max(bullCallMaxValue, bearPutMaxValue) - totalCost;
   
   // Locked profit is the MIN of the two spread max profits, minus costs
