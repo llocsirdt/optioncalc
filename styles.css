@@ -427,6 +427,38 @@ pre {
   border-left: 4px solid #2196F3;
 }
 
+/* Clickable offsetting trade elements */
+.clickable-offset-trade {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.clickable-offset-trade:hover {
+  background-color: #f0f8ff !important;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2);
+  transform: scale(1.01);
+}
+
+.clickable-offset-trade:active {
+  background-color: #e3f2fd !important;
+  transform: scale(0.99);
+}
+
+.clickable-offset-trade::after {
+  content: "👆";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.clickable-offset-trade:hover::after {
+  opacity: 0.6;
+}
+
 .trade-description {
   flex: 1;
 }

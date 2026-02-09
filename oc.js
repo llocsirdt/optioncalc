@@ -10,6 +10,172 @@ let fullStrikeIncrement = 0;
 let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {strike, type, bid, ask, side}
 let selectedPositionsCost = 0;
 
+// Function to parse offsetting trade and click corresponding table cells
+function clickOffsettingTrade(tradeDescription, tradeAction) {
+  console.log('🎯 Clicking offsetting trade:', tradeDescription);
+  console.log('📋 Trade action:', tradeAction);
+  
+  // Parse the trade description to extract strikes and types
+  // Examples:
+  // "Bull 1 130/135 call spread"
+  // "Bear 1 120/115 put spread" 
+  // "Long 1 130 calls"
+  // "Long 1 120 puts"
+  
+  const callSpreadMatch = tradeDescription.match(/Bul[l]? (\d+) (\d+)\/(\d+) call spread/i);
+  const putSpreadMatch = tradeDescription.match(/Bear (\d+) (\d+)\/(\d+) put spread/i);
+  const singleCallMatch = tradeDescription.match(/Long (\d+) (\d+) calls?/i);
+  const singlePutMatch = tradeDescription.match(/Long (\d+) (\d+) puts?/i);
+  
+  const clickedPositions = [];
+  
+  if (callSpreadMatch) {
+    // Bull call spread: BUY lower strike CALL, SELL higher strike CALL
+    const [, qty, lowerStrike, higherStrike] = callSpreadMatch;
+    console.log(`🐂 Bull call spread: BUY ${qty} ${lowerStrike} CALL, SELL ${qty} ${higherStrike} CALL`);
+    
+    // Click ASK cell for long call (lower strike)
+    const longCallResult = findAndClickOptionCell('c', parseFloat(lowerStrike), 'ask');
+    if (longCallResult) clickedPositions.push(longCallResult);
+    
+    // Click BID cell for short call (higher strike)
+    const shortCallResult = findAndClickOptionCell('c', parseFloat(higherStrike), 'bid');
+    if (shortCallResult) clickedPositions.push(shortCallResult);
+    
+  } else if (putSpreadMatch) {
+    // Bear put spread: BUY higher strike PUT, SELL lower strike PUT
+    const [, qty, lowerStrike, higherStrike] = putSpreadMatch;
+    console.log(`🐻 Bear put spread: BUY ${qty} ${higherStrike} PUT, SELL ${qty} ${lowerStrike} PUT`);
+    
+    // Click ASK cell for long put (higher strike)
+    const longPutResult = findAndClickOptionCell('p', parseFloat(higherStrike), 'ask');
+    if (longPutResult) clickedPositions.push(longPutResult);
+    
+    // Click BID cell for short put (lower strike)
+    const shortPutResult = findAndClickOptionCell('p', parseFloat(lowerStrike), 'bid');
+    if (shortPutResult) clickedPositions.push(shortPutResult);
+    
+  } else if (singleCallMatch) {
+    // Single long call
+    const [, qty, strike] = singleCallMatch;
+    console.log(`📈 Long call: BUY ${qty} ${strike} CALL`);
+    
+    const callResult = findAndClickOptionCell('c', parseFloat(strike), 'ask');
+    if (callResult) clickedPositions.push(callResult);
+    
+  } else if (singlePutMatch) {
+    // Single long put
+    const [, qty, strike] = singlePutMatch;
+    console.log(`📉 Long put: BUY ${qty} ${strike} PUT`);
+    
+    const putResult = findAndClickOptionCell('p', parseFloat(strike), 'ask');
+    if (putResult) clickedPositions.push(putResult);
+    
+  } else {
+    console.warn('❌ Could not parse trade description:', tradeDescription);
+    return false;
+  }
+  
+  // Update the selected positions display
+  updateSelectedPositionsDisplay();
+  
+  console.log(`✅ Clicked ${clickedPositions.length} positions:`, clickedPositions);
+  return clickedPositions.length > 0;
+}
+
+// Function to find and click a specific option cell
+function findAndClickOptionCell(optionType, strike, bidAsk) {
+  console.log(`🔍 Looking for ${optionType}${strike} ${bidAsk} cell`);
+  
+  // Find the options table
+  const table = document.querySelector('.options-table');
+  if (!table) {
+    console.warn('❌ Options table not found');
+    return null;
+  }
+  
+  // Find all rows with the target strike
+  const rows = table.querySelectorAll('tr');
+  let targetRow = null;
+  let strikeIndex = -1;
+  
+  for (const row of rows) {
+    const cells = row.getElementsByTagName('td');
+    
+    // Find the strike cell
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      if (cell.className.includes('strike-cell') && !cell.className.includes('strike-cell-p')) {
+        const strikeText = cell.textContent.replace('$', '');
+        const rowStrike = parseFloat(strikeText);
+        
+        if (Math.abs(rowStrike - strike) < 0.01) { // Account for floating point precision
+          targetRow = row;
+          strikeIndex = i;
+          break;
+        }
+      }
+    }
+    
+    if (targetRow) break;
+  }
+  
+  if (!targetRow) {
+    console.warn(`❌ Could not find row for strike ${strike}`);
+    return null;
+  }
+  
+  // Find the target cell based on option type and bid/ask
+  const cells = targetRow.getElementsByTagName('td');
+  let targetCell = null;
+  
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    const cellClass = cell.className;
+    
+    // Check if this cell matches our criteria
+    const isCallCell = i < strikeIndex; // Calls are to the left of strike
+    const isPutCell = i > strikeIndex;  // Puts are to the right of strike
+    const isBidCell = cellClass.includes('bid');
+    const isAskCell = cellClass.includes('ask');
+    
+    if ((optionType === 'c' && isCallCell) || (optionType === 'p' && isPutCell)) {
+      if ((bidAsk === 'bid' && isBidCell) || (bidAsk === 'ask' && isAskCell)) {
+        targetCell = cell;
+        break;
+      }
+    }
+  }
+  
+  if (!targetCell) {
+    console.warn(`❌ Could not find ${optionType}${strike} ${bidAsk} cell`);
+    return null;
+  }
+  
+  // Get cell info before clicking
+  const priceText = targetCell.textContent.replace('$', '');
+  const price = parseFloat(priceText);
+  const side = bidAsk === 'bid' ? 'short' : 'long';
+  
+  console.log(`🎯 Clicking ${optionType}${strike} ${bidAsk} cell at price $${price}`);
+  
+  // Simulate click on the cell
+  const clickEvent = new MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+    view: window
+  });
+  targetCell.dispatchEvent(clickEvent);
+  
+  return {
+    type: optionType,
+    strike: strike,
+    side: side,
+    price: price,
+    bidAsk: bidAsk
+  };
+}
+
 // Function to handle clicking/tapping on bid/ask cells
 function handleOptionCellClick(event) {
   // Prevent default behavior for touch events to avoid interference
@@ -130,6 +296,8 @@ function updateSelectedPositionsDisplay() {
   if (selectedTablePositions.size === 0) {
     displayArea.innerHTML = '<div class="selected-positions-empty">Click bid/ask cells to select positions</div>';
     selectedPositionsCost = 0;
+    // Clear tempOptionArray from textInput when no positions selected
+    updateTextInputWithTempPositions([]);
     return;
   }
   
@@ -137,6 +305,7 @@ function updateSelectedPositionsDisplay() {
   html += '<div class="selected-positions-list">';
   
   let totalCost = 0;
+  const tempPositions = [];
   
   // Sort by strike then type
   const sortedPositions = Array.from(selectedTablePositions.entries()).sort((a, b) => {
@@ -151,14 +320,20 @@ function updateSelectedPositionsDisplay() {
   sortedPositions.forEach(([key, position]) => {
     const optionName = position.type === 'c' ? 'Call' : 'Put';
     const sideSymbol = position.side === 'long' ? '+' : '-';
-    const cost = position.side === 'long' ? -position.price : position.price; // Long = debit, Short = credit
+    const cost = position.side === 'long' ? -position.price * 100 : position.price * 100; // Long = debit, Short = credit, multiplied by 100
     totalCost += cost;
+    
+    // Create position string for tempOptionArray with cost
+    // Format: +1c100@250 or -1c110@120 (costs are multiplied by 100)
+    const costString = cost >= 0 ? `@${cost.toFixed(0)}` : `@${Math.abs(cost).toFixed(0)}`;
+    const positionString = `${sideSymbol}1${position.type}${position.strike.toFixed(0)}${costString}`;
+    tempPositions.push(positionString);
     
     html += `
       <div class="selected-position-item">
         <span class="position-type">${optionName} $${position.strike.toFixed(2)}</span>
         <span class="position-side ${position.side}">${sideSymbol}${position.price.toFixed(2)}</span>
-        <span class="position-cost ${cost >= 0 ? 'credit' : 'debit'}">${cost >= 0 ? '+' : ''}$${Math.abs(cost).toFixed(2)}</span>
+        <span class="position-cost ${cost >= 0 ? 'credit' : 'debit'}">${cost >= 0 ? '+' : ''}$${Math.abs(cost).toFixed(0)}</span>
       </div>
     `;
   });
@@ -168,6 +343,59 @@ function updateSelectedPositionsDisplay() {
   
   displayArea.innerHTML = html;
   selectedPositionsCost = totalCost;
+  
+  // Update textInput with tempOptionArray
+  updateTextInputWithTempPositions(tempPositions);
+}
+
+// Function to update textInput textarea with tempOptionArray
+function updateTextInputWithTempPositions(tempPositions) {
+  const textInput = document.getElementById('textInput');
+  if (!textInput) return;
+  
+  const currentText = textInput.value.trim();
+  
+  try {
+    // Try to parse existing JSON
+    let jsonData = {};
+    if (currentText) {
+      // Clean the input text for JSON parsing
+      const cleanText = currentText
+        .replace(/\r\n|\r|\n/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      
+      if (cleanText) {
+        jsonData = JSON.parse(cleanText);
+      }
+    }
+    
+    // Update or add tempOptionArray
+    if (tempPositions.length > 0) {
+      jsonData.tempOptionArray = tempPositions.join(',');
+    } else {
+      // Remove tempOptionArray if no positions selected
+      delete jsonData.tempOptionArray;
+    }
+    
+    // Convert back to formatted JSON
+    const updatedJson = JSON.stringify(jsonData, null, 2);
+    textInput.value = updatedJson;
+    
+    console.log('📝 Updated textInput with tempOptionArray:', tempPositions);
+    
+  } catch (error) {
+    console.warn('⚠️ Could not parse existing JSON in textInput:', error.message);
+    
+    // If JSON parsing fails, create new structure with just tempOptionArray
+    if (tempPositions.length > 0) {
+      const newJson = {
+        tempOptionArray: tempPositions.join(',')
+      };
+      textInput.value = JSON.stringify(newJson, null, 2);
+      console.log('📝 Created new JSON with tempOptionArray:', tempPositions);
+    }
+  }
 }
 
 // Function to preserve selections when table is redrawn
@@ -1268,11 +1496,15 @@ function updateOptionsChain(options) {
           html += '<div class="offsetting-trades">';
           html += '<h4>🎯 Risk Offsetting Opportunities</h4>';
           
-          offsettingTrades.forEach(trade => {
+          offsettingTrades.forEach((trade, index) => {
             const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
             const lowLockedClass = trade.lockedProfit < 100 ? 'low-locked-profit' : '';
             html += `
-              <div class="offset-trade ${trade.type} ${lowLockedClass}">
+              <div class="offset-trade ${trade.type} ${lowLockedClass} clickable-offset-trade" 
+                   data-description="${trade.description.replace(/"/g, '&quot;')}" 
+                   data-action="${trade.action.replace(/"/g, '&quot;')}"
+                   data-index="${index}"
+                   title="Click to select these options in the table">
                 <div class="trade-description">
                   <strong>${trade.description}</strong>
                   <div class="trade-action">${trade.action}</div>
@@ -1308,18 +1540,57 @@ function updateOptionsChain(options) {
           // Additional verification using elementFromPoint for zoomed scenarios
           if (event.touches && event.touches.length > 0) {
             const touch = event.touches[0];
-            const elementAtPoint = document.elementFromPoint(touch.clientX, touch.clientY);
-            
-            // Check if the element at touch point is the same cell or a child of it
-            if (elementAtPoint !== cell && !cell.contains(elementAtPoint)) {
-              console.log('🚫 Touch target mismatch, ignoring');
-              event.preventDefault();
+            const element = document.elementFromPoint(touch.clientX, touch.clientY);
+            if (element !== this && !this.contains(element)) {
+              console.log('🚫 Touch not on target element, ignoring');
               return;
             }
           }
           
           handleOptionCellClick.call(this, event);
         }, { passive: false });
+      });
+      
+      // Set up click handlers for offsetting trade elements
+      const offsettingTradeElements = chainElement.querySelectorAll('.clickable-offset-trade');
+      offsettingTradeElements.forEach(element => {
+        element.addEventListener('click', function(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          
+          const description = this.dataset.description;
+          const action = this.dataset.action;
+          const index = this.dataset.index;
+          
+          console.log(`🎯 Clicked offsetting trade ${index}:`, description);
+          
+          // Visual feedback
+          this.style.backgroundColor = '#e8f5e8';
+          setTimeout(() => {
+            this.style.backgroundColor = '';
+          }, 300);
+          
+          // Click the corresponding options in the table
+          const success = clickOffsettingTrade(description, action);
+          
+          if (success) {
+            console.log('✅ Successfully selected offsetting trade options');
+          } else {
+            console.warn('❌ Failed to select offsetting trade options');
+          }
+        });
+        
+        // Add hover effect
+        element.addEventListener('mouseenter', function() {
+          this.style.cursor = 'pointer';
+          this.style.transform = 'scale(1.02)';
+          this.style.transition = 'all 0.2s ease';
+        });
+        
+        element.addEventListener('mouseleave', function() {
+          this.style.cursor = 'default';
+          this.style.transform = 'scale(1)';
+        });
       });
       
       // Restore selections after table is rendered
@@ -1904,3 +2175,6 @@ window.processInput = processInput;
 window.handleOptionCellClick = handleOptionCellClick;
 window.updateSelectedPositionsDisplay = updateSelectedPositionsDisplay;
 window.clearSelectedPositions = clearSelectedPositions;
+window.clickOffsettingTrade = clickOffsettingTrade;
+window.findAndClickOptionCell = findAndClickOptionCell;
+window.updateTextInputWithTempPositions = updateTextInputWithTempPositions;

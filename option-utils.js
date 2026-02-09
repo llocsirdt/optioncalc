@@ -233,7 +233,15 @@ function calculateTotalCost(originalCost, offsettingCost) {
   return originalCost + offsettingCost;
 }
 
-// Export all functions for use in other files (global approach for file:// protocol)
+// Format currency utility function
+function formatCurrency(amount) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  }).format(amount);
+}
+
+// Export functions for use in other files (global approach)
 window.calculateStrikeIncrement = calculateStrikeIncrement;
 window.calculateVerticalSpreadCost = calculateVerticalSpreadCost;
 window.calculateOffsetCost = calculateOffsetCost;
