@@ -33,261 +33,265 @@
 
 <div id="container">
 
-  <div id="left">
-  <textarea id="textInput" placeholder="Enter option positions"></textarea><br>
-  <div id="chart"><div id="chart-container"></div></div>
-  <div id="output">
-<pre>
-{
-  "cost": 20000, *optional
-  "range": "500-1000", *optional
-  "inc 10, *optional
-  "optionArray": "
-1c620,-1c820,@2000,
-1c620,-1c800,@-1000,
-1p960,-1p800,
-",
-"tempOptionArray": "
-1c650,-1c750,
-"
-}
-</pre>
-  </div>
+  <div id="container-col1">
+    <textarea id="textInput" placeholder="Enter option positions"></textarea><br>
+    <div id="chart"><div id="chart-container"></div></div>
+    <div id="output">
+      <pre>
+      {
+        "cost": 20000, *optional
+        "range": "500-1000", *optional
+        "inc 10, *optional
+        "optionArray": "
+      1c620,-1c820,@2000,
+      1c620,-1c800,@-1000,
+      1p960,-1p800,
+      ",
+      "tempOptionArray": "
+      1c650,-1c750,
+      "
+      }
+      </pre>
+    </div>
 
-</div>
-<div id="center">
+  </div>
+  <div id="container-col2">
 
   
   <!-- TradingView Script -->
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
 
- <!-- TradingView Widget -->
-  <div class="tradingview-widget-container">
-    <div id="tradingview_chart1" style="height: 300px;"></div>
-    <div class="tradingview-widget-copyright">
-      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span>Track all markets on TradingView</span>
-      </a>
-    </div>
-  </div>  
+  <!-- TradingView Widget -->
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart1" style="height: 300px;"></div>
+      <div class="tradingview-widget-copyright">
+        <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+          <span>Track all markets on TradingView</span>
+        </a>
+      </div>
+    </div>  
 
-  <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "NAS100",
-      "interval": "1",  // 1 min candles
-      "timezone": "America/New_York",
-      "theme": "light",
-      "style": "1",
-      "locale": "en",
-      "enable_publishing": false,
-      "allow_symbol_change": true,
-      "container_id": "tradingview_chart1",
-      "volume": false,
-      "studies": [
-        "MAExp@tv-basicstudies",  // Moving Average
-        "BB@tv-basicstudies"  // This adds Bollinger Bands
-      ],
-      "studies_overrides": {
-        "volume.volume.show": false,  // Add this line
-        //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
-        //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
-        //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
-        "bollinger bands.upper.linewidth": 2,       // Width of upper band
-        "bollinger bands.lower.linewidth": 2,       // Width of lower band
-        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
-        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
-        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.upper.value": 20,          // Period
-        "bollinger bands.lower.value": 20,          // Period
-        //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
-      }
-    });
-  </script>
-
-
-  <!-- Second TradingView Widget -->
-  <div class="tradingview-widget-container">
-    <div id="tradingview_chart2" style="height: 300px;"></div>
-    <div class="tradingview-widget-copyright">
-      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span>Track all markets on TradingView</span>
-      </a>
-    </div>
-  </div>
-  
-  <!-- Second TradingView Script -->
-  <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "NAS100",
-      "interval": "5",  // 5 min candles
-      "timezone": "America/New_York",
-      "theme": "light",
-      "style": "1",
-      "locale": "en",
-      "enable_publishing": false,
-      "allow_symbol_change": true,
-      "container_id": "tradingview_chart2",
-      "volume": false,
-      "studies": [
-        "MAExp@tv-basicstudies",  // Moving Average
-        "BB@tv-basicstudies"  // This adds Bollinger Bands
-      ],
-      "studies_overrides": {
-        "volume.volume.show": false,  // Add this line
-        //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
-        //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
-        //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
-        "bollinger bands.upper.linewidth": 2,       // Width of upper band
-        "bollinger bands.lower.linewidth": 2,       // Width of lower band
-        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
-        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
-        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.upper.value": 20,          // Period
-        "bollinger bands.lower.value": 20,          // Period
-        //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
-      }
-    });
-  </script>
+    <script type="text/javascript">
+      new TradingView.widget({
+        "autosize": true,
+        "symbol": "NAS100",
+        "interval": "1",  // 1 min candles
+        "timezone": "America/New_York",
+        "theme": "light",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart1",
+        "volume": false,
+        "studies": [
+          "MAExp@tv-basicstudies",  // Moving Average
+          "BB@tv-basicstudies"  // This adds Bollinger Bands
+        ],
+        "studies_overrides": {
+          "volume.volume.show": false,  // Add this line
+          //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
+          //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
+          //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
+          "bollinger bands.upper.linewidth": 2,       // Width of upper band
+          "bollinger bands.lower.linewidth": 2,       // Width of lower band
+          "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+          "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+          "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.upper.value": 20,          // Period
+          "bollinger bands.lower.value": 20,          // Period
+          //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
+        }
+      });
+    </script>
 
 
- <!-- TradingView Widget -->
-  <div class="tradingview-widget-container">
-    <div id="tradingview_chart3" style="height: 300px;"></div>
-    <div class="tradingview-widget-copyright">
-      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span>Track all markets on TradingView</span>
-      </a>
-    </div>
-  </div>  
-
-  <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "NAS100",
-      "interval": "15",  // 5 min candles
-      "timezone": "America/New_York",
-      "theme": "light",
-      "style": "1",
-      "locale": "en",
-      "enable_publishing": false,
-      "allow_symbol_change": true,
-      "container_id": "tradingview_chart3",
-      "volume": false,
-      "studies": [
-        "MAExp@tv-basicstudies",  // Moving Average
-        "BB@tv-basicstudies"  // This adds Bollinger Bands
-      ],
-      "studies_overrides": {
-        "volume.volume.show": false,  // Add this line
-        //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
-        //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
-        //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
-        "bollinger bands.upper.linewidth": 2,       // Width of upper band
-        "bollinger bands.lower.linewidth": 2,       // Width of lower band
-        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
-        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
-        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.upper.value": 20,          // Period
-        "bollinger bands.lower.value": 20,          // Period
-        //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
-      }
-    });
-  </script>
-
-
-  <!-- Second TradingView Widget -->
-  <div class="tradingview-widget-container">
-    <div id="tradingview_chart4" style="height: 300px;"></div>
-    <div class="tradingview-widget-copyright">
-      <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-        <span>Track all markets on TradingView</span>
-      </a>
-    </div>
-  </div>
-  
-  <!-- Second TradingView Script -->
-  <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "NAS100",
-      "interval": "60",  // 1-hour candles
-      "timezone": "America/New_York",
-      "theme": "light",
-      "style": "1",
-      "locale": "en",
-      "enable_publishing": false,
-      "allow_symbol_change": true,
-      "container_id": "tradingview_chart4",
-      "studies": [
-        "MAExp@tv-basicstudies",  // Moving Average
-        "BB@tv-basicstudies"  // This adds Bollinger Bands
-      ],
-      "studies_overrides": {
-        //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
-        //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
-        //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
-        "bollinger bands.upper.linewidth": 2,       // Width of upper band
-        "bollinger bands.lower.linewidth": 2,       // Width of lower band
-        "bollinger bands.upper.color": "#2196F3",   // Color of upper band
-        "bollinger bands.lower.color": "#2196F3",   // Color of lower band
-        "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
-        "bollinger bands.upper.value": 20,          // Period
-        "bollinger bands.lower.value": 20,          // Period
-        //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
-      }
-    });
-  </script>
-
-
-</div>
-<div id="right">
-
-    
-  <!-- Schwab API Status -->
-  <div id="schwab-container">
-    <div class="schwab-header">
-      <h3>API Integration</h3>
-      <div class="schwab-status">
-        Status: <span id="schwab-status">Not Connected</span> <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button>
+    <!-- Second TradingView Widget -->
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart2" style="height: 300px;"></div>
+      <div class="tradingview-widget-copyright">
+        <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+          <span>Track all markets on TradingView</span>
+        </a>
       </div>
     </div>
     
-    <div class="schwab-controls">
-      <div class="control-group">
-        <label for="symbol-input">Symbol:</label>
-        <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
-        <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
-      </div>      
-      <div class="live-data-display">
-        <div class="price-display">
-          <span>Underlying Price: </span>
-          <span id="underlying-price">--</span>
+    <!-- Second TradingView Script -->
+    <script type="text/javascript">
+      new TradingView.widget({
+        "autosize": true,
+        "symbol": "NAS100",
+        "interval": "5",  // 5 min candles
+        "timezone": "America/New_York",
+        "theme": "light",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart2",
+        "volume": false,
+        "studies": [
+          "MAExp@tv-basicstudies",  // Moving Average
+          "BB@tv-basicstudies"  // This adds Bollinger Bands
+        ],
+        "studies_overrides": {
+          "volume.volume.show": false,  // Add this line
+          //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
+          //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
+          //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
+          "bollinger bands.upper.linewidth": 2,       // Width of upper band
+          "bollinger bands.lower.linewidth": 2,       // Width of lower band
+          "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+          "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+          "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.upper.value": 20,          // Period
+          "bollinger bands.lower.value": 20,          // Period
+          //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
+        }
+      });
+    </script>
+
+
+  <!-- TradingView Widget -->
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart3" style="height: 300px;"></div>
+      <div class="tradingview-widget-copyright">
+        <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+          <span>Track all markets on TradingView</span>
+        </a>
+      </div>
+    </div>  
+
+    <script type="text/javascript">
+      new TradingView.widget({
+        "autosize": true,
+        "symbol": "NAS100",
+        "interval": "15",  // 5 min candles
+        "timezone": "America/New_York",
+        "theme": "light",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart3",
+        "volume": false,
+        "studies": [
+          "MAExp@tv-basicstudies",  // Moving Average
+          "BB@tv-basicstudies"  // This adds Bollinger Bands
+        ],
+        "studies_overrides": {
+          "volume.volume.show": false,  // Add this line
+          //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
+          //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
+          //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
+          "bollinger bands.upper.linewidth": 2,       // Width of upper band
+          "bollinger bands.lower.linewidth": 2,       // Width of lower band
+          "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+          "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+          "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.upper.value": 20,          // Period
+          "bollinger bands.lower.value": 20,          // Period
+          //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
+        }
+      });
+    </script>
+
+
+    <!-- Second TradingView Widget -->
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart4" style="height: 300px;"></div>
+      <div class="tradingview-widget-copyright">
+        <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
+          <span>Track all markets on TradingView</span>
+        </a>
+      </div>
+    </div>
+    
+    <!-- Second TradingView Script -->
+    <script type="text/javascript">
+      new TradingView.widget({
+        "autosize": true,
+        "symbol": "NAS100",
+        "interval": "60",  // 1-hour candles
+        "timezone": "America/New_York",
+        "theme": "light",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart4",
+        "studies": [
+          "MAExp@tv-basicstudies",  // Moving Average
+          "BB@tv-basicstudies"  // This adds Bollinger Bands
+        ],
+        "studies_overrides": {
+          //"moving average.median.color": "#FF6D00", // NOT CORRECT PARAMETER for Moving Average Color
+          //"moving average.median.linewidth": 2,     // NOT CORRECT PARAMETER for Moving Average Width
+          //"bollinger bands.median.color": "#3A68CC",// NOT CORRECT PARAMETER for Color of the middle line
+          "bollinger bands.upper.linewidth": 2,       // Width of upper band
+          "bollinger bands.lower.linewidth": 2,       // Width of lower band
+          "bollinger bands.upper.color": "#2196F3",   // Color of upper band
+          "bollinger bands.lower.color": "#2196F3",   // Color of lower band
+          "bollinger bands.upper.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.lower.transparency": 30,   // Transparency (0-100)
+          "bollinger bands.upper.value": 20,          // Period
+          "bollinger bands.lower.value": 20,          // Period
+          //"bollinger bands.deviation.value": 2      // NOT CORRECT PARAMETER for Standard deviations
+        }
+      });
+    </script>
+
+
+  </div>
+  <div id="container-col3">
+
+      
+    <!-- Schwab API Status -->
+    <div id="schwab-container">
+      <div class="schwab-header">
+        <h3>API Integration</h3>
+        <div class="schwab-status">
+          Status: <span id="schwab-status">Not Connected</span> <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button>
+        </div>
+      </div>
+      
+      <div class="schwab-controls">
+        <div class="control-group">
+          <label for="symbol-input">Symbol:</label>
+          <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
+          <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
+        </div>      
+        <div class="live-data-display">
+          <div class="price-display">
+            <span>Underlying Price: </span>
+            <span id="underlying-price">--</span>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-  
-  <!-- Options Chain Display -->
-  <div id="options-chain-container">
-    <h4>Live Options Chain</h4>
-      <label for="expiration-dropdown">Expiration:</label>
-      <select id="expiration-dropdown" onchange="updateExpirationDate()">
-        <option value="">Loading expirations...</option>
-      </select>
-      <button id="refresh-expirations" onclick="loadExpirations()">↻</button>
-    <div id="options-chain">
-      <p>Options chain will appear here when live data is enabled</p>
+    
+    <!-- Options Chain Display -->
+    <div id="options-chain-container">
+      <h4>Live Options Chain</h4>
+        <label for="expiration-dropdown">Expiration:</label>
+        <select id="expiration-dropdown" onchange="updateExpirationDate()">
+          <option value="">Loading expirations...</option>
+        </select>
+        <button id="refresh-expirations" onclick="loadExpirations()">↻</button>
+      <div id="options-chain">
+        <p>Options chain will appear here when live data is enabled</p>
+      </div>
     </div>
+
   </div>
 
-</div>
+  <div id="container-col4">
+  </div>
+    
 </div>
 
 <script>

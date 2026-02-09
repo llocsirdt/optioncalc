@@ -320,12 +320,13 @@ function updateSelectedPositionsDisplay() {
   sortedPositions.forEach(([key, position]) => {
     const optionName = position.type === 'c' ? 'Call' : 'Put';
     const sideSymbol = position.side === 'long' ? '+' : '-';
-    const cost = position.side === 'long' ? -position.price * 100 : position.price * 100; // Long = debit, Short = credit, multiplied by 100
+    const cost = position.side === 'long' ? position.price * 100 : -position.price * 100; // Long = positive cost, Short = negative cost, multiplied by 100
     totalCost += cost;
     
     // Create position string for tempOptionArray with cost
-    // Format: +1c100@250 or -1c110@120 (costs are multiplied by 100)
-    const costString = cost >= 0 ? `@${cost.toFixed(0)}` : `@${Math.abs(cost).toFixed(0)}`;
+    // Format: +1c100@250 or -1c110@-120 (costs are multiplied by 100)
+    // Cost should be positive for long positions, negative for short positions
+    const costString = cost >= 0 ? `@${cost.toFixed(0)}` : `@${cost.toFixed(0)}`;
     const positionString = `${sideSymbol}1${position.type}${position.strike.toFixed(0)}${costString}`;
     tempPositions.push(positionString);
     
@@ -1501,6 +1502,9 @@ function updateOptionsChain(options) {
       
       html += '</tbody></table>';
       
+      // Initialize offsetting trades HTML separately at higher scope
+      let offsettingTradesHtml = '';
+      
       // Find and display offsetting trades
       if (fullOptionArray && fullOptionArray.length > 0) {
         console.log('🔍 Analyzing offsetting trades...');
@@ -1512,8 +1516,8 @@ function updateOptionsChain(options) {
         console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
         
         if (offsettingTrades && offsettingTrades.length > 0) {
-          html += '<div class="offsetting-trades">';
-          html += '<h4>🎯 Risk Offsetting Opportunities</h4>';
+          offsettingTradesHtml += '<div class="offsetting-trades">';
+          offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
           
           offsettingTrades.forEach((trade, index) => {
             const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
@@ -1530,7 +1534,7 @@ function updateOptionsChain(options) {
             const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
             const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
             
-            html += `
+            offsettingTradesHtml += `
               <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
                    data-description="${trade.description.replace(/"/g, '&quot;')}" 
                    data-action="${trade.action.replace(/"/g, '&quot;')}"
@@ -1550,13 +1554,11 @@ function updateOptionsChain(options) {
             `;
           });
           
-          html += '</div>';
+          offsettingTradesHtml += '</div>';
         }
       }
       
-      console.log('🖼️ Generated HTML length:', html.length);
-      console.log('🖼️ Generated HTML sample:', html.substring(0, 200) + '...');
-      
+      // Insert options chain HTML (without offsetting trades)
       chainElement.innerHTML = html;
       console.log('✅ Options chain updated in UI');
       
@@ -1582,47 +1584,61 @@ function updateOptionsChain(options) {
         }, { passive: false });
       });
       
-      // Set up click handlers for offsetting trade elements
-      const offsettingTradeElements = chainElement.querySelectorAll('.clickable-offset-trade');
-      offsettingTradeElements.forEach(element => {
-        element.addEventListener('click', function(event) {
-          event.preventDefault();
-          event.stopPropagation();
+      // Insert offsetting trades into container-col4
+      const col4Element = document.getElementById('container-col4');
+      if (col4Element) {
+        if (offsettingTradesHtml) {
+          col4Element.innerHTML = offsettingTradesHtml;
+          console.log('✅ Offsetting trades updated in container-col4');
           
-          const description = this.dataset.description;
-          const action = this.dataset.action;
-          const index = this.dataset.index;
-          
-          console.log(`🎯 Clicked offsetting trade ${index}:`, description);
-          
-          // Visual feedback
-          this.style.backgroundColor = '#e8f5e8';
-          setTimeout(() => {
-            this.style.backgroundColor = '';
-          }, 300);
-          
-          // Click the corresponding options in the table
-          const success = clickOffsettingTrade(description, action);
-          
-          if (success) {
-            console.log('✅ Successfully selected offsetting trade options');
-          } else {
-            console.warn('❌ Failed to select offsetting trade options');
-          }
-        });
-        
-        // Add hover effect
-        element.addEventListener('mouseenter', function() {
-          this.style.cursor = 'pointer';
-          this.style.transform = 'scale(1.02)';
-          this.style.transition = 'all 0.2s ease';
-        });
-        
-        element.addEventListener('mouseleave', function() {
-          this.style.cursor = 'default';
-          this.style.transform = 'scale(1)';
-        });
-      });
+          // Set up click handlers for offsetting trade elements in container-col4
+          const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
+          offsettingTradeElements.forEach(element => {
+            element.addEventListener('click', function(event) {
+              event.preventDefault();
+              event.stopPropagation();
+              
+              const description = this.dataset.description;
+              const action = this.dataset.action;
+              const index = this.dataset.index;
+              
+              console.log(`🎯 Clicked offsetting trade ${index}:`, description);
+              
+              // Visual feedback
+              this.style.backgroundColor = '#e8f5e8';
+              setTimeout(() => {
+                this.style.backgroundColor = '';
+              }, 300);
+              
+              // Click the corresponding options in the table
+              const success = clickOffsettingTrade(description, action);
+              
+              if (success) {
+                console.log('✅ Successfully selected offsetting trade options');
+              } else {
+                console.warn('❌ Failed to select offsetting trade options');
+              }
+            });
+            
+            // Add hover effect
+            element.addEventListener('mouseenter', function() {
+              this.style.cursor = 'pointer';
+              this.style.transform = 'scale(1.02)';
+              this.style.transition = 'all 0.2s ease';
+            });
+            
+            element.addEventListener('mouseleave', function() {
+              this.style.cursor = 'default';
+              this.style.transform = 'scale(1)';
+            });
+          });
+        } else {
+          col4Element.innerHTML = '<p>No offsetting opportunities available</p>';
+          console.log('📝 No offsetting trades to display');
+        }
+      } else {
+        console.warn('⚠️ container-col4 element not found');
+      }
       
       // Restore selections after table is rendered
       restoreTableSelections();

@@ -47,9 +47,9 @@ pre {
   display: flex;
 }
 
-#left, #center, #right {
+#container-col1, #container-col2, #container-col3, #container-col4 {
   width: 30vw;
-  min-width: 360px;
+  min-width: 370px;
   margin-right: 20px;
   box-sizing: border-box;
   flex-shrink: 0;
@@ -392,7 +392,6 @@ pre {
 }
 
 .offsetting-trades {
-  margin-top: 20px;
   padding: 15px;
   background: #f8f9fa;
   border-radius: 8px;
