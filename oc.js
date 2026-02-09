@@ -2110,31 +2110,34 @@ function processInput() {
       <strong>Processed Output:</strong><br>
       <strong>Position Count:</strong> ${fullOptionArray.length}<br>
       <strong>Total Cost:</strong> $${fullCost.toFixed(2)}<br><br>
-      <strong>Value Curve (optionArray):</strong><br>
-      <pre>${formatCurve(data)}</pre>
+      <strong>Value Curve:</strong><br><br>
     `;
 
     if (keyPoints.length > 0) {
       outputStr += `
-        <strong>Key Points on Curve:</strong><br>
+        <strong>Key Points on Curve (optionArray):</strong><br>
         <pre>${formatKeyPoints(keyPoints)}</pre>
       `;
     }
 
+    outputStr += `
+      <pre>${formatCurve(data)}</pre>
+    `;
+
     if (combinedData.length > 0) {
-      outputStr += `
-        <strong>Value Curve (optionArray + tempOptionArray):</strong><br>
-        <pre>${formatCurve(combinedData)}</pre>
-      `;
-      
+
       // Find key points on combined curve as well
       const combinedKeyPoints = ChartModule.findKeyPointsOnCurve(combinedData, fullCost);
       if (combinedKeyPoints.length > 0) {
         outputStr += `
-          <strong>Key Points on Combined Curve:</strong><br>
+          <strong>Key Points on Combined Curve (optionArray + tempOptionArray):</strong><br>
           <pre>${formatKeyPoints(combinedKeyPoints)}</pre>
         `;
       }
+
+      outputStr += `
+        <pre>${formatCurve(combinedData)}</pre>
+      `;
     }
 
     outputDiv.innerHTML = outputStr;
@@ -2142,9 +2145,9 @@ function processInput() {
   } catch (error) {
     console.error('Error processing input:', error);
     outputDiv.innerHTML = `
-      <strong>Error:</strong> ${error.message}<br><br>
-      <strong>Expected format:</strong><br>
-      <pre>{
+<strong>Error:</strong> ${error.message}<br><br>
+<strong>Expected format:</strong><br>
+<pre>{
   "cost": 20000,
   "range": "500-1000",
   "inc": 10,
