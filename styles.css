@@ -655,6 +655,39 @@ pre {
   }
 }
 
+/* Chart axis styling to prevent label overlap */
+#chart svg {
+  font-size: 12px;
+}
+
+#chart .domain {
+  stroke: #666;
+}
+
+#chart .tick line {
+  stroke: #666;
+}
+
+#chart .tick text {
+  fill: #333;
+}
+
+/* X-axis specific styling */
+#chart .tick:nth-child(even) text {
+  opacity: 0.8;
+}
+
+/* Responsive chart text */
+@media (max-width: 768px) {
+  #chart svg {
+    font-size: 10px;
+  }
+  
+  #chart .tick text {
+    font-size: 10px;
+  }
+}
+
 .clickable:hover {
   background-color: #e3f2fd !important;
 }

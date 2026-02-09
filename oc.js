@@ -348,52 +348,63 @@ function updateSelectedPositionsDisplay() {
   updateTextInputWithTempPositions(tempPositions);
 }
 
-// Function to update textInput textarea with tempOptionArray
+// Function to update textInput textarea with tempOptionArray while preserving formatting
 function updateTextInputWithTempPositions(tempPositions) {
   const textInput = document.getElementById('textInput');
   if (!textInput) return;
   
-  const currentText = textInput.value.trim();
+  const currentText = textInput.value;
+  const tempOptionArrayValue = tempPositions.join(',');
   
-  try {
-    // Try to parse existing JSON
-    let jsonData = {};
-    if (currentText) {
-      // Clean the input text for JSON parsing
-      const cleanText = currentText
-        .replace(/\r\n|\r|\n/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      
-      if (cleanText) {
-        jsonData = JSON.parse(cleanText);
+  // If no positions selected, remove tempOptionArray field entirely
+  if (tempPositions.length === 0) {
+    // Remove tempOptionArray line while preserving other formatting
+    const updatedText = currentText.replace(/,\s*"tempOptionArray"\s*:\s*"[^"]*"/g, '') // Remove with comma
+                              .replace(/"tempOptionArray"\s*:\s*"[^"]*"/g, '') // Remove without comma
+                              .replace(/,\s*\n\s*\}/g, '\n}') // Clean up trailing comma before closing brace
+                              .replace(/\n\s*\n\s*\}/g, '\n}'); // Clean up extra newlines before closing brace
+    
+    textInput.value = updatedText;
+    console.log('📝 Removed tempOptionArray from textInput');
+    return;
+  }
+  
+  // Try to preserve existing formatting by updating only the tempOptionArray field
+  const tempArrayRegex = /"tempOptionArray"\s*:\s*"[^"]*"/;
+  
+  if (tempArrayRegex.test(currentText)) {
+    // Update existing tempOptionArray field
+    const updatedText = currentText.replace(tempArrayRegex, `"tempOptionArray": "${tempOptionArrayValue}"`);
+    textInput.value = updatedText;
+    console.log('📝 Updated existing tempOptionArray in textInput:', tempOptionArrayValue);
+  } else {
+    // Add tempOptionArray field to existing JSON
+    try {
+      // Check if the text looks like valid JSON
+      const cleanText = currentText.replace(/\r\n|\r|\n/g, '').replace(/\s+/g, ' ').trim();
+      if (cleanText && cleanText.startsWith('{') && cleanText.endsWith('}')) {
+        // Add tempOptionArray before the closing brace, preserving formatting
+        const lastBraceIndex = currentText.lastIndexOf('}');
+        const beforeBrace = currentText.substring(0, lastBraceIndex);
+        const afterBrace = currentText.substring(lastBraceIndex);
+        
+        // Check if we need to add a comma
+        const needsComma = !beforeBrace.trim().endsWith(',') && !beforeBrace.trim().endsWith('{');
+        const separator = needsComma ? ',\n  ' : '\n  ';
+        
+        const updatedText = beforeBrace + separator + `"tempOptionArray": "${tempOptionArrayValue}"` + afterBrace;
+        textInput.value = updatedText;
+        console.log('📝 Added tempOptionArray to existing JSON:', tempOptionArrayValue);
+      } else {
+        // Not valid JSON, create new structure
+        const newJson = `{\n  "tempOptionArray": "${tempOptionArrayValue}"\n}`;
+        textInput.value = newJson;
+        console.log('📝 Created new JSON with tempOptionArray:', tempOptionArrayValue);
       }
-    }
-    
-    // Update or add tempOptionArray
-    if (tempPositions.length > 0) {
-      jsonData.tempOptionArray = tempPositions.join(',');
-    } else {
-      // Remove tempOptionArray if no positions selected
-      delete jsonData.tempOptionArray;
-    }
-    
-    // Convert back to formatted JSON
-    const updatedJson = JSON.stringify(jsonData, null, 2);
-    textInput.value = updatedJson;
-    
-    console.log('📝 Updated textInput with tempOptionArray:', tempPositions);
-    
-  } catch (error) {
-    console.warn('⚠️ Could not parse existing JSON in textInput:', error.message);
-    
-    // If JSON parsing fails, create new structure with just tempOptionArray
-    if (tempPositions.length > 0) {
-      const newJson = {
-        tempOptionArray: tempPositions.join(',')
-      };
-      textInput.value = JSON.stringify(newJson, null, 2);
-      console.log('📝 Created new JSON with tempOptionArray:', tempPositions);
+    } catch (error) {
+      console.warn('⚠️ Could not parse existing text, creating new JSON:', error.message);
+      const newJson = `{\n  "tempOptionArray": "${tempOptionArrayValue}"\n}`;
+      textInput.value = newJson;
     }
   }
 }

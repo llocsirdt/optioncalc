@@ -231,10 +231,29 @@ function drawChart(data, cost, optionArray = [], tempData = []) {
         .y(d => yScale(d.totalIntrinsicValue))
         .curve(d3.curveMonotoneX);
 
-    // Add X axis
-    svg.append("g")
+    // Add X axis with limited ticks to prevent overlap
+    const maxTicks = Math.min(10, Math.floor(width / 50));
+    console.log(`🎯 Chart width: ${width}, calculated max ticks: ${maxTicks}`);
+    
+    const xAxis = d3.axisBottom(xScale)
+        .tickFormat(d3.format(".0f"))
+        .ticks(maxTicks); // Dynamic tick calculation
+    
+    const xAxisGroup = svg.append("g")
         .attr("transform", `translate(0,${height})`)
-        .call(d3.axisBottom(xScale).tickFormat(d3.format(".0f")));
+        .call(xAxis);
+    
+    // Count actual ticks rendered
+    const actualTicks = xAxisGroup.selectAll(".tick").size();
+    console.log(`📊 Actual ticks rendered: ${actualTicks}`);
+    
+    // Optional: Rotate labels if still overlapping
+    xAxisGroup.selectAll("text")
+        //.style("text-anchor", "end")
+        //.attr("dx", "-.8em")
+        //.attr("dy", ".15em") 
+        //.attr("transform", "rotate(-45)")
+        .style("font-size", "11px");
 
     // Add Y axis
     svg.append("g")
