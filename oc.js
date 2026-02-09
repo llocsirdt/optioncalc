@@ -1499,12 +1499,17 @@ function updateOptionsChain(options) {
           offsettingTrades.forEach((trade, index) => {
             const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
             const lowLockedClass = trade.lockedProfit < 100 ? 'low-locked-profit' : '';
+            
+            // Check if cost is less than locked in value for green background
+            const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
+            const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+            
             html += `
-              <div class="offset-trade ${trade.type} ${lowLockedClass} clickable-offset-trade" 
+              <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
                    data-description="${trade.description.replace(/"/g, '&quot;')}" 
                    data-action="${trade.action.replace(/"/g, '&quot;')}"
                    data-index="${index}"
-                   title="Click to select these options in the table">
+                   title="Click to select these options in the table${costLessThanLockedTooltip}">
                 <div class="trade-description">
                   <strong>${trade.description}</strong>
                   <div class="trade-action">${trade.action}</div>

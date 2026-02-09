@@ -419,6 +419,12 @@ pre {
   opacity: 0.5;
 }
 
+/* Light green background for trades where cost is less than locked value */
+.offset-trade.cost-less-than-locked {
+  background-color: #e8f5e8 !important;
+  border-left: 4px solid #4CAF50;
+}
+
 .offset-trade.single_leg {
   border-left: 4px solid #4CAF50;
 }
