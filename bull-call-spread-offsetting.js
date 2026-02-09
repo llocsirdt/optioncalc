@@ -145,6 +145,7 @@ function processBullCallSpreadOffsetting(
           }
           
           if (spreadMaxValue < positionPotentialValue) {
+            console.log(`❌ Spread rejected: spread max value $${spreadMaxValue.toFixed(2)} is less than position potential value $${positionPotentialValue.toFixed(2)}`);
             continue;
           }
           

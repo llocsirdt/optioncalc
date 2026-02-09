@@ -115,6 +115,7 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   console.log('📉 Put positions:', putPositions.map(pos => `${pos.type}${pos.strike}(qty:${pos.qty})`));
   
   // Calculate Bull Call Spread Max Profit (if present)
+  let bullCallMaxValue = 0;
   let bullCallMaxProfit = 0;
   if (callPositions.length >= 2) {
     // Sort calls by strike (ascending)
@@ -125,13 +126,15 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
     if (longCall && shortCall) {
       const spreadWidth = shortCall.strike - longCall.strike;
       const callCost = Math.abs(longCall.qty) * (longCall.cost || 0) + Math.abs(shortCall.qty) * (shortCall.cost || 0);
-      bullCallMaxProfit = spreadWidth * 100 - callCost;
+      bullCallMaxValue = spreadWidth * 100;
+      bullCallMaxProfit = bullCallMaxValue - (callCost<=0 ? originalCost : callCost);
       console.log(`🐂 Bull Call Spread: ${longCall.strike}/${shortCall.strike}, width: $${spreadWidth}, cost: $${callCost.toFixed(2)}, max profit: $${bullCallMaxProfit.toFixed(2)}`);
     }
   }
   
   // Calculate Bear Put Spread Max Profit (if present)
   let bearPutMaxProfit = 0;
+  let bearPutMaxValue = 0;
   if (putPositions.length >= 2) {
     // Sort puts by strike (descending)
     const sortedPuts = putPositions.sort((a, b) => b.strike - a.strike);
@@ -141,7 +144,8 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
     if (longPut && shortPut) {
       const spreadWidth = longPut.strike - shortPut.strike;
       const putCost = Math.abs(longPut.qty) * (longPut.cost || 0) + Math.abs(shortPut.qty) * (shortPut.cost || 0);
-      bearPutMaxProfit = spreadWidth * 100 - putCost;
+      bearPutMaxValue = spreadWidth * 100;
+      bearPutMaxProfit = bearPutMaxValue - (putCost<=0 ? originalCost : putCost);
       console.log(`🐻 Bear Put Spread: ${shortPut.strike}/${longPut.strike}, width: $${spreadWidth}, cost: $${putCost.toFixed(2)}, max profit: $${bearPutMaxProfit.toFixed(2)}`);
     }
   }
@@ -161,11 +165,11 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   
   // Calculate potential profit: max of individual spread profits minus total cost
   const totalCost = calculateTotalCost(originalCost, offsettingCost);
-  const potentialProfit = Math.max(bullCallMaxProfit, bearPutMaxProfit) - totalCost;
+  const potentialProfit = Math.max(bullCallMaxValue, bearPutMaxValue) - totalCost;
   
   // Locked profit is the MIN of the two spread max profits, minus costs
   const minMaxProfit = Math.min(bullCallMaxProfit, bearPutMaxProfit);
-  const rawLockedInValue = minMaxProfit - originalCost - offsettingCost;
+  const rawLockedInValue = minMaxProfit; // - originalCost - offsettingCost
   const lockedProfit = Math.max(0, rawLockedInValue);
   
   // For display purposes, calculate the spread difference (sum of both spread widths)
@@ -174,7 +178,9 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   const spreadDifferenceValue = totalSpreadWidth * 100;
   
   console.log(`🔒 Locked-in value calculation:`);
+  console.log(`  Bull call max value: $${bullCallMaxValue.toFixed(2)}`);
   console.log(`  Bull call max profit: $${bullCallMaxProfit.toFixed(2)}`);
+  console.log(`  Bear put max value: $${bearPutMaxValue.toFixed(2)}`);
   console.log(`  Bear put max profit: $${bearPutMaxProfit.toFixed(2)}`);
   console.log(`  Short leg overlap: $${shortLegOverlap.toFixed(2)}`);
   console.log(`  Original cost: $${originalCost}`);
@@ -184,7 +190,7 @@ function calculateLockedInValue(originalPositions, offsettingPositions, underlyi
   console.log(`  Min of max profits: $${minMaxProfit.toFixed(2)}`);
   console.log(`  Total spread width: $${totalSpreadWidth}`);
   console.log(`  Spread difference value: $${spreadDifferenceValue.toFixed(2)}`);
-  console.log(`  Raw locked-in: $${minMaxProfit.toFixed(2)} - $${originalCost.toFixed(2)} - $${offsettingCost.toFixed(2)} = $${rawLockedInValue.toFixed(2)}`);
+  console.log(`  Raw locked-in: $${rawLockedInValue.toFixed(2)}`);
   console.log(`  Final locked profit: $${lockedProfit.toFixed(2)}`);
   
   return {

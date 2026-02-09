@@ -695,7 +695,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
             const positionPotentialValue = shortCall ? shortCall.premium * 100 * Math.abs(shortCall.qty) : 0;
             
             if (spreadMaxValue < positionPotentialValue) {
-              //console.log(`❌ Put spread rejected: potential value $${spreadMaxValue.toFixed(2)} < position potential $${positionPotentialValue.toFixed(2)}`);
+              console.log(`❌ Put spread rejected: potential value $${spreadMaxValue.toFixed(2)} < position potential $${positionPotentialValue.toFixed(2)}`);
               continue;
             }
             
