@@ -6,9 +6,10 @@ let fullMinStrike = 0;
 let fullMaxStrike = 0;
 let fullStrikeIncrement = 0;
 
-// Position selection tracking
+// Global variables for selected positions
 let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {strike, type, bid, ask, side}
 let selectedPositionsCost = 0;
+let currentOptionsData = []; // Store current options data for real-time updates
 
 // Function to parse offsetting trade and click corresponding table cells
 function clickOffsettingTrade(tradeDescription, tradeAction) {
@@ -77,7 +78,7 @@ function clickOffsettingTrade(tradeDescription, tradeAction) {
   }
   
   // Update the selected positions display
-  updateSelectedPositionsDisplay();
+  updateSelectedPositionsDisplay(currentOptionsData);
   
   console.log(`✅ Clicked ${clickedPositions.length} positions:`, clickedPositions);
   return clickedPositions.length > 0;
@@ -310,7 +311,7 @@ function handleOptionCellClick(event, optionsData) {
   }
   
   // Update the display
-  updateSelectedPositionsDisplay();
+  updateSelectedPositionsDisplay(currentOptionsData);
 }
 
 // Function to update the selected positions display
@@ -565,7 +566,7 @@ function clearSelectedPositions() {
   });
   
   // Update display
-  updateSelectedPositionsDisplay();
+  updateSelectedPositionsDisplay(currentOptionsData);
 }
 
 // Import single leg offsetting functions
@@ -1448,6 +1449,10 @@ function findParetoOptimal(trades) {
 // Note: testSchwabConnection function is now in schwab-api.js
 function updateOptionsChain(options) {
   console.log('🎨 Updating options chain UI with', options.length, 'options');
+  
+  // Store current options data for real-time updates
+  currentOptionsData = options;
+  console.log('💾 Stored current options data:', currentOptionsData.length, 'options');
   
   const chainElement = document.getElementById('options-chain');
   console.log('🔍 Chain element found:', !!chainElement);
