@@ -27,6 +27,12 @@ function restoreLastSymbol() {
 // Save current symbol to localStorage
 function saveCurrentSymbol(symbol) {
   if (symbol) {
+    // Clear expiration cache if symbol changed
+    if (currentSymbol !== symbol) {
+      console.log('🔄 Symbol changed from', currentSymbol, 'to', symbol);
+      clearExpirationCache();
+    }
+    
     localStorage.setItem('lastSymbol', symbol);
     currentSymbol = symbol;
     console.log('💾 Saved symbol:', symbol);
@@ -649,6 +655,17 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
   return apiSymbol;
 }
 
+// Global variables for tracking current symbol and expirations
+let currentSymbolForExpirations = null;
+let cachedExpirations = null;
+
+// Clear cached expirations (useful when switching symbols or refreshing)
+function clearExpirationCache() {
+  console.log('🗑️ Clearing expiration cache');
+  currentSymbolForExpirations = null;
+  cachedExpirations = null;
+}
+
 // Update calculator with live Schwab data
 async function updateCalculatorWithLiveData(symbol) {
   if (!schwabConnected) {
@@ -682,11 +699,25 @@ async function updateCalculatorWithLiveData(symbol) {
       console.log('Tried symbol:', quoteSymbol);
     }
 
-    // Get options chain - use chains mapping
-    const chainsSymbol = mapSymbolForAPI(symbol, 'chains');
-    console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
-    const expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
-    console.log('📅 Expirations data:', expirations);
+    // Use cached expirations or load if symbol changed
+    let expirations = cachedExpirations;
+    const chainsSymbol = mapSymbolForAPI(symbol, 'chains'); // Define here for use later
+    
+    if (!expirations || currentSymbolForExpirations !== symbol) {
+      console.log('🔄 Symbol changed or no cached expirations, loading expirations for:', symbol);
+      console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
+      expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
+      console.log('📅 Expirations data:', expirations);
+      
+      // Cache the expirations for this symbol
+      if (expirations) {
+        cachedExpirations = expirations;
+        currentSymbolForExpirations = symbol;
+        console.log('💾 Cached expirations for symbol:', symbol);
+      }
+    } else {
+      console.log('📋 Using cached expirations for symbol:', symbol);
+    }
     
     if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
       // Check if user has selected an expiration from dropdown
