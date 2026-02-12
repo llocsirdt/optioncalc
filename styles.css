@@ -43,6 +43,7 @@ pre {
   background-color: #f5f5f5;
   padding: 20px;
 }
+
 /* Layout for column sections */
 #container {
   display: flex;
@@ -74,8 +75,8 @@ pre {
 }
 
 #optionRange {
-  width: 50vw; 
-  margin: 0 20px; 
+  width: 70vw; 
+  margin-left: 20px; 
   vertical-align: middle;
 }
 
