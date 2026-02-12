@@ -1,6 +1,5 @@
 body {
   font-family: Arial, sans-serif;
-  padding: 20px;
   margin: 0;
   overflow-x: auto;
   min-width: 100vw;
@@ -10,7 +9,6 @@ body {
 h1 {
   font-size: 14px;
 }
-
 
 textarea {
   width: 100%;
@@ -41,10 +39,14 @@ pre {
   line-height: 1.4;
 }
 
-
+#header {
+  background-color: #f5f5f5;
+  padding: 20px;
+}
 /* Layout for column sections */
 #container {
   display: flex;
+  overflow: scroll;
 }
 
 #container-col1, #container-col2, #container-col3, #container-col4 {
@@ -53,6 +55,7 @@ pre {
   margin-right: 20px;
   box-sizing: border-box;
   flex-shrink: 0;
+  padding: 20px;
 }
 
 #buttonContainer {
