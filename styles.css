@@ -48,6 +48,7 @@ pre {
 #container {
   display: flex;
   overflow: scroll;
+  padding: 20px;
 }
 
 #container-col1, #container-col2, #container-col3, #container-col4 {
@@ -56,7 +57,6 @@ pre {
   margin-right: 20px;
   box-sizing: border-box;
   flex-shrink: 0;
-  padding: 20px;
 }
 
 #buttonContainer {
@@ -185,7 +185,6 @@ pre {
 .schwab-controls {
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
 .control-group {
@@ -205,7 +204,7 @@ pre {
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 14px;
-  min-width: 150px;
+  width: 100px;
 }
 
 
@@ -367,7 +366,7 @@ pre {
 }
 
 .options-header {
-  margin-bottom: 10px;
+  margin: 10px 0;
 }
 
 .options-header h3 {
