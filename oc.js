@@ -177,7 +177,7 @@ function findAndClickOptionCell(optionType, strike, bidAsk) {
 }
 
 // Function to handle clicking/tapping on bid/ask cells
-function handleOptionCellClick(event) {
+function handleOptionCellClick(event, optionsData) {
   // Prevent default behavior for touch events to avoid interference
   if (event.type === 'touchstart' || event.type === 'touchend') {
     event.preventDefault();
@@ -256,6 +256,31 @@ function handleOptionCellClick(event) {
   const priceText = cell.textContent.replace('$', '');
   const price = parseFloat(priceText);
   
+  // Find the option data from the options array instead of parsing the table
+  let optionData = null;
+  if (optionsData && optionsData.length > 0) {
+    optionData = optionsData.find(option => {
+      const optionStrike = option.strike;
+      const optionType = option.optionType; // 'call' or 'put'
+      
+      return Math.abs(optionStrike - strike) < 0.01 && 
+             ((isCall && optionType === 'call') || (!isCall && optionType === 'put'));
+    });
+  }
+  
+  // Calculate average price using the existing calculateOffsetCost function
+  let averagePrice = price; // fallback to clicked price
+  if (optionData && optionData.bid !== null && optionData.ask !== null) {
+    // Use the existing calculateOffsetCost function to get the average price
+    const costForOneContract = calculateOffsetCost(optionData, 1);
+    averagePrice = costForOneContract / 100; // Convert back from cost*100 to price
+  } else if (optionData) {
+    // Fallback to available price
+    averagePrice = optionData.bid || optionData.ask || price;
+  }
+  
+  console.log(`💰 Option ${optionType}${strike}: Found data=${!!optionData}, Bid=${optionData?.bid}, Ask=${optionData?.ask}, Average=${averagePrice}`);
+  
   // Create position key
   const positionKey = `${optionType}${strike}`;
   
@@ -269,10 +294,10 @@ function handleOptionCellClick(event) {
     const position = {
       strike: strike,
       type: optionType,
-      bid: isBid ? price : null,
-      ask: !isBid ? price : null,
+      bid: optionData?.bid || null,
+      ask: optionData?.ask || null,
       side: side,
-      price: price
+      price: averagePrice // Use average price from calculateOffsetCost
     };
     selectedTablePositions.set(positionKey, position);
     
@@ -289,9 +314,14 @@ function handleOptionCellClick(event) {
 }
 
 // Function to update the selected positions display
-function updateSelectedPositionsDisplay() {
+function updateSelectedPositionsDisplay(optionsData = null) {
   const displayArea = document.getElementById('selected-positions-display');
   if (!displayArea) return;
+  
+  console.log('🎨 updateSelectedPositionsDisplay called with optionsData:', !!optionsData);
+  if (optionsData) {
+    console.log('📊 Options data received:', optionsData.length, 'options');
+  }
   
   if (selectedTablePositions.size === 0) {
     displayArea.innerHTML = '<div class="selected-positions-empty">Click bid/ask cells to select positions</div>';
@@ -320,7 +350,61 @@ function updateSelectedPositionsDisplay() {
   sortedPositions.forEach(([key, position]) => {
     const optionName = position.type === 'c' ? 'Call' : 'Put';
     const sideSymbol = position.side === 'long' ? '+' : '-';
-    const cost = position.side === 'long' ? position.price * 100 : -position.price * 100; // Long = positive cost, Short = negative cost, multiplied by 100
+    
+    // Recalculate average price using fresh options data if available
+    let currentPrice = position.price; // fallback to stored price
+    
+    if (optionsData && optionsData.length > 0) {
+      console.log(`🔍 Looking for option: ${position.type}${position.strike}`);
+      console.log(`📊 Available strikes:`, optionsData.slice(0, 5).map(o => `${o.type}${o.strike}`));
+      
+      const optionData = optionsData.find(option => {
+        const optionStrike = option.strike;
+        const optionType = option.optionType || option.type; // Handle both field names
+        
+        console.log(`🔍 Checking option: ${optionType}${optionStrike} against ${position.type}${position.strike}`);
+        
+        const matches = Math.abs(optionStrike - position.strike) < 0.01 && 
+               ((position.type === 'c' && (optionType === 'c' || optionType === 'call')) || 
+                (position.type === 'p' && (optionType === 'p' || optionType === 'put')));
+        
+        if (matches) {
+          console.log(`✅ Found matching option: strike=${optionStrike}, type=${optionType}, bid=${option.bid}, ask=${option.ask}`);
+        }
+        
+        return matches;
+      });
+      
+      if (optionData && optionData.bid !== null && optionData.ask !== null) {
+        // Use the existing calculateOffsetCost function to get the fresh average price
+        const costForOneContract = calculateOffsetCost(optionData, 1);
+        currentPrice = costForOneContract / 100; // Convert back from cost*100 to price
+        console.log(`🔄 Updated price for ${position.type}${position.strike}: ${position.price} → ${currentPrice} (bid: ${optionData.bid}, ask: ${optionData.ask})`);
+      } else {
+        console.log(`❌ No matching option data found for ${position.type}${position.strike}`);
+        // Let's find the closest strike as a fallback
+        const closestOption = optionsData.reduce((closest, option) => {
+          const optionType = option.optionType || option.type;
+          const typeMatches = (position.type === 'c' && (optionType === 'c' || optionType === 'call')) || 
+                            (position.type === 'p' && (optionType === 'p' || optionType === 'put'));
+          
+          if (!typeMatches) return closest;
+          
+          const currentDiff = Math.abs(option.strike - position.strike);
+          const closestDiff = closest ? Math.abs(closest.strike - position.strike) : Infinity;
+          
+          return currentDiff < closestDiff ? option : closest;
+        }, null);
+        
+        if (closestOption) {
+          console.log(`🎯 Found closest option: ${closestOption.type}${closestOption.strike} (diff: ${Math.abs(closestOption.strike - position.strike)})`);
+        }
+      }
+    } else {
+      console.log(`📝 No options data provided, using stored price: ${currentPrice}`);
+    }
+    
+    const cost = position.side === 'long' ? currentPrice * 100 : -currentPrice * 100; // Long = positive cost, Short = negative cost, multiplied by 100
     totalCost += cost;
     
     // Create position string for tempOptionArray with cost
@@ -333,7 +417,7 @@ function updateSelectedPositionsDisplay() {
     html += `
       <div class="selected-position-item">
         <span class="position-type">${optionName} $${position.strike.toFixed(2)}</span>
-        <span class="position-side ${position.side}">${sideSymbol}${position.price.toFixed(2)}</span>
+        <span class="position-side ${position.side}">${sideSymbol}${currentPrice.toFixed(2)}${optionsData ? ' (avg)' : ''}</span>
         <span class="position-cost ${cost >= 0 ? 'credit' : 'debit'}">${cost >= 0 ? '+' : ''}$${Math.abs(cost).toFixed(0)}</span>
       </div>
     `;
@@ -467,8 +551,7 @@ function restoreTableSelections() {
     }
   });
   
-  // Update display
-  updateSelectedPositionsDisplay();
+  // Note: updateSelectedPositionsDisplay is called later in updateOptionsChain with fresh data
 }
 
 // Function to clear all selected positions
@@ -1566,7 +1649,7 @@ function updateOptionsChain(options) {
       const clickableCells = chainElement.querySelectorAll('.clickable');
       clickableCells.forEach(cell => {
         // Mouse events for desktop
-        cell.addEventListener('click', handleOptionCellClick);
+        cell.addEventListener('click', (event) => handleOptionCellClick(event, options));
         
         // Touch events for mobile devices (only touchstart to prevent double-firing)
         cell.addEventListener('touchstart', function(event) {
@@ -1580,7 +1663,7 @@ function updateOptionsChain(options) {
             }
           }
           
-          handleOptionCellClick.call(this, event);
+          handleOptionCellClick.call(this, event, options);
         }, { passive: false });
       });
       
@@ -1642,6 +1725,18 @@ function updateOptionsChain(options) {
       
       // Restore selections after table is rendered
       restoreTableSelections();
+      
+      // Update selected positions display with new options data
+      if (selectedTablePositions.size > 0) {
+        console.log('🔄 Updating selected positions display with new options data');
+        console.log('📊 Options data length:', options.length);
+        console.log('📋 Selected positions count:', selectedTablePositions.size);
+        console.log('💰 Sample option data:', options[0]);
+        console.log('🎯 Selected positions:', Array.from(selectedTablePositions.keys()));
+        updateSelectedPositionsDisplay(options);
+      } else {
+        console.log('📝 No selected positions to update');
+      }
     } else {
       console.log('❌ No options to display');
       chainElement.innerHTML = '<p>No options data available</p>';
@@ -1708,8 +1803,12 @@ function startLiveDataUpdates() {
   
   // Update every 10 seconds
   liveDataInterval = setInterval(() => {
+    console.log('⏰ Live data interval check:', { liveDataEnabled, currentSymbol, schwabConnected });
     if (liveDataEnabled && currentSymbol && schwabConnected) {
+      console.log('🔄 Triggering live data update for:', currentSymbol);
       updateCalculatorWithLiveData(currentSymbol);
+    } else {
+      console.log('⏸️ Skipping live data update - conditions not met');
     }
   }, liveDataIntervalDuration);
 

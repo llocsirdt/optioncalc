@@ -737,6 +737,7 @@ async function updateCalculatorWithLiveData(symbol) {
       if (chainData) {
         const options = parseSchwabOptionsData(chainData, targetExpiration.expirationDate);
         console.log('📈 Parsed options:', options);
+        console.log('🔄 Calling updateOptionsChain with', options.length, 'options');
         updateOptionsChain(options);
       } else {
         // Handle case where chains API fails (common for index options like NDX)
