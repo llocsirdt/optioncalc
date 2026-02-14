@@ -8,6 +8,8 @@
 # Files with sensitive credentials
 SCHWAB_SETUP_UNSAFE.md
 API_SAMPLES.md
+TEST_README.md
+test-apis.js
 restart-proxy.sh
 schwab-proxy.zip
 

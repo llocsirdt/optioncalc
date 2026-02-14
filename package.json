@@ -5,7 +5,8 @@
   "main": "proxy-server-sdk.js",
   "scripts": {
     "start": "node proxy-server-sdk.js",
-    "dev": "nodemon proxy-server-sdk.js"
+    "dev": "nodemon proxy-server-sdk.js",
+    "test": "node test-apis.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
