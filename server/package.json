@@ -4,7 +4,7 @@
   "description": "Schwab API Proxy Server with Persistence",
   "main": "src/proxy-server-sdk.js",
   "scripts": {
-    "start": "node src/proxy-server-sdk.js",
+    "start": "NODE_ENV=production node src/proxy-server-sdk.js",
     "dev": "nodemon src/proxy-server-sdk.js",
     "test": "node ../tests/test-apis.js"
   },

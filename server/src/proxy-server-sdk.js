@@ -12,6 +12,22 @@ const PORT = process.env.PORT || 3001;
 // Initialize persistence manager
 const persistence = new PersistenceManager();
 
+// Environment detection
+const isDevMode = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
+// Dev-only middleware
+function requireDevMode(req, res, next) {
+  if (isDevMode) {
+    next();
+  } else {
+    res.status(404).json({
+      error: 'Endpoint not found',
+      message: 'This endpoint is only available in development mode',
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
 // Debug: Log environment variables (without exposing secrets)
 console.log('🔍 Environment Variables Check:');
 console.log('✅ SCHWAB_CLIENT_ID:', process.env.SCHWAB_CLIENT_ID ? 'SET' : 'MISSING');
@@ -19,6 +35,7 @@ console.log('✅ SCHWAB_CLIENT_SECRET:', process.env.SCHWAB_CLIENT_SECRET ? 'SET
 console.log('✅ SCHWAB_REFRESH_TOKEN:', process.env.SCHWAB_REFRESH_TOKEN ? 'SET' : 'MISSING');
 console.log('✅ ACCOUNT_HASH:', process.env.ACCOUNT_HASH ? 'SET' : 'MISSING');
 console.log('✅ PORT:', process.env.PORT || '3001 (default)');
+console.log('🔧 Development Mode:', isDevMode ? 'ENABLED' : 'DISABLED');
 
 // Get account hash from environment
 const ACCOUNT_HASH = process.env.ACCOUNT_HASH;
@@ -234,8 +251,8 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
   }
 });
 
-// Proxy endpoint for Schwab Trading API
-app.all('/api/v1/trading/*', async (req, res) => {
+// Proxy endpoint for Schwab Trading API (Development Only)
+app.all('/api/v1/trading/*', requireDevMode, async (req, res) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] === TRADING REQUEST ===`);
   try {
@@ -795,6 +812,93 @@ app.post('/api/v1/admin/state/reset', async (req, res) => {
   }
 });
 
+// Development-only endpoints
+app.get('/api/v1/dev/debug', requireDevMode, (req, res) => {
+  res.json({
+    message: 'Development debug endpoint',
+    environment: process.env.NODE_ENV || 'development',
+    isDevMode,
+    timestamp: new Date().toISOString(),
+    serverInfo: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      memory: process.memoryUsage(),
+      uptime: process.uptime()
+    }
+  });
+});
+
+app.get('/api/v1/dev/env', requireDevMode, (req, res) => {
+  const safeEnv = {
+    NODE_ENV: process.env.NODE_ENV || 'development',
+    PORT: process.env.PORT || 3001,
+    // Only show safe environment variables
+    SCHWAB_CLIENT_ID: process.env.SCHWAB_CLIENT_ID ? 'SET' : 'MISSING',
+    SCHWAB_CLIENT_SECRET: process.env.SCHWAB_CLIENT_SECRET ? 'SET' : 'MISSING',
+    SCHWAB_REFRESH_TOKEN: process.env.SCHWAB_REFRESH_TOKEN ? 'SET' : 'MISSING',
+    ACCOUNT_HASH: process.env.ACCOUNT_HASH ? 'SET' : 'MISSING'
+  };
+  
+  res.json({
+    message: 'Environment variables (safe)',
+    environment: safeEnv,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/v1/dev/test-order', requireDevMode, async (req, res) => {
+  try {
+    // Test order placement for development
+    const testOrder = {
+      orderId: `DEV_TEST_${Date.now()}`,
+      symbol: 'TEST',
+      status: 'TEST',
+      createdAt: new Date().toISOString(),
+      isDevOnly: true
+    };
+    
+    persistence.trackOrder(testOrder, 'active');
+    
+    res.json({
+      message: 'Test order created',
+      order: testOrder,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to create test order',
+      message: error.message
+    });
+  }
+});
+
+app.delete('/api/v1/dev/cleanup', requireDevMode, async (req, res) => {
+  try {
+    // Clean up test data
+    const state = persistence.exportState();
+    const parsedState = JSON.parse(state);
+    
+    // Remove test orders
+    parsedState.orders.active = parsedState.orders.active.filter(order => 
+      !order.orderId.startsWith('DEV_TEST_')
+    );
+    parsedState.orders.completed = parsedState.orders.completed.filter(order => 
+      !order.orderId.startsWith('DEV_TEST_')
+    );
+    
+    res.json({
+      message: 'Development cleanup completed',
+      removedTestOrders: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to cleanup',
+      message: error.message
+    });
+  }
+});
+
 // Start server
 async function startServer() {
   try {
@@ -809,16 +913,28 @@ async function startServer() {
       console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
       console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
       console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);
-      console.log(``);
-      console.log(`💰 Trading & Account API:`);
-      console.log(`📋 All Accounts: http://localhost:${PORT}/api/v1/trading/accounts`);
-      console.log(`🔐 Account Numbers (Hash Values): http://localhost:${PORT}/api/v1/trading/accounts/accountNumbers`);
-      console.log(`💳 Account Details: http://localhost:${PORT}/api/v1/trading/accounts/HASH`);
-      console.log(`💰 Account Balances: http://localhost:${PORT}/api/v1/trading/accounts/HASH/balances`);
-      console.log(`📊 Account Positions: http://localhost:${PORT}/api/v1/trading/accounts/HASH/positions`);
-      console.log(`📋 Account Orders: http://localhost:${PORT}/api/v1/trading/accounts/HASH/orders`);
-      console.log(`📈 All Orders: http://localhost:${PORT}/api/v1/trading/orders`);
-      console.log(`� Account Transactions (THIS DOESNT WORK YET BUT WE DONT CARE FOR NOW): http://localhost:${PORT}/api/v1/trading/accounts/HASH/transactions`);
+      
+      if (isDevMode) {
+        console.log(``);
+        console.log(`💰 Trading & Account API (Development Only):`);
+        console.log(`📋 All Accounts: http://localhost:${PORT}/api/v1/trading/accounts`);
+        console.log(`🔐 Account Numbers (Hash Values): http://localhost:${PORT}/api/v1/trading/accounts/accountNumbers`);
+        console.log(`💳 Account Details: http://localhost:${PORT}/api/v1/trading/accounts/HASH`);
+        console.log(`💰 Account Balances: http://localhost:${PORT}/api/v1/trading/accounts/HASH/balances`);
+        console.log(`📊 Account Positions: http://localhost:${PORT}/api/v1/trading/accounts/HASH/positions`);
+        console.log(`📋 Account Orders: http://localhost:${PORT}/api/v1/trading/accounts/HASH/orders`);
+        console.log(`📈 All Orders: http://localhost:${PORT}/api/v1/trading/orders`);
+        console.log(` Account Transactions (THIS DOESNT WORK YET BUT WE DONT CARE FOR NOW): http://localhost:${PORT}/api/v1/trading/accounts/HASH/transactions`);
+        console.log(``);
+        console.log(`🔧 Additional Development-Only Endpoints:`);
+        console.log(`🐛 Debug Info: http://localhost:${PORT}/api/v1/dev/debug`);
+        console.log(`🔍 Environment Variables: http://localhost:${PORT}/api/v1/dev/env`);
+        console.log(`🧪 Test Order: POST http://localhost:${PORT}/api/v1/dev/test-order`);
+        console.log(`🧹 Cleanup Test Data: DELETE http://localhost:${PORT}/api/v1/dev/cleanup`);
+      } else {
+        console.log(``);
+        console.log(`🔒 Trading endpoints disabled in production mode`);
+      }
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);

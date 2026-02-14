@@ -11,6 +11,7 @@ restart-proxy.sh
 schwab-proxy.zip
 
 # Files to block but need to be uncommented for dev/debug at times
+DEV_ENDPOINTS_GUIDE.md
 API_SAMPLES.md
 TEST_README.md
 test-apis.js
