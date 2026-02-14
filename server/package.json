@@ -1,0 +1,23 @@
+{
+  "name": "schwab-proxy-server",
+  "version": "1.0.0",
+  "description": "Schwab API Proxy Server with Persistence",
+  "main": "src/proxy-server-sdk.js",
+  "scripts": {
+    "start": "node src/proxy-server-sdk.js",
+    "dev": "nodemon src/proxy-server-sdk.js",
+    "test": "node ../tests/test-apis.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "schwab-client-js": "^1.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["schwab", "api", "proxy", "trading", "options"],
+  "author": "",
+  "license": "MIT"
+}

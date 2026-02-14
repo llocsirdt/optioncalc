@@ -4,26 +4,26 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Option Calc</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="client/styles.css">
 
 
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
-  <script src="chart.js"></script>
-  <script src="schwab-api.js"></script>
-  <script src="option-utils.js"></script>
-  <script src="bull-call-spread-offsetting.js"></script>
-  <script src="bear-put-spread-offsetting.js"></script>
-  <script src="single-leg-offsetting.js"></script>
-  <script src="oc.js"></script>
-  <script src="expiration-dropdown.js"></script>
+  <script src="client/lib/chart.js"></script>
+  <script src="client/lib/schwab-api.js"></script>
+  <script src="client/lib/option-utils.js"></script>
+  <script src="client/lib/bull-call-spread-offsetting.js"></script>
+  <script src="client/lib/bear-put-spread-offsetting.js"></script>
+  <script src="client/lib/single-leg-offsetting.js"></script>
+  <script src="client/lib/oc.js"></script>
+  <script src="client/lib/expiration-dropdown.js"></script>
 
 
 </head>
 <body>
 
 <div id="header">
-  <h1>Option Calc v1.9.10</h1>
+  <h1>Option Calc v2.0.0</h1>
   
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>

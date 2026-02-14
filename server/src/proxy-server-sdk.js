@@ -1,10 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
-require('dotenv').config();
+require('dotenv').config({ path: '../.env' });
 
 // Import persistence manager
-const PersistenceManager = require('./persistence');
+const PersistenceManager = require('./persistence/persistence');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
