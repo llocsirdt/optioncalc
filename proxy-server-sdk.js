@@ -62,8 +62,8 @@ const handleExpirationChainRequest = async (path, query, timestamp) => {
   }
   
   console.log(`[${timestamp}] Getting expiration chain for: ${symbol}`);
-  console.log(`[${timestamp}] 🔗 API Request: marketClient.optionExpirations("${symbol}")`);
-  return await marketClient.optionExpirations(symbol);
+  console.log(`[${timestamp}] 🔗 API Request: marketClient.expirationChain("${symbol}")`);
+  return await marketClient.expirationChain(symbol);
 };
 
 const handleChainsRequest = async (path, query, timestamp) => {
@@ -244,6 +244,8 @@ app.all('/api/v1/trading/*', async (req, res) => {
       try {
         result = await tradingClient.orderDelete(accountNumber, orderId);
         console.log(`[${timestamp}] Order ${orderId} successfully canceled`);
+        // Return success message for proper response handling
+        result = { message: 'Order successfully canceled' };
       } catch (apiError) {
         console.error(`[${timestamp}] 🔍 Schwab API Error Details:`);
         console.error(`[${timestamp}] Error message:`, apiError.message);
@@ -264,9 +266,9 @@ app.all('/api/v1/trading/*', async (req, res) => {
       }
     }
       
-    // Check for account-specific order placement first: /{accountNumber}/orders
+    // Check for account-specific order placement: /{accountNumber}/orders (POST only)
     const accountOrderMatch = path.match(/^\/([^\/]+)\/orders$/);
-    if (accountOrderMatch) {
+    if (accountOrderMatch && req.method === 'POST') {
       let accountNumber = accountOrderMatch[1];
       
       // If accountNumber is "HASH", use environment ACCOUNT_HASH

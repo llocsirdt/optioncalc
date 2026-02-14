@@ -7,11 +7,13 @@
 
 # Files with sensitive credentials
 SCHWAB_SETUP_UNSAFE.md
+restart-proxy.sh
+schwab-proxy.zip
+
+# Files to block but need to be uncommented for dev/debug at times
 API_SAMPLES.md
 TEST_README.md
 test-apis.js
-restart-proxy.sh
-schwab-proxy.zip
 
 # Node.js dependencies
 node_modules/
