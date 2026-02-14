@@ -3,8 +3,14 @@ const cors = require('cors');
 const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
 require('dotenv').config();
 
+// Import persistence manager
+const PersistenceManager = require('./persistence');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Initialize persistence manager
+const persistence = new PersistenceManager();
 
 // Debug: Log environment variables (without exposing secrets)
 console.log('🔍 Environment Variables Check:');
@@ -21,6 +27,25 @@ if (!ACCOUNT_HASH) {
   console.log('   Some endpoints will require manual hash specification');
 } else {
   console.log('✅ Account Hash loaded from environment');
+}
+
+// Initialize persistence system
+async function initializePersistence() {
+  try {
+    console.log('🔄 Initializing persistence system...');
+    await persistence.loadState();
+    
+    // Log state summary
+    const summary = persistence.getStateSummary();
+    console.log('📊 State Summary:', JSON.stringify(summary, null, 2));
+    
+    // Clean up old data
+    await persistence.cleanup();
+    
+    console.log('✅ Persistence system ready');
+  } catch (error) {
+    console.error('❌ Failed to initialize persistence:', error.message);
+  }
 }
 
 // Enable CORS for all routes
@@ -244,6 +269,12 @@ app.all('/api/v1/trading/*', async (req, res) => {
       try {
         result = await tradingClient.orderDelete(accountNumber, orderId);
         console.log(`[${timestamp}] Order ${orderId} successfully canceled`);
+        
+        // Mark order as completed in persistence
+        persistence.completeOrder(orderId);
+        await persistence.saveState();
+        console.log(`[${timestamp}] 📋 Order marked as completed in persistence: ${orderId}`);
+        
         // Return success message for proper response handling
         result = { message: 'Order successfully canceled' };
       } catch (apiError) {
@@ -459,6 +490,19 @@ app.all('/api/v1/trading/*', async (req, res) => {
         console.log(`[${timestamp}] Placing order for account: ${accountNumber}`);
         result = await tradingClient.placeOrderByAcct(accountNumber, orderData);
         
+        // Track order in persistence
+        if (result && result.orderId) {
+          const orderData = {
+            orderId: result.orderId,
+            symbol: orderData.orderLegCollection?.[0]?.instrument?.symbol || 'UNKNOWN',
+            orderType: orderData.orderType,
+            accountHash: accountNumber
+          };
+          persistence.trackOrder(orderData, 'active');
+          await persistence.saveState();
+          console.log(`[${timestamp}] 📋 Order tracked for persistence: ${result.orderId}`);
+        }
+        
       } else {
         // GET ORDERS
         result = await tradingClient.orderAll(defaultFromTime, defaultToTime, status, maxResults);
@@ -593,20 +637,32 @@ app.all('/api/v1/trading/*', async (req, res) => {
           
           // Parse query parameters for transactions
           const url = new URL(req.url, `http://localhost:${PORT}`);
-          const startDate = url.searchParams.get('startDate') || null;
-          const endDate = url.searchParams.get('endDate') || null;
-          const transactionType = url.searchParams.get('transactionType') || null;
-          const symbol = url.searchParams.get('symbol') || null;
+          const startDate = url.searchParams.get('startDate');
+          const endDate = url.searchParams.get('endDate');
+          const transactionType = url.searchParams.get('transactionType');
+          const symbol = url.searchParams.get('symbol');
           
+          // Build transaction parameters only with valid values
           const transactionParams = {};
-          if (startDate) transactionParams.startDate = startDate;
-          if (endDate) transactionParams.endDate = endDate;
-          if (transactionType) transactionParams.transactionType = transactionType;
-          if (symbol) transactionParams.symbol = symbol;
+          if (startDate && startDate.trim()) {
+            transactionParams.startDate = startDate.trim();
+          }
+          if (endDate && endDate.trim()) {
+            transactionParams.endDate = endDate.trim();
+          }
+          if (transactionType && transactionType.trim()) {
+            transactionParams.transactionType = transactionType.trim();
+          }
+          if (symbol && symbol.trim()) {
+            transactionParams.symbol = symbol.trim();
+          }
           
           console.log(`[${timestamp}] Transaction parameters:`, transactionParams);
+          
           // Use correct method name: transactByAcct
-          result = await tradingClient.transactByAcct(accountNumber, transactionParams);
+          // Only pass parameters if they exist, otherwise pass empty object
+          const params = Object.keys(transactionParams).length > 0 ? transactionParams : {};
+          result = await tradingClient.transactByAcct(accountNumber, params);
         } else {
           throw new Error('Account number required for transactions endpoint');
         }
@@ -634,6 +690,18 @@ app.all('/api/v1/trading/*', async (req, res) => {
   } catch (error) {
     console.error(`[${timestamp}] ❌ Trading request failed:`, error.message);
     
+    // Log error to persistence
+    persistence.logError({
+      message: error.message,
+      stack: error.stack,
+      path: req.path,
+      method: req.method,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Save state with error info
+    await persistence.saveState();
+    
     // Enhanced error logging for validation errors
     if (error.message.includes('validation error') || error.message.includes('400')) {
       console.error(`[${timestamp}] 🔍 Validation Error Details:`);
@@ -660,41 +728,103 @@ app.all('/api/v1/trading/*', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
-  console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
-  console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
-  console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);
-  console.log(``);
-  console.log(`💰 Trading & Account API:`);
-  console.log(`📋 All Accounts: http://localhost:${PORT}/api/v1/trading/accounts`);
-  console.log(`🔐 Account Numbers (Hash Values): http://localhost:${PORT}/api/v1/trading/accounts/accountNumbers`);
-  console.log(`💳 Account Details: http://localhost:${PORT}/api/v1/trading/accounts/HASH`);
-  console.log(`💰 Account Balances: http://localhost:${PORT}/api/v1/trading/accounts/HASH/balances`);
-  console.log(`📊 Account Positions: http://localhost:${PORT}/api/v1/trading/accounts/HASH/positions`);
-  console.log(`📋 Account Orders: http://localhost:${PORT}/api/v1/trading/accounts/HASH/orders`);
-  console.log(`📈 All Orders: http://localhost:${PORT}/api/v1/trading/orders`);
-  console.log(`� Account Transactions: http://localhost:${PORT}/api/v1/trading/accounts/HASH/transactions`);
-  console.log(`🎯 Place Order: POST http://localhost:${PORT}/api/v1/trading/HASH/orders`);
-  console.log(`🎯 Place Order (Account): POST http://localhost:${PORT}/api/v1/trading/{accountNumber}/orders`);
-  console.log(``);
-  console.log(`🌍 Environment-Based Endpoints (uses ACCOUNT_HASH from .env):`);
-  console.log(`✅ Use "HASH" instead of full hash value`);
-  console.log(`✅ Example: /accounts/HASH instead of /accounts/D7F05FFF...`);
-  console.log(`✅ Example: /HASH/orders instead of /D7F05FFF.../orders`);
-  console.log(``);
-  console.log(`🔍 Query Parameters:`);
-  console.log(`📋 Orders: ?fromDateTime=2024-01-01T00:00:00Z&toDateTime=2024-01-31T23:59:59Z&status=FILLED`);
-  console.log(`💰 Transactions: ?startDate=2024-01-01&endDate=2024-01-31&transactionType=TRADE&symbol=AAPL`);
-  console.log(``);
-  console.log(`📋 Spread Order Examples:`);
-  console.log(`curl -X POST http://localhost:3001/api/v1/trading/orders \\`);
-  console.log(`  -H "Content-Type: application/json" \\`);
-  console.log(`  -d '{"orderType": "NET_DEBIT", "session": "NORMAL", "duration": "DAY", "complexOrderStrategyType": "VERTICAL", "price": "2.50", "quantity": 1, "leg": [{"instrument": {"symbol": "SPY", "assetType": "OPTION"}, "orderLegType": "BUY_TO_OPEN", "quantity": 1, "openClose": "OPEN", "positionEffect": "OPEN"}, {"instrument": {"symbol": "SPY", "assetType": "OPTION"}, "orderLegType": "SELL_TO_OPEN", "quantity": 1, "openClose": "OPEN", "positionEffect": "OPEN"}]}'`);
-  console.log(`curl -X POST http://localhost:3001/api/v1/trading/46860914/orders \\`);
-  console.log(`  -H "Content-Type: application/json" \\`);
-  console.log(`  -d '{"orderType": "NET_DEBIT", "session": "NORMAL", "duration": "DAY", "complexOrderStrategyType": "VERTICAL", "price": "0.05", "quantity": 1, "leg": [{"instrument": {"symbol": "SPY_021926C690", "assetType": "OPTION"}, "orderLegType": "BUY_TO_OPEN", "quantity": 1}, {"instrument": {"symbol": "SPY_021926C695", "assetType": "OPTION"}, "orderLegType": "SELL_TO_OPEN", "quantity": 1}]}'`);
+// Persistence management endpoints
+app.get('/api/v1/admin/state', async (req, res) => {
+  try {
+    const summary = persistence.getStateSummary();
+    const activeOrders = persistence.getActiveOrders();
+    const recentErrors = persistence.getRecentErrors(10);
+    
+    res.json({
+      summary,
+      activeOrders,
+      recentErrors,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get state',
+      message: error.message
+    });
+  }
 });
+
+app.post('/api/v1/admin/state/save', async (req, res) => {
+  try {
+    await persistence.saveState();
+    res.json({
+      message: 'State saved successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to save state',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/v1/admin/state/cleanup', async (req, res) => {
+  try {
+    await persistence.cleanup();
+    await persistence.saveState();
+    res.json({
+      message: 'Cleanup completed successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to cleanup state',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/v1/admin/state/reset', async (req, res) => {
+  try {
+    await persistence.resetState();
+    res.json({
+      message: 'State reset successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to reset state',
+      message: error.message
+    });
+  }
+});
+
+// Start server
+async function startServer() {
+  try {
+    // Initialize persistence first
+    await initializePersistence();
+    
+    app.listen(PORT, () => {
+      console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
+      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`🗄️ State Management: http://localhost:${PORT}/api/v1/admin/state`);
+      console.log(`📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
+      console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
+      console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
+      console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);
+      console.log(``);
+      console.log(`💰 Trading & Account API:`);
+      console.log(`📋 All Accounts: http://localhost:${PORT}/api/v1/trading/accounts`);
+      console.log(`🔐 Account Numbers (Hash Values): http://localhost:${PORT}/api/v1/trading/accounts/accountNumbers`);
+      console.log(`💳 Account Details: http://localhost:${PORT}/api/v1/trading/accounts/HASH`);
+      console.log(`💰 Account Balances: http://localhost:${PORT}/api/v1/trading/accounts/HASH/balances`);
+      console.log(`📊 Account Positions: http://localhost:${PORT}/api/v1/trading/accounts/HASH/positions`);
+      console.log(`📋 Account Orders: http://localhost:${PORT}/api/v1/trading/accounts/HASH/orders`);
+      console.log(`📈 All Orders: http://localhost:${PORT}/api/v1/trading/orders`);
+      console.log(`� Account Transactions (THIS DOESNT WORK YET BUT WE DONT CARE FOR NOW): http://localhost:${PORT}/api/v1/trading/accounts/HASH/transactions`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error.message);
+    process.exit(1);
+  }
+}
+
+// Start the server
+startServer();
