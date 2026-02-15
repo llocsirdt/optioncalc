@@ -472,8 +472,237 @@ class OffsetManager {
   }
 
   findOffsettingBearCallSpread(position, chainData) {
-    // TODO: Implement bear call spread offsetting logic using chainData
-    return { strategy: 'bear_call_spread', possibleOffsets: [] };
+    const possibleOffsets = [];
+    
+    // Get the short leg strike of the bull call spread (the higher strike)
+    const shortCallStrike = Math.max(...position.legs.map(leg => leg.strike));
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const offsetBudget = position.offsetBudget;
+        
+    // Get call options from chain data
+    const callOptions = chainData.call || null;
+    if (!callOptions || Object.keys(callOptions).length === 0) {
+      return { strategy: 'bear_call_spread', possibleOffsets: [] };
+    }
+    
+    // Find all available expirations and their strikes
+    let allCallStrikes = new Set();
+    const expirationStrikes = {};
+    
+    for (const [expiration, strikes] of Object.entries(callOptions)) {
+      const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
+      strikeList.forEach(strike => allCallStrikes.add(strike));
+      expirationStrikes[expiration] = strikes;
+    }
+    
+    const callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b); // Sort ascending (low to high)
+    
+    // Track which spread combinations we've already added to avoid duplicates
+    const addedSpreads = new Set();
+    
+    // Look for bear call spreads that can offset the bull call spread
+    // Bear call spread: short lower call, long higher call (generates credit)
+    // The bear call short strike can be at or below the bull call short strike
+    // to create a zone where bull call is at max and bear call expires worthless
+    for (const shortLowerCallStrike of callStrikes) {
+      // Skip strikes that are too low (below the bull call's long strike)
+      const longCallStrike = Math.min(...position.legs.map(leg => leg.strike));
+      if (shortLowerCallStrike < longCallStrike) {
+        continue;
+      }
+      
+      const longHigherCallStrike = shortLowerCallStrike + spreadWidth;
+      const spreadKey = `${shortLowerCallStrike}-${longHigherCallStrike}`;
+      
+      // Skip if we've already added this spread
+      if (addedSpreads.has(spreadKey)) {
+        continue;
+      }
+      
+      // Check if both strikes exist in any expiration
+      let shortLowerCallData = null;
+      let longHigherCallData = null;
+      
+      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+        const shortStrikeKey = shortLowerCallStrike.toString() + '.0';
+        const longStrikeKey = longHigherCallStrike.toString() + '.0';
+        
+        if (strikes[shortStrikeKey] && strikes[longStrikeKey]) {
+          shortLowerCallData = strikes[shortStrikeKey][0];
+          longHigherCallData = strikes[longStrikeKey][0];
+          break;
+        }
+      }
+      
+      if (!shortLowerCallData || !longHigherCallData) {
+        continue;
+      }
+      
+      // Calculate credit using bid-ask average
+      // Bear call spread: sell lower call (credit), buy higher call (debit)
+      const shortLowerCallCredit = (shortLowerCallData.bid + shortLowerCallData.ask) / 2;
+      const longHigherCallCost = (longHigherCallData.bid + longHigherCallData.ask) / 2;
+      const spreadCredit = (shortLowerCallCredit - longHigherCallCost) * 100; // Net credit (positive value)
+      
+      // If spread credit is negative (would cost money), skip it
+      if (spreadCredit <= 0) {
+        continue;
+      }
+      
+      // Calculate locked-in profit and profit potential
+      // Bear call spread maxValue is the max loss = -(spread width × 100)
+      const offsetMaxValue = -(spreadWidth * 100);
+      
+      // When offsetting bull call spread with bear call spread:
+      // Worst case: Market goes up - bull call wins max, bear call loses max
+      //   Profit = position.maxValue + offsetMaxValue + spreadCredit - position.cost
+      // Best case: Market lands between the two short strikes - bull call at max, bear call expires worthless
+      //   Profit = position.maxValue + spreadCredit - position.cost
+      const worstCase = position.maxValue + offsetMaxValue + spreadCredit - position.cost;
+      const bestCase = position.maxValue + spreadCredit - position.cost;
+      
+      const lockedInProfit = worstCase; // Worst case scenario
+      const profitPotential = bestCase; // Best case scenario (sweet spot between short strikes)
+      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+      // Skip spreads with negative locked-in profit
+      if (lockedInProfit < 0) {
+        continue;
+      }
+      
+      // Add to possible offsets
+      const offsettingSpread = {
+        strategy: 'bear_call_spread',
+        legs: [
+          {
+            action: 'offset',
+            quantity: -1, // Short the lower strike
+            type: 'C',
+            strike: shortLowerCallStrike,
+            cost: -shortLowerCallCredit * 100,
+            originalString: `-1c${shortLowerCallStrike}@${-shortLowerCallCredit * 100}`
+          },
+          {
+            action: 'offset',
+            quantity: 1, // Long the higher strike
+            type: 'C',
+            strike: longHigherCallStrike,
+            cost: longHigherCallCost * 100,
+            originalString: `1c${longHigherCallStrike}@${longHigherCallCost * 100}`
+          }
+        ],
+        cost: -spreadCredit, // Negative cost = credit received
+        spreadWidth: spreadWidth,
+        maxValue: offsetMaxValue, // Negative spread width × 100
+        lockedInProfit: lockedInProfit,
+        profitPotential: profitPotential,
+        profitPotentialScore: profitPotentialScore,
+        description: `Bear Call Spread: Short ${shortLowerCallStrike}C @ ${shortLowerCallCredit.toFixed(2)}, Long ${longHigherCallStrike}C @ ${longHigherCallCost.toFixed(2)}`
+      };
+      
+      possibleOffsets.push(offsettingSpread);
+      addedSpreads.add(spreadKey);
+      
+      // Test wider spreads: keep same short call leg, move long call leg higher
+      // Only test strikes that create spreads WIDER than the initial spread width
+      const shortLowerCallStrikeIndex = callStrikes.indexOf(shortLowerCallStrike);
+      if (shortLowerCallStrikeIndex !== -1) {
+        // Only test wider spreads if we found the shortLowerCallStrike in the array
+        for (let i = shortLowerCallStrikeIndex + 1; i < callStrikes.length; i++) {
+          const widerLongHigherCallStrike = callStrikes[i];
+          const widerSpreadWidth = widerLongHigherCallStrike - shortLowerCallStrike;
+          
+          // Skip if this spread is not wider than the initial spread
+          if (widerSpreadWidth <= spreadWidth) {
+            continue;
+          }
+          
+          const widerSpreadKey = `${shortLowerCallStrike}-${widerLongHigherCallStrike}`;
+          
+          // Skip if we've already added this spread
+          if (addedSpreads.has(widerSpreadKey)) {
+            continue;
+          }
+          
+          // Check if wider long call strike exists in chain data
+          let widerLongHigherCallData = null;
+          
+          for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+            const widerLongStrikeKey = widerLongHigherCallStrike.toString() + '.0';
+            
+            if (strikes[widerLongStrikeKey]) {
+              widerLongHigherCallData = strikes[widerLongStrikeKey][0];
+              break;
+            }
+          }
+          
+          if (!widerLongHigherCallData) {
+            continue; // No data for this strike, try next one
+          }
+          
+          // Calculate credit for wider spread
+          const widerLongHigherCallCost = (widerLongHigherCallData.bid + widerLongHigherCallData.ask) / 2;
+          const widerSpreadCredit = (shortLowerCallCredit - widerLongHigherCallCost) * 100;
+          
+          // If wider spread credit is negative, skip it
+          if (widerSpreadCredit <= 0) {
+            continue;
+          }
+          
+          // Calculate locked-in profit and profit potential for wider spread
+          const widerOffsetMaxValue = -(widerSpreadWidth * 100);
+          
+          // Worst case: Market goes up - both spreads hit max
+          // Best case: Market lands between short strikes - bull call at max, bear call expires worthless
+          const widerWorstCase = position.maxValue + widerOffsetMaxValue + widerSpreadCredit - position.cost;
+          const widerBestCase = position.maxValue + widerSpreadCredit - position.cost;
+          
+          const widerLockedInProfit = widerWorstCase;
+          const widerProfitPotential = widerBestCase;
+          const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+          // Skip wider spreads with negative locked-in profit
+          if (widerLockedInProfit < 0) {
+            continue;
+          }
+          
+          // Add wider spread to possible offsets
+          const widerOffsetSpread = {
+            strategy: 'bear_call_spread',
+            legs: [
+              {
+                action: 'offset',
+                quantity: -1,
+                type: 'C',
+                strike: shortLowerCallStrike,
+                cost: -shortLowerCallCredit * 100,
+                originalString: `-1c${shortLowerCallStrike}@${-shortLowerCallCredit * 100}`
+              },
+              {
+                action: 'offset',
+                quantity: 1,
+                type: 'C',
+                strike: widerLongHigherCallStrike,
+                cost: widerLongHigherCallCost * 100,
+                originalString: `1c${widerLongHigherCallStrike}@${widerLongHigherCallCost * 100}`
+              }
+            ],
+            cost: -widerSpreadCredit,
+            spreadWidth: widerSpreadWidth,
+            maxValue: widerOffsetMaxValue, // Negative spread width × 100
+            lockedInProfit: widerLockedInProfit,
+            profitPotential: widerProfitPotential,
+            profitPotentialScore: widerProfitPotentialScore,
+            description: `Bear Call Spread: Short ${shortLowerCallStrike}C @ ${shortLowerCallCredit.toFixed(2)}, Long ${widerLongHigherCallStrike}C @ ${widerLongHigherCallCost.toFixed(2)}`
+          };
+          
+          possibleOffsets.push(widerOffsetSpread);
+          addedSpreads.add(widerSpreadKey);
+        }
+      }
+    }
+    
+    return { strategy: 'bear_call_spread', possibleOffsets };
   }
 
   findOffsettingBullPutSpread(position, chainData) {
