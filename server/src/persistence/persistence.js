@@ -447,9 +447,39 @@ class PersistenceManager {
     return {
       cacheCount: this.state.chains.cacheCount,
       cachedSymbols: [...new Set(this.state.chains.cachedKeys.map(key => key.split('_')[0]))],
-      cachedKeys: this.state.chains.cachedKeys,
-      lastUpdated: this.state.chains.lastUpdated
+      oldestCache: this.state.chains.oldestCache,
+      newestCache: this.state.chains.newestCache
     };
+  }
+
+  /**
+   * Get cached chain data for a specific key
+   */
+  getChainCache(cacheKey) {
+    const cacheFile = path.join(CHAIN_CACHE_DIR, `${cacheKey}.json`);
+    try {
+      const data = require('fs').readFileSync(cacheFile, 'utf8');
+      return JSON.parse(data);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Update timestamp for cached chain data
+   */
+  updateChainCacheTimestamp(cacheKey) {
+    const cacheFile = path.join(CHAIN_CACHE_DIR, `${cacheKey}.json`);
+    try {
+      const fs = require('fs');
+      const data = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      data.timestamp = Date.now();
+      fs.writeFileSync(cacheFile, JSON.stringify(data, null, 2));
+      return true;
+    } catch (error) {
+      console.error(`Failed to update cache timestamp for ${cacheKey}:`, error.message);
+      return false;
+    }
   }
 
   /**
@@ -666,7 +696,7 @@ class PersistenceManager {
   async findOffsettingPositions() {
     try {
       const positions = await this.getAllPositions();
-      return this.offsetManager.findOffsettingPositions(positions);
+      return await this.offsetManager.findOffsettingPositions(positions, this);
     } catch (error) {
       console.error('❌ Failed to find offsetting positions:', error.message);
       return {};
