@@ -245,9 +245,13 @@ class OffsetManager {
       expirationStrikes[expiration] = strikes;
     }
     
-    const callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b);
+    const callStrikes = Array.from(allCallStrikes).sort((a, b) => b - a); // Sort descending (high to low)
     
-    // Look for bull call spreads with same spread width
+    // Track which spread combinations we've already added to avoid duplicates
+    const addedSpreads = new Set();
+    
+    // Look for bull call spreads starting from highest strikes
+    // Start from highest strikes and work down - once we exceed budget, all deeper ITM spreads will be more expensive
     for (const longCallStrike of callStrikes) {
       // Long call strike should be at or lower than the short put strike
       if (longCallStrike > shortPutStrike) {
@@ -255,6 +259,12 @@ class OffsetManager {
       }
       
       const shortCallStrike = longCallStrike + spreadWidth;
+      const spreadKey = `${longCallStrike}-${shortCallStrike}`;
+      
+      // Skip if we've already added this spread
+      if (addedSpreads.has(spreadKey)) {
+        continue;
+      }
       
       // Check if short call strike exists in any expiration
       let longCallData = null;
@@ -280,10 +290,19 @@ class OffsetManager {
       const shortCallCost = (shortCallData.bid + shortCallData.ask) / 2;
       const spreadCost = (longCallCost - shortCallCost) * 100; // Multiply by 100 for contract multiplier
       
-      // Skip if spread cost exceeds offset budget
+      // If spread cost exceeds offset budget, stop looking - all deeper ITM spreads will be more expensive
       if (spreadCost > offsetBudget) {
-        continue;
+        break;
       }
+      
+      // Calculate locked-in profit and profit potential
+      const offsetMaxValue = spreadWidth * 100;
+      const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+      const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+      const totalCost = position.cost + spreadCost;
+      const lockedInProfit = minMaxValue - totalCost;
+      const profitPotential = maxMaxValue - totalCost;
+      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
       // Add to possible offsets
       const offsettingSpread = {
@@ -308,13 +327,136 @@ class OffsetManager {
         ],
         cost: spreadCost,
         spreadWidth: spreadWidth,
-        maxValue: spreadWidth * 100,
+        maxValue: offsetMaxValue,
+        lockedInProfit: lockedInProfit,
+        profitPotential: profitPotential,
+        profitPotentialScore: profitPotentialScore,
         description: `Bull Call Spread: Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}, Short ${shortCallStrike}C @ ${shortCallCost.toFixed(2)}`
       };
       
       possibleOffsets.push(offsettingSpread);
+      addedSpreads.add(spreadKey);
+      
+      // Test wider spreads: keep same short call leg, move long call leg deeper ITM
+      const currentStrikeIndex = callStrikes.indexOf(longCallStrike);
+      for (let i = currentStrikeIndex + 1; i < callStrikes.length; i++) {
+        const widerLongCallStrike = callStrikes[i];
+        const widerSpreadKey = `${widerLongCallStrike}-${shortCallStrike}`;
+        
+        // Skip if we've already added this spread
+        if (addedSpreads.has(widerSpreadKey)) {
+          continue;
+        }
+        
+        // Check if wider long call strike exists in chain data
+        let widerLongCallData = null;
+        
+        for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+          const widerLongStrikeKey = widerLongCallStrike.toString() + '.0';
+          
+          if (strikes[widerLongStrikeKey]) {
+            widerLongCallData = strikes[widerLongStrikeKey][0];
+            break;
+          }
+        }
+        
+        if (!widerLongCallData) {
+          continue; // No data for this strike, try next one
+        }
+        
+        // Calculate cost for wider spread
+        const widerLongCallCost = (widerLongCallData.bid + widerLongCallData.ask) / 2;
+        const widerSpreadCost = (widerLongCallCost - shortCallCost) * 100;
+        
+        // If wider spread exceeds budget, stop testing wider spreads for this short leg
+        if (widerSpreadCost > offsetBudget) {
+          break;
+        }
+        
+        // Calculate locked-in profit and profit potential for wider spread
+        const widerSpreadWidth = shortCallStrike - widerLongCallStrike;
+        const widerOffsetMaxValue = widerSpreadWidth * 100;
+        const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+        const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
+        const widerTotalCost = position.cost + widerSpreadCost;
+        const widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+        const widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+        const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+        
+        // Add wider spread to possible offsets
+        const widerOffsetSpread = {
+          strategy: 'bull_call_spread',
+          legs: [
+            {
+              action: 'offset',
+              quantity: 1,
+              type: 'C',
+              strike: widerLongCallStrike,
+              cost: widerLongCallCost * 100,
+              originalString: `1c${widerLongCallStrike}@${widerLongCallCost * 100}`
+            },
+            {
+              action: 'offset',
+              quantity: -1,
+              type: 'C',
+              strike: shortCallStrike,
+              cost: -shortCallCost * 100,
+              originalString: `-1c${shortCallStrike}@${-shortCallCost * 100}`
+            }
+          ],
+          cost: widerSpreadCost,
+          spreadWidth: widerSpreadWidth,
+          maxValue: widerOffsetMaxValue,
+          lockedInProfit: widerLockedInProfit,
+          profitPotential: widerProfitPotential,
+          profitPotentialScore: widerProfitPotentialScore,
+          description: `Bull Call Spread: Long ${widerLongCallStrike}C @ ${widerLongCallCost.toFixed(2)}, Short ${shortCallStrike}C @ ${shortCallCost.toFixed(2)}`
+        };
+        
+        possibleOffsets.push(widerOffsetSpread);
+        addedSpreads.add(widerSpreadKey);
+      }
     }
-    return { strategy: 'bull_call_spread', possibleOffsets: possibleOffsets };
+    
+    // Sort offsetting positions by custom priority:
+    // Position 1: Highest locked-in profit with score = 1
+    // Position 2: Highest profit potential
+    // Remaining: Sorted by proximity to balanced score of 0.5
+    
+    // Find the best locked-in profit position (with score = 1)
+    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
+      if (current.profitPotentialScore === 1.0) {
+        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
+      }
+      return best;
+    }, null);
+    
+    // Find the best profit potential position
+    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
+      return (!best || current.profitPotential > best.profitPotential) ? current : best;
+    }, null);
+    
+    // Sort all positions by proximity to 0.5
+    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
+      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
+      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
+      return aDistance - bDistance;
+    });
+    
+    // Remove the top two from their current positions
+    const filteredOffsets = sortedByProximity.filter(o => 
+      o !== bestLockedInProfit && o !== bestProfitPotential
+    );
+    
+    // Place them at the top
+    const finalSortedOffsets = [];
+    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
+    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
+      finalSortedOffsets.push(bestProfitPotential);
+    }
+    finalSortedOffsets.push(...filteredOffsets);
+    
+    return { strategy: 'bull_call_spread', possibleOffsets: finalSortedOffsets };
   }
 
   findOffsettingBearCallSpread(position, chainData) {
