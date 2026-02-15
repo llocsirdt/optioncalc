@@ -716,6 +716,10 @@ class PersistenceManager {
         positions[symbolExpiration] = positions[symbolExpiration].map(position => {
           // Convert position back to positionArray format for enrichment
           const positionArray = position.legs.map(leg => {
+            // If leg already has strike data, use it; otherwise parse from originalString
+            if (leg.strike !== undefined) {
+              return leg;
+            }
             // Parse the original string to get the position data
             const parsed = this.positionManager.parsePositionString(leg.originalString);
             return Array.isArray(parsed) ? parsed[0] : parsed;
@@ -724,9 +728,10 @@ class PersistenceManager {
           // Get enriched response format
           const enriched = this.positionManager.toResponseFormat(positionArray);
           
-          // Merge with existing position data
+          // Merge with existing position data, preserving legs with strike data
           return {
             ...position,
+            legs: positionArray, // Use the full leg data with strikes
             spreadWidth: enriched.spreadWidth,
             maxValue: enriched.maxValue
           };

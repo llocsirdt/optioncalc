@@ -465,13 +465,522 @@ class OffsetManager {
   }
 
   findOffsettingBullPutSpread(position, chainData) {
-    // TODO: Implement bull put spread offsetting logic using chainData
-    return { strategy: 'bull_put_spread', possibleOffsets: [] };
+    const possibleOffsets = [];
+    
+    // Get the short leg strike of the bear put spread (the lower strike)
+    const shortPutStrike = Math.min(...position.legs.map(leg => leg.strike));
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const offsetBudget = position.offsetBudget;
+        
+    // Get put options from chain data
+    const putOptions = chainData.put || null;
+    if (!putOptions || Object.keys(putOptions).length === 0) {
+      return { strategy: 'bull_put_spread', possibleOffsets: [] };
+    }
+    
+    // Find all available expirations and their strikes
+    let allPutStrikes = new Set();
+    const expirationStrikes = {};
+    
+    for (const [expiration, strikes] of Object.entries(putOptions)) {
+      const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
+      strikeList.forEach(strike => allPutStrikes.add(strike));
+      expirationStrikes[expiration] = strikes;
+    }
+    
+    const putStrikes = Array.from(allPutStrikes).sort((a, b) => b - a); // Sort descending (high to low)
+    
+    // Track which spread combinations we've already added to avoid duplicates
+    const addedSpreads = new Set();
+    
+    // Look for bull put spreads starting from highest strikes below the initial position
+    // Bull put spread: short higher put, long lower put (generates credit)
+    for (const shortHigherPutStrike of putStrikes) {
+      // Short put strike should be lower than the initial bear put spread's short strike
+      if (shortHigherPutStrike >= shortPutStrike) {
+        continue; // Skip if at or above the initial position
+      }
+      
+      const longLowerPutStrike = shortHigherPutStrike - spreadWidth;
+      const spreadKey = `${shortHigherPutStrike}-${longLowerPutStrike}`;
+      
+      // Skip if we've already added this spread
+      if (addedSpreads.has(spreadKey)) {
+        continue;
+      }
+      
+      // Check if both strikes exist in any expiration
+      let shortHigherPutData = null;
+      let longLowerPutData = null;
+      
+      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+        const shortStrikeKey = shortHigherPutStrike.toString() + '.0';
+        const longStrikeKey = longLowerPutStrike.toString() + '.0';
+        
+        if (strikes[shortStrikeKey] && strikes[longStrikeKey]) {
+          shortHigherPutData = strikes[shortStrikeKey][0];
+          longLowerPutData = strikes[longStrikeKey][0];
+          break;
+        }
+      }
+      
+      if (!shortHigherPutData || !longLowerPutData) {
+        continue;
+      }
+      
+      // Calculate credit using bid-ask average
+      // Bull put spread: sell higher put (credit), buy lower put (debit)
+      const shortHigherPutCredit = (shortHigherPutData.bid + shortHigherPutData.ask) / 2;
+      const longLowerPutCost = (longLowerPutData.bid + longLowerPutData.ask) / 2;
+      const spreadCredit = (shortHigherPutCredit - longLowerPutCost) * 100; // Net credit (positive value)
+      
+      // If spread credit is negative (would cost money), skip it
+      if (spreadCredit <= 0) {
+        continue;
+      }
+      
+      // Calculate locked-in profit and profit potential
+      // Bull put spread maxValue is the max loss = -(spread width × 100)
+      const offsetMaxValue = -(spreadWidth * 100);
+      
+      // When offsetting bear put spread with bull put spread:
+      // Worst case: Market goes down - bear put wins max, bull put loses max
+      //   Profit = position.maxValue + offsetMaxValue + spreadCredit - position.cost
+      // Best case: Market lands between the two short strikes - bear put at max, bull put expires worthless
+      //   Profit = position.maxValue + spreadCredit - position.cost
+      const worstCase = position.maxValue + offsetMaxValue + spreadCredit - position.cost;
+      const bestCase = position.maxValue + spreadCredit - position.cost;
+      
+      const lockedInProfit = worstCase; // Worst case scenario
+      const profitPotential = bestCase; // Best case scenario (sweet spot between short strikes)
+      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+      // Skip spreads with negative locked-in profit
+      if (lockedInProfit < 0) {
+        continue;
+      }
+      
+      // Add to possible offsets
+      const offsettingSpread = {
+        strategy: 'bull_put_spread',
+        legs: [
+          {
+            action: 'offset',
+            quantity: -1, // Short the higher strike
+            type: 'P',
+            strike: shortHigherPutStrike,
+            cost: -shortHigherPutCredit * 100,
+            originalString: `-1p${shortHigherPutStrike}@${-shortHigherPutCredit * 100}`
+          },
+          {
+            action: 'offset',
+            quantity: 1, // Long the lower strike
+            type: 'P',
+            strike: longLowerPutStrike,
+            cost: longLowerPutCost * 100,
+            originalString: `1p${longLowerPutStrike}@${longLowerPutCost * 100}`
+          }
+        ],
+        cost: -spreadCredit, // Negative cost = credit received
+        spreadWidth: spreadWidth,
+        maxValue: offsetMaxValue, // Negative spread width × 100
+        lockedInProfit: lockedInProfit,
+        profitPotential: profitPotential,
+        profitPotentialScore: profitPotentialScore,
+        description: `Bull Put Spread: Short ${shortHigherPutStrike}P @ ${shortHigherPutCredit.toFixed(2)}, Long ${longLowerPutStrike}P @ ${longLowerPutCost.toFixed(2)}`
+      };
+      
+      possibleOffsets.push(offsettingSpread);
+      addedSpreads.add(spreadKey);
+      
+      // Test wider spreads: keep same short put leg, move long put leg lower
+      // Only test strikes that create spreads WIDER than the initial spread width
+      const shortHigherPutStrikeIndex = putStrikes.indexOf(shortHigherPutStrike);
+      if (shortHigherPutStrikeIndex !== -1) {
+        // Only test wider spreads if we found the shortHigherPutStrike in the array
+        for (let i = shortHigherPutStrikeIndex + 1; i < putStrikes.length; i++) {
+          const widerLongLowerPutStrike = putStrikes[i];
+          const widerSpreadWidth = shortHigherPutStrike - widerLongLowerPutStrike;
+          
+          // Skip if this spread is not wider than the initial spread
+          if (widerSpreadWidth <= spreadWidth) {
+            continue;
+          }
+          
+          const widerSpreadKey = `${shortHigherPutStrike}-${widerLongLowerPutStrike}`;
+          
+          // Skip if we've already added this spread
+          if (addedSpreads.has(widerSpreadKey)) {
+            continue;
+          }
+          
+          // Check if wider long put strike exists in chain data
+          let widerLongLowerPutData = null;
+          
+          for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+            const widerLongStrikeKey = widerLongLowerPutStrike.toString() + '.0';
+            
+            if (strikes[widerLongStrikeKey]) {
+              widerLongLowerPutData = strikes[widerLongStrikeKey][0];
+              break;
+            }
+          }
+          
+          if (!widerLongLowerPutData) {
+            continue; // No data for this strike, try next one
+          }
+          
+          // Calculate credit for wider spread
+          const widerLongLowerPutCost = (widerLongLowerPutData.bid + widerLongLowerPutData.ask) / 2;
+          const widerSpreadCredit = (shortHigherPutCredit - widerLongLowerPutCost) * 100;
+          
+          // If wider spread credit is negative, skip it
+          if (widerSpreadCredit <= 0) {
+            continue;
+          }
+          
+          // Calculate locked-in profit and profit potential for wider spread
+          const widerOffsetMaxValue = -(widerSpreadWidth * 100);
+          
+          // Worst case: Market goes down - both spreads hit max
+          // Best case: Market lands between short strikes - bear put at max, bull put expires worthless
+          const widerWorstCase = position.maxValue + widerOffsetMaxValue + widerSpreadCredit - position.cost;
+          const widerBestCase = position.maxValue + widerSpreadCredit - position.cost;
+          
+          const widerLockedInProfit = widerWorstCase;
+          const widerProfitPotential = widerBestCase;
+          const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+          // Skip wider spreads with negative locked-in profit
+          if (widerLockedInProfit < 0) {
+            continue;
+          }
+          
+          // Add wider spread to possible offsets
+          const widerOffsetSpread = {
+            strategy: 'bull_put_spread',
+            legs: [
+              {
+                action: 'offset',
+                quantity: -1,
+                type: 'P',
+                strike: shortHigherPutStrike,
+                cost: -shortHigherPutCredit * 100,
+                originalString: `-1p${shortHigherPutStrike}@${-shortHigherPutCredit * 100}`
+              },
+              {
+                action: 'offset',
+                quantity: 1,
+                type: 'P',
+                strike: widerLongLowerPutStrike,
+                cost: widerLongLowerPutCost * 100,
+                originalString: `1p${widerLongLowerPutStrike}@${widerLongLowerPutCost * 100}`
+              }
+            ],
+            cost: -widerSpreadCredit,
+            spreadWidth: widerSpreadWidth,
+            maxValue: widerOffsetMaxValue, // Negative spread width × 100
+            lockedInProfit: widerLockedInProfit,
+            profitPotential: widerProfitPotential,
+            profitPotentialScore: widerProfitPotentialScore,
+            description: `Bull Put Spread: Short ${shortHigherPutStrike}P @ ${shortHigherPutCredit.toFixed(2)}, Long ${widerLongLowerPutStrike}P @ ${widerLongLowerPutCost.toFixed(2)}`
+          };
+          
+          possibleOffsets.push(widerOffsetSpread);
+          addedSpreads.add(widerSpreadKey);
+        }
+      }
+    }
+    
+    // Sort offsetting positions by custom priority
+    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
+      if (current.profitPotentialScore === 1.0) {
+        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
+      }
+      return best;
+    }, null);
+    
+    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
+      return (!best || current.profitPotential > best.profitPotential) ? current : best;
+    }, null);
+    
+    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
+      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
+      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
+      return aDistance - bDistance;
+    });
+    
+    const filteredOffsets = sortedByProximity.filter(o => 
+      o !== bestLockedInProfit && o !== bestProfitPotential
+    );
+    
+    const finalSortedOffsets = [];
+    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
+    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
+      finalSortedOffsets.push(bestProfitPotential);
+    }
+    finalSortedOffsets.push(...filteredOffsets);
+    
+    return { strategy: 'bull_put_spread', possibleOffsets: finalSortedOffsets };
   }
 
   findOffsettingBearPutSpread(position, chainData) {
-    // TODO: Implement bear put spread offsetting logic using chainData
-    return { strategy: 'bear_put_spread', possibleOffsets: [] };
+    const possibleOffsets = [];
+    
+    // Get the long leg strike of the bull call spread (the lower strike)
+    const longCallStrike = Math.min(...position.legs.map(leg => leg.strike));
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const offsetBudget = position.offsetBudget;
+        
+    // Get put options from chain data
+    const putOptions = chainData.put || null;
+    if (!putOptions || Object.keys(putOptions).length === 0) {
+      return { strategy: 'bear_put_spread', possibleOffsets: [] };
+    }
+    
+    // Find all available expirations and their strikes
+    let allPutStrikes = new Set();
+    const expirationStrikes = {};
+    
+    for (const [expiration, strikes] of Object.entries(putOptions)) {
+      const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
+      strikeList.forEach(strike => allPutStrikes.add(strike));
+      expirationStrikes[expiration] = strikes;
+    }
+    
+    const putStrikes = Array.from(allPutStrikes).sort((a, b) => a - b); // Sort ascending (low to high)
+    
+    // Track which spread combinations we've already added to avoid duplicates
+    const addedSpreads = new Set();
+    
+    // Look for bear put spreads starting from lowest strikes
+    // Start from lowest strikes and work up - once we exceed budget, all higher OTM spreads will be more expensive
+    for (const shortPutStrike of putStrikes) {
+      // Short put strike should be at or higher than the long call strike
+      if (shortPutStrike < longCallStrike) {
+        continue; // Skip if short put is lower than long call
+      }
+      
+      const longPutStrike = shortPutStrike + spreadWidth;
+      const spreadKey = `${longPutStrike}-${shortPutStrike}`;
+      
+      // Skip if we've already added this spread
+      if (addedSpreads.has(spreadKey)) {
+        continue;
+      }
+      
+      // Check if long put strike exists in any expiration
+      let shortPutData = null;
+      let longPutData = null;
+      
+      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+        const shortStrikeKey = shortPutStrike.toString() + '.0';
+        const longStrikeKey = longPutStrike.toString() + '.0';
+        
+        if (strikes[shortStrikeKey] && strikes[longStrikeKey]) {
+          shortPutData = strikes[shortStrikeKey][0];
+          longPutData = strikes[longStrikeKey][0];
+          break;
+        }
+      }
+      
+      if (!shortPutData || !longPutData) {
+        continue;
+      }
+      
+      // Calculate cost using bid-ask average
+      const longPutCost = (longPutData.bid + longPutData.ask) / 2;
+      const shortPutCost = (shortPutData.bid + shortPutData.ask) / 2;
+      const spreadCost = (longPutCost - shortPutCost) * 100; // Multiply by 100 for contract multiplier
+      
+      // If spread cost exceeds offset budget, stop looking - all higher OTM spreads will be more expensive
+      if (spreadCost > offsetBudget) {
+        break;
+      }
+      
+      // Calculate locked-in profit and profit potential
+      const offsetMaxValue = spreadWidth * 100;
+      const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+      const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+      const totalCost = position.cost + spreadCost;
+      const lockedInProfit = minMaxValue - totalCost;
+      const profitPotential = maxMaxValue - totalCost;
+      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+      // Skip spreads with negative locked-in profit (cost exceeds guaranteed value)
+      if (lockedInProfit < 0) {
+        continue;
+      }
+      
+      // Add to possible offsets
+      const offsettingSpread = {
+        strategy: 'bear_put_spread',
+        legs: [
+          {
+            action: 'offset',
+            quantity: 1,
+            type: 'P',
+            strike: longPutStrike,
+            cost: longPutCost * 100,
+            originalString: `1p${longPutStrike}@${longPutCost * 100}`
+          },
+          {
+            action: 'offset',
+            quantity: -1,
+            type: 'P',
+            strike: shortPutStrike,
+            cost: -shortPutCost * 100,
+            originalString: `-1p${shortPutStrike}@${-shortPutCost * 100}`
+          }
+        ],
+        cost: spreadCost,
+        spreadWidth: spreadWidth,
+        maxValue: offsetMaxValue,
+        lockedInProfit: lockedInProfit,
+        profitPotential: profitPotential,
+        profitPotentialScore: profitPotentialScore,
+        description: `Bear Put Spread: Long ${longPutStrike}P @ ${longPutCost.toFixed(2)}, Short ${shortPutStrike}P @ ${shortPutCost.toFixed(2)}`
+      };
+      
+      possibleOffsets.push(offsettingSpread);
+      addedSpreads.add(spreadKey);
+      
+      // Test wider spreads: keep same short put leg, move long put leg higher
+      // Only test strikes that create spreads WIDER than the initial spread width
+      // Start from the strike AFTER longPutStrike to ensure we only test wider spreads
+      const longPutStrikeIndex = putStrikes.indexOf(longPutStrike);
+      if (longPutStrikeIndex !== -1) {
+        // Only test wider spreads if we found the longPutStrike in the array
+        for (let i = longPutStrikeIndex + 1; i < putStrikes.length; i++) {
+          const widerLongPutStrike = putStrikes[i];
+          const widerSpreadWidth = widerLongPutStrike - shortPutStrike;
+          
+          // Double-check: Skip if this spread is not wider than the initial spread
+          if (widerSpreadWidth <= spreadWidth) {
+            continue;
+          }
+          
+          const widerSpreadKey = `${widerLongPutStrike}-${shortPutStrike}`;
+          
+          // Skip if we've already added this spread
+          if (addedSpreads.has(widerSpreadKey)) {
+            continue;
+          }
+          
+          // Check if wider long put strike exists in chain data
+          let widerLongPutData = null;
+          
+          for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+            const widerLongStrikeKey = widerLongPutStrike.toString() + '.0';
+            
+            if (strikes[widerLongStrikeKey]) {
+              widerLongPutData = strikes[widerLongStrikeKey][0];
+              break;
+            }
+          }
+          
+          if (!widerLongPutData) {
+            continue; // No data for this strike, try next one
+          }
+          
+          // Calculate cost for wider spread
+          const widerLongPutCost = (widerLongPutData.bid + widerLongPutData.ask) / 2;
+          const widerSpreadCost = (widerLongPutCost - shortPutCost) * 100;
+          
+          // If wider spread exceeds budget, stop testing wider spreads for this short leg
+          if (widerSpreadCost > offsetBudget) {
+            break;
+          }
+          
+          // Calculate locked-in profit and profit potential for wider spread
+          const widerOffsetMaxValue = widerSpreadWidth * 100;
+          const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+          const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
+          const widerTotalCost = position.cost + widerSpreadCost;
+          const widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+          const widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+          const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+          // Skip wider spreads with negative locked-in profit
+          if (widerLockedInProfit < 0) {
+            continue;
+          }
+          
+          // Add wider spread to possible offsets
+          const widerOffsetSpread = {
+            strategy: 'bear_put_spread',
+            legs: [
+              {
+                action: 'offset',
+                quantity: 1,
+                type: 'P',
+                strike: widerLongPutStrike,
+                cost: widerLongPutCost * 100,
+                originalString: `1p${widerLongPutStrike}@${widerLongPutCost * 100}`
+              },
+              {
+                action: 'offset',
+                quantity: -1,
+                type: 'P',
+                strike: shortPutStrike,
+                cost: -shortPutCost * 100,
+                originalString: `-1p${shortPutStrike}@${-shortPutCost * 100}`
+              }
+            ],
+            cost: widerSpreadCost,
+            spreadWidth: widerSpreadWidth,
+            maxValue: widerOffsetMaxValue,
+            lockedInProfit: widerLockedInProfit,
+            profitPotential: widerProfitPotential,
+            profitPotentialScore: widerProfitPotentialScore,
+            description: `Bear Put Spread: Long ${widerLongPutStrike}P @ ${widerLongPutCost.toFixed(2)}, Short ${shortPutStrike}P @ ${shortPutCost.toFixed(2)}`
+          };
+          
+          possibleOffsets.push(widerOffsetSpread);
+          addedSpreads.add(widerSpreadKey);
+        }
+      }
+    }
+    
+    // Sort offsetting positions by custom priority:
+    // Position 1: Highest locked-in profit with score = 1
+    // Position 2: Highest profit potential
+    // Remaining: Sorted by proximity to balanced score of 0.5
+    
+    // Find the best locked-in profit position (with score = 1)
+    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
+      if (current.profitPotentialScore === 1.0) {
+        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
+      }
+      return best;
+    }, null);
+    
+    // Find the best profit potential position
+    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
+      return (!best || current.profitPotential > best.profitPotential) ? current : best;
+    }, null);
+    
+    // Sort all positions by proximity to 0.5
+    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
+      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
+      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
+      return aDistance - bDistance;
+    });
+    
+    // Remove the top two from their current positions
+    const filteredOffsets = sortedByProximity.filter(o => 
+      o !== bestLockedInProfit && o !== bestProfitPotential
+    );
+    
+    // Place them at the top
+    const finalSortedOffsets = [];
+    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
+    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
+      finalSortedOffsets.push(bestProfitPotential);
+    }
+    finalSortedOffsets.push(...filteredOffsets);
+    
+    return { strategy: 'bear_put_spread', possibleOffsets: finalSortedOffsets };
   }
 }
 
