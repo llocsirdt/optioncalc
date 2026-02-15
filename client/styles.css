@@ -41,7 +41,7 @@ pre {
 
 #header {
   background-color: #f5f5f5;
-  padding: 20px;
+  padding: 10px 20px;
 }
 
 /* Layout for column sections */
@@ -61,10 +61,9 @@ pre {
 
 #buttonContainer {
   position: fixed;
-  width: 91vw;
-  top: 20px;
+  right: 20px;
+  top: 10px;
   z-index: 1000;
-  text-align: right;
 }
 
 #output {
@@ -295,6 +294,7 @@ pre {
   border-collapse: collapse;
   margin-top: 10px;
   font-size: 12px;
+  margin-left: -30px;
 }
 
 .options-table th {
@@ -400,7 +400,7 @@ pre {
   border-radius: 8px;
   border: 1px solid #e9ecef;
   overflow-x: scroll;
-  height: 60vh;
+  height: 80vh;
 }
 
 .offsetting-trades h4 {

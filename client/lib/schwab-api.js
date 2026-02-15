@@ -48,7 +48,7 @@ async function fetchOffsettingAnalysis(symbol, expiration) {
           offsettingHtml += `<div class="position-info">Cost: $${position.cost}, Max: $${position.maxValue}, Width: ${position.spreadWidth}</div>`;
           
           // Show top 10 offsetting positions
-          offsets.slice(0, 10).forEach((offset, index) => {
+          offsets.slice(0, 50).forEach((offset, index) => {
             const cost = Math.abs(offset.cost);
             const costLabel = offset.cost < 0 ? 'Credit' : 'Cost';
             const profitClass = offset.profitPotential > 0 ? 'profit-positive' : 'profit-neutral';

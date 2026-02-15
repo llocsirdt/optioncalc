@@ -14,13 +14,14 @@ schwab-proxy.zip
 DEV_ENDPOINTS_GUIDE.md
 API_SAMPLES.md
 TEST_README.md
-test-apis.js
+tests/
 
 # Server persistence files (cache data)
 server/src/persistence/chain-cache/
 server/src/persistence/server-state.json
 server/src/persistence/server-state.backup.json
 server/src/persistence/positions.json
+server/nodemon.json
 
 # Node.js dependencies
 node_modules/

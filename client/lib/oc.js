@@ -1601,7 +1601,7 @@ function updateOptionsChain(options) {
         const putPClass = putPositionQty > 0 ? 'position-long' : putPositionQty < 0 ? 'position-short' : 'strike-cell-p';
         
         html += `<td class="${callPClass}">${callPositionQty !== 0 ? callPositionQty : ''}</td>`; // P column for calls
-        html += `<td class="strike-cell">$${strike.toFixed(2)}</td>`; // Strike
+        html += `<td class="strike-cell">${strike.toFixed(1)}</td>`; // Strike
         html += `<td class="${putPClass}">${putPositionQty !== 0 ? putPositionQty : ''}</td>`; // P column for puts
         
         // Put side (right)
