@@ -115,7 +115,7 @@ function processBearPutSpreadOffsetting(
       const longCallStrike = callStrikes[j]; // Lower strike (buy)
       const spreadWidth = shortCallStrike - longCallStrike;
       
-      console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
+      console.log(`🔍 [processBearPutSpreadOffsetting] Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
       
       // Only check spreads within minimum width range and in $10 increments
       if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {

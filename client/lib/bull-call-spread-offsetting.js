@@ -93,7 +93,7 @@ function processBullCallSpreadOffsetting(
       const longPutStrike = putStrikes[j]; // Higher strike (buy)
       const spreadWidth = longPutStrike - shortPutStrike;
       
-      console.log(`🔍 Checking spread ${shortPutStrike}/${longPutStrike} (width: $${spreadWidth})`);
+      console.log(`🔍 [processBullCallSpreadOffsetting] Checking spread ${shortPutStrike}/${longPutStrike} (width: $${spreadWidth})`);
       
       // Only check spreads within minimum width range and in $10 increments
       if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {

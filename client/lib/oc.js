@@ -1170,25 +1170,25 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         for (let j = i - 1; j >= 0; j--) {
           const longCallStrike = callStrikes[j]; // Lower strike (buy)
           const spreadWidth = shortCallStrike - longCallStrike;
-          
+
+          // For individual long puts: offsetting bull call spread must have at least one leg at or above the put strike
+          if (shortCallStrike < putStrike && longCallStrike < putStrike) {
+            console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - both legs below put strike $${putStrike}`);
+            continue;
+          }
+
+          // Only process spreads up to the calculated maximum width
+          if (spreadWidth > maxSpreadWidth) {
+            console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
+            continue;
+          }
+
           console.log(`🔍 Checking spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth})`);
           
           // Only check spreads within minimum width range and in $10 increments
           if (spreadWidth >= strikeIncrement && spreadWidth % strikeIncrement === 0) {
             
-            // For individual long puts: offsetting bull call spread must have at least one leg at or above the put strike
-            if (shortCallStrike < putStrike && longCallStrike < putStrike) {
-              console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - both legs below put strike $${putStrike}`);
-              continue;
-            }
-            
             console.log(`✅ Processing spread ${longCallStrike}/${shortCallStrike} (width: $${spreadWidth}) - meets protection requirement`);
-            
-            // Only process spreads up to the calculated maximum width
-            if (spreadWidth > maxSpreadWidth) {
-              console.log(`⏭️ Skipping spread ${longCallStrike}/${shortCallStrike} - width $${spreadWidth} exceeds max limit $${maxSpreadWidth}`);
-              continue;
-            }
             
             const longCall = marketData.find(option => option.type === 'c' && option.strike === longCallStrike);
             const shortCall = marketData.find(option => option.type === 'c' && option.strike === shortCallStrike);
