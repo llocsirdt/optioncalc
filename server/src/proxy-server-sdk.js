@@ -808,7 +808,31 @@ app.get('/api/v1/positions', async (req, res) => {
 
 app.get('/api/v1/positions/offsetting', async (req, res) => {
   try {
-    const offsettingAnalysis = await persistence.findOffsettingPositions();
+    const { symbol, expiration } = req.query;
+    let offsettingAnalysis = await persistence.findOffsettingPositions();
+    
+    // Filter by symbol and/or expiration if provided
+    if (symbol || expiration) {
+      const filtered = {};
+      const filterKey = symbol && expiration ? `${symbol}_${expiration}` : null;
+      
+      for (const [key, value] of Object.entries(offsettingAnalysis)) {
+        // If both symbol and expiration provided, match exact key
+        if (filterKey && key === filterKey) {
+          filtered[key] = value;
+        }
+        // If only symbol provided, match symbol prefix
+        else if (symbol && !expiration && key.startsWith(`${symbol}_`)) {
+          filtered[key] = value;
+        }
+        // If only expiration provided, match expiration suffix
+        else if (expiration && !symbol && key.endsWith(`_${expiration}`)) {
+          filtered[key] = value;
+        }
+      }
+      
+      offsettingAnalysis = filtered;
+    }
     
     res.json({
       offsettingAnalysis,
