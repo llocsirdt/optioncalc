@@ -140,9 +140,8 @@ class PositionManager {
       positions[key].forEach((positionArray, posIndex) => {
         result += '    {\n';
         
-        // Add covered and strategy first
-        result += `      "covered": ${positionArray.covered},\n`;
-        result += `      "strategy": "${positionArray.strategy}",\n`;
+        // Add covered, strategy, cost, and offsetBudget on one line
+        result += `      "covered": ${positionArray.covered}, "strategy": "${positionArray.strategy}", "cost": ${positionArray.cost}, "offsetBudget": ${positionArray.offsetBudget},\n`;
         result += '      "legs": [\n';
         
         // Add each leg on a single line
@@ -175,6 +174,59 @@ class PositionManager {
   }
 
   /**
+   * Calculate maximum value potential of a spread position
+   * For single leg: 0 (no spread, no max value)
+   * For multi-leg spreads: difference between strikes * 100 * quantity
+   */
+  calculateMaximumValuePotential(positionArray) {
+    const legs = Array.isArray(positionArray) ? positionArray : [positionArray];
+    
+    if (legs.length === 1) {
+      return 0; // Single leg has no spread, no maximum value potential
+    }
+    
+    // For spreads, calculate the difference between strikes
+    const strikes = legs.map(leg => leg.strike);
+    const maxStrike = Math.max(...strikes);
+    const minStrike = Math.min(...strikes);
+    const strikeDifference = maxStrike - minStrike;
+    
+    // Use absolute quantity for calculation (spreads are typically 1:1)
+    const quantity = Math.abs(legs[0].quantity);
+    
+    return strikeDifference * 100 * quantity; // Options represent 100 shares
+  }
+
+  /**
+   * Calculate offset budget for a position
+   * Single leg: cost of the initial position (TODO: revisit this logic)
+   * Spread: maximum value potential minus cost
+   */
+  calculateOffsetBudget(positionArray) {
+    const legs = Array.isArray(positionArray) ? positionArray : [positionArray];
+    
+    if (legs.length === 1) {
+      // TODO: Revisit this logic for single leg offset budget
+      return this.calculatePositionCost(positionArray);
+    }
+    
+    const maxPotential = this.calculateMaximumValuePotential(positionArray);
+    const cost = this.calculatePositionCost(positionArray);
+    
+    return maxPotential - cost;
+  }
+
+  /**
+   * Calculate total cost of a position
+   * For single leg: cost of the leg
+   * For multi-leg: sum of all leg costs
+   */
+  calculatePositionCost(positionArray) {
+    const legs = Array.isArray(positionArray) ? positionArray : [positionArray];
+    return legs.reduce((total, leg) => total + leg.cost, 0);
+  }
+
+  /**
    * Convert position array to response format with covered/strategy properties
    */
   toResponseFormat(positionArray) {
@@ -183,7 +235,9 @@ class PositionManager {
     return {
       legs: Array.isArray(positionArray) ? positionArray : [positionArray],
       covered: enriched.covered,
-      strategy: enriched.strategy
+      strategy: enriched.strategy,
+      cost: this.calculatePositionCost(positionArray),
+      offsetBudget: this.calculateOffsetBudget(positionArray)
     };
   }
 }

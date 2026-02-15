@@ -581,10 +581,20 @@ class PersistenceManager {
       // Parse the position string
       const positionObj = this.positionManager.parsePositionString(positionString);
       
-      // Add metadata
-      positionObj.timestamp = new Date().toISOString();
-      positionObj.symbol = symbol;
-      positionObj.expiration = expiration;
+      // Add metadata consistently for both single legs and multi-leg positions
+      if (Array.isArray(positionObj)) {
+        // Multi-leg position - add metadata to each leg
+        positionObj.forEach(leg => {
+          leg.timestamp = new Date().toISOString();
+          leg.symbol = symbol;
+          leg.expiration = expiration;
+        });
+      } else {
+        // Single leg position - add metadata to the object
+        positionObj.timestamp = new Date().toISOString();
+        positionObj.symbol = symbol;
+        positionObj.expiration = expiration;
+      }
       
       // Load existing positions
       let positions = {};
