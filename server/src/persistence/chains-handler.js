@@ -37,9 +37,13 @@ async function handleChainsRequest(path, query, timestamp, persistenceManager, m
   // Decode the symbol for Schwab API
   // Only index symbols need $ prefix for Schwab API
   const indexSymbols = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX']; // Known index symbols
-  const apiSymbol = (symbol.startsWith('$') || indexSymbols.includes(symbol)) ? 
-    (symbol.startsWith('$') ? symbol : `$${symbol}`) : 
-    symbol;
+  
+  // If symbol already has $ prefix, use it as-is
+  // If it's an index symbol without $ prefix, add it
+  // Otherwise, use symbol as-is
+  const apiSymbol = symbol.startsWith('$') ? 
+    symbol : 
+    (indexSymbols.includes(symbol) ? `$${symbol}` : symbol);
   
   // Use original symbol for cache key (without $ prefix)
   const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;

@@ -631,13 +631,21 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
   };
   
   const chainsMap = {
+    'NDX': 'NDX',     // Chains API requires %24 prefix
+    'SPX': 'SPX',
+    'DJX': 'DJX',
+    'RUT': 'RUT',
+    'VIX': 'VIX'
+  };
+
+  const chainsMap__OLD = {
     'NDX': '%24NDX',     // Chains API requires %24 prefix
     'SPX': '%24SPX',
     'DJX': '%24DJX',
     'RUT': '%24RUT',
     'VIX': '%24VIX'
   };
-  
+
   let apiSymbol = displaySymbol;
   
   if (endpoint === 'quote') {
