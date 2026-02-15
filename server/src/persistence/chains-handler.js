@@ -18,7 +18,7 @@ async function handleChainsRequest(path, query, timestamp, persistenceManager, m
   
   // Extract symbol and expiration date from query
   const symbol = queryString.includes('symbol=') ? 
-    queryString.split('symbol=')[1].split('&')[0] : null;
+    decodeURIComponent(queryString.split('symbol=')[1].split('&')[0]) : null;
   const expirationDate = queryString.includes('expirationDate=') ? 
     queryString.split('expirationDate=')[1].split('&')[0] : null;
   
@@ -49,15 +49,6 @@ async function handleChainsRequest(path, query, timestamp, persistenceManager, m
   const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;
   
   console.log(`[${timestamp}] 🔍 DEBUG: Original symbol: ${symbol}, API symbol: ${apiSymbol}, Cache symbol: ${cacheSymbol}`);
-  
-  // Check if we have cached data first
-  console.log(`[${timestamp}] Checking cache for option chain ${cacheSymbol} ${expirationDate}`);
-  const cachedData = await persistenceManager.getCachedChainData(cacheSymbol, expirationDate);
-  
-  if (cachedData) {
-    console.log(`[${timestamp}] 📋 Returning cached option chain for ${cacheSymbol} ${expirationDate}`);
-    return cachedData;
-  }
   
   console.log(`[${timestamp}] Fetching fresh option chain for ${apiSymbol} ${expirationDate}`);
   

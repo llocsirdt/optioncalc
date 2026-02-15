@@ -630,7 +630,7 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
     'VIX': '$VIX.X'
   };
   
-  const chainsMap = {
+  const chainsMap__NO$ = {
     'NDX': 'NDX',     // Chains API requires %24 prefix
     'SPX': 'SPX',
     'DJX': 'DJX',
@@ -638,7 +638,7 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
     'VIX': 'VIX'
   };
 
-  const chainsMap__OLD = {
+  const chainsMap = {
     'NDX': '%24NDX',     // Chains API requires %24 prefix
     'SPX': '%24SPX',
     'DJX': '%24DJX',
