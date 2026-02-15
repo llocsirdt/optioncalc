@@ -899,6 +899,23 @@ app.get('/api/v1/positions', async (req, res) => {
   }
 });
 
+app.get('/api/v1/positions/offsetting', async (req, res) => {
+  try {
+    const offsettingAnalysis = await persistence.findOffsettingPositions();
+    
+    res.json({
+      offsettingAnalysis,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to find offsetting positions',
+      message: error.message
+    });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {
@@ -1070,6 +1087,7 @@ async function startServer() {
       console.log(`📍 Position Management: POST http://localhost:${PORT}/api/v1/positions`);
       console.log(`📍 View Positions: GET http://localhost:${PORT}/api/v1/positions/SPY/2024-01-19`);
       console.log(`📍 All Positions: GET http://localhost:${PORT}/api/v1/positions`);
+      console.log(`📍 Offsetting Analysis: GET http://localhost:${PORT}/api/v1/positions/offsetting`);
       
       if (isDevMode) {
         console.log(``);

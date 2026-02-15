@@ -9,6 +9,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const PositionManager = require('./position-manager');
+const OffsetManager = require('./offset-manager');
 
 const PERSISTENCE_FILE = path.join(__dirname, 'server-state.json');
 const BACKUP_FILE = path.join(__dirname, 'server-state.backup.json');
@@ -18,6 +19,7 @@ const POSITIONS_FILE = path.join(__dirname, 'positions.json');
 class PersistenceManager {
   constructor() {
     this.positionManager = new PositionManager();
+    this.offsetManager = new OffsetManager();
     
     this.state = {
       // Account data
@@ -655,6 +657,19 @@ class PersistenceManager {
       }
       console.error(`❌ Failed to read positions for ${key}:`, error.message);
       return [];
+    }
+  }
+
+  /**
+   * Find offsetting positions analysis
+   */
+  async findOffsettingPositions() {
+    try {
+      const positions = await this.getAllPositions();
+      return this.offsetManager.findOffsettingPositions(positions);
+    } catch (error) {
+      console.error('❌ Failed to find offsetting positions:', error.message);
+      return {};
     }
   }
 

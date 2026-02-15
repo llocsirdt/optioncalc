@@ -200,7 +200,7 @@ class PositionManager {
   /**
    * Calculate offset budget for a position
    * Single leg: cost of the initial position (TODO: revisit this logic)
-   * Spread: maximum value potential minus cost
+   * Spread: maximum value potential minus cost, but never less than 0
    */
   calculateOffsetBudget(positionArray) {
     const legs = Array.isArray(positionArray) ? positionArray : [positionArray];
@@ -212,8 +212,10 @@ class PositionManager {
     
     const maxPotential = this.calculateMaximumValuePotential(positionArray);
     const cost = this.calculatePositionCost(positionArray);
+    const offsetBudget = maxPotential - cost;
     
-    return maxPotential - cost;
+    // Ensure offset budget is never negative
+    return Math.max(0, offsetBudget);
   }
 
   /**
