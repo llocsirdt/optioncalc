@@ -124,6 +124,20 @@ const handleChainsRequest = async (path, query, timestamp) => {
     throw new Error('expirationDate parameter is required (e.g., ?symbol=SPY&expirationDate=2024-01-19)');
   }
   
+  // Decode the symbol for Schwab API
+  const decodedSymbol = decodeURIComponent(rawSymbol);
+  
+  // Check if we have cached data first
+  console.log(`[${timestamp}] Checking cache for option chain ${decodedSymbol} ${expirationDate}`);
+  const cachedData = await persistence.getCachedChainData(decodedSymbol, expirationDate);
+  
+  if (cachedData) {
+    console.log(`[${timestamp}] 📋 Returning cached option chain for ${decodedSymbol} ${expirationDate}`);
+    return cachedData;
+  }
+  
+  console.log(`[${timestamp}] Fetching fresh option chain for ${decodedSymbol} ${expirationDate}`);
+  
   // Extract optional parameters using SDK documentation names
   const strikeCountParam = url.searchParams.get('strikeCount') || url.searchParams.get('strike_count');
   const optionalParams = {
@@ -161,13 +175,17 @@ const handleChainsRequest = async (path, query, timestamp) => {
   // Log the exact API request being made
   console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${rawSymbol}", ${JSON.stringify(optionalParams)})`);
   
-  // Decode the symbol for Schwab SDK (e.g., %24NDX -> $NDX)
-  const decodedSymbol = decodeURIComponent(rawSymbol);
   console.log(`[${timestamp}] Getting options chain for: ${decodedSymbol}`);
   console.log(`[${timestamp}] Options object:`, optionalParams);
   
-  // Pass symbol and options object to Schwab SDK
+  // Fetch fresh data from Schwab API
   const result = await marketClient.chains(decodedSymbol, optionalParams);
+  
+  // Cache the result for storage purposes (only if successful)
+  if (result) {
+    await persistence.cacheChainData(decodedSymbol, expirationDate, result);
+    console.log(`[${timestamp}] 💾 Stored fresh option chain for ${decodedSymbol} ${expirationDate} in cache`);
+  }
   
   // Debug: Check what expiration date we actually got back
   if (result && result.callExpDateMap) {
@@ -812,6 +830,72 @@ app.post('/api/v1/admin/state/reset', async (req, res) => {
   }
 });
 
+// Chains cache management endpoints
+app.get('/api/v1/admin/chains', async (req, res) => {
+  try {
+    const summary = persistence.getChainCacheSummary();
+    
+    res.json({
+      message: 'Chains cache summary',
+      summary,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get chains cache summary',
+      message: error.message
+    });
+  }
+});
+
+app.delete('/api/v1/admin/chains', async (req, res) => {
+  try {
+    const maxAgeHours = parseInt(req.query.maxAgeHours) || 24;
+    const clearedCount = persistence.clearOldChainCache(maxAgeHours);
+    
+    res.json({
+      message: `Cleared ${clearedCount} old chain cache entries`,
+      clearedCount,
+      maxAgeHours,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to clear chains cache',
+      message: error.message
+    });
+  }
+});
+
+app.get('/api/v1/admin/chains/:symbol/:expiration', async (req, res) => {
+  try {
+    const { symbol, expiration } = req.params;
+    const cachedData = persistence.getCachedChainData(symbol, expiration);
+    
+    if (!cachedData) {
+      return res.status(404).json({
+        error: 'Chain data not found',
+        message: `No cached data for ${symbol} ${expiration}`,
+        symbol,
+        expiration
+      });
+    }
+    
+    res.json({
+      message: 'Retrieved cached chain data',
+      symbol,
+      expiration,
+      data: cachedData,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get cached chain data',
+      message: error.message
+    });
+  }
+});
+
 // Development-only endpoints
 app.get('/api/v1/dev/debug', requireDevMode, (req, res) => {
   res.json({
@@ -909,7 +993,8 @@ async function startServer() {
       console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/health`);
       console.log(`🗄️ State Management: http://localhost:${PORT}/api/v1/admin/state`);
-      console.log(`📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
+      console.log(`� Chains Cache: http://localhost:${PORT}/api/v1/admin/chains`);
+      console.log(`�📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
       console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
       console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
       console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);

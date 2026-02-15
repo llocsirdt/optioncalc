@@ -11,6 +11,7 @@ const path = require('path');
 
 const PERSISTENCE_FILE = path.join(__dirname, 'server-state.json');
 const BACKUP_FILE = path.join(__dirname, 'server-state.backup.json');
+const CHAIN_CACHE_DIR = path.join(__dirname, 'chain-cache');
 
 class PersistenceManager {
   constructor() {
@@ -51,6 +52,13 @@ class PersistenceManager {
         lastError: null
       },
       
+      // Chain cache metadata only (actual chains stored in separate files)
+      chains: {
+        cachedKeys: [], // Array of "SYMBOL_EXPIRATION" keys
+        lastUpdated: {}, // Key: "SYMBOL_EXPIRATION", Value: timestamp
+        cacheCount: 0
+      },
+      
       // Metadata
       metadata: {
         createdAt: new Date().toISOString(),
@@ -59,6 +67,19 @@ class PersistenceManager {
         totalUptime: 0
       }
     };
+  }
+
+  /**
+   * Initialize chain cache directory
+   */
+  async initializeChainCache() {
+    try {
+      await fs.mkdir(CHAIN_CACHE_DIR, { recursive: true });
+      console.log(`📁 Chain cache directory ready: ${CHAIN_CACHE_DIR}`);
+    } catch (error) {
+      console.error('❌ Failed to create chain cache directory:', error.message);
+      throw error;
+    }
   }
 
   /**
@@ -72,6 +93,9 @@ class PersistenceManager {
       
       // Merge with default state to handle new fields
       this.state = this.mergeStates(this.state, savedState);
+      
+      // Migrate old chain cache format to new file-based format
+      await this.migrateChainCacheIfNeeded();
       
       // Update restart count and timestamps
       this.state.metadata.restartCount = (this.state.metadata.restartCount || 0) + 1;
@@ -307,12 +331,225 @@ class PersistenceManager {
         totalCount: this.state.errors.errorCount,
         lastError: this.state.errors.lastError?.timestamp
       },
+      chains: {
+        cacheCount: this.state.chains.cacheCount,
+        cachedSymbols: [...new Set(this.state.chains.cachedKeys.map(key => key.split('_')[0]))],
+        lastUpdated: Object.values(this.state.chains.lastUpdated).sort().pop() || null
+      },
       metadata: {
         restartCount: this.state.metadata.restartCount,
         createdAt: this.state.metadata.createdAt,
         lastSaved: this.state.metadata.lastSaved
       }
     };
+  }
+
+  /**
+   * Cache option chain data to separate file
+   */
+  async cacheChainData(symbol, expiration, chainData) {
+    const key = `${symbol}_${expiration}`;
+    const timestamp = new Date().toISOString();
+    const filename = `${key}.json`;
+    const filepath = path.join(CHAIN_CACHE_DIR, filename);
+    
+    try {
+      // Ensure cache directory exists
+      await this.initializeChainCache();
+      
+      // Save chain data to separate file
+      const chainFileData = {
+        symbol,
+        expiration,
+        data: chainData,
+        cachedAt: timestamp
+      };
+      
+      await fs.writeFile(filepath, JSON.stringify(chainFileData, null, 2), 'utf8');
+      
+      // Update metadata in main state
+      if (!this.state.chains.cachedKeys.includes(key)) {
+        this.state.chains.cachedKeys.push(key);
+      }
+      this.state.chains.lastUpdated[key] = timestamp;
+      this.state.chains.cacheCount = this.state.chains.cachedKeys.length;
+      
+      console.log(`💾 Cached option chain for ${symbol} ${expiration} (${Object.keys(chainData.call || {}).length + Object.keys(chainData.put || {}).length} contracts)`);
+      
+      // Auto-save metadata after caching
+      this.saveState().catch(error => {
+        console.error('Failed to save state after caching chain:', error.message);
+      });
+      
+    } catch (error) {
+      console.error(`❌ Failed to cache chain data for ${key}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get cached option chain data from file
+   */
+  async getCachedChainData(symbol, expiration) {
+    const key = `${symbol}_${expiration}`;
+    const filename = `${key}.json`;
+    const filepath = path.join(CHAIN_CACHE_DIR, filename);
+    
+    try {
+      const data = await fs.readFile(filepath, 'utf8');
+      const cached = JSON.parse(data);
+      
+      console.log(`📋 Retrieved cached option chain for ${symbol} ${expiration} (cached at ${cached.cachedAt})`);
+      return cached.data;
+      
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return null; // File doesn't exist, no cached data
+      }
+      console.error(`❌ Failed to read cached chain data for ${key}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Check if chain data is cached (file exists)
+   */
+  async hasCachedChainData(symbol, expiration) {
+    const key = `${symbol}_${expiration}`;
+    const filename = `${key}.json`;
+    const filepath = path.join(CHAIN_CACHE_DIR, filename);
+    
+    try {
+      await fs.access(filepath);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Get chain cache summary
+   */
+  getChainCacheSummary() {
+    return {
+      cacheCount: this.state.chains.cacheCount,
+      cachedSymbols: [...new Set(this.state.chains.cachedKeys.map(key => key.split('_')[0]))],
+      cachedKeys: this.state.chains.cachedKeys,
+      lastUpdated: this.state.chains.lastUpdated
+    };
+  }
+
+  /**
+   * Clear old chain cache entries (older than specified hours)
+   */
+  async clearOldChainCache(maxAgeHours = 24) {
+    const cutoffTime = new Date(Date.now() - (maxAgeHours * 60 * 60 * 1000));
+    const keysToDelete = [];
+    
+    // Check each cached key
+    for (const key of this.state.chains.cachedKeys) {
+      const filename = `${key}.json`;
+      const filepath = path.join(CHAIN_CACHE_DIR, filename);
+      
+      try {
+        const data = await fs.readFile(filepath, 'utf8');
+        const cached = JSON.parse(data);
+        const cachedTime = new Date(cached.cachedAt);
+        
+        if (cachedTime < cutoffTime) {
+          keysToDelete.push(key);
+        }
+      } catch (error) {
+        // File might be corrupted or missing, mark for deletion
+        keysToDelete.push(key);
+      }
+    }
+    
+    // Delete old files and update metadata
+    for (const key of keysToDelete) {
+      const filename = `${key}.json`;
+      const filepath = path.join(CHAIN_CACHE_DIR, filename);
+      
+      try {
+        await fs.unlink(filepath);
+      } catch (error) {
+        // File might not exist, that's okay
+      }
+      
+      // Remove from metadata
+      this.state.chains.cachedKeys = this.state.chains.cachedKeys.filter(k => k !== key);
+      delete this.state.chains.lastUpdated[key];
+    }
+    
+    // Update cache count
+    this.state.chains.cacheCount = this.state.chains.cachedKeys.length;
+    
+    if (keysToDelete.length > 0) {
+      console.log(`🧹 Cleared ${keysToDelete.length} old chain cache entries`);
+      this.saveState().catch(error => {
+        console.error('Failed to save state after clearing old chains:', error.message);
+      });
+    }
+    
+    return keysToDelete.length;
+  }
+
+  /**
+   * Migrate old chain cache format to new file-based format
+   */
+  async migrateChainCacheIfNeeded() {
+    // Check if we have old format chain data in the state
+    if (this.state.chains.cached && typeof this.state.chains.cached === 'object' && Object.keys(this.state.chains.cached).length > 0) {
+      console.log('🔄 Migrating chain cache to new file-based format...');
+      
+      try {
+        // Ensure cache directory exists
+        await this.initializeChainCache();
+        
+        const oldCacheData = this.state.chains.cached;
+        const totalEntries = Object.keys(oldCacheData).length;
+        let migratedCount = 0;
+        
+        console.log(`📊 Found ${totalEntries} chain cache entries to migrate`);
+        
+        // Migrate each cached chain to separate file
+        for (const [key, chainData] of Object.entries(oldCacheData)) {
+          try {
+            const filename = `${key}.json`;
+            const filepath = path.join(CHAIN_CACHE_DIR, filename);
+            
+            await fs.writeFile(filepath, JSON.stringify(chainData, null, 2), 'utf8');
+            migratedCount++;
+            
+            // Progress logging every 10 entries
+            if (migratedCount % 10 === 0) {
+              console.log(`📝 Migrated ${migratedCount}/${totalEntries} chain cache entries...`);
+            }
+            
+          } catch (error) {
+            console.error(`❌ Failed to migrate chain ${key}:`, error.message);
+          }
+        }
+        
+        // Update state structure
+        this.state.chains.cachedKeys = Object.keys(oldCacheData);
+        delete this.state.chains.cached; // Remove old format
+        
+        console.log(`✅ Migrated ${migratedCount}/${totalEntries} chain cache entries to separate files`);
+        
+        // Save the updated state immediately
+        await this.saveState();
+        
+      } catch (error) {
+        console.error('❌ Failed to migrate chain cache:', error.message);
+        // If migration fails, clear the old cache to prevent restart loops
+        console.log('🧹 Clearing old chain cache to prevent restart loop...');
+        this.state.chains.cachedKeys = [];
+        delete this.state.chains.cached;
+        this.state.chains.cacheCount = 0;
+        this.state.chains.lastUpdated = {};
+      }
+    }
   }
 
   /**
@@ -332,12 +569,27 @@ class PersistenceManager {
       session: { refreshToken: null, accessToken: null, tokenExpiry: null, lastRefresh: null },
       config: { port: 3001, environment: 'development', version: '1.0.0' },
       errors: { recent: [], errorCount: 0, lastError: null },
+      chains: { cachedKeys: [], lastUpdated: {}, cacheCount: 0 },
       metadata: { createdAt: new Date().toISOString(), lastSaved: null, restartCount: 0, totalUptime: 0 }
     };
     
     try {
       await fs.unlink(PERSISTENCE_FILE);
       await fs.unlink(BACKUP_FILE);
+      
+      // Clean up chain cache directory
+      try {
+        const files = await fs.readdir(CHAIN_CACHE_DIR);
+        for (const file of files) {
+          if (file.endsWith('.json')) {
+            await fs.unlink(path.join(CHAIN_CACHE_DIR, file));
+          }
+        }
+        console.log('🗑️  Cleared chain cache files');
+      } catch (error) {
+        // Directory might not exist, that's okay
+      }
+      
       console.log('🗑️  Reset persistence state');
     } catch (error) {
       // Files might not exist, that's okay
