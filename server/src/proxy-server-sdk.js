@@ -6,6 +6,10 @@ require('dotenv').config({ path: '../.env' });
 // Import persistence manager
 const PersistenceManager = require('./persistence/persistence');
 
+// Import shared chains handler and market client
+const { handleChainsRequest } = require('./persistence/chains-handler');
+const { marketClient } = require('./persistence/market-client');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -68,13 +72,6 @@ async function initializePersistence() {
 // Enable CORS for all routes
 app.use(cors());
 app.use(express.json());
-
-// Initialize Schwab clients
-const marketClient = new MarketApiClient(
-  process.env.SCHWAB_CLIENT_ID, 
-  process.env.SCHWAB_CLIENT_SECRET, 
-  process.env.SCHWAB_REFRESH_TOKEN
-);
 const tradingClient = new TradingApiClient(
   process.env.SCHWAB_CLIENT_ID, 
   process.env.SCHWAB_CLIENT_SECRET, 
@@ -106,96 +103,6 @@ const handleExpirationChainRequest = async (path, query, timestamp) => {
   console.log(`[${timestamp}] Getting expiration chain for: ${symbol}`);
   console.log(`[${timestamp}] 🔗 API Request: marketClient.expirationChain("${symbol}")`);
   return await marketClient.expirationChain(symbol);
-};
-
-const handleChainsRequest = async (path, query, timestamp) => {
-  const url = new URL(`http://localhost:${PORT}${path}${query}`);
-  // Parse raw query string to avoid auto-decoding
-  const queryString = url.searchParams.toString();
-  const symbolMatch = queryString.match(/symbol=([^&]+)/);
-  const rawSymbol = symbolMatch ? symbolMatch[1] : null;
-  const expirationDate = url.searchParams.get('expirationDate') || null;
-  
-  if (!rawSymbol || rawSymbol === '') {
-    throw new Error('symbol parameter is required (e.g., ?symbol=SPY)');
-  }
-  
-  if (!expirationDate || expirationDate === '') {
-    throw new Error('expirationDate parameter is required (e.g., ?symbol=SPY&expirationDate=2024-01-19)');
-  }
-  
-  // Decode the symbol for Schwab API
-  const decodedSymbol = decodeURIComponent(rawSymbol);
-  
-  // Check if we have cached data first
-  console.log(`[${timestamp}] Checking cache for option chain ${decodedSymbol} ${expirationDate}`);
-  const cachedData = await persistence.getCachedChainData(decodedSymbol, expirationDate);
-  
-  if (cachedData) {
-    console.log(`[${timestamp}] 📋 Returning cached option chain for ${decodedSymbol} ${expirationDate}`);
-    return cachedData;
-  }
-  
-  console.log(`[${timestamp}] Fetching fresh option chain for ${decodedSymbol} ${expirationDate}`);
-  
-  // Extract optional parameters using SDK documentation names
-  const strikeCountParam = url.searchParams.get('strikeCount') || url.searchParams.get('strike_count');
-  const optionalParams = {
-    strikeCount: strikeCountParam ? parseInt(strikeCountParam) : 100, // Default to 100 strikes if not provided
-    contractType: url.searchParams.get('contractType') || url.searchParams.get('contract_type') || undefined, // From SDK docs
-    includeUnderlyingQuote: url.searchParams.get('includeUnderlyingQuote') === 'true' || url.searchParams.get('include_underlying_quote') === 'true',
-    strategy: url.searchParams.get('strategy') || undefined,
-    range: url.searchParams.get('range') || url.searchParams.get('strike_range') || undefined, // From SDK docs
-    optionType: url.searchParams.get('optionType') || url.searchParams.get('option_type') || undefined,
-    strike: parseFloat(url.searchParams.get('strike')) || undefined,
-    interval: parseInt(url.searchParams.get('interval')) || undefined,
-    // Include expirationDate in the options object
-    expirationDate: expirationDate
-    // No fromDate/toDate - just pass expiration date
-  };
-  
-  // Remove undefined parameters (but keep strikeCount)
-  Object.keys(optionalParams).forEach(key => {
-    if (optionalParams[key] === undefined && key !== 'strikeCount') {
-      delete optionalParams[key];
-    }
-  });
-  
-  console.log(`[${timestamp}] Getting options chain for: ${rawSymbol}, exp: ${expirationDate}`);
-  console.log(`[${timestamp}] Optional params:`, optionalParams);
-  
-  // Build the chain options object for schwab-client-js SDK
-  const chainOptions = {
-    ...optionalParams
-    // Don't include expirationDate - use fromDate/toDate instead
-  };
-  
-  console.log(`[${timestamp}] Final chain options:`, chainOptions);
-  
-  // Log the exact API request being made
-  console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${rawSymbol}", ${JSON.stringify(optionalParams)})`);
-  
-  console.log(`[${timestamp}] Getting options chain for: ${decodedSymbol}`);
-  console.log(`[${timestamp}] Options object:`, optionalParams);
-  
-  // Fetch fresh data from Schwab API
-  const result = await marketClient.chains(decodedSymbol, optionalParams);
-  
-  // Cache the result for storage purposes (only if successful)
-  if (result) {
-    await persistence.cacheChainData(decodedSymbol, expirationDate, result);
-    console.log(`[${timestamp}] 💾 Stored fresh option chain for ${decodedSymbol} ${expirationDate} in cache`);
-  }
-  
-  // Debug: Check what expiration date we actually got back
-  if (result && result.callExpDateMap) {
-    const expirationDates = Object.keys(result.callExpDateMap);
-    if (expirationDates.length > 0) {
-      // console.log(`[${timestamp}] 🎯 DEBUG: Requested: ${expirationDate}, Got: ${expirationDates[0]}`);
-    }
-  }
-  
-  return result;
 };
 
 // Debug middleware to log all requests
@@ -239,7 +146,7 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       result = await handleExpirationChainRequest(path, query, timestamp);
       
     } else if (path.startsWith('/chains')) {
-      result = await handleChainsRequest(path, query, timestamp);
+      result = await handleChainsRequest(path, query, timestamp, persistence, marketClient);
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
@@ -1119,3 +1026,10 @@ async function startServer() {
 
 // Start the server
 startServer();
+
+// Export functions for use by other modules
+module.exports = {
+  handleChainsRequest,
+  handleQuotesRequest,
+  handleExpirationChainRequest
+};

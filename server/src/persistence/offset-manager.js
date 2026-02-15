@@ -120,7 +120,9 @@ class OffsetManager {
    * Get cached chain data or fetch fresh data if needed
    */
   async getOrFetchChainData(symbol, expiration, persistenceManager) {
-    const cacheKey = `${symbol}_${expiration}`;
+    // Use consistent cache symbol logic (same as chains-handler)
+    const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;
+    const cacheKey = `${cacheSymbol}_${expiration}`;
     const cachedData = persistenceManager.getChainCache(cacheKey);
     
     // Check if we have fresh data (less than 5 seconds old)
@@ -132,22 +134,38 @@ class OffsetManager {
       return cachedData.data;
     }
     
-    // If we have any cached data, use it for now (even if stale)
-    if (cachedData && cachedData.data) {
-      console.log(`� Using stale cached chain data for ${symbol} ${expiration} (${Math.round((now - cachedData.timestamp) / 1000)}s old)`);
-      return cachedData.data;
-    }
-    
-    // Fetch fresh data
+    // Fetch fresh data by calling chains-handler directly
     console.log(`🔄 Fetching fresh chain data for ${symbol} ${expiration}`);
     try {
-      // TODO: Implement actual chain data fetching
-      // For now, return empty structure
-      console.log(`⚠️ No chain data available for ${symbol} ${expiration}`);
-      return { calls: [], puts: [] };
+      // Import at call time to avoid module-level circular dependency
+      const { handleChainsRequest } = require('./chains-handler');
+      const { marketClient } = require('./market-client');
+      
+      const query = `?symbol=${symbol}&expirationDate=${expiration}`;
+      const timestamp = new Date().toISOString();
+      
+      console.log(`🔍 Calling handleChainsRequest for ${symbol} ${expiration}`);
+      
+      const result = await handleChainsRequest('/chains', query, timestamp, persistenceManager, marketClient);
+      
+      if (result && (result.callExpDateMap || result.putExpDateMap)) {
+        console.log(`✅ Successfully fetched fresh chain data for ${symbol} ${expiration}`);
+        
+        const transformedData = {
+          call: result.callExpDateMap || {},
+          put: result.putExpDateMap || {}
+        };
+        
+        await persistenceManager.cacheChainData(cacheSymbol, expiration, transformedData);
+        
+        return transformedData;
+      } else {
+        console.log(`⚠️ No chain data returned for ${symbol} ${expiration}`);
+        return { call: {}, put: {} };
+      }
     } catch (error) {
       console.error(`❌ Failed to fetch chain data for ${symbol} ${expiration}:`, error.message);
-      return { calls: [], puts: [] };
+      return { call: {}, put: {} };
     }
   }
 
@@ -176,6 +194,7 @@ class OffsetManager {
   
   findOffsettingLongCall(position, chainData) {
     // TODO: Implement long call offsetting logic using chainData
+    // Chain data available: chainData.call and chainData.put with strike prices
     return { strategy: 'long_call', possibleOffsets: [] };
   }
 
@@ -186,6 +205,7 @@ class OffsetManager {
 
   findOffsettingLongPut(position, chainData) {
     // TODO: Implement long put offsetting logic using chainData
+    // Chain data available: chainData.call and chainData.put with strike prices
     return { strategy: 'long_put', possibleOffsets: [] };
   }
 
