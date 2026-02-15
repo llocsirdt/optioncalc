@@ -709,7 +709,31 @@ class PersistenceManager {
   async getAllPositions() {
     try {
       const data = await fs.readFile(POSITIONS_FILE, 'utf8');
-      return JSON.parse(data);
+      const positions = JSON.parse(data);
+      
+      // Enrich positions with calculated properties
+      for (const symbolExpiration in positions) {
+        positions[symbolExpiration] = positions[symbolExpiration].map(position => {
+          // Convert position back to positionArray format for enrichment
+          const positionArray = position.legs.map(leg => {
+            // Parse the original string to get the position data
+            const parsed = this.positionManager.parsePositionString(leg.originalString);
+            return Array.isArray(parsed) ? parsed[0] : parsed;
+          });
+          
+          // Get enriched response format
+          const enriched = this.positionManager.toResponseFormat(positionArray);
+          
+          // Merge with existing position data
+          return {
+            ...position,
+            spreadWidth: enriched.spreadWidth,
+            maxValue: enriched.maxValue
+          };
+        });
+      }
+      
+      return positions;
     } catch (error) {
       if (error.code === 'ENOENT') {
         return {}; // File doesn't exist, no positions

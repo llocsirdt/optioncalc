@@ -7,6 +7,11 @@
  */
 
 class OffsetManager {
+  constructor() {
+    this.positions = [];
+  }
+
+  
   /**
    * Find offsetting positions (placeholder function)
    * Currently just outputs position information for analysis
@@ -104,6 +109,8 @@ class OffsetManager {
             cost: position.cost,
             offsetBudget: position.offsetBudget,
             covered: position.covered,
+            spreadWidth: position.spreadWidth,
+            maxValue: position.maxValue,
             legs: position.legs.map(leg => ({
               originalString: leg.originalString
             })),

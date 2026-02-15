@@ -140,8 +140,10 @@ class PositionManager {
       positions[key].forEach((positionArray, posIndex) => {
         result += '    {\n';
         
-        // Add covered, strategy, cost, and offsetBudget on one line
-        result += `      "covered": ${positionArray.covered}, "strategy": "${positionArray.strategy}", "cost": ${positionArray.cost}, "offsetBudget": ${positionArray.offsetBudget},\n`;
+        // Add covered, strategy, cost, offsetBudget, spreadWidth, and maxValue on one line
+        const spreadWidth = positionArray.spreadWidth !== undefined ? positionArray.spreadWidth : 0;
+        const maxValue = positionArray.maxValue !== undefined ? positionArray.maxValue : 0;
+        result += `      "covered": ${positionArray.covered}, "strategy": "${positionArray.strategy}", "cost": ${positionArray.cost}, "offsetBudget": ${positionArray.offsetBudget}, "spreadWidth": ${spreadWidth}, "maxValue": ${maxValue},\n`;
         result += '      "legs": [\n';
         
         // Add each leg on a single line
@@ -171,6 +173,26 @@ class PositionManager {
     
     result += '}';
     return result;
+  }
+
+  /**
+   * Calculate spread width for spread positions
+   * For single leg: 0 (no spread)
+   * For multi-leg spreads: absolute difference between strikes
+   */
+  calculateSpreadWidth(positionArray) {
+    const legs = Array.isArray(positionArray) ? positionArray : [positionArray];
+    
+    if (legs.length === 1) {
+      return 0; // Single leg has no spread
+    }
+    
+    // For spreads, calculate the difference between strikes
+    const strikes = legs.map(leg => leg.strike);
+    const maxStrike = Math.max(...strikes);
+    const minStrike = Math.min(...strikes);
+    
+    return Math.abs(maxStrike - minStrike);
   }
 
   /**
@@ -239,7 +261,9 @@ class PositionManager {
       covered: enriched.covered,
       strategy: enriched.strategy,
       cost: this.calculatePositionCost(positionArray),
-      offsetBudget: this.calculateOffsetBudget(positionArray)
+      offsetBudget: this.calculateOffsetBudget(positionArray),
+      spreadWidth: this.calculateSpreadWidth(positionArray),
+      maxValue: this.calculateMaximumValuePotential(positionArray)
     };
   }
 }
