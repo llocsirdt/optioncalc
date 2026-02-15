@@ -177,6 +177,53 @@ class OffsetManager {
   }
 
   /**
+   * Sort offsetting positions by custom priority:
+   * Position 1: Highest locked-in profit with score = 1
+   * Position 2: Highest profit potential
+   * Remaining: Sorted by proximity to balanced score of 0.5
+   */
+  sortOffsettingPositions(possibleOffsets) {
+    if (!possibleOffsets || possibleOffsets.length === 0) {
+      return [];
+    }
+
+    // Find the best locked-in profit position (with score = 1)
+    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
+      if (current.profitPotentialScore === 1.0) {
+        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
+      }
+      return best;
+    }, null);
+    
+    // Find the best profit potential position
+    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
+      return (!best || current.profitPotential > best.profitPotential) ? current : best;
+    }, null);
+    
+    // Sort all positions by proximity to 0.5
+    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
+      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
+      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
+      return aDistance - bDistance;
+    });
+    
+    // Remove the top two from their current positions
+    const filteredOffsets = sortedByProximity.filter(o => 
+      o !== bestLockedInProfit && o !== bestProfitPotential
+    );
+    
+    // Place them at the top
+    const finalSortedOffsets = [];
+    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
+    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
+      finalSortedOffsets.push(bestProfitPotential);
+    }
+    finalSortedOffsets.push(...filteredOffsets);
+    
+    return finalSortedOffsets;
+  }
+
+  /**
    * Aggregate results from multiple offsetting find methods
    */
   aggregateOffsettingResults(resultsArray) {
@@ -193,6 +240,9 @@ class OffsetManager {
         aggregated.possibleOffsets.push(...result.possibleOffsets);
       }
     });
+
+    // Sort all aggregated positions together
+    aggregated.possibleOffsets = this.sortOffsettingPositions(aggregated.possibleOffsets);
 
     return aggregated;
   }
@@ -418,45 +468,7 @@ class OffsetManager {
       }
     }
     
-    // Sort offsetting positions by custom priority:
-    // Position 1: Highest locked-in profit with score = 1
-    // Position 2: Highest profit potential
-    // Remaining: Sorted by proximity to balanced score of 0.5
-    
-    // Find the best locked-in profit position (with score = 1)
-    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
-      if (current.profitPotentialScore === 1.0) {
-        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
-      }
-      return best;
-    }, null);
-    
-    // Find the best profit potential position
-    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
-      return (!best || current.profitPotential > best.profitPotential) ? current : best;
-    }, null);
-    
-    // Sort all positions by proximity to 0.5
-    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
-      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
-      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
-      return aDistance - bDistance;
-    });
-    
-    // Remove the top two from their current positions
-    const filteredOffsets = sortedByProximity.filter(o => 
-      o !== bestLockedInProfit && o !== bestProfitPotential
-    );
-    
-    // Place them at the top
-    const finalSortedOffsets = [];
-    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
-    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
-      finalSortedOffsets.push(bestProfitPotential);
-    }
-    finalSortedOffsets.push(...filteredOffsets);
-    
-    return { strategy: 'bull_call_spread', possibleOffsets: finalSortedOffsets };
+    return { strategy: 'bull_call_spread', possibleOffsets };
   }
 
   findOffsettingBearCallSpread(position, chainData) {
@@ -692,36 +704,7 @@ class OffsetManager {
       }
     }
     
-    // Sort offsetting positions by custom priority
-    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
-      if (current.profitPotentialScore === 1.0) {
-        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
-      }
-      return best;
-    }, null);
-    
-    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
-      return (!best || current.profitPotential > best.profitPotential) ? current : best;
-    }, null);
-    
-    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
-      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
-      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
-      return aDistance - bDistance;
-    });
-    
-    const filteredOffsets = sortedByProximity.filter(o => 
-      o !== bestLockedInProfit && o !== bestProfitPotential
-    );
-    
-    const finalSortedOffsets = [];
-    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
-    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
-      finalSortedOffsets.push(bestProfitPotential);
-    }
-    finalSortedOffsets.push(...filteredOffsets);
-    
-    return { strategy: 'bull_put_spread', possibleOffsets: finalSortedOffsets };
+    return { strategy: 'bull_put_spread', possibleOffsets };
   }
 
   findOffsettingBearPutSpread(position, chainData) {
@@ -942,45 +925,7 @@ class OffsetManager {
       }
     }
     
-    // Sort offsetting positions by custom priority:
-    // Position 1: Highest locked-in profit with score = 1
-    // Position 2: Highest profit potential
-    // Remaining: Sorted by proximity to balanced score of 0.5
-    
-    // Find the best locked-in profit position (with score = 1)
-    const bestLockedInProfit = possibleOffsets.reduce((best, current) => {
-      if (current.profitPotentialScore === 1.0) {
-        return (!best || current.lockedInProfit > best.lockedInProfit) ? current : best;
-      }
-      return best;
-    }, null);
-    
-    // Find the best profit potential position
-    const bestProfitPotential = possibleOffsets.reduce((best, current) => {
-      return (!best || current.profitPotential > best.profitPotential) ? current : best;
-    }, null);
-    
-    // Sort all positions by proximity to 0.5
-    const sortedByProximity = [...possibleOffsets].sort((a, b) => {
-      const aDistance = Math.abs(a.profitPotentialScore - 0.5);
-      const bDistance = Math.abs(b.profitPotentialScore - 0.5);
-      return aDistance - bDistance;
-    });
-    
-    // Remove the top two from their current positions
-    const filteredOffsets = sortedByProximity.filter(o => 
-      o !== bestLockedInProfit && o !== bestProfitPotential
-    );
-    
-    // Place them at the top
-    const finalSortedOffsets = [];
-    if (bestLockedInProfit) finalSortedOffsets.push(bestLockedInProfit);
-    if (bestProfitPotential && bestProfitPotential !== bestLockedInProfit) {
-      finalSortedOffsets.push(bestProfitPotential);
-    }
-    finalSortedOffsets.push(...filteredOffsets);
-    
-    return { strategy: 'bear_put_spread', possibleOffsets: finalSortedOffsets };
+    return { strategy: 'bear_put_spread', possibleOffsets };
   }
 }
 
