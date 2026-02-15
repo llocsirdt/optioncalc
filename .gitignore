@@ -20,6 +20,7 @@ test-apis.js
 server/src/persistence/chain-cache/
 server/src/persistence/server-state.json
 server/src/persistence/server-state.backup.json
+server/src/persistence/positions.json
 
 # Node.js dependencies
 node_modules/

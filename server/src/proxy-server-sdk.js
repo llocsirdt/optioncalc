@@ -830,6 +830,75 @@ app.post('/api/v1/admin/state/reset', async (req, res) => {
   }
 });
 
+// Position management endpoints
+app.post('/api/v1/positions', async (req, res) => {
+  try {
+    const { symbol, expiration, position } = req.body;
+    
+    // Validate required parameters
+    if (!symbol || !expiration || !position) {
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        required: ['symbol', 'expiration', 'position']
+      });
+    }
+    
+    // Store the position
+    const positionObj = await persistence.storePosition(symbol, expiration, position);
+    
+    res.json({
+      message: 'Position stored successfully',
+      position: positionObj,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to store position',
+      message: error.message
+    });
+  }
+});
+
+app.get('/api/v1/positions/:symbol/:expiration', async (req, res) => {
+  try {
+    const { symbol, expiration } = req.params;
+    
+    const positions = await persistence.getPositions(symbol, expiration);
+    
+    res.json({
+      symbol,
+      expiration,
+      positions,
+      count: positions.length,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to retrieve positions',
+      message: error.message
+    });
+  }
+});
+
+app.get('/api/v1/positions', async (req, res) => {
+  try {
+    const positions = await persistence.getAllPositions();
+    
+    res.json({
+      positions,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to retrieve all positions',
+      message: error.message
+    });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {
@@ -993,11 +1062,14 @@ async function startServer() {
       console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/health`);
       console.log(`🗄️ State Management: http://localhost:${PORT}/api/v1/admin/state`);
-      console.log(`� Chains Cache: http://localhost:${PORT}/api/v1/admin/chains`);
-      console.log(`�📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
+      console.log(` Chains Cache: http://localhost:${PORT}/api/v1/admin/chains`);
+      console.log(`📈 Market Data API: http://localhost:${PORT}/api/v1/marketdata/quotes?symbols=SPY`);
       console.log(`📅 Option Expirations: http://localhost:${PORT}/api/v1/marketdata/expirationchain?symbol=SPY`);
       console.log(`💼 Options Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19`);
       console.log(`🎯 Enhanced Chain: http://localhost:${PORT}/api/v1/marketdata/chains?symbol=SPY&expirationDate=2024-01-19&strike_count=10&contract_type=CALL`);
+      console.log(`📍 Position Management: POST http://localhost:${PORT}/api/v1/positions`);
+      console.log(`📍 View Positions: GET http://localhost:${PORT}/api/v1/positions/SPY/2024-01-19`);
+      console.log(`📍 All Positions: GET http://localhost:${PORT}/api/v1/positions`);
       
       if (isDevMode) {
         console.log(``);

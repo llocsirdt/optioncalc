@@ -8,13 +8,17 @@
 
 const fs = require('fs').promises;
 const path = require('path');
+const PositionManager = require('./position-manager');
 
 const PERSISTENCE_FILE = path.join(__dirname, 'server-state.json');
 const BACKUP_FILE = path.join(__dirname, 'server-state.backup.json');
 const CHAIN_CACHE_DIR = path.join(__dirname, 'chain-cache');
+const POSITIONS_FILE = path.join(__dirname, 'positions.json');
 
 class PersistenceManager {
   constructor() {
+    this.positionManager = new PositionManager();
+    
     this.state = {
       // Account data
       accounts: {
@@ -57,6 +61,13 @@ class PersistenceManager {
         cachedKeys: [], // Array of "SYMBOL_EXPIRATION" keys
         lastUpdated: {}, // Key: "SYMBOL_EXPIRATION", Value: timestamp
         cacheCount: 0
+      },
+      
+      // Positions storage
+      positions: {
+        // Key: "SYMBOL_EXPIRATION", Value: Array of position objects
+        lastUpdated: null,
+        positionCount: 0
       },
       
       // Metadata
@@ -559,6 +570,100 @@ class PersistenceManager {
     return JSON.stringify(this.state, null, 2);
   }
 
+
+  /**
+   * Store position in positions.json file
+   */
+  async storePosition(symbol, expiration, positionString) {
+    const key = `${symbol}_${expiration}`;
+    
+    try {
+      // Parse the position string
+      const positionObj = this.positionManager.parsePositionString(positionString);
+      
+      // Add metadata
+      positionObj.timestamp = new Date().toISOString();
+      positionObj.symbol = symbol;
+      positionObj.expiration = expiration;
+      
+      // Load existing positions
+      let positions = {};
+      try {
+        const data = await fs.readFile(POSITIONS_FILE, 'utf8');
+        positions = JSON.parse(data);
+      } catch (error) {
+        // File doesn't exist, start fresh
+        positions = {};
+      }
+      
+      // Initialize array for this symbol/expiration if it doesn't exist
+      if (!positions[key]) {
+        positions[key] = [];
+      }
+      
+      // Add the new position in API response format
+      const positionForStorage = this.positionManager.toResponseFormat(positionObj);
+      positions[key].push(positionForStorage);
+      
+      // Update metadata in main state
+      this.state.positions.lastUpdated = new Date().toISOString();
+      this.state.positions.positionCount = Object.keys(positions).reduce((count, key) => count + positions[key].length, 0);
+      
+      // Save positions to file with readable formatting
+      await fs.writeFile(POSITIONS_FILE, this.positionManager.formatPositionsJson(positions), 'utf8');
+      
+      console.log(`💾 Stored position: ${positionString} for ${symbol} ${expiration}`);
+      
+      // Auto-save main state
+      this.saveState().catch(error => {
+        console.error('Failed to save state after storing position:', error.message);
+      });
+      
+      return positionObj;
+      
+    } catch (error) {
+      console.error(`❌ Failed to store position:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get positions for symbol and expiration
+   */
+  async getPositions(symbol, expiration) {
+    const key = `${symbol}_${expiration}`;
+    
+    try {
+      const data = await fs.readFile(POSITIONS_FILE, 'utf8');
+      const positions = JSON.parse(data);
+      
+      return positions[key] || [];
+      
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return []; // File doesn't exist, no positions
+      }
+      console.error(`❌ Failed to read positions for ${key}:`, error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get all positions
+   */
+  async getAllPositions() {
+    try {
+      const data = await fs.readFile(POSITIONS_FILE, 'utf8');
+      return JSON.parse(data);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return {}; // File doesn't exist, no positions
+      }
+      console.error('❌ Failed to read all positions:', error.message);
+      return {};
+    }
+  }
+
   /**
    * Reset state (for testing/debugging)
    */
@@ -570,6 +675,7 @@ class PersistenceManager {
       config: { port: 3001, environment: 'development', version: '1.0.0' },
       errors: { recent: [], errorCount: 0, lastError: null },
       chains: { cachedKeys: [], lastUpdated: {}, cacheCount: 0 },
+      positions: { lastUpdated: null, positionCount: 0 },
       metadata: { createdAt: new Date().toISOString(), lastSaved: null, restartCount: 0, totalUptime: 0 }
     };
     
@@ -588,6 +694,14 @@ class PersistenceManager {
         console.log('🗑️  Cleared chain cache files');
       } catch (error) {
         // Directory might not exist, that's okay
+      }
+      
+      // Clean up positions file
+      try {
+        await fs.unlink(POSITIONS_FILE);
+        console.log('🗑️  Cleared positions file');
+      } catch (error) {
+        // File might not exist, that's okay
       }
       
       console.log('🗑️  Reset persistence state');
