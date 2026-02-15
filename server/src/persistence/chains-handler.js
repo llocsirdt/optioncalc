@@ -64,9 +64,9 @@ async function handleChainsRequest(path, query, timestamp, persistenceManager, m
     optionType: params.get('optionType') || params.get('option_type') || undefined,
     strike: parseFloat(params.get('strike')) || undefined,
     interval: parseInt(params.get('interval')) || undefined,
-    // Include expirationDate in the options object
-    expirationDate: expirationDate
-    // No fromDate/toDate - just pass expiration date
+    // Use fromDate/toDate to filter to a specific expiration (expirationDate param doesn't work)
+    fromDate: expirationDate,
+    toDate: expirationDate
   };
   
   // Remove undefined parameters (but keep strikeCount)
@@ -77,21 +77,7 @@ async function handleChainsRequest(path, query, timestamp, persistenceManager, m
   });
   
   console.log(`[${timestamp}] Getting options chain for: ${apiSymbol}, exp: ${expirationDate}`);
-  console.log(`[${timestamp}] Optional params:`, optionalParams);
-  
-  // Build the chain options object for schwab-client-js SDK
-  const chainOptions = {
-    ...optionalParams
-    // Don't include expirationDate - use fromDate/toDate instead
-  };
-  
-  console.log(`[${timestamp}] Final chain options:`, chainOptions);
-  
-  // Log the exact API request being made
-  console.log(`[${timestamp}] 🔗 API Request: marketClient.chains("${apiSymbol}", ${JSON.stringify(optionalParams)})`);
-  
-  console.log(`[${timestamp}] Getting options chain for: ${apiSymbol}`);
-  console.log(`[${timestamp}] Options object:`, optionalParams);
+  console.log(`[${timestamp}] API params:`, optionalParams);
   
   // Fetch fresh data from Schwab API
   const result = await marketClient.chains(apiSymbol, optionalParams);

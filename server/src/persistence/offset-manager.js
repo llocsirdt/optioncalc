@@ -27,7 +27,7 @@ class OffsetManager {
       const cacheKey = `${cacheSymbol}_${expiration}`;
       
       // Get or fetch fresh option chain data
-      const chainData = await this.getOrFetchChainData(cacheSymbol, expiration, persistenceManager);
+      const chainData = await this.getOrFetchChainData(symbol, expiration, persistenceManager);
       
       results[symbolExpiration] = {
         positions: positions[symbolExpiration].map(position => {
@@ -222,8 +222,99 @@ class OffsetManager {
   }
 
   findOffsettingBullCallSpread(position, chainData) {
-    // TODO: Implement bull call spread offsetting logic using chainData
-    return { strategy: 'bull_call_spread', possibleOffsets: [] };
+    const possibleOffsets = [];
+    
+    // Get the short leg strike of the bear put spread (the lower strike)
+    const shortPutStrike = Math.min(...position.legs.map(leg => leg.strike));
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const offsetBudget = position.offsetBudget;
+        
+    // Get call options from chain data - handle nested expiration structure
+    const callOptions = chainData.call || null;
+    if (!callOptions || Object.keys(callOptions).length === 0) {
+      return { strategy: 'bull_call_spread', possibleOffsets: [] };
+    }
+    
+    // Find all available expirations and their strikes
+    let allCallStrikes = new Set();
+    const expirationStrikes = {};
+    
+    for (const [expiration, strikes] of Object.entries(callOptions)) {
+      const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
+      strikeList.forEach(strike => allCallStrikes.add(strike));
+      expirationStrikes[expiration] = strikes;
+    }
+    
+    const callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b);
+    
+    // Look for bull call spreads with same spread width
+    for (const longCallStrike of callStrikes) {
+      // Long call strike should be at or lower than the short put strike
+      if (longCallStrike > shortPutStrike) {
+        continue; // Skip if long call is higher than short put
+      }
+      
+      const shortCallStrike = longCallStrike + spreadWidth;
+      
+      // Check if short call strike exists in any expiration
+      let longCallData = null;
+      let shortCallData = null;
+      
+      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+        const longStrikeKey = longCallStrike.toString() + '.0';
+        const shortStrikeKey = shortCallStrike.toString() + '.0';
+        
+        if (strikes[longStrikeKey] && strikes[shortStrikeKey]) {
+          longCallData = strikes[longStrikeKey][0];
+          shortCallData = strikes[shortStrikeKey][0];
+          break;
+        }
+      }
+      
+      if (!longCallData || !shortCallData) {
+        continue;
+      }
+      
+      // Calculate cost using bid-ask average
+      const longCallCost = (longCallData.bid + longCallData.ask) / 2;
+      const shortCallCost = (shortCallData.bid + shortCallData.ask) / 2;
+      const spreadCost = (longCallCost - shortCallCost) * 100; // Multiply by 100 for contract multiplier
+      
+      // Skip if spread cost exceeds offset budget
+      if (spreadCost > offsetBudget) {
+        continue;
+      }
+      
+      // Add to possible offsets
+      const offsettingSpread = {
+        strategy: 'bull_call_spread',
+        legs: [
+          {
+            action: 'offset',
+            quantity: 1,
+            type: 'C',
+            strike: longCallStrike,
+            cost: longCallCost * 100, // Store actual dollar cost
+            originalString: `1c${longCallStrike}@${longCallCost * 100}`
+          },
+          {
+            action: 'offset',
+            quantity: -1,
+            type: 'C',
+            strike: shortCallStrike,
+            cost: -shortCallCost * 100, // Store actual dollar cost
+            originalString: `-1c${shortCallStrike}@${-shortCallCost * 100}`
+          }
+        ],
+        cost: spreadCost,
+        spreadWidth: spreadWidth,
+        maxValue: spreadWidth * 100,
+        description: `Bull Call Spread: Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}, Short ${shortCallStrike}C @ ${shortCallCost.toFixed(2)}`
+      };
+      
+      possibleOffsets.push(offsettingSpread);
+    }
+    return { strategy: 'bull_call_spread', possibleOffsets: possibleOffsets };
   }
 
   findOffsettingBearCallSpread(position, chainData) {
