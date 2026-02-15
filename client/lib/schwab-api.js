@@ -11,6 +11,133 @@ let currentSymbol = '';
 let liveDataEnabled = false;
 let liveDataIntervalDuration = 3000;
 
+// Fetch offsetting analysis for symbol and expiration
+async function fetchOffsettingAnalysis(symbol, expiration) {
+  if (!symbol || !expiration) {
+    console.log('⚠️ Cannot fetch offsetting analysis - missing symbol or expiration');
+    return null;
+  }
+  
+  try {
+    console.log(`🔍 Fetching offsetting analysis for ${symbol} ${expiration}...`);
+    const response = await fetch(`${PROXY_URL}/api/v1/positions/offsetting?symbol=${symbol}&expiration=${expiration}`);
+    
+    if (!response.ok) {
+      console.error(`❌ Failed to fetch offsetting analysis: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    const key = `${symbol}_${expiration}`;
+    
+    if (data.offsettingAnalysis && data.offsettingAnalysis[key]) {
+      const analysis = data.offsettingAnalysis[key];
+      
+      console.log(`✅ Offsetting Analysis for ${symbol} ${expiration}:`);
+      console.log(`   Positions found: ${analysis.positions.length}`);
+      
+      // Generate HTML for UI
+      let offsettingHtml = '';
+      
+      analysis.positions.forEach((position, posIdx) => {
+        const offsets = position.offsettingAnalysis?.possibleOffsets || [];
+        
+        if (offsets.length > 0) {
+          offsettingHtml += '<div class="offsetting-trades server-based">';
+          offsettingHtml += `<h4>🎯 Risk Offsetting Opportunities (Server) - ${position.strategy}</h4>`;
+          offsettingHtml += `<div class="position-info">Cost: $${position.cost}, Max: $${position.maxValue}, Width: ${position.spreadWidth}</div>`;
+          
+          // Show top 10 offsetting positions
+          offsets.slice(0, 10).forEach((offset, index) => {
+            const cost = Math.abs(offset.cost);
+            const costLabel = offset.cost < 0 ? 'Credit' : 'Cost';
+            const profitClass = offset.profitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+            
+            // Check if locked profit is less than 10% of the cost
+            const tenPercentOfCost = cost * 0.1;
+            const lowLockedClass = offset.lockedInProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+            
+            // Check if cost is less than locked in value for green background
+            const costLessThanLockedClass = cost < offset.lockedInProfit ? 'cost-less-than-locked' : '';
+            const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+            
+            // Format strategy name for display
+            const strategyDisplay = offset.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            
+            // Create description from legs
+            let description = `${strategyDisplay}`;
+            if (offset.legs && offset.legs.length > 0) {
+              const strikes = offset.legs.map(leg => leg.strike).join('/');
+              description += ` ${strikes}`;
+            }
+            
+            // Generate action string for clicking strikes in the table
+            let action = '';
+            if (offset.legs && offset.legs.length > 0) {
+              action = offset.legs.map(leg => {
+                const type = leg.type === 'C' ? 'Call' : 'Put';
+                const side = leg.quantity > 0 ? 'Buy' : 'Sell';
+                return `${side} ${Math.abs(leg.quantity)} ${type} ${leg.strike}`;
+              }).join(', ');
+            }
+            
+            offsettingHtml += `
+              <div class="offset-trade server-offset ${offset.strategy} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
+                   data-description="${description.replace(/"/g, '&quot;')}"
+                   data-action="${action.replace(/"/g, '&quot;')}"
+                   data-index="${index}"
+                   title="Click to select these options in the table${costLessThanLockedTooltip}">
+                <div class="trade-description">
+                  <strong>${description}</strong>
+                  <div class="trade-action">${action}</div>
+                  <div class="trade-cost">${costLabel}: $${cost.toFixed(2)}</div>
+                </div>
+                <div class="trade-metrics">
+                  <div class="trade-potential">Potential: $${offset.profitPotential.toFixed(2)}</div>
+                  <div class="trade-locked-profit">Locked: $${offset.lockedInProfit.toFixed(2)}</div>
+                  <div class="trade-score">Score: ${offset.profitPotentialScore.toFixed(4)}</div>
+                </div>
+              </div>
+            `;
+          });
+          
+          offsettingHtml += '</div>';
+        }
+        
+        // Console logging
+        console.log(`\n   Position ${posIdx + 1}: ${position.strategy}`);
+        console.log(`     Cost: $${position.cost}, Max Value: $${position.maxValue}`);
+        console.log(`     Spread Width: ${position.spreadWidth}`);
+        console.log(`     Total offsetting positions: ${offsets.length}`);
+        
+        // Count by strategy
+        const strategies = {};
+        offsets.forEach(o => {
+          strategies[o.strategy] = (strategies[o.strategy] || 0) + 1;
+        });
+        
+        if (Object.keys(strategies).length > 0) {
+          console.log(`     Breakdown by strategy:`);
+          Object.entries(strategies).sort().forEach(([strategy, count]) => {
+            console.log(`       ${strategy}: ${count}`);
+          });
+        }
+      });
+      
+      return {
+        analysis: analysis,
+        html: offsettingHtml
+      };
+    } else {
+      console.log(`⚠️ No offsetting analysis found for ${symbol} ${expiration}`);
+      return null;
+    }
+  } catch (error) {
+    console.error('❌ Error fetching offsetting analysis:', error);
+    return null;
+  }
+}
+
 // Restore last used symbol on page load
 function restoreLastSymbol() {
   const lastSymbol = localStorage.getItem('lastSymbol');

@@ -399,6 +399,8 @@ pre {
   background: #f8f9fa;
   border-radius: 8px;
   border: 1px solid #e9ecef;
+  overflow-x: scroll;
+  height: 60vh;
 }
 
 .offsetting-trades h4 {
@@ -434,6 +436,68 @@ pre {
 
 .offset-trade.spread {
   border-left: 4px solid #2196F3;
+}
+
+/* Server-based offsetting trades - darker, bolder borders */
+.offset-trade.server-offset {
+  border: 3px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.offset-trade.server-offset.bull_call_spread {
+  border-left: 6px solid #1976D2;
+}
+
+.offset-trade.server-offset.bear_call_spread {
+  border-left: 6px solid #D32F2F;
+}
+
+.offset-trade.server-offset.bull_put_spread {
+  border-left: 6px solid #388E3C;
+}
+
+.offset-trade.server-offset.bear_put_spread {
+  border-left: 6px solid #F57C00;
+}
+
+.offset-trade.server-offset.cost-less-than-locked {
+  background-color: #e8f5e8 !important;
+  border-left-width: 6px;
+  border-left-color: #2E7D32;
+}
+
+.offsetting-trades.server-based h4 {
+  color: #1565C0;
+  border-bottom: 2px solid #1565C0;
+  padding-bottom: 5px;
+}
+
+.offsetting-trades.server-based .position-info {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 10px;
+  padding: 5px;
+  background-color: #f0f0f0;
+  border-radius: 3px;
+}
+
+.offsetting-trades.client-based {
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 2px dashed #ccc;
+}
+
+.offsetting-trades.client-based h4 {
+  color: #666;
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 5px;
+}
+
+.trade-score {
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
 }
 
 /* Clickable offsetting trade elements */

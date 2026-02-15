@@ -16,7 +16,39 @@ function clickOffsettingTrade(tradeDescription, tradeAction) {
   console.log('🎯 Clicking offsetting trade:', tradeDescription);
   console.log('📋 Trade action:', tradeAction);
   
-  // Parse the trade description to extract strikes and types
+  const clickedPositions = [];
+  
+  // First, try to parse the action string (server-side format)
+  // Example: "Buy 1 Call 6850, Sell 1 Call 6950"
+  // Example: "Buy 1 Put 6950, Sell 1 Put 6850"
+  if (tradeAction && tradeAction.includes(',')) {
+    console.log('🔍 Parsing action string (server-side format)');
+    const actions = tradeAction.split(',').map(a => a.trim());
+    
+    for (const action of actions) {
+      // Match: "Buy/Sell <qty> Call/Put <strike>"
+      const actionMatch = action.match(/(Buy|Sell)\s+(\d+)\s+(Call|Put)\s+([\d.]+)/i);
+      if (actionMatch) {
+        const [, buySell, qty, optionType, strike] = actionMatch;
+        const isBuy = buySell.toLowerCase() === 'buy';
+        const type = optionType.toLowerCase() === 'call' ? 'c' : 'p';
+        const bidAsk = isBuy ? 'ask' : 'bid';
+        
+        console.log(`  ${buySell} ${qty} ${optionType} ${strike} -> clicking ${type}${strike} ${bidAsk}`);
+        
+        const result = findAndClickOptionCell(type, parseFloat(strike), bidAsk);
+        if (result) clickedPositions.push(result);
+      }
+    }
+    
+    if (clickedPositions.length > 0) {
+      updateSelectedPositionsDisplay(currentOptionsData);
+      console.log(`✅ Clicked ${clickedPositions.length} positions:`, clickedPositions);
+      return true;
+    }
+  }
+  
+  // Fall back to parsing the trade description (client-side format)
   // Examples:
   // "Bull 1 130/135 call spread"
   // "Bear 1 120/115 put spread" 
@@ -27,8 +59,6 @@ function clickOffsettingTrade(tradeDescription, tradeAction) {
   const putSpreadMatch = tradeDescription.match(/Bear (\d+) (\d+)\/(\d+) put spread/i);
   const singleCallMatch = tradeDescription.match(/Long (\d+) (\d+) calls?/i);
   const singlePutMatch = tradeDescription.match(/Long (\d+) (\d+) puts?/i);
-  
-  const clickedPositions = [];
   
   if (callSpreadMatch) {
     // Bull call spread: BUY lower strike CALL, SELL higher strike CALL
@@ -1599,50 +1629,200 @@ function updateOptionsChain(options) {
         console.log('📊 fullOptionArray length:', fullOptionArray.length);
         console.log('📊 options length:', options.length);
         
-        const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
-        console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
-        console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
+        // Fetch server-side offsetting analysis
+        const symbol = document.getElementById('symbol-input')?.value.trim();
+        const expiration = getSelectedExpiration ? getSelectedExpiration() : null;
         
-        if (offsettingTrades && offsettingTrades.length > 0) {
-          offsettingTradesHtml += '<div class="offsetting-trades">';
-          offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
-          
-          offsettingTrades.forEach((trade, index) => {
-            const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+        if (symbol && expiration && typeof fetchOffsettingAnalysis === 'function') {
+          console.log('🔍 Fetching server-side offsetting analysis...');
+          fetchOffsettingAnalysis(symbol, expiration).then(serverResult => {
+            // Get client-side offsetting trades
+            const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
+            console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
+            console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
             
-            // Check if locked profit is less than 10% of the cost
-            const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
-            const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+            let combinedHtml = '';
             
-            if (lowLockedClass) {
-              console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);
+            // Add server-side results first (at the top)
+            if (serverResult && serverResult.html) {
+              combinedHtml += serverResult.html;
             }
             
-            // Check if cost is less than locked in value for green background
-            const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
-            const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+            // Add client-side results below
+            if (offsettingTrades && offsettingTrades.length > 0) {
+              combinedHtml += '<div class="offsetting-trades client-based">';
+              combinedHtml += '<h4>🎯 Risk Offsetting Opportunities (Client)</h4>';
+              
+              offsettingTrades.forEach((trade, index) => {
+                const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+                
+                // Check if locked profit is less than 10% of the cost
+                const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
+                const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+                
+                if (lowLockedClass) {
+                  console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);
+                }
+                
+                // Check if cost is less than locked in value for green background
+                const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
+                const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+                
+                combinedHtml += `
+                  <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
+                       data-description="${trade.description.replace(/"/g, '&quot;')}" 
+                       data-action="${trade.action.replace(/"/g, '&quot;')}"
+                       data-index="${index}"
+                       title="Click to select these options in the table${costLessThanLockedTooltip}">
+                    <div class="trade-description">
+                      <strong>${trade.description}</strong>
+                      <div class="trade-action">${trade.action}</div>
+                      <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
+                    </div>
+                    <div class="trade-metrics">
+                      <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
+                      <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
+                      <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
+                    </div>
+                  </div>
+                `;
+              });
+              
+              combinedHtml += '</div>';
+            }
             
-            offsettingTradesHtml += `
-              <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
-                   data-description="${trade.description.replace(/"/g, '&quot;')}" 
-                   data-action="${trade.action.replace(/"/g, '&quot;')}"
-                   data-index="${index}"
-                   title="Click to select these options in the table${costLessThanLockedTooltip}">
-                <div class="trade-description">
-                  <strong>${trade.description}</strong>
-                  <div class="trade-action">${trade.action}</div>
-                  <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
-                </div>
-                <div class="trade-metrics">
-                  <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
-                  <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
-                  <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
-                </div>
-              </div>
-            `;
+            // Update the UI with combined results
+            const col4Element = document.getElementById('container-col4');
+            if (col4Element && combinedHtml) {
+              col4Element.innerHTML = combinedHtml;
+              console.log('✅ Combined offsetting trades (server + client) updated in container-col4');
+              
+              // Set up click handlers for client-side offsetting trade elements
+              const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
+              offsettingTradeElements.forEach(element => {
+                element.addEventListener('click', function(event) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  
+                  const description = this.dataset.description;
+                  const action = this.dataset.action;
+                  const index = this.dataset.index;
+                  
+                  console.log(`🎯 Clicked offsetting trade ${index}:`, description);
+                  
+                  // Visual feedback
+                  this.style.backgroundColor = '#e8f5e8';
+                  setTimeout(() => {
+                    this.style.backgroundColor = '';
+                  }, 300);
+                  
+                  // Click the corresponding options in the table
+                  const success = clickOffsettingTrade(description, action);
+                  
+                  if (success) {
+                    console.log('✅ Successfully selected offsetting trade options');
+                  } else {
+                    console.warn('❌ Failed to select offsetting trade options');
+                  }
+                });
+                
+                // Add hover effect
+                element.addEventListener('mouseenter', function() {
+                  this.style.cursor = 'pointer';
+                  this.style.transform = 'scale(1.02)';
+                });
+                
+                element.addEventListener('mouseleave', function() {
+                  this.style.transform = 'scale(1)';
+                });
+              });
+            }
+          }).catch(error => {
+            console.error('❌ Error fetching server-side offsetting analysis:', error);
+            
+            // Fall back to client-side only
+            const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
+            if (offsettingTrades && offsettingTrades.length > 0) {
+              offsettingTradesHtml += '<div class="offsetting-trades">';
+              offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
+              
+              offsettingTrades.forEach((trade, index) => {
+                const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+                const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
+                const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+                const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
+                const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+                
+                offsettingTradesHtml += `
+                  <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
+                       data-description="${trade.description.replace(/"/g, '&quot;')}" 
+                       data-action="${trade.action.replace(/"/g, '&quot;')}"
+                       data-index="${index}"
+                       title="Click to select these options in the table${costLessThanLockedTooltip}">
+                    <div class="trade-description">
+                      <strong>${trade.description}</strong>
+                      <div class="trade-action">${trade.action}</div>
+                      <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
+                    </div>
+                    <div class="trade-metrics">
+                      <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
+                      <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
+                      <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
+                    </div>
+                  </div>
+                `;
+              });
+              
+              offsettingTradesHtml += '</div>';
+            }
           });
+        } else {
+          // No symbol/expiration, just show client-side
+          const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
+          console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
+          console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
           
-          offsettingTradesHtml += '</div>';
+          if (offsettingTrades && offsettingTrades.length > 0) {
+            offsettingTradesHtml += '<div class="offsetting-trades">';
+            offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
+            
+            offsettingTrades.forEach((trade, index) => {
+              const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+              
+              // Check if locked profit is less than 10% of the cost
+              const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
+              const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+              
+              if (lowLockedClass) {
+                console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);
+              }
+              
+              // Check if cost is less than locked in value for green background
+              const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
+              const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+              
+              offsettingTradesHtml += `
+                <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
+                     data-description="${trade.description.replace(/"/g, '&quot;')}" 
+                     data-action="${trade.action.replace(/"/g, '&quot;')}"
+                     data-index="${index}"
+                     title="Click to select these options in the table${costLessThanLockedTooltip}">
+                  <div class="trade-description">
+                    <strong>${trade.description}</strong>
+                    <div class="trade-action">${trade.action}</div>
+                    <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
+                  </div>
+                  <div class="trade-metrics">
+                    <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
+                    <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
+                    <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
+                  </div>
+                </div>
+              `;
+            });
+            
+            offsettingTradesHtml += '</div>';
+          }
         }
       }
       
@@ -1672,60 +1852,53 @@ function updateOptionsChain(options) {
         }, { passive: false });
       });
       
-      // Insert offsetting trades into container-col4
+      // Handle fallback for client-side only (when no server data available)
       const col4Element = document.getElementById('container-col4');
-      if (col4Element) {
-        if (offsettingTradesHtml) {
-          col4Element.innerHTML = offsettingTradesHtml;
-          console.log('✅ Offsetting trades updated in container-col4');
-          
-          // Set up click handlers for offsetting trade elements in container-col4
-          const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
-          offsettingTradeElements.forEach(element => {
-            element.addEventListener('click', function(event) {
-              event.preventDefault();
-              event.stopPropagation();
-              
-              const description = this.dataset.description;
-              const action = this.dataset.action;
-              const index = this.dataset.index;
-              
-              console.log(`🎯 Clicked offsetting trade ${index}:`, description);
-              
-              // Visual feedback
-              this.style.backgroundColor = '#e8f5e8';
-              setTimeout(() => {
-                this.style.backgroundColor = '';
-              }, 300);
-              
-              // Click the corresponding options in the table
-              const success = clickOffsettingTrade(description, action);
-              
-              if (success) {
-                console.log('✅ Successfully selected offsetting trade options');
-              } else {
-                console.warn('❌ Failed to select offsetting trade options');
-              }
-            });
+      if (col4Element && offsettingTradesHtml) {
+        col4Element.innerHTML = offsettingTradesHtml;
+        console.log('✅ Offsetting trades (client-side fallback) updated in container-col4');
+        
+        // Set up click handlers for offsetting trade elements in container-col4
+        const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
+        offsettingTradeElements.forEach(element => {
+          element.addEventListener('click', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
             
-            // Add hover effect
-            element.addEventListener('mouseenter', function() {
-              this.style.cursor = 'pointer';
-              this.style.transform = 'scale(1.02)';
-              this.style.transition = 'all 0.2s ease';
-            });
+            const description = this.dataset.description;
+            const action = this.dataset.action;
+            const index = this.dataset.index;
             
-            element.addEventListener('mouseleave', function() {
-              this.style.cursor = 'default';
-              this.style.transform = 'scale(1)';
-            });
+            console.log(`🎯 Clicked offsetting trade ${index}:`, description);
+            
+            // Visual feedback
+            this.style.backgroundColor = '#e8f5e8';
+            setTimeout(() => {
+              this.style.backgroundColor = '';
+            }, 300);
+            
+            // Click the corresponding options in the table
+            const success = clickOffsettingTrade(description, action);
+            
+            if (success) {
+              console.log('✅ Successfully selected offsetting trade options');
+            } else {
+              console.warn('❌ Failed to select offsetting trade options');
+            }
           });
-        } else {
-          col4Element.innerHTML = '<p>No offsetting opportunities available</p>';
-          console.log('📝 No offsetting trades to display');
-        }
-      } else {
-        console.warn('⚠️ container-col4 element not found');
+          
+          // Add hover effect
+          element.addEventListener('mouseenter', function() {
+            this.style.cursor = 'pointer';
+            this.style.transform = 'scale(1.02)';
+            this.style.transition = 'all 0.2s ease';
+          });
+          
+          element.addEventListener('mouseleave', function() {
+            this.style.cursor = 'default';
+            this.style.transform = 'scale(1)';
+          });
+        });
       }
       
       // Restore selections after table is rendered
