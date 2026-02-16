@@ -111,9 +111,7 @@ class OffsetManager {
             covered: position.covered,
             spreadWidth: position.spreadWidth,
             maxValue: position.maxValue,
-            legs: position.legs.map(leg => ({
-              originalString: leg.originalString
-            })),
+            legs: position.legs, // Return full leg data with all fields
             offsettingAnalysis
           };
         })
@@ -347,12 +345,43 @@ class OffsetManager {
       
       // Calculate locked-in profit and profit potential
       const offsetMaxValue = spreadWidth * 100;
-      const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-      const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-      const totalCost = position.cost + spreadCost;
-      const lockedInProfit = minMaxValue - totalCost;
-      const profitPotential = maxMaxValue - totalCost;
-      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+      // Determine position type
+      const isBearPutSpread = position.strategy === 'bear_put_spread';
+      const isBearCallSpread = position.strategy === 'bear_call_spread';
+      
+      let lockedInProfit, profitPotential, profitPotentialScore;
+      
+      if (isBearPutSpread) {
+        // Bear put spread (debit): long higher put, short lower put
+        // Both are debit spreads - use standard calculation
+        const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+        const totalCost = position.cost + spreadCost;
+        lockedInProfit = minMaxValue - totalCost;
+        profitPotential = maxMaxValue - totalCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        
+      } else if (isBearCallSpread) {
+        // Bear call spread (credit): short lower call, long higher call
+        // Offsetting credit spread with debit spread - use net cost approach
+        const netCost = spreadCost + position.cost; // position.cost is negative for credit spreads
+        const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
+        
+        lockedInProfit = minMaxValue - netCost;
+        profitPotential = maxMaxValue - netCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        
+      } else {
+        // Default calculation for other position types
+        const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
+        const totalCost = position.cost + spreadCost;
+        lockedInProfit = minMaxValue - totalCost;
+        profitPotential = maxMaxValue - totalCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      }
       
       // Add to possible offsets
       const offsettingSpread = {
@@ -426,12 +455,37 @@ class OffsetManager {
         // Calculate locked-in profit and profit potential for wider spread
         const widerSpreadWidth = shortCallStrike - widerLongCallStrike;
         const widerOffsetMaxValue = widerSpreadWidth * 100;
-        const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
-        const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
-        const widerTotalCost = position.cost + widerSpreadCost;
-        const widerLockedInProfit = widerMinMaxValue - widerTotalCost;
-        const widerProfitPotential = widerMaxMaxValue - widerTotalCost;
-        const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+        
+        let widerLockedInProfit, widerProfitPotential, widerProfitPotentialScore;
+        
+        if (isBearPutSpread) {
+          // Bear put spread (debit): both are debit spreads
+          const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+          const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
+          const widerTotalCost = position.cost + widerSpreadCost;
+          widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+          widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+          widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+        } else if (isBearCallSpread) {
+          // Bear call spread (credit): offsetting credit with debit - use net cost approach
+          const widerNetCost = widerSpreadCost + position.cost; // position.cost is negative
+          const widerMinMaxValue = Math.min(position.maxValue || 0, widerOffsetMaxValue);
+          const widerMaxMaxValue = Math.max(position.maxValue || 0, widerOffsetMaxValue);
+          
+          widerLockedInProfit = widerMinMaxValue - widerNetCost;
+          widerProfitPotential = widerMaxMaxValue - widerNetCost;
+          widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+        } else {
+          // Default calculation
+          const widerMinMaxValue = Math.min(position.maxValue || 0, widerOffsetMaxValue);
+          const widerMaxMaxValue = Math.max(position.maxValue || 0, widerOffsetMaxValue);
+          const widerTotalCost = position.cost + widerSpreadCost;
+          widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+          widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+          widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+        }
         
         // Add wider spread to possible offsets
         const widerOffsetSpread = {
@@ -552,14 +606,42 @@ class OffsetManager {
       // Calculate locked-in profit and profit potential
       // Bear call spread maxValue is the max loss = -(spread width × 100)
       const offsetMaxValue = -(spreadWidth * 100);
+      const bearCallMaxLoss = offsetMaxValue; // Negative value
       
-      // When offsetting bull call spread with bear call spread:
-      // Worst case: Market goes up - bull call wins max, bear call loses max
-      //   Profit = position.maxValue + offsetMaxValue + spreadCredit - position.cost
-      // Best case: Market lands between the two short strikes - bull call at max, bear call expires worthless
-      //   Profit = position.maxValue + spreadCredit - position.cost
-      const worstCase = position.maxValue + offsetMaxValue + spreadCredit - position.cost;
-      const bestCase = position.maxValue + spreadCredit - position.cost;
+      // Determine position type
+      const isBullCallSpread = position.strategy === 'bull_call_spread';
+      const isBullPutSpread = position.strategy === 'bull_put_spread';
+      
+      let worstCase, bestCase;
+      
+      if (isBullCallSpread) {
+        // Bull call spread (debit): long lower call, short higher call
+        // Worst case: Market goes up - bull call wins max, bear call loses max
+        worstCase = position.maxValue + bearCallMaxLoss + spreadCredit - position.cost;
+        // Best case: Market lands between the two short strikes - bull call at max, bear call expires worthless
+        bestCase = position.maxValue + spreadCredit - position.cost;
+        
+      } else if (isBullPutSpread) {
+        // Bull put spread (credit): short higher put, long lower put
+        // For two credit spreads, worst case is when one spread hits max loss
+        // but we keep the total credit collected from both spreads
+        const bullPutCredit = -position.cost; // Position cost is negative for credit spreads
+        const bullPutMaxLoss = -(spreadWidth * 100);
+        
+        const totalCredit = bullPutCredit + spreadCredit;
+        const maxLossEitherSpread = Math.abs(bullPutMaxLoss); // Both spreads have same width
+        
+        // Worst case: One spread hits max loss, but we keep total credit
+        worstCase = -maxLossEitherSpread + totalCredit;
+        // Best case: Both spreads expire worthless, we keep total credit
+        bestCase = totalCredit;
+        
+      } else {
+        // Default calculation for other position types
+        const positionMaxValue = position.maxValue || 0;
+        worstCase = positionMaxValue + bearCallMaxLoss + spreadCredit - position.cost;
+        bestCase = positionMaxValue + spreadCredit - position.cost;
+      }
       
       const lockedInProfit = worstCase; // Worst case scenario
       const profitPotential = bestCase; // Best case scenario (sweet spot between short strikes)
@@ -651,11 +733,34 @@ class OffsetManager {
           
           // Calculate locked-in profit and profit potential for wider spread
           const widerOffsetMaxValue = -(widerSpreadWidth * 100);
+          const widerBearCallMaxLoss = widerOffsetMaxValue; // Negative value
           
-          // Worst case: Market goes up - both spreads hit max
-          // Best case: Market lands between short strikes - bull call at max, bear call expires worthless
-          const widerWorstCase = position.maxValue + widerOffsetMaxValue + widerSpreadCredit - position.cost;
-          const widerBestCase = position.maxValue + widerSpreadCredit - position.cost;
+          let widerWorstCase, widerBestCase;
+          
+          if (isBullCallSpread) {
+            // Bull call spread (debit): long lower call, short higher call
+            widerWorstCase = position.maxValue + widerBearCallMaxLoss + widerSpreadCredit - position.cost;
+            widerBestCase = position.maxValue + widerSpreadCredit - position.cost;
+            
+          } else if (isBullPutSpread) {
+            // Bull put spread (credit): short higher put, long lower put
+            const bullPutCredit = -position.cost;
+            const bullPutMaxLoss = -(spreadWidth * 100);
+            
+            const totalCredit = bullPutCredit + widerSpreadCredit;
+            const maxLossEitherSpread = Math.abs(bullPutMaxLoss); // Use original spread width for max loss
+            
+            // Worst case: One spread hits max loss, but we keep total credit
+            widerWorstCase = -maxLossEitherSpread + totalCredit;
+            // Best case: Both spreads expire worthless, we keep total credit
+            widerBestCase = totalCredit;
+            
+          } else {
+            // Default calculation for other position types
+            const positionMaxValue = position.maxValue || 0;
+            widerWorstCase = positionMaxValue + widerBearCallMaxLoss + widerSpreadCredit - position.cost;
+            widerBestCase = positionMaxValue + widerSpreadCredit - position.cost;
+          }
           
           const widerLockedInProfit = widerWorstCase;
           const widerProfitPotential = widerBestCase;
@@ -708,10 +813,24 @@ class OffsetManager {
   findOffsettingBullPutSpread(position, chainData) {
     const possibleOffsets = [];
     
-    // Get the short leg strike of the bear put spread (the lower strike)
-    const shortPutStrike = Math.min(...position.legs.map(leg => leg.strike));
+    // Determine if this is a bear put spread or bear call spread
+    const isBearPutSpread = position.strategy === 'bear_put_spread';
+    const isBearCallSpread = position.strategy === 'bear_call_spread';
+    
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
-    const offsetBudget = position.offsetBudget;
+    const offsetBudget = Math.abs(position.offsetBudget || position.cost);
+    
+    // For bear put spread: reference strike is the short put (lower strike)
+    // For bear call spread: reference strike is the short call (lower strike)
+    let referenceStrike;
+    if (isBearPutSpread) {
+      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    } else if (isBearCallSpread) {
+      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    } else {
+      // Default behavior for other position types
+      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    }
         
     // Get put options from chain data
     const putOptions = chainData.put || null;
@@ -737,9 +856,9 @@ class OffsetManager {
     // Look for bull put spreads starting from highest strikes below the initial position
     // Bull put spread: short higher put, long lower put (generates credit)
     for (const shortHigherPutStrike of putStrikes) {
-      // Short put strike should be lower than the initial bear put spread's short strike
-      if (shortHigherPutStrike >= shortPutStrike) {
-        continue; // Skip if at or above the initial position
+      // Short put strike should be lower than the reference strike
+      if (shortHigherPutStrike >= referenceStrike) {
+        continue; // Skip if at or above the reference strike
       }
       
       const longLowerPutStrike = shortHigherPutStrike - spreadWidth;
@@ -780,20 +899,50 @@ class OffsetManager {
         continue;
       }
       
-      // Calculate locked-in profit and profit potential
-      // Bull put spread maxValue is the max loss = -(spread width × 100)
-      const offsetMaxValue = -(spreadWidth * 100);
+      // Check if spread credit is within budget
+      if (spreadCredit > offsetBudget) {
+        continue;
+      }
       
-      // When offsetting bear put spread with bull put spread:
-      // Worst case: Market goes down - bear put wins max, bull put loses max
-      //   Profit = position.maxValue + offsetMaxValue + spreadCredit - position.cost
-      // Best case: Market lands between the two short strikes - bear put at max, bull put expires worthless
-      //   Profit = position.maxValue + spreadCredit - position.cost
-      const worstCase = position.maxValue + offsetMaxValue + spreadCredit - position.cost;
-      const bestCase = position.maxValue + spreadCredit - position.cost;
+      // Calculate locked-in profit and profit potential based on position type
+      const bullPutMaxLoss = -(spreadWidth * 100);
+      let worstCase, bestCase;
       
-      const lockedInProfit = worstCase; // Worst case scenario
-      const profitPotential = bestCase; // Best case scenario (sweet spot between short strikes)
+      if (isBearPutSpread) {
+        // Bear put spread: long higher put, short lower put (debit spread)
+        // Max profit if market goes down below short put
+        const bearPutMaxValue = position.maxValue || (spreadWidth * 100);
+        
+        // Worst case: Market goes down - bear put wins max, bull put loses max
+        worstCase = bearPutMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
+        // Best case: Market lands between the two short strikes - bear put at max, bull put expires worthless
+        bestCase = bearPutMaxValue + spreadCredit - position.cost;
+        
+      } else if (isBearCallSpread) {
+        // Bear call spread: short lower call, long higher call (credit spread)
+        // Max profit if market stays below short call, max loss if goes above long call
+        const bearCallCredit = -position.cost; // Position cost is negative for credit spreads
+        const bearCallMaxLoss = -(spreadWidth * 100);
+        
+        // For two credit spreads, the worst case is when one spread hits max loss
+        // but we keep the total credit collected from both spreads
+        const totalCredit = bearCallCredit + spreadCredit;
+        const maxLossEitherSpread = Math.abs(bearCallMaxLoss); // Both spreads have same width
+        
+        // Worst case: One spread hits max loss, but we keep total credit
+        worstCase = -maxLossEitherSpread + totalCredit;
+        // Best case: Both spreads expire worthless, we keep total credit
+        bestCase = totalCredit;
+        
+      } else {
+        // Default calculation for other position types
+        const positionMaxValue = position.maxValue || 0;
+        worstCase = positionMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
+        bestCase = positionMaxValue + spreadCredit - position.cost;
+      }
+      
+      const lockedInProfit = worstCase;
+      const profitPotential = bestCase;
       const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
       // Skip spreads with negative locked-in profit
@@ -824,7 +973,7 @@ class OffsetManager {
         ],
         cost: -spreadCredit, // Negative cost = credit received
         spreadWidth: spreadWidth,
-        maxValue: offsetMaxValue, // Negative spread width × 100
+        maxValue: bullPutMaxLoss, // Negative spread width × 100
         lockedInProfit: lockedInProfit,
         profitPotential: profitPotential,
         profitPotentialScore: profitPotentialScore,
@@ -880,13 +1029,37 @@ class OffsetManager {
             continue;
           }
           
-          // Calculate locked-in profit and profit potential for wider spread
-          const widerOffsetMaxValue = -(widerSpreadWidth * 100);
+          // Check if wider spread credit is within budget
+          if (widerSpreadCredit > offsetBudget) {
+            continue;
+          }
           
-          // Worst case: Market goes down - both spreads hit max
-          // Best case: Market lands between short strikes - bear put at max, bull put expires worthless
-          const widerWorstCase = position.maxValue + widerOffsetMaxValue + widerSpreadCredit - position.cost;
-          const widerBestCase = position.maxValue + widerSpreadCredit - position.cost;
+          // Calculate locked-in profit and profit potential for wider spread based on position type
+          const widerBullPutMaxLoss = -(widerSpreadWidth * 100);
+          let widerWorstCase, widerBestCase;
+          
+          if (isBearPutSpread) {
+            const bearPutMaxValue = position.maxValue || (spreadWidth * 100);
+            widerWorstCase = bearPutMaxValue + widerBullPutMaxLoss + widerSpreadCredit - position.cost;
+            widerBestCase = bearPutMaxValue + widerSpreadCredit - position.cost;
+          } else if (isBearCallSpread) {
+            const bearCallCredit = -position.cost;
+            const bearCallMaxLoss = -(spreadWidth * 100);
+            
+            // For two credit spreads, the worst case is when one spread hits max loss
+            // but we keep the total credit collected from both spreads
+            const totalCredit = bearCallCredit + widerSpreadCredit;
+            const maxLossEitherSpread = Math.abs(bearCallMaxLoss); // Use original spread width for max loss
+            
+            // Worst case: One spread hits max loss, but we keep total credit
+            widerWorstCase = -maxLossEitherSpread + totalCredit;
+            // Best case: Both spreads expire worthless, we keep total credit
+            widerBestCase = totalCredit;
+          } else {
+            const positionMaxValue = position.maxValue || 0;
+            widerWorstCase = positionMaxValue + widerBullPutMaxLoss + widerSpreadCredit - position.cost;
+            widerBestCase = positionMaxValue + widerSpreadCredit - position.cost;
+          }
           
           const widerLockedInProfit = widerWorstCase;
           const widerProfitPotential = widerBestCase;
@@ -920,7 +1093,7 @@ class OffsetManager {
             ],
             cost: -widerSpreadCredit,
             spreadWidth: widerSpreadWidth,
-            maxValue: widerOffsetMaxValue, // Negative spread width × 100
+            maxValue: widerBullPutMaxLoss, // Negative spread width × 100
             lockedInProfit: widerLockedInProfit,
             profitPotential: widerProfitPotential,
             profitPotentialScore: widerProfitPotentialScore,
@@ -1012,12 +1185,44 @@ class OffsetManager {
       
       // Calculate locked-in profit and profit potential
       const offsetMaxValue = spreadWidth * 100;
-      const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-      const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-      const totalCost = position.cost + spreadCost;
-      const lockedInProfit = minMaxValue - totalCost;
-      const profitPotential = maxMaxValue - totalCost;
-      const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+      // Determine position type
+      const isBullCallSpread = position.strategy === 'bull_call_spread';
+      const isBullPutSpread = position.strategy === 'bull_put_spread';
+      
+      let lockedInProfit, profitPotential, profitPotentialScore;
+      
+      if (isBullCallSpread) {
+        // Bull call spread (debit): long lower call, short higher call
+        // Both are debit spreads - use standard calculation
+        const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+        const totalCost = position.cost + spreadCost;
+        lockedInProfit = minMaxValue - totalCost;
+        profitPotential = maxMaxValue - totalCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        
+      } else if (isBullPutSpread) {
+        // Bull put spread (credit): short higher put, long lower put
+        // Offsetting credit spread with debit spread - use net cost approach
+        // Net cost = debit paid - credit collected (negative if net credit)
+        const netCost = spreadCost + position.cost; // position.cost is negative for credit spreads
+        const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+        
+        lockedInProfit = minMaxValue - netCost;
+        profitPotential = maxMaxValue - netCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        
+      } else {
+        // Default calculation for other position types
+        const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
+        const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
+        const totalCost = position.cost + spreadCost;
+        lockedInProfit = minMaxValue - totalCost;
+        profitPotential = maxMaxValue - totalCost;
+        profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      }
       
       // Skip spreads with negative locked-in profit (cost exceeds guaranteed value)
       if (lockedInProfit < 0) {
@@ -1106,12 +1311,37 @@ class OffsetManager {
           
           // Calculate locked-in profit and profit potential for wider spread
           const widerOffsetMaxValue = widerSpreadWidth * 100;
-          const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
-          const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
-          const widerTotalCost = position.cost + widerSpreadCost;
-          const widerLockedInProfit = widerMinMaxValue - widerTotalCost;
-          const widerProfitPotential = widerMaxMaxValue - widerTotalCost;
-          const widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          
+          let widerLockedInProfit, widerProfitPotential, widerProfitPotentialScore;
+          
+          if (isBullCallSpread) {
+            // Bull call spread (debit): both are debit spreads
+            const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+            const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
+            const widerTotalCost = position.cost + widerSpreadCost;
+            widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+            widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+            widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+            
+          } else if (isBullPutSpread) {
+            // Bull put spread (credit): offsetting credit with debit - use net cost approach
+            const widerNetCost = widerSpreadCost + position.cost; // position.cost is negative
+            const widerMinMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+            const widerMaxMaxValue = Math.max(position.maxValue, widerOffsetMaxValue);
+            
+            widerLockedInProfit = widerMinMaxValue - widerNetCost;
+            widerProfitPotential = widerMaxMaxValue - widerNetCost;
+            widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+            
+          } else {
+            // Default calculation
+            const widerMinMaxValue = Math.min(position.maxValue || 0, widerOffsetMaxValue);
+            const widerMaxMaxValue = Math.max(position.maxValue || 0, widerOffsetMaxValue);
+            const widerTotalCost = position.cost + widerSpreadCost;
+            widerLockedInProfit = widerMinMaxValue - widerTotalCost;
+            widerProfitPotential = widerMaxMaxValue - widerTotalCost;
+            widerProfitPotentialScore = widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0;
+          }
           
           // Skip wider spreads with negative locked-in profit
           if (widerLockedInProfit < 0) {

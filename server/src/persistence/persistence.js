@@ -711,39 +711,32 @@ class PersistenceManager {
       const data = await fs.readFile(POSITIONS_FILE, 'utf8');
       const positions = JSON.parse(data);
       
-      // Enrich positions with calculated properties
+      // Ensure legs have full data (parse from originalString if needed)
       for (const symbolExpiration in positions) {
         positions[symbolExpiration] = positions[symbolExpiration].map(position => {
-          // Convert position back to positionArray format for enrichment
-          const positionArray = position.legs.map(leg => {
-            // If leg already has strike data, use it; otherwise parse from originalString
+          // If legs are missing strike data, parse from originalString
+          const enrichedLegs = position.legs.map(leg => {
             if (leg.strike !== undefined) {
+              // Leg already has full data
               return leg;
             }
-            // Parse the original string to get the position data
+            // Parse the original string to get the full position data
             const parsed = this.positionManager.parsePositionString(leg.originalString);
             return Array.isArray(parsed) ? parsed[0] : parsed;
           });
           
-          // Get enriched response format
-          const enriched = this.positionManager.toResponseFormat(positionArray);
-          
-          // Merge with existing position data, preserving legs with strike data
+          // Return position with enriched legs, keeping all other stored values
           return {
             ...position,
-            legs: positionArray, // Use the full leg data with strikes
-            spreadWidth: enriched.spreadWidth,
-            maxValue: enriched.maxValue
+            legs: enrichedLegs
           };
         });
       }
       
       return positions;
+      
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        return {}; // File doesn't exist, no positions
-      }
-      console.error('❌ Failed to read all positions:', error.message);
+      console.error('❌ Failed to get all positions:', error.message);
       return {};
     }
   }

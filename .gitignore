@@ -14,7 +14,7 @@ schwab-proxy.zip
 DEV_ENDPOINTS_GUIDE.md
 API_SAMPLES.md
 TEST_README.md
-tests/
+nogit/
 
 # Server persistence files (cache data)
 server/src/persistence/chain-cache/
