@@ -401,6 +401,7 @@ pre {
   border: 1px solid #e9ecef;
   overflow-x: scroll;
   height: 80vh;
+  margin-bottom: 20px;
 }
 
 .offsetting-trades h4 {
@@ -483,7 +484,6 @@ pre {
 }
 
 .offsetting-trades.client-based {
-  margin-top: 20px;
   padding-top: 15px;
   border-top: 2px dashed #ccc;
 }

@@ -44,8 +44,37 @@ async function fetchOffsettingAnalysis(symbol, expiration) {
         
         if (offsets.length > 0) {
           offsettingHtml += '<div class="offsetting-trades server-based">';
-          offsettingHtml += `<h4>🎯 Risk Offsetting Opportunities (Server) - ${position.strategy}</h4>`;
-          offsettingHtml += `<div class="position-info">Cost: $${position.cost}, Max: $${position.maxValue}, Width: ${position.spreadWidth}</div>`;
+          
+          // Format strategy name
+          const strategyName = position.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          offsettingHtml += `<h4>🎯 Risk Offsetting Opportunities (Server) - ${strategyName}</h4>`;
+          
+          // Build detailed position info
+          offsettingHtml += '<div class="position-info">';
+          offsettingHtml += `<div class="position-summary">`;
+          
+          // Show legs
+          if (position.legs && position.legs.length > 0) {
+            const legDescriptions = position.legs.map(leg => {
+              const type = leg.type === 'C' ? 'Call' : 'Put';
+              const action = leg.quantity > 0 ? 'Long' : 'Short';
+              const qty = Math.abs(leg.quantity);
+              return `${action} ${qty} ${type} @ ${leg.strike}`;
+            }).join(' | ');
+            offsettingHtml += `<div class="position-legs"><strong>Position:</strong> ${legDescriptions}</div>`;
+          }
+          
+          // Show financials
+          const costLabel = position.cost < 0 ? 'Credit' : 'Cost';
+          const costValue = Math.abs(position.cost);
+          offsettingHtml += `<div class="position-financials">`;
+          offsettingHtml += `<span><strong>${costLabel}:</strong> $${costValue.toFixed(0)}</span> | `;
+          offsettingHtml += `<span><strong>Max Value:</strong> $${Math.abs(position.maxValue).toFixed(0)}</span> | `;
+          offsettingHtml += `<span><strong>Width:</strong> ${position.spreadWidth}</span> | `;
+          offsettingHtml += `<span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span>`;
+          offsettingHtml += `</div>`;
+          
+          offsettingHtml += `</div></div>`;
           
           // Show top 10 offsetting positions
           offsets.slice(0, 50).forEach((offset, index) => {
@@ -53,9 +82,9 @@ async function fetchOffsettingAnalysis(symbol, expiration) {
             const costLabel = offset.cost < 0 ? 'Credit' : 'Cost';
             const profitClass = offset.profitPotential > 0 ? 'profit-positive' : 'profit-neutral';
             
-            // Check if locked profit is less than 10% of the cost
+            // Check if locked profit is less than 10% of the cost (only for debit spreads)
             const tenPercentOfCost = cost * 0.1;
-            const lowLockedClass = offset.lockedInProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+            const lowLockedClass = (offset.cost > 0 && offset.lockedInProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
             
             // Check if cost is less than locked in value for green background
             const costLessThanLockedClass = cost < offset.lockedInProfit ? 'cost-less-than-locked' : '';

@@ -1656,9 +1656,9 @@ function updateOptionsChain(options) {
               offsettingTrades.forEach((trade, index) => {
                 const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
                 
-                // Check if locked profit is less than 10% of the cost
+                // Check if locked profit is less than 10% of the cost (only for debit spreads)
                 const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
-                const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+                const lowLockedClass = (trade.cost > 0 && trade.lockedProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
                 
                 if (lowLockedClass) {
                   console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);
@@ -1749,7 +1749,7 @@ function updateOptionsChain(options) {
               offsettingTrades.forEach((trade, index) => {
                 const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
                 const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
-                const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+                const lowLockedClass = (trade.cost > 0 && trade.lockedProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
                 const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
                 const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
                 
@@ -1789,9 +1789,9 @@ function updateOptionsChain(options) {
             offsettingTrades.forEach((trade, index) => {
               const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
               
-              // Check if locked profit is less than 10% of the cost
+              // Check if locked profit is less than 10% of the cost (only for debit spreads)
               const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
-              const lowLockedClass = trade.lockedProfit < tenPercentOfCost ? 'low-locked-profit' : '';
+              const lowLockedClass = (trade.cost > 0 && trade.lockedProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
               
               if (lowLockedClass) {
                 console.log(`🔍 Low locked profit: $${trade.lockedProfit.toFixed(2)} < 10% of $${trade.cost.toFixed(2)} ($${tenPercentOfCost.toFixed(2)})`);

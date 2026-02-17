@@ -364,8 +364,10 @@ class OffsetManager {
         const bullCallLongStrike = longCallStrike;
         const bullCallShortStrike = shortCallStrike;
         
-        // Check if strikes overlap (bull call long <= bear put short AND bull call short >= bear put short)
-        const strikesOverlap = bullCallLongStrike <= bearPutShortStrike && bullCallShortStrike >= bearPutShortStrike;
+        // Check if strikes overlap: standard range overlap check
+        // Bear put range: [bearPutShortStrike, bearPutLongStrike]
+        // Bull call range: [bullCallLongStrike, bullCallShortStrike]
+        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
         
         if (strikesOverlap) {
           // Overlapping strikes: both spreads can profit simultaneously in the overlap zone
@@ -793,8 +795,10 @@ class OffsetManager {
         // Net cost = debit paid - credit collected
         const netCost = position.cost - spreadCredit;
         
-        // Check if strikes overlap
-        const strikesOverlap = bearCallShortStrike <= bullCallShortStrike && bearCallLongStrike >= bullCallShortStrike;
+        // Check if strikes overlap: standard range overlap check
+        // Bull call range: [bullCallLongStrike, bullCallShortStrike]
+        // Bear call range: [bearCallShortStrike, bearCallLongStrike]
+        const strikesOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
         
         if (strikesOverlap) {
           // Overlapping strikes: need to find optimal price point
@@ -953,8 +957,10 @@ class OffsetManager {
             // Net cost = debit paid - credit collected
             const widerNetCost = position.cost - widerSpreadCredit;
             
-            // Check if strikes overlap
-            const strikesOverlap = bearCallShortStrike <= bullCallShortStrike && bearCallLongStrike >= bullCallShortStrike;
+            // Check if strikes overlap: standard range overlap check
+            // Bull call range: [bullCallLongStrike, bullCallShortStrike]
+            // Bear call range: [bearCallShortStrike, bearCallLongStrike]
+            const strikesOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
             
             if (strikesOverlap) {
               // Overlapping strikes: need to find optimal price point
@@ -1149,28 +1155,70 @@ class OffsetManager {
       let worstCase, bestCase;
       
       if (isBearPutSpread) {
-        // Bear put spread: long higher put, short lower put (debit spread)
-        // Max profit if market goes down below short put
-        const bearPutMaxValue = position.maxValue || (spreadWidth * 100);
+        // Bear put spread (debit): long higher put, short lower put
+        // Bull put spread (credit): short higher put, long lower put
+        // These are OPPOSING spreads - when one profits, the other loses
         
-        // Worst case: Market goes down - bear put wins max, bull put loses max
-        worstCase = bearPutMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
-        // Best case: Market lands between the two short strikes - bear put at max, bull put expires worthless
-        bestCase = bearPutMaxValue + spreadCredit - position.cost;
+        // Get strike prices
+        const bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
+        const bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+        const bullPutShortStrike = shortHigherPutStrike;
+        const bullPutLongStrike = longLowerPutStrike;
+        
+        // Net credit/cost
+        const bearPutCost = position.cost; // Debit spread has positive cost
+        const netCost = bearPutCost - spreadCredit; // Debit paid minus credit collected
+        
+        // Worst case: price moves to maximize one spread's value
+        const bearPutMaxValue = position.maxValue || (spreadWidth * 100);
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+        
+        // When both spreads are at their extremes, they offset each other
+        const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost; // Price below both spreads
+        const worstCaseHighPrice = -netCost; // Price above both spreads, both expire worthless
+        
+        worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+        
+        // Best case: find optimal zone
+        let bestCaseProfit = -netCost;
+        
+        // If bear put long strike is between bull put strikes, check that zone
+        if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
+          const bearPutValueAtLong = bearPutMaxValue;
+          const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
+          bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong - netCost);
+        }
+        
+        // If bull put short strike is between bear put strikes, check that zone
+        if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
+          const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
+          const bullPutLossAtShort = 0; // Bull put expires worthless above its short strike
+          bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort - netCost);
+        }
+        
+        // If spreads don't overlap (bear put long < bull put long), best case is bear put at max, bull put worthless
+        if (bearPutLongStrike < bullPutLongStrike) {
+          bestCaseProfit = Math.max(bestCaseProfit, bearPutMaxValue - netCost);
+        }
+        
+        bestCase = bestCaseProfit;
         
       } else if (isBearCallSpread) {
-        // Bear call spread: short lower call, long higher call (credit spread)
-        // Max profit if market stays below short call, max loss if goes above long call
-        const bearCallCredit = -position.cost; // Position cost is negative for credit spreads
-        const bearCallMaxLoss = -(spreadWidth * 100);
-        
+        // Bear call spread (credit): short lower call, long higher call
+        // Bull put spread (credit): short higher put, long lower put
         // For two credit spreads, the worst case is when one spread hits max loss
         // but we keep the total credit collected from both spreads
+        const bearCallCredit = -position.cost; // Position cost is negative for credit spreads
+        const bearCallMaxLoss = Math.abs(position.maxValue || 0); // Absolute value of max loss
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss); // Absolute value of max loss
+        
         const totalCredit = bearCallCredit + spreadCredit;
-        const maxLossEitherSpread = Math.abs(bearCallMaxLoss); // Both spreads have same width
+        
+        // Worst case: The spread with the larger max loss hits max loss, but we keep total credit
+        const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
         
         // Worst case: One spread hits max loss, but we keep total credit
-        worstCase = -maxLossEitherSpread + totalCredit;
+        worstCase = -maxLossWorstSpread + totalCredit;
         // Best case: Both spreads expire worthless, we keep total credit
         bestCase = totalCredit;
         
@@ -1443,8 +1491,10 @@ class OffsetManager {
         const bearPutShortStrike = shortPutStrike;
         const bearPutLongStrike = longPutStrike;
         
-        // Check if strikes overlap (bear put short >= bull call long AND bear put long >= bull call short)
-        const strikesOverlap = bearPutShortStrike >= bullCallLongStrike && bearPutLongStrike >= bullCallShortStrike;
+        // Check if strikes overlap: standard range overlap check
+        // Bull call range: [bullCallLongStrike, bullCallShortStrike]
+        // Bear put range: [bearPutShortStrike, bearPutLongStrike]
+        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
         
         if (strikesOverlap) {
           // Overlapping strikes: both spreads can profit simultaneously in the overlap zone
