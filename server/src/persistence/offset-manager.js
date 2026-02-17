@@ -33,6 +33,17 @@ class OffsetManager {
         positions: positions[symbolExpiration].map(position => {
           let offsettingAnalysis = {};
           
+          // Skip offsetting analysis if position is covered
+          if (position.covered === true) {
+            return {
+              ...position,
+              offsettingAnalysis: {
+                possibleOffsets: [],
+                message: 'Position is covered - no offsetting analysis performed'
+              }
+            };
+          }
+          
           // Switch based on strategy to determine offsetting approach
           switch (position.strategy) {
             case 'long_call':
