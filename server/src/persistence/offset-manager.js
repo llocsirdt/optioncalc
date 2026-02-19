@@ -16,18 +16,29 @@ class OffsetManager {
    * Find offsetting positions (placeholder function)
    * Currently just outputs position information for analysis
    */
-  async findOffsettingPositions(positions, persistenceManager) {
+  async findOffsettingPositions(positions, chainDataMap) {
     const results = {};
     
     for (const symbolExpiration of Object.keys(positions)) {
       const [symbol, expiration] = symbolExpiration.split('_');
       
-      // Remove dollar sign from symbol for cache lookup (most symbols don't have it)
-      const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;
-      const cacheKey = `${cacheSymbol}_${expiration}`;
+      // Get chain data from the provided map
+      const chainData = chainDataMap[symbolExpiration];
       
-      // Get or fetch fresh option chain data
-      const chainData = await this.getOrFetchChainData(symbol, expiration, persistenceManager);
+      // Skip if no chain data available
+      if (!chainData) {
+        console.warn(`⚠️ No chain data available for ${symbolExpiration}, skipping offsetting analysis`);
+        results[symbolExpiration] = {
+          positions: positions[symbolExpiration].map(position => ({
+            ...position,
+            offsettingAnalysis: {
+              possibleOffsets: [],
+              message: 'No chain data available'
+            }
+          }))
+        };
+        continue;
+      }
       
       results[symbolExpiration] = {
         positions: positions[symbolExpiration].map(position => {
@@ -132,59 +143,7 @@ class OffsetManager {
     return results;
   }
 
-  /**
-   * Get cached chain data or fetch fresh data if needed
-   */
-  async getOrFetchChainData(symbol, expiration, persistenceManager) {
-    // Use consistent cache symbol logic (same as chains-handler)
-    const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;
-    const cacheKey = `${cacheSymbol}_${expiration}`;
-    const cachedData = persistenceManager.getChainCache(cacheKey);
-    
-    // Check if we have fresh data (less than 5 seconds old)
-    const FRESHNESS_THRESHOLD = 5000; // 5 seconds
-    const now = Date.now();
-    
-    if (cachedData && cachedData.timestamp && (now - cachedData.timestamp) < FRESHNESS_THRESHOLD) {
-      console.log(`📊 Using fresh cached chain data for ${symbol} ${expiration}`);
-      return cachedData.data;
-    }
-    
-    // Fetch fresh data by calling chains-handler directly
-    console.log(`🔄 Fetching fresh chain data for ${symbol} ${expiration}`);
-    try {
-      // Import at call time to avoid module-level circular dependency
-      const { handleChainsRequest } = require('./chains-handler');
-      const { marketClient } = require('./market-client');
-      
-      const query = `?symbol=${symbol}&expirationDate=${expiration}`;
-      const timestamp = new Date().toISOString();
-      
-      console.log(`🔍 Calling handleChainsRequest for ${symbol} ${expiration}`);
-      
-      const result = await handleChainsRequest('/chains', query, timestamp, persistenceManager, marketClient);
-      
-      if (result && (result.callExpDateMap || result.putExpDateMap)) {
-        console.log(`✅ Successfully fetched fresh chain data for ${symbol} ${expiration}`);
-        
-        const transformedData = {
-          call: result.callExpDateMap || {},
-          put: result.putExpDateMap || {}
-        };
-        
-        await persistenceManager.cacheChainData(cacheSymbol, expiration, transformedData);
-        
-        return transformedData;
-      } else {
-        console.log(`⚠️ No chain data returned for ${symbol} ${expiration}`);
-        return { call: {}, put: {} };
-      }
-    } catch (error) {
-      console.error(`❌ Failed to fetch chain data for ${symbol} ${expiration}:`, error.message);
-      return { call: {}, put: {} };
-    }
-  }
-
+  
   /**
    * Sort offsetting positions by custom priority:
    * Position 1: Highest locked-in profit with score = 1

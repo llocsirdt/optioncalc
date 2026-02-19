@@ -691,12 +691,77 @@ class PersistenceManager {
   }
 
   /**
+   * Get cached chain data or fetch fresh data if needed
+   */
+  async getOrFetchChainData(symbol, expiration) {
+    // Use consistent cache symbol logic (same as chains-handler)
+    const cacheSymbol = symbol.startsWith('$') ? symbol.substring(1) : symbol;
+    const cacheKey = `${cacheSymbol}_${expiration}`;
+    const cachedData = this.getChainCache(cacheKey);
+    
+    // Check if we have fresh data (less than 5 seconds old)
+    const FRESHNESS_THRESHOLD = 5000; // 5 seconds
+    const now = Date.now();
+    
+    if (cachedData && cachedData.timestamp && (now - cachedData.timestamp) < FRESHNESS_THRESHOLD) {
+      console.log(`📊 Using fresh cached chain data for ${symbol} ${expiration}`);
+      return cachedData.data;
+    }
+    
+    // Fetch fresh data by calling chains-handler directly
+    console.log(`🔄 Fetching fresh chain data for ${symbol} ${expiration}`);
+    try {
+      // Import at call time to avoid module-level circular dependency
+      const { handleChainsRequest } = require('./chains-handler');
+      const { marketClient } = require('./market-client');
+      
+      const query = `?symbol=${symbol}&expirationDate=${expiration}`;
+      const timestamp = new Date().toISOString();
+      
+      console.log(`🔍 Calling handleChainsRequest for ${symbol} ${expiration}`);
+      
+      const result = await handleChainsRequest('/chains', query, timestamp, this, marketClient);
+      
+      if (result && (result.callExpDateMap || result.putExpDateMap)) {
+        console.log(`✅ Successfully fetched fresh chain data for ${symbol} ${expiration}`);
+        
+        const transformedData = {
+          call: result.callExpDateMap || {},
+          put: result.putExpDateMap || {}
+        };
+        
+        await this.cacheChainData(cacheSymbol, expiration, transformedData);
+        
+        return transformedData;
+      } else {
+        console.log(`⚠️ No chain data returned for ${symbol} ${expiration}`);
+        return { call: {}, put: {} };
+      }
+    } catch (error) {
+      console.error(`❌ Failed to fetch chain data for ${symbol} ${expiration}:`, error.message);
+      return { call: {}, put: {} };
+    }
+  }
+
+  /**
    * Find offsetting positions analysis
    */
   async findOffsettingPositions() {
     try {
       const positions = await this.getAllPositions();
-      return await this.offsetManager.findOffsettingPositions(positions, this);
+      
+      // Fetch chain data for all symbol/expiration combinations
+      const chainDataMap = {};
+      
+      for (const symbolExpiration of Object.keys(positions)) {
+        const [symbol, expiration] = symbolExpiration.split('_');
+        
+        // Get or fetch fresh option chain data
+        const chainData = await this.getOrFetchChainData(symbol, expiration);
+        chainDataMap[symbolExpiration] = chainData;
+      }
+      
+      return await this.offsetManager.findOffsettingPositions(positions, chainDataMap);
     } catch (error) {
       console.error('❌ Failed to find offsetting positions:', error.message);
       return {};
