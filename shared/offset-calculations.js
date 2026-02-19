@@ -163,36 +163,50 @@
         const bullCallLongStrike = longCallStrike;
         const bullCallShortStrike = shortCallStrike;
         
-        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
-        
-        if (strikesOverlap) {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          lockedInProfit = minMaxValue - totalCost;
+        // Check if strikes overlap in a way where both can be worthless
+        // Bear put is worthless above bearPutLongStrike
+        // Bull call is worthless below bullCallLongStrike
+        // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
+        if (bullCallLongStrike >= bearPutLongStrike) {
+          // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
+          lockedInProfit = -totalCost; // Worst case: both worthless
           
-          let maxCombinedValue = 0;
-          
-          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-            const bullCallValueAtShort = offsetMaxValue;
-            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
-          }
-          
-          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-            const bearPutValueAtShort = position.maxValue;
-            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
-          }
-          
-          if (maxCombinedValue === 0) {
-            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-          }
-          
-          profitPotential = maxCombinedValue - totalCost;
-        } else {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          // Best case: one of them reaches max value
           const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-          lockedInProfit = minMaxValue - totalCost;
           profitPotential = maxMaxValue - totalCost;
+        } else {
+          // Strikes overlap - at least one spread will have value at any price
+          const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+          
+          if (strikesOverlap) {
+            const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+            lockedInProfit = minMaxValue - totalCost;
+            
+            let maxCombinedValue = 0;
+            
+            if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
+              const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
+              const bullCallValueAtShort = offsetMaxValue;
+              maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
+            }
+            
+            if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
+              const bearPutValueAtShort = position.maxValue;
+              const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
+              maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
+            }
+            
+            if (maxCombinedValue === 0) {
+              maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
+            }
+            
+            profitPotential = maxCombinedValue - totalCost;
+          } else {
+            const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+            const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+            lockedInProfit = minMaxValue - totalCost;
+            profitPotential = maxMaxValue - totalCost;
+          }
         }
         
         profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
@@ -933,36 +947,50 @@
         const bearPutShortStrike = shortPutStrike;
         const bearPutLongStrike = longPutStrike;
         
-        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
-        
-        if (strikesOverlap) {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          lockedInProfit = minMaxValue - totalCost;
+        // Check if strikes overlap in a way where both can be worthless
+        // Bull call is worthless below bullCallLongStrike
+        // Bear put is worthless above bearPutLongStrike
+        // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
+        if (bullCallLongStrike >= bearPutLongStrike) {
+          // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
+          lockedInProfit = -totalCost; // Worst case: both worthless
           
-          let maxCombinedValue = 0;
-          
-          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-            const bearPutValueAtShort = offsetMaxValue;
-            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtBearPutShort + bearPutValueAtShort);
-          }
-          
-          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-            const bullCallValueAtShort = position.maxValue;
-            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtShort + bearPutValueAtBullCallShort);
-          }
-          
-          if (maxCombinedValue === 0) {
-            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-          }
-          
-          profitPotential = maxCombinedValue - totalCost;
-        } else {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          // Best case: one of them reaches max value
           const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-          lockedInProfit = minMaxValue - totalCost;
           profitPotential = maxMaxValue - totalCost;
+        } else {
+          // Strikes overlap - at least one spread will have value at any price
+          const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+          
+          if (strikesOverlap) {
+            const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+            lockedInProfit = minMaxValue - totalCost;
+            
+            let maxCombinedValue = 0;
+            
+            if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
+              const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
+              const bearPutValueAtShort = offsetMaxValue;
+              maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtBearPutShort + bearPutValueAtShort);
+            }
+            
+            if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
+              const bullCallValueAtShort = position.maxValue;
+              const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
+              maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtShort + bearPutValueAtBullCallShort);
+            }
+            
+            if (maxCombinedValue === 0) {
+              maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
+            }
+            
+            profitPotential = maxCombinedValue - totalCost;
+          } else {
+            const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+            const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+            lockedInProfit = minMaxValue - totalCost;
+            profitPotential = maxMaxValue - totalCost;
+          }
         }
         
         profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
