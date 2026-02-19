@@ -48,7 +48,38 @@ function clickOffsettingTrade(tradeDescription, tradeAction) {
     }
   }
   
-  // Fall back to parsing the trade description (client-side format)
+  // Try parsing new shared function format first
+  // Examples:
+  // "Bear Call Spread: Short 24800C @ 163.95, Long 24960C @ 70.60"
+  // "Bear Put Spread: Long 24900P @ 123.45, Short 24800P @ 67.89"
+  const newFormatMatch = tradeDescription.match(/(Bear|Bull)\s+(Call|Put)\s+Spread:\s+(.+)/i);
+  if (newFormatMatch) {
+    console.log('🔍 Parsing new shared function format');
+    const [, direction, optionType, legsStr] = newFormatMatch;
+    const type = optionType.toLowerCase() === 'call' ? 'c' : 'p';
+    
+    // Parse each leg: "Short 24800C @ 163.95" or "Long 24960C @ 70.60"
+    const legMatches = legsStr.matchAll(/(Short|Long)\s+([\d.]+)[CP]\s+@\s+([\d.]+)/gi);
+    
+    for (const legMatch of legMatches) {
+      const [, action, strike, price] = legMatch;
+      const isBuy = action.toLowerCase() === 'long';
+      const bidAsk = isBuy ? 'ask' : 'bid';
+      
+      console.log(`  ${action} ${strike} ${optionType} @ ${price} -> clicking ${type}${strike} ${bidAsk}`);
+      
+      const result = findAndClickOptionCell(type, parseFloat(strike), bidAsk);
+      if (result) clickedPositions.push(result);
+    }
+    
+    if (clickedPositions.length > 0) {
+      updateSelectedPositionsDisplay(currentOptionsData);
+      console.log(`✅ Clicked ${clickedPositions.length} positions:`, clickedPositions);
+      return true;
+    }
+  }
+  
+  // Fall back to parsing the trade description (old client-side format)
   // Examples:
   // "Bull 1 130/135 call spread"
   // "Bear 1 120/115 put spread" 
@@ -734,6 +765,312 @@ function getAverageAskPrice(currentStrike, positions) {
 function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   console.log('::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::');
   console.log('🔍 findOffsettingTrades START :: Analyzing offsetting trades for:', currentPositions);
+  console.log('📊 Market data available:', marketData.length, 'options');
+  console.log('💰 Underlying price:', underlyingPrice);
+  
+  // Convert client positions and marketData to format expected by shared functions
+  const position = convertClientPositionToSharedFormat(currentPositions);
+  const chainData = convertMarketDataToChainData(marketData);
+  
+  if (!position) {
+    console.log('❌ No valid position detected');
+    return [];
+  }
+  
+  console.log('📊 Detected strategy:', position.strategy);
+  console.log('💰 Position cost:', position.cost);
+  console.log('📏 Spread width:', position.spreadWidth);
+  console.log('💵 Offset budget:', position.offsetBudget);
+  
+  // Call appropriate shared offset functions based on strategy
+  let offsettingAnalysis = {};
+  
+  console.log('🔍 Calling shared offset functions for strategy:', position.strategy);
+  console.log('📊 Position data:', position);
+  console.log('📊 ChainData structure:', {
+    callExpirations: Object.keys(chainData.call),
+    putExpirations: Object.keys(chainData.put),
+    callStrikeCount: Object.keys(chainData.call[Object.keys(chainData.call)[0]] || {}).length,
+    putStrikeCount: Object.keys(chainData.put[Object.keys(chainData.put)[0]] || {}).length
+  });
+  
+  switch (position.strategy) {
+    case 'bull_call_spread':
+      console.log('🔍 Finding bear call spread offsets...');
+      const bearCallSpreadOffsets = OffsetCalculations.findOffsettingBearCallSpread(position, chainData);
+      console.log('📊 Bear call spread results:', bearCallSpreadOffsets);
+      
+      console.log('🔍 Finding bear put spread offsets...');
+      const bearPutSpreadOffsets = OffsetCalculations.findOffsettingBearPutSpread(position, chainData);
+      console.log('📊 Bear put spread results:', bearPutSpreadOffsets);
+      
+      offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bearCallSpreadOffsets, bearPutSpreadOffsets]);
+      console.log('📊 Aggregated results:', offsettingAnalysis);
+      break;
+    case 'bear_put_spread':
+      const bullCallSpreadOffsets = OffsetCalculations.findOffsettingBullCallSpread(position, chainData);
+      const bullPutSpreadOffsets = OffsetCalculations.findOffsettingBullPutSpread(position, chainData);
+      offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bullCallSpreadOffsets, bullPutSpreadOffsets]);
+      break;
+    case 'bear_call_spread':
+      const bullCallSpreadOffsets2 = OffsetCalculations.findOffsettingBullCallSpread(position, chainData);
+      const bullPutSpreadOffsets2 = OffsetCalculations.findOffsettingBullPutSpread(position, chainData);
+      offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bullCallSpreadOffsets2, bullPutSpreadOffsets2]);
+      break;
+    case 'bull_put_spread':
+      const bearCallSpreadOffsets2 = OffsetCalculations.findOffsettingBearCallSpread(position, chainData);
+      const bearPutSpreadOffsets2 = OffsetCalculations.findOffsettingBearPutSpread(position, chainData);
+      offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bearCallSpreadOffsets2, bearPutSpreadOffsets2]);
+      break;
+    default:
+      console.log('⚠️ Strategy not supported for offsetting:', position.strategy);
+      return [];
+  }
+  
+  // Convert shared format results back to client format
+  const offsettingTrades = convertSharedOffsetsToClientFormat(offsettingAnalysis.possibleOffsets, position);
+  
+  console.log('🎯 Found offsetting trades:', offsettingTrades);
+  console.log(`📊 Total offsetting opportunities: ${offsettingTrades.length}`);
+  
+  return offsettingTrades;
+}
+
+// Helper: Convert client positions to shared format
+function convertClientPositionToSharedFormat(currentPositions) {
+  console.log('🔍 convertClientPositionToSharedFormat - Input positions:', currentPositions);
+  
+  const callPositions = currentPositions.filter(p => p.type === 'c' && p.strike !== null);
+  const putPositions = currentPositions.filter(p => p.type === 'p' && p.strike !== null);
+  
+  console.log('📞 Call positions:', callPositions);
+  console.log('📉 Put positions:', putPositions);
+  
+  // Detect strategy
+  const hasLongCall = callPositions.some(cp => cp.qty > 0);
+  const hasShortCall = callPositions.some(cp => cp.qty < 0);
+  const hasLongPut = putPositions.some(pp => pp.qty > 0);
+  const hasShortPut = putPositions.some(pp => pp.qty < 0);
+  
+  console.log('🔍 Strategy detection:', { hasLongCall, hasShortCall, hasLongPut, hasShortPut });
+  
+  let strategy = null;
+  let legs = [];
+  let cost = 0;
+  let maxValue = 0;
+  let spreadWidth = 0;
+  
+  // Bull call spread: long lower call, short higher call (debit spread)
+  if (hasLongCall && hasShortCall && callPositions.length === 2) {
+    console.log('✅ Detected call spread with 2 positions');
+    const sortedCalls = callPositions.sort((a, b) => a.strike - b.strike);
+    const longCall = sortedCalls[0];
+    const shortCall = sortedCalls[1];
+    
+    console.log('📊 Long call:', longCall);
+    console.log('📊 Short call:', shortCall);
+    
+    // Use costAdjustment if available (already in total dollars), otherwise calculate from premium
+    let longCallCost, shortCallCredit, longCallPremium, shortCallPremium;
+    
+    if (longCall.costAdjustment !== undefined) {
+      longCallCost = Math.abs(longCall.costAdjustment);
+      shortCallCredit = shortCall.costAdjustment; // Already negative for short positions
+      longCallPremium = longCallCost / 100; // For logging
+      shortCallPremium = Math.abs(shortCallCredit) / 100; // For logging
+    } else {
+      longCallPremium = getValidatedPremium(longCall, callPositions);
+      shortCallPremium = getValidatedPremium(shortCall, callPositions);
+      longCallCost = longCallPremium * 100 * Math.abs(longCall.qty);
+      shortCallCredit = shortCallPremium * 100 * Math.abs(shortCall.qty);
+    }
+    
+    const netCost = longCallCost + shortCallCredit; // shortCallCredit is negative
+    
+    console.log('💰 Cost breakdown:', {
+      longCallPremium,
+      shortCallPremium,
+      longCallCost,
+      shortCallCredit,
+      netCost
+    });
+    
+    // Bull call spread is a debit spread (positive cost)
+    if (netCost > 0) {
+      strategy = 'bull_call_spread';
+      spreadWidth = shortCall.strike - longCall.strike;
+      maxValue = spreadWidth * 100 * Math.abs(longCall.qty);
+      cost = netCost;
+      
+      console.log('✅ Detected BULL CALL SPREAD:', { strategy, spreadWidth, maxValue, cost });
+      
+      legs = [
+        { action: 'buy', quantity: Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
+        { action: 'sell', quantity: Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
+      ];
+    }
+    // Bear call spread is a credit spread (negative cost)
+    else {
+      strategy = 'bear_call_spread';
+      spreadWidth = shortCall.strike - longCall.strike;
+      maxValue = -(spreadWidth * 100 * Math.abs(longCall.qty)); // Negative for credit spreads
+      cost = netCost; // Negative value
+      
+      console.log('✅ Detected BEAR CALL SPREAD:', { strategy, spreadWidth, maxValue, cost });
+      
+      legs = [
+        { action: 'sell', quantity: Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
+        { action: 'buy', quantity: Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
+      ];
+    }
+  }
+  // Put spreads
+  else if (hasLongPut && hasShortPut && putPositions.length === 2) {
+    const sortedPuts = putPositions.sort((a, b) => a.strike - b.strike);
+    const shortPut = sortedPuts[0];
+    const longPut = sortedPuts[1];
+    
+    // Use costAdjustment if available (already in total dollars), otherwise calculate from premium
+    let longPutCost, shortPutCredit;
+    
+    if (longPut.costAdjustment !== undefined) {
+      longPutCost = Math.abs(longPut.costAdjustment);
+      shortPutCredit = shortPut.costAdjustment; // Already negative for short positions
+    } else {
+      const longPutPremium = getValidatedPremium(longPut, putPositions);
+      const shortPutPremium = getValidatedPremium(shortPut, putPositions);
+      longPutCost = longPutPremium * 100 * Math.abs(longPut.qty);
+      shortPutCredit = shortPutPremium * 100 * Math.abs(shortPut.qty);
+    }
+    
+    const netCost = longPutCost + shortPutCredit; // shortPutCredit is negative
+    
+    // Bear put spread is a debit spread (positive cost)
+    if (netCost > 0) {
+      strategy = 'bear_put_spread';
+      spreadWidth = longPut.strike - shortPut.strike;
+      maxValue = spreadWidth * 100 * Math.abs(longPut.qty);
+      cost = netCost;
+      
+      legs = [
+        { action: 'buy', quantity: Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
+        { action: 'sell', quantity: Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
+      ];
+    }
+    // Bull put spread is a credit spread (negative cost)
+    else {
+      strategy = 'bull_put_spread';
+      spreadWidth = longPut.strike - shortPut.strike;
+      maxValue = -(spreadWidth * 100 * Math.abs(longPut.qty)); // Negative for credit spreads
+      cost = netCost; // Negative value
+      
+      legs = [
+        { action: 'sell', quantity: Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
+        { action: 'buy', quantity: Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
+      ];
+    }
+  }
+  
+  if (!strategy) {
+    console.log('❌ No strategy detected, returning null');
+    return null;
+  }
+  
+  const offsetBudget = maxValue - cost; // Max profit
+  
+  console.log('✅ Final position object:', {
+    strategy,
+    legs,
+    cost,
+    maxValue,
+    spreadWidth,
+    offsetBudget
+  });
+  
+  return {
+    strategy,
+    legs,
+    cost,
+    maxValue,
+    spreadWidth,
+    offsetBudget
+  };
+}
+
+// Helper: Convert marketData to chainData format
+function convertMarketDataToChainData(marketData) {
+  const chainData = { call: {}, put: {} };
+  
+  // Group by expiration (we'll use a single expiration key since client doesn't track expirations separately)
+  const expirationKey = '2025-01-01:1'; // Placeholder expiration
+  chainData.call[expirationKey] = {};
+  chainData.put[expirationKey] = {};
+  
+  marketData.forEach(option => {
+    const strikeKey = option.strike.toString() + '.0';
+    const optionData = {
+      bid: option.bid || 0,
+      ask: option.ask || 0,
+      last: option.last || 0,
+      mark: (option.bid + option.ask) / 2
+    };
+    
+    if (option.type === 'c') {
+      chainData.call[expirationKey][strikeKey] = [optionData];
+    } else if (option.type === 'p') {
+      chainData.put[expirationKey][strikeKey] = [optionData];
+    }
+  });
+  
+  return chainData;
+}
+
+// Helper: Convert shared format offsets back to client format
+function convertSharedOffsetsToClientFormat(sharedOffsets, originalPosition) {
+  if (!sharedOffsets || sharedOffsets.length === 0) {
+    return [];
+  }
+  
+  return sharedOffsets.map(offset => {
+    // Determine if this is a debit spread (positive cost) for opacity logic
+    const isDebitSpread = originalPosition.cost > 0;
+    const tenPercentOfCost = Math.abs(originalPosition.cost) * 0.1;
+    const lowLockedClass = (isDebitSpread && offset.lockedInProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
+    
+    return {
+      type: 'spread',
+      description: offset.description,
+      action: formatOffsetAction(offset),
+      cost: offset.cost,
+      potentialValue: offset.maxValue,
+      lockedProfit: offset.lockedInProfit,
+      profitPotential: offset.profitPotential,
+      totalProfitPotential: offset.profitPotential,
+      riskNeutralized: offset.lockedInProfit >= 0,
+      lowLockedClass: lowLockedClass,
+      strategy: offset.strategy,
+      legs: offset.legs
+    };
+  });
+}
+
+// Helper: Format offset action for display
+function formatOffsetAction(offset) {
+  const lines = [];
+  offset.legs.forEach(leg => {
+    const action = leg.quantity > 0 ? 'BUY' : 'SELL';
+    const qty = Math.abs(leg.quantity);
+    const type = leg.type === 'C' ? 'CALL' : 'PUT';
+    const price = Math.abs(leg.cost) / 100;
+    lines.push(`${action} ${qty} ${leg.strike} ${type} @ $${price.toFixed(2)}`);
+  });
+  return lines.join(' & <br/>');
+}
+
+// Legacy function - keeping for backwards compatibility but simplified
+function findOffsettingTradesLegacy(currentPositions, marketData, underlyingPrice) {
+  console.log('::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::');
+  console.log('🔍 findOffsettingTradesLegacy START :: Using legacy logic');
   console.log('📊 Market data available:', marketData.length, 'options');
   console.log('💰 Underlying price:', underlyingPrice);
   
