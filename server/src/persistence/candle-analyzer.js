@@ -35,9 +35,14 @@ function hasValidCache(symbol) {
   const cached = candleDataCache.get(cacheKey);
   if (!cached) return false;
   
+  // Check if fetchedAt exists and is valid
+  if (!cached.fetchedAt) return false;
+  
   // Check if data was fetched today
-  const fetchDate = new Date(cached.fetchedAt).toISOString().split('T')[0];
-  return fetchDate === today;
+  const fetchDate = new Date(cached.fetchedAt);
+  if (isNaN(fetchDate.getTime())) return false; // Invalid date
+  
+  return fetchDate.toISOString().split('T')[0] === today;
 }
 
 /**
@@ -137,6 +142,10 @@ function aggregateCandles(oneMinCandles) {
  */
 function isAtTimeframeBoundary(datetime, minutes) {
   const date = new Date(datetime);
+  if (isNaN(date.getTime())) {
+    console.error(`🕯️ Invalid datetime value: ${datetime}`);
+    return false;
+  }
   const minute = date.getMinutes();
   return minute % minutes === 0;
 }
@@ -484,12 +493,13 @@ async function fetchCandleData(symbol) {
         undefined  // needPreviousClose
       );
       
+      // Store only raw candle data (no indicators yet)
       candleData[timeframe.name] = {
         timeframe: timeframe.name,
-        data: data,
         candles: data.candles || [],
         count: data.candles ? data.candles.length : 0,
-        fetchedAt: new Date().toISOString()
+        fetchedAt: new Date().toISOString(),
+        raw: true // Flag to indicate this is raw data without indicators
       };
       
       console.log(`🕯️ ✅ Fetched ${candleData[timeframe.name].count} ${timeframe.name} candles`);
@@ -632,51 +642,157 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     console.log(`🕯️ ✅ Enhanced ${timeframe} with indicators`);
   }
   
-  // Cache the enhanced data
-  cacheCandleData(symbol, enhancedData);
+  // Don't cache here - we cache the raw data in fetchCandleData
+  // This allows us to apply limiting on each request without storing huge datasets
   
   return enhancedData;
 }
 
 /**
+ * Limit candles to most recent N candles
+ * @param {Object} candleData - Candle data object with timeframes
+ * @param {number} limit - Maximum number of candles to return per timeframe
+ * @returns {Object} Limited candle data
+ */
+function limitCandleData(candleData, limit = 100) {
+  const limitedData = {};
+  
+  console.log(`🕯️ Limiting candle data to ${limit} candles per timeframe...`);
+  
+  for (const [timeframe, data] of Object.entries(candleData)) {
+    if (data.error || !data.candles) {
+      limitedData[timeframe] = data;
+      continue;
+    }
+    
+    const candles = data.candles;
+    console.log(`🕯️ ${timeframe}: ${candles.length} candles before limiting`);
+    const limitedCandles = candles.slice(-limit); // Get last N candles
+    console.log(`🕯️ ${timeframe}: ${limitedCandles.length} candles after limiting`);
+    
+    // Update indicators arrays to match limited candles
+    const indicators = data.indicators || {};
+    const limitedIndicators = {};
+    
+    for (const [key, values] of Object.entries(indicators)) {
+      if (Array.isArray(values)) {
+        limitedIndicators[key] = values.slice(-limit);
+      } else if (typeof values === 'object' && values !== null) {
+        // Handle nested objects like bollinger bands
+        limitedIndicators[key] = {};
+        for (const [subKey, subValues] of Object.entries(values)) {
+          if (Array.isArray(subValues)) {
+            limitedIndicators[key][subKey] = subValues.slice(-limit);
+          } else {
+            limitedIndicators[key][subKey] = subValues;
+          }
+        }
+      } else {
+        limitedIndicators[key] = values;
+      }
+    }
+    
+    limitedData[timeframe] = {
+      ...data,
+      candles: limitedCandles,
+      count: limitedCandles.length,
+      indicators: limitedIndicators,
+      limited: true,
+      limitedTo: limit
+    };
+  }
+  
+  return limitedData;
+}
+
+/**
+ * Filter candle data to specific timeframe
+ * @param {Object} candleData - Candle data object with timeframes
+ * @param {string} timeframe - Timeframe to filter (1m, 5m, 15m, 60m, daily)
+ * @returns {Object} Filtered candle data
+ */
+function filterTimeframe(candleData, timeframe) {
+  // Normalize timeframe (60m -> 1h)
+  const normalizedTimeframe = timeframe === '60m' ? '1h' : timeframe;
+  
+  if (!candleData[normalizedTimeframe]) {
+    return {
+      error: `Timeframe '${timeframe}' not found`,
+      availableTimeframes: Object.keys(candleData)
+    };
+  }
+  
+  return {
+    [normalizedTimeframe]: candleData[normalizedTimeframe]
+  };
+}
+
+/**
  * Analyze candles for a given symbol
  * @param {string} symbol - The symbol to analyze
+ * @param {Object} options - Analysis options
+ * @param {string} options.timeframe - Optional specific timeframe to return (1m, 5m, 15m, 60m, daily)
  * @returns {Promise<Object>} Analysis results
  */
-async function analyzeCandles(symbol) {
+async function analyzeCandles(symbol, options = {}) {
   console.log(`🕯️ Starting candle analysis for: ${symbol}`);
   
   try {
     // Start refresh loop on first call
     if (!refreshLoopRunning) {
-      startRefreshLoop();
+      try {
+        startRefreshLoop();
+      } catch (refreshError) {
+        console.error(`🕯️ Failed to start refresh loop:`, refreshError);
+        // Continue anyway - this is not critical for the first analysis
+      }
     }
     
     // Step 1: Fetch candle data for all timeframes
+    console.log(`🕯️ Step 1: Fetching candle data...`);
     const candleData = await fetchCandleData(symbol);
+    console.log(`🕯️ Step 1 complete: Fetched data for ${Object.keys(candleData).length} timeframes`);
     
     // Step 2: Enhance with technical indicators
-    const enhancedCandleData = enhanceCandleDataWithIndicators(symbol, candleData);
+    console.log(`🕯️ Step 2: Enhancing with technical indicators...`);
+    let enhancedCandleData = enhanceCandleDataWithIndicators(symbol, candleData);
+    console.log(`🕯️ Step 2 complete: Enhanced ${Object.keys(enhancedCandleData).length} timeframes`);
+    
+    // Step 3: Limit to most recent 100 candles per timeframe
+    console.log(`🕯️ Step 3: Limiting to 100 candles per timeframe...`);
+    enhancedCandleData = limitCandleData(enhancedCandleData, 100);
+    console.log(`🕯️ Step 3 complete`);
+    
+    // Step 4: Filter to specific timeframe if requested
+    if (options.timeframe) {
+      console.log(`🕯️ Step 4: Filtering to ${options.timeframe} timeframe...`);
+      enhancedCandleData = filterTimeframe(enhancedCandleData, options.timeframe);
+      console.log(`🕯️ Step 4 complete`);
+    }
     
     const analysis = {
       symbol: symbol,
       timestamp: new Date().toISOString(),
       status: 'analysis_complete',
       candleData: enhancedCandleData,
-      message: 'Candle analysis completed with technical indicators'
+      message: options.timeframe 
+        ? `Candle analysis completed for ${options.timeframe} timeframe (limited to 100 candles)`
+        : 'Candle analysis completed with technical indicators (limited to 100 candles per timeframe)'
     };
     
-    console.log(`🕯️ ✅ Candle analysis completed for ${symbol}`);
+    console.log(`🕯️ ✅ Candle analysis completed for ${symbol}${options.timeframe ? ` (${options.timeframe})` : ''}`);
     return analysis;
     
   } catch (error) {
-    console.error(`🕯️ ❌ Candle analysis failed for ${symbol}:`, error.message);
+    console.error(`🕯️ ❌ Candle analysis failed for ${symbol}:`, error);
+    console.error(`🕯️ Error stack:`, error.stack);
     
     const analysis = {
       symbol: symbol,
       timestamp: new Date().toISOString(),
       status: 'error',
       error: error.message,
+      stack: error.stack,
       message: 'Failed to complete candle analysis'
     };
     

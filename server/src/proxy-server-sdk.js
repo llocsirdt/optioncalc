@@ -9,6 +9,7 @@ const PersistenceManager = require('./persistence/persistence');
 // Import shared handlers and market client
 const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
+const { analyzeCandles } = require('./persistence/candle-analyzer');
 const { marketClient } = require('./persistence/market-client');
 
 const app = express();
@@ -151,6 +152,28 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       
     } else if (path.startsWith('/pricehistory')) {
       result = await handlePriceHistoryRequest(path, query, timestamp, marketClient);
+      
+    } else if (path.startsWith('/candleanalysis')) {
+      const url = new URL(`http://localhost${query}`);
+      const symbol = url.searchParams.get('symbol');
+      const timeframe = url.searchParams.get('timeframe');
+      
+      if (!symbol) {
+        throw new Error('symbol parameter is required (e.g., ?symbol=SPY)');
+      }
+      
+      const options = {};
+      if (timeframe) {
+        // Validate timeframe
+        const validTimeframes = ['1m', '5m', '15m', '60m', 'daily'];
+        if (!validTimeframes.includes(timeframe)) {
+          throw new Error(`Invalid timeframe '${timeframe}'. Valid options: ${validTimeframes.join(', ')}`);
+        }
+        options.timeframe = timeframe;
+      }
+      
+      console.log(`[${timestamp}] Analyzing candles for: ${symbol}${timeframe ? ` (${timeframe})` : ''}`);
+      result = await analyzeCandles(symbol, options);
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
