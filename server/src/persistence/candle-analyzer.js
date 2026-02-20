@@ -9,6 +9,10 @@ const { marketClient } = require('./market-client');
 // In-memory cache for candle data (symbol -> date -> data)
 const candleDataCache = new Map();
 
+// Track if refresh loop is running
+let refreshLoopRunning = false;
+let refreshIntervalId = null;
+
 /**
  * Get cache key for symbol and date
  * @param {string} symbol - The symbol
@@ -84,6 +88,348 @@ function clearOldCache() {
   if (clearedCount > 0) {
     console.log(`🕯️ Cleared ${clearedCount} old cache entries`);
   }
+}
+
+/**
+ * Get all symbols that have cached data for today
+ * @returns {Array<string>} Array of symbols
+ */
+function getCachedSymbols() {
+  const today = new Date().toISOString().split('T')[0];
+  const symbols = new Set();
+  
+  for (const [key, data] of candleDataCache.entries()) {
+    if (data.date === today) {
+      // Extract symbol from cache key (format: symbol_date)
+      const symbol = key.split('_')[0];
+      symbols.add(symbol);
+    }
+  }
+  
+  return Array.from(symbols);
+}
+
+/**
+ * Aggregate 1-minute candles into a higher timeframe candle
+ * @param {Array} oneMinCandles - Array of 1-minute candles to aggregate
+ * @returns {Object} Aggregated candle
+ */
+function aggregateCandles(oneMinCandles) {
+  if (!oneMinCandles || oneMinCandles.length === 0) {
+    return null;
+  }
+  
+  return {
+    open: oneMinCandles[0].open,
+    high: Math.max(...oneMinCandles.map(c => c.high)),
+    low: Math.min(...oneMinCandles.map(c => c.low)),
+    close: oneMinCandles[oneMinCandles.length - 1].close,
+    volume: oneMinCandles.reduce((sum, c) => sum + c.volume, 0),
+    datetime: oneMinCandles[0].datetime // Use the start time of the period
+  };
+}
+
+/**
+ * Check if a datetime is at a timeframe boundary
+ * @param {number} datetime - Epoch milliseconds
+ * @param {number} minutes - Timeframe in minutes (5, 15, 60)
+ * @returns {boolean} True if at boundary
+ */
+function isAtTimeframeBoundary(datetime, minutes) {
+  const date = new Date(datetime);
+  const minute = date.getMinutes();
+  return minute % minutes === 0;
+}
+
+/**
+ * Build higher timeframe candles from 1-minute data
+ * @param {Array} oneMinCandles - Array of 1-minute candles (with indicators stripped)
+ * @param {number} timeframeMinutes - Timeframe in minutes (5, 15, 60)
+ * @returns {Array} Array of aggregated candles
+ */
+function buildHigherTimeframeCandles(oneMinCandles, timeframeMinutes) {
+  if (!oneMinCandles || oneMinCandles.length === 0) {
+    return [];
+  }
+  
+  const higherTimeframeCandles = [];
+  let currentPeriodCandles = [];
+  
+  for (let i = 0; i < oneMinCandles.length; i++) {
+    const candle = oneMinCandles[i];
+    currentPeriodCandles.push(candle);
+    
+    // Check if we're at the end of a period or the last candle
+    const isLastCandle = i === oneMinCandles.length - 1;
+    const nextCandleStartsNewPeriod = !isLastCandle && 
+      isAtTimeframeBoundary(oneMinCandles[i + 1].datetime, timeframeMinutes);
+    
+    if (nextCandleStartsNewPeriod || isLastCandle) {
+      // Aggregate the current period
+      const aggregated = aggregateCandles(currentPeriodCandles);
+      if (aggregated) {
+        higherTimeframeCandles.push(aggregated);
+      }
+      currentPeriodCandles = [];
+    }
+  }
+  
+  return higherTimeframeCandles;
+}
+
+/**
+ * Update higher timeframe candles from refreshed 1-minute data
+ * @param {string} symbol - The symbol
+ * @param {Array} oneMinCandles - Updated 1-minute candles (without indicators)
+ */
+function updateHigherTimeframes(symbol, oneMinCandles) {
+  const cachedData = getCachedData(symbol);
+  if (!cachedData) return;
+  
+  console.log(`🕯️ Updating higher timeframes for ${symbol} from 1m data...`);
+  
+  // Strip indicators from 1m candles for aggregation
+  const rawOneMinCandles = oneMinCandles.map(c => ({
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+    volume: c.volume,
+    datetime: c.datetime
+  }));
+  
+  // Build and update each higher timeframe
+  const timeframes = [
+    { minutes: 5, name: '5m' },
+    { minutes: 15, name: '15m' },
+    { minutes: 60, name: '1h' }
+  ];
+  
+  for (const tf of timeframes) {
+    const aggregatedCandles = buildHigherTimeframeCandles(rawOneMinCandles, tf.minutes);
+    
+    if (aggregatedCandles.length === 0) {
+      console.log(`🕯️ No ${tf.name} candles to update for ${symbol}`);
+      continue;
+    }
+    
+    // Calculate indicators for the aggregated candles
+    const sma20 = calculateSMA(aggregatedCandles, 20);
+    const sma50 = calculateSMA(aggregatedCandles, 50);
+    const bollinger20_2 = calculateBollingerBands(aggregatedCandles, 20, 2);
+    
+    // Add indicators to each candle
+    const enhancedCandles = aggregatedCandles.map((candle, index) => ({
+      ...candle,
+      indicators: {
+        sma20: sma20[index],
+        sma50: sma50[index],
+        bollinger20_2: {
+          upper: bollinger20_2.upper[index],
+          middle: bollinger20_2.middle[index],
+          lower: bollinger20_2.lower[index]
+        }
+      }
+    }));
+    
+    // Update cached data for this timeframe
+    cachedData[tf.name] = {
+      timeframe: tf.name,
+      data: { candles: aggregatedCandles },
+      candles: enhancedCandles,
+      count: enhancedCandles.length,
+      indicators: {
+        sma20: sma20,
+        sma50: sma50,
+        bollinger20_2: bollinger20_2
+      },
+      fetchedAt: cachedData[tf.name]?.fetchedAt || new Date().toISOString(),
+      enhancedAt: new Date().toISOString(),
+      lastRefreshed: new Date().toISOString(),
+      derivedFrom: '1m'
+    };
+    
+    console.log(`🕯️ ✅ Updated ${tf.name} with ${enhancedCandles.length} candles for ${symbol}`);
+  }
+  
+  // Re-cache the updated data
+  cacheCandleData(symbol, cachedData);
+}
+
+/**
+ * Refresh 1-minute candle data for a symbol
+ * @param {string} symbol - The symbol to refresh
+ */
+async function refresh1MinuteData(symbol) {
+  try {
+    const cachedData = getCachedData(symbol);
+    if (!cachedData || !cachedData['1m']) {
+      console.log(`🕯️ No cached 1m data for ${symbol}, skipping refresh`);
+      return;
+    }
+    
+    // Handle index symbols
+    const indexSymbols = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
+    const apiSymbol = symbol.startsWith('$') ? 
+      symbol : 
+      (indexSymbols.includes(symbol) ? `$${symbol}` : symbol);
+    
+    console.log(`🕯️ Refreshing 1m data for ${symbol}...`);
+    
+    // Fetch latest 1-minute data
+    const freshData = await marketClient.priceHistory(
+      apiSymbol,
+      'day',
+      5,
+      'minute',
+      1,
+      undefined,
+      undefined,
+      undefined,
+      undefined
+    );
+    
+    if (!freshData || !freshData.candles || freshData.candles.length === 0) {
+      console.log(`🕯️ No new 1m candles for ${symbol}`);
+      return;
+    }
+    
+    // Get existing candles
+    const existingCandles = cachedData['1m'].candles || [];
+    const existingTimes = new Set(existingCandles.map(c => c.datetime));
+    
+    // Filter out duplicate candles (only add new ones)
+    const newCandles = freshData.candles.filter(candle => !existingTimes.has(candle.datetime));
+    
+    if (newCandles.length === 0) {
+      console.log(`🕯️ No new 1m candles for ${symbol} (all duplicates)`);
+      return;
+    }
+    
+    console.log(`🕯️ Adding ${newCandles.length} new 1m candles for ${symbol}`);
+    
+    // Merge new candles with existing ones and sort by datetime
+    const mergedCandles = [...existingCandles, ...newCandles].sort((a, b) => a.datetime - b.datetime);
+    
+    // Recalculate indicators for the updated 1m data
+    const sma20 = calculateSMA(mergedCandles, 20);
+    const sma50 = calculateSMA(mergedCandles, 50);
+    const bollinger20_2 = calculateBollingerBands(mergedCandles, 20, 2);
+    
+    // Add indicators to each candle
+    const enhancedCandles = mergedCandles.map((candle, index) => ({
+      ...candle,
+      indicators: {
+        sma20: sma20[index],
+        sma50: sma50[index],
+        bollinger20_2: {
+          upper: bollinger20_2.upper[index],
+          middle: bollinger20_2.middle[index],
+          lower: bollinger20_2.lower[index]
+        }
+      }
+    }));
+    
+    // Update cached data
+    cachedData['1m'] = {
+      timeframe: '1m',
+      data: { ...freshData, candles: mergedCandles },
+      candles: enhancedCandles,
+      count: enhancedCandles.length,
+      indicators: {
+        sma20: sma20,
+        sma50: sma50,
+        bollinger20_2: bollinger20_2
+      },
+      fetchedAt: cachedData['1m'].fetchedAt,
+      enhancedAt: new Date().toISOString(),
+      lastRefreshed: new Date().toISOString()
+    };
+    
+    // Re-cache the updated data
+    cacheCandleData(symbol, cachedData);
+    
+    console.log(`🕯️ ✅ Refreshed 1m data for ${symbol} (total: ${enhancedCandles.length} candles)`);
+    
+    // Update higher timeframes (5m, 15m, 1h) from the updated 1m data
+    updateHigherTimeframes(symbol, enhancedCandles);
+    
+  } catch (error) {
+    console.error(`🕯️ ❌ Failed to refresh 1m data for ${symbol}:`, error.message);
+  }
+}
+
+/**
+ * Refresh 1-minute data for all cached symbols
+ */
+async function refreshAllSymbols() {
+  const symbols = getCachedSymbols();
+  
+  if (symbols.length === 0) {
+    console.log(`🕯️ No symbols to refresh`);
+    return;
+  }
+  
+  console.log(`🕯️ Refreshing 1m data for ${symbols.length} symbols: ${symbols.join(', ')}`);
+  
+  // Refresh all symbols in parallel
+  await Promise.all(symbols.map(symbol => refresh1MinuteData(symbol)));
+  
+  console.log(`🕯️ ✅ Refresh cycle completed`);
+}
+
+/**
+ * Calculate milliseconds until next minute boundary
+ * @returns {number} Milliseconds to wait
+ */
+function msUntilNextMinute() {
+  const now = new Date();
+  const nextMinute = new Date(now);
+  nextMinute.setMinutes(now.getMinutes() + 1);
+  nextMinute.setSeconds(0);
+  nextMinute.setMilliseconds(0);
+  
+  return nextMinute - now;
+}
+
+/**
+ * Start the automatic refresh loop
+ */
+function startRefreshLoop() {
+  if (refreshLoopRunning) {
+    console.log(`🕯️ Refresh loop already running`);
+    return;
+  }
+  
+  refreshLoopRunning = true;
+  console.log(`🕯️ Starting automatic 1m candle refresh loop`);
+  
+  // Schedule first refresh at the next minute boundary
+  const initialDelay = msUntilNextMinute();
+  console.log(`🕯️ First refresh in ${Math.round(initialDelay / 1000)} seconds`);
+  
+  setTimeout(() => {
+    // Execute first refresh
+    refreshAllSymbols();
+    
+    // Then set up recurring refresh every minute
+    refreshIntervalId = setInterval(() => {
+      refreshAllSymbols();
+    }, 60000); // 60 seconds
+    
+  }, initialDelay);
+}
+
+/**
+ * Stop the automatic refresh loop
+ */
+function stopRefreshLoop() {
+  if (refreshIntervalId) {
+    clearInterval(refreshIntervalId);
+    refreshIntervalId = null;
+  }
+  refreshLoopRunning = false;
+  console.log(`🕯️ Stopped automatic refresh loop`);
 }
 
 /**
@@ -301,6 +647,11 @@ async function analyzeCandles(symbol) {
   console.log(`🕯️ Starting candle analysis for: ${symbol}`);
   
   try {
+    // Start refresh loop on first call
+    if (!refreshLoopRunning) {
+      startRefreshLoop();
+    }
+    
     // Step 1: Fetch candle data for all timeframes
     const candleData = await fetchCandleData(symbol);
     
@@ -337,5 +688,8 @@ module.exports = {
   analyzeCandles,
   clearOldCache,
   hasValidCache,
-  getCachedData
+  getCachedData,
+  startRefreshLoop,
+  stopRefreshLoop,
+  refreshAllSymbols
 };
