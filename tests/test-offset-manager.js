@@ -357,7 +357,7 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
 
 runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffsettingBullPutSpread', () => {
   // Create bear put spread with favorable cost to ensure offsets are found
-  const position = createBearPutSpread(7100, 7000, 10000, -6000); // Lower cost: $2000 vs $3000
+  const position = createBearPutSpread(7000, 6900, 10000, -7000); // Lower cost: $2000 vs $3000
   const chainData = createStaticChainData();
   
   console.log('\n\n\n  📍 Testing Bear Put Spread Position');

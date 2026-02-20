@@ -86,6 +86,14 @@
    * Find offsetting Bull Call Spread positions
    */
   function findOffsettingBullCallSpread(position, chainData) {
+    // console.log('🔍 SHARED: findOffsettingBullCallSpread START', {
+    //   strategy: position.strategy,
+    //   shortPutStrike: Math.min(...position.legs.map(leg => leg.strike)),
+    //   longPutStrike: Math.max(...position.legs.map(leg => leg.strike)),
+    //   spreadWidth: position.spreadWidth,
+    //   offsetBudget: position.offsetBudget
+    // });
+    
     const possibleOffsets = [];
     
     const shortPutStrike = Math.min(...position.legs.map(leg => leg.strike));
@@ -111,14 +119,18 @@
     const addedSpreads = new Set();
     
     for (const longCallStrike of callStrikes) {
-      if (longCallStrike > longPutStrike) {
+      // console.log(`🔍 SHARED: Testing longCallStrike ${longCallStrike} vs shortPutStrike ${shortPutStrike}`);
+      if (longCallStrike > shortPutStrike) {
+        // console.log(`🔍 SHARED: Skipping ${longCallStrike} > ${shortPutStrike}`);
         continue;
       }
       
       const shortCallStrike = longCallStrike + spreadWidth;
       const spreadKey = `${longCallStrike}-${shortCallStrike}`;
+      // console.log(`🔍 SHARED: Trying spread ${longCallStrike}-${shortCallStrike}`);
       
       if (addedSpreads.has(spreadKey)) {
+        // console.log(`🔍 SHARED: Spread ${spreadKey} already added`);
         continue;
       }
       
@@ -137,6 +149,7 @@
       }
       
       if (!longCallData || !shortCallData) {
+        // console.log(`🔍 SHARED: Missing data for ${longCallStrike}-${shortCallStrike}: long=${!!longCallData}, short=${!!shortCallData}`);
         continue;
       }
       
@@ -144,9 +157,14 @@
       const shortCallCost = (shortCallData.bid + shortCallData.ask) / 2;
       const spreadCost = (longCallCost - shortCallCost) * 100;
       
+      // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: cost=$${spreadCost.toFixed(2)}, budget=$${offsetBudget}`);
+      
       if (spreadCost > offsetBudget) {
-        break;
+        // console.log(`🔍 SHARED: Spread cost $${spreadCost.toFixed(2)} > budget $${offsetBudget} - SKIPPING`);
+        continue;
       }
+      
+      // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike} passed budget check, calculating locked profit...`);
       
       const offsetMaxValue = spreadWidth * 100;
       
@@ -171,14 +189,16 @@
           // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
           lockedInProfit = -totalCost; // Worst case: both worthless
           
-          // Best case: one of them reaches max value
-          const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-          profitPotential = maxMaxValue - totalCost;
+          // Best case: both spreads can reach full value at different price points
+          const combinedMaxValue = position.maxValue + offsetMaxValue;
+          profitPotential = combinedMaxValue - totalCost;
         } else {
           // Strikes overlap - at least one spread will have value at any price
           const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+          // console.log(`🔍 SHARED: Overlap check: ${bullCallLongStrike} < ${bearPutLongStrike} = ${bullCallLongStrike < bearPutLongStrike}, ${bearPutShortStrike} < ${bullCallShortStrike} = ${bearPutShortStrike < bullCallShortStrike}, Overlap = ${strikesOverlap}`);
           
           if (strikesOverlap) {
+            // console.log('🔍 SHARED: Using OVERLAPPING calculation');
             const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
             lockedInProfit = minMaxValue - totalCost;
             
@@ -201,11 +221,14 @@
             }
             
             profitPotential = maxCombinedValue - totalCost;
+            // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
           } else {
+            // console.log('🔍 SHARED: Using NON-OVERLAPPING calculation');
             const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-            const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+            const combinedMaxValue = position.maxValue + offsetMaxValue;
             lockedInProfit = minMaxValue - totalCost;
-            profitPotential = maxMaxValue - totalCost;
+            profitPotential = combinedMaxValue - totalCost;
+            // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
           }
         }
         
@@ -293,7 +316,150 @@
       
       possibleOffsets.push(offsettingSpread);
       addedSpreads.add(spreadKey);
-    }
+
+      // Check for wider spreads after successfully adding a fixed-width spread
+      // console.log(`🔍 BULL CALL: Successfully added fixed-width spread ${longCallStrike}-${shortCallStrike}, now checking wider spreads`);
+      
+      const longCallStrikeIndex = callStrikes.indexOf(longCallStrike);
+      // console.log(`🔍 BULL CALL: Checking wider spreads for longCallStrike ${longCallStrike}, index: ${longCallStrikeIndex}`);
+      if (longCallStrikeIndex !== -1) {
+        for (let i = longCallStrikeIndex - 1; i >= 0; i--) {
+          const widerShortCallStrike = callStrikes[i];
+          const widerSpreadWidth = widerShortCallStrike - longCallStrike;
+          // console.log(`🔍 BULL CALL: Trying wider spread ${longCallStrike}-${widerShortCallStrike} (width: ${widerSpreadWidth})`);
+          
+          if (widerSpreadWidth <= spreadWidth) {
+            continue;
+          }
+          
+          const spreadKey = `${longCallStrike}-${widerShortCallStrike}`;
+          if (addedSpreads.has(spreadKey)) {
+            continue;
+          }
+          
+          let widerShortCallData = null;
+          
+          for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+            const widerShortStrikeKey = widerShortCallStrike.toString() + '.0';
+            
+            if (strikes[widerShortStrikeKey]) {
+              widerShortCallData = strikes[widerShortStrikeKey][0];
+              break;
+            }
+          }
+          
+          if (!widerShortCallData || !widerShortCallData.bid || !widerShortCallData.ask) {
+            // console.log(`🔍 BULL CALL: Missing data for ${longCallStrike}-${widerShortCallStrike}: short=false`);
+            continue;
+          }          
+          const widerShortCallCost = (widerShortCallData.bid + widerShortCallData.ask) / 2;
+          const widerSpreadCost = (longCallCost - widerShortCallCost) * 100;
+          
+          // console.log(`🔍 BULL CALL: Wider spread ${longCallStrike}-${widerShortCallStrike}: cost=$${widerSpreadCost.toFixed(2)}, budget=$${offsetBudget}`);
+          
+          if (widerSpreadCost > offsetBudget) {
+            // console.log(`🔍 BULL CALL: Wider spread cost $${widerSpreadCost.toFixed(2)} > budget $${offsetBudget} - SKIPPING`);
+            continue;
+          }
+          
+          const widerOffsetMaxValue = widerSpreadWidth * 100;
+          
+          let widerLockedInProfit, widerProfitPotential;
+          
+          if (isBearPutSpread) {
+            const bullCallLongStrike = longCallStrike;
+            const bullCallShortStrike = widerShortCallStrike;
+            const bearPutShortStrike = position.shortPutStrike;
+            const bearPutLongStrike = position.longPutStrike;
+            
+            const totalCost = position.cost + widerSpreadCost;
+            
+            if (bullCallLongStrike >= bearPutLongStrike) {
+              widerLockedInProfit = -totalCost;
+              const combinedMaxValue = position.maxValue + widerOffsetMaxValue;
+              widerProfitPotential = combinedMaxValue - totalCost;
+            } else {
+              const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+              
+              if (strikesOverlap) {
+                const minMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+                widerLockedInProfit = minMaxValue - totalCost;
+                
+                let maxCombinedValue = 0;
+                
+                if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
+                  const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
+                  const bullCallValueAtShort = widerOffsetMaxValue;
+                  maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
+                }
+                
+                if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
+                  const bearPutValueAtShort = position.maxValue;
+                  const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
+                  maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
+                }
+                
+                if (maxCombinedValue === 0) {
+                  maxCombinedValue = Math.max(position.maxValue, widerOffsetMaxValue);
+                }
+                
+                widerProfitPotential = maxCombinedValue - totalCost;
+              } else {
+                const minMaxValue = Math.min(position.maxValue, widerOffsetMaxValue);
+                const combinedMaxValue = position.maxValue + widerOffsetMaxValue;
+                widerLockedInProfit = minMaxValue - totalCost;
+                widerProfitPotential = combinedMaxValue - totalCost;
+              }
+            }
+          } else {
+            const minMaxValue = Math.min(position.maxValue || 0, widerOffsetMaxValue);
+            const maxMaxValue = Math.max(position.maxValue || 0, widerOffsetMaxValue);
+            const totalCost = position.cost + widerSpreadCost;
+            widerLockedInProfit = minMaxValue - totalCost;
+            widerProfitPotential = maxMaxValue - totalCost;
+          }
+          
+          // console.log(`🔍 BULL CALL: Wider spread ${longCallStrike}-${widerShortCallStrike}: lockedInProfit=$${widerLockedInProfit.toFixed(2)}, profitPotential=$${widerProfitPotential.toFixed(2)}`);
+          
+          if (widerLockedInProfit < 0) {
+            // console.log(`🔍 BULL CALL: Skipping wider spread ${longCallStrike}-${widerShortCallStrike} due to negative locked profit: $${widerLockedInProfit.toFixed(2)}`);
+            continue;
+          }
+          
+          const widerOffsettingSpread = {
+            strategy: 'bull_call_spread',
+            legs: [
+              {
+                action: 'offset',
+                quantity: 1,
+                type: 'C',
+                strike: longCallStrike,
+                cost: longCallCost * 100,
+                originalString: `1c${longCallStrike}@${longCallCost * 100}`
+              },
+              {
+                action: 'offset',
+                quantity: -1,
+                type: 'C',
+                strike: widerShortCallStrike,
+                cost: -widerShortCallCost * 100,
+                originalString: `-1c${widerShortCallStrike}@${-widerShortCallCost * 100}`
+              }
+            ],
+            cost: widerSpreadCost,
+            spreadWidth: widerSpreadWidth,
+            maxValue: widerOffsetMaxValue,
+            lockedInProfit: widerLockedInProfit,
+            profitPotential: widerProfitPotential,
+            profitPotentialScore: widerProfitPotential !== 0 ? widerLockedInProfit / widerProfitPotential : 0,
+            description: `Bull Call Spread: Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}, Short ${widerShortCallStrike}C @ ${widerShortCallCost.toFixed(2)}`
+          };
+          
+          possibleOffsets.push(widerOffsettingSpread);
+          addedSpreads.add(spreadKey);
+          // console.log(`🔍 BULL CALL: Successfully added wider spread ${longCallStrike}-${widerShortCallStrike}`);
+        }
+      }    }
     
     return { strategy: 'bull_call_spread', possibleOffsets };
   }
@@ -302,7 +468,14 @@
    * Find offsetting Bear Call Spread positions
    */
   function findOffsettingBearCallSpread(position, chainData) {
+    // console.log('🔍 DEBUG findOffsettingBearCallSpread: Starting with position', {
+    //   strategy: position.strategy,
+    //   referenceStrike: Math.max(...position.legs.map(leg => leg.strike)),
+    //   offsetBudget: position.offsetBudget
+    // });
+    
     const possibleOffsets = [];
+    const addedSpreads = new Set();
     
     const shortCallStrike = Math.max(...position.legs.map(leg => leg.strike));
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
@@ -323,10 +496,9 @@
     }
     
     const callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b);
-    const addedSpreads = new Set();
     
     for (const shortLowerCallStrike of callStrikes) {
-      const longCallStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const longCallStrike = Math.max(...position.legs.map(leg => leg.strike));
       if (shortLowerCallStrike < longCallStrike) {
         continue;
       }
@@ -416,9 +588,7 @@
       const profitPotential = bestCase;
       const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
-      if (lockedInProfit < 0) {
-        continue;
-      }
+      // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
       
       const offsettingSpread = {
         strategy: 'bear_call_spread',
@@ -449,14 +619,23 @@
         description: `Bear Call Spread: Short ${shortLowerCallStrike}C @ ${shortLowerCallCredit.toFixed(2)}, Long ${longHigherCallStrike}C @ ${longHigherCallCost.toFixed(2)}`
       };
       
+      // console.log(`🔍 BEAR CALL: Checking locked profit for ${shortLowerCallStrike}-${longHigherCallStrike}: $${lockedInProfit.toFixed(2)}`);
+      if (lockedInProfit < 0) {
+        // console.log(`🔍 BEAR CALL: Skipping spread ${shortLowerCallStrike}-${longHigherCallStrike} due to negative locked profit: $${lockedInProfit.toFixed(2)}`);
+        continue;
+      }
+      
       possibleOffsets.push(offsettingSpread);
       addedSpreads.add(spreadKey);
+      // console.log(`🔍 BEAR CALL: Successfully added fixed-width spread ${shortLowerCallStrike}-${longHigherCallStrike}, now checking wider spreads`);
       
       const shortLowerCallStrikeIndex = callStrikes.indexOf(shortLowerCallStrike);
+      // console.log(`🔍 BEAR CALL: Checking wider spreads for shortLowerCallStrike ${shortLowerCallStrike}, index: ${shortLowerCallStrikeIndex}`);
       if (shortLowerCallStrikeIndex !== -1) {
         for (let i = shortLowerCallStrikeIndex + 1; i < callStrikes.length; i++) {
           const widerLongHigherCallStrike = callStrikes[i];
           const widerSpreadWidth = widerLongHigherCallStrike - shortLowerCallStrike;
+          // console.log(`🔍 BEAR CALL: Trying wider spread ${shortLowerCallStrike}-${widerLongHigherCallStrike} (width: ${widerSpreadWidth})`);
           
           if (widerSpreadWidth <= spreadWidth) {
             continue;
@@ -487,6 +666,11 @@
           const widerSpreadCredit = (shortLowerCallCredit - widerLongHigherCallCost) * 100;
           
           if (widerSpreadCredit <= 0) {
+            continue;
+          }
+          
+          if (widerSpreadCredit < offsetBudget) {
+            // console.log(`🔍 BEAR CALL: Wider spread credit $${widerSpreadCredit.toFixed(2)} < budget $${offsetBudget} - INSUFFICIENT CREDIT`);
             continue;
           }
           
@@ -620,12 +804,15 @@
     const addedSpreads = new Set();
     
     for (const shortHigherPutStrike of putStrikes) {
+      // console.log(`🔍 BULL PUT: Testing shortHigherPutStrike ${shortHigherPutStrike} vs referenceStrike ${referenceStrike}`);
       if (shortHigherPutStrike >= referenceStrike) {
+        // console.log(`🔍 BULL PUT: Skipping ${shortHigherPutStrike} >= ${referenceStrike} - bull put strikes must be lower than bear put strikes`);
         continue;
       }
       
       const longLowerPutStrike = shortHigherPutStrike - spreadWidth;
       const spreadKey = `${shortHigherPutStrike}-${longLowerPutStrike}`;
+      // console.log(`🔍 BULL PUT: Trying spread ${shortHigherPutStrike}-${longLowerPutStrike}`);
       
       if (addedSpreads.has(spreadKey)) {
         continue;
@@ -646,6 +833,7 @@
       }
       
       if (!shortHigherPutData || !longLowerPutData) {
+        // console.log(`🔍 BULL PUT: Missing data for ${shortHigherPutStrike}-${longLowerPutStrike}: short=${!!shortHigherPutData}, long=${!!longLowerPutData}`);
         continue;
       }
       
@@ -653,11 +841,17 @@
       const longLowerPutCost = (longLowerPutData.bid + longLowerPutData.ask) / 2;
       const spreadCredit = (shortHigherPutCredit - longLowerPutCost) * 100;
       
+      // console.log(`🔍 BULL PUT: Spread ${shortHigherPutStrike}-${longLowerPutStrike}: credit=$${spreadCredit.toFixed(2)}, budget=$${offsetBudget}`);
+      
       if (spreadCredit <= 0) {
+        // console.log(`🔍 BULL PUT: Spread credit $${spreadCredit.toFixed(2)} <= 0 - SKIPPING`);
         continue;
       }
       
+      // For credit spreads, we want the credit to be within our budget
+      // Reject if the credit required is MORE than our budget
       if (spreadCredit > offsetBudget) {
+        // console.log(`🔍 BULL PUT: Spread credit $${spreadCredit.toFixed(2)} > budget $${offsetBudget} - EXCEEDS BUDGET`);
         continue;
       }
       
@@ -695,7 +889,23 @@
         }
         
         if (bearPutLongStrike < bullPutLongStrike) {
-          bestCaseProfit = Math.max(bestCaseProfit, bearPutMaxValue - netCost);
+          // Non-overlapping spreads - both can reach full value at different price points
+          const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
+          bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
+        } else {
+          // Strikes overlap - check if they overlap
+          const strikesOverlap = bullPutShortStrike > bearPutLongStrike && bullPutLongStrike < bearPutShortStrike;
+          // console.log(`🔍 BULL PUT: Overlap check: ${bullPutShortStrike} > ${bearPutLongStrike} = ${bullPutShortStrike > bearPutLongStrike}, ${bullPutLongStrike} < ${bearPutShortStrike} = ${bullPutLongStrike < bearPutShortStrike}, Overlap = ${strikesOverlap}`);
+          
+          if (strikesOverlap) {
+            // console.log('🔍 BULL PUT: Using OVERLAPPING calculation');
+            const minMaxValue = Math.min(bearPutMaxValue, Math.abs(bullPutMaxLoss));
+            bestCaseProfit = Math.max(bestCaseProfit, minMaxValue - netCost);
+          } else {
+            // console.log('🔍 BULL PUT: Using NON-OVERLAPPING calculation');
+            const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
+            bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
+          }
         }
         
         bestCase = bestCaseProfit;
@@ -795,7 +1005,7 @@
             continue;
           }
           
-          if (widerSpreadCredit > offsetBudget) {
+          if (widerSpreadCredit < offsetBudget) {
             continue;
           }
           
@@ -873,9 +1083,11 @@
   function findOffsettingBearPutSpread(position, chainData) {
     const possibleOffsets = [];
     
-    const longCallStrike = Math.min(...position.legs.map(leg => leg.strike));
+    const shortCallStrike = Math.min(...position.legs.map(leg => leg.strike));
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
     const offsetBudget = position.offsetBudget;
+    
+    // console.log(`🔍 BEAR PUT: findOffsettingBearPutSpread START {strategy: '${position.strategy}', shortCallStrike: ${shortCallStrike}, spreadWidth: ${spreadWidth}, offsetBudget: ${offsetBudget}}`);
         
     const putOptions = chainData.put || null;
     if (!putOptions || Object.keys(putOptions).length === 0) {
@@ -894,8 +1106,12 @@
     const putStrikes = Array.from(allPutStrikes).sort((a, b) => a - b);
     const addedSpreads = new Set();
     
+    // console.log(`🔍 BEAR PUT: Testing ${putStrikes.length} put strikes`);
+    
     for (const shortPutStrike of putStrikes) {
-      if (shortPutStrike < longCallStrike) {
+      // console.log(`🔍 BEAR PUT: Testing shortPutStrike ${shortPutStrike} vs shortCallStrike ${shortCallStrike}`);
+      if (shortPutStrike < shortCallStrike) {
+        // console.log(`🔍 BEAR PUT: Skipping ${shortPutStrike} < ${shortCallStrike}`);
         continue;
       }
       
@@ -928,8 +1144,11 @@
       const shortPutCost = (shortPutData.bid + shortPutData.ask) / 2;
       const spreadCost = (longPutCost - shortPutCost) * 100;
       
+      // console.log(`🔍 BEAR PUT: Spread ${longPutStrike}-${shortPutStrike}: cost=$${spreadCost.toFixed(2)}, budget=$${offsetBudget}`);
+      
       if (spreadCost > offsetBudget) {
-        break;
+        // console.log(`🔍 BEAR PUT: Spread cost $${spreadCost.toFixed(2)} > budget $${offsetBudget} - SKIPPING`);
+        continue;
       }
       
       const offsetMaxValue = spreadWidth * 100;
@@ -955,14 +1174,16 @@
           // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
           lockedInProfit = -totalCost; // Worst case: both worthless
           
-          // Best case: one of them reaches max value
-          const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
-          profitPotential = maxMaxValue - totalCost;
+          // Best case: both spreads can reach full value at different price points
+          const combinedMaxValue = position.maxValue + offsetMaxValue;
+          profitPotential = combinedMaxValue - totalCost;
         } else {
           // Strikes overlap - at least one spread will have value at any price
           const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+          console.log(`🔍 SHARED: Overlap check: ${bullCallLongStrike} < ${bearPutLongStrike} = ${bullCallLongStrike < bearPutLongStrike}, ${bearPutShortStrike} < ${bullCallShortStrike} = ${bearPutShortStrike < bullCallShortStrike}, Overlap = ${strikesOverlap}`);
           
           if (strikesOverlap) {
+            console.log('🔍 SHARED: Using OVERLAPPING calculation');
             const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
             lockedInProfit = minMaxValue - totalCost;
             
@@ -986,10 +1207,11 @@
             
             profitPotential = maxCombinedValue - totalCost;
           } else {
+            console.log('🔍 SHARED: Using NON-OVERLAPPING calculation');
             const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-            const maxMaxValue = Math.max(position.maxValue, offsetMaxValue);
+            const combinedMaxValue = position.maxValue + offsetMaxValue;
             lockedInProfit = minMaxValue - totalCost;
-            profitPotential = maxMaxValue - totalCost;
+            profitPotential = combinedMaxValue - totalCost;
           }
         }
         

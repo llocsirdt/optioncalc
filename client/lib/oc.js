@@ -808,14 +808,56 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
       console.log('📊 Aggregated results:', offsettingAnalysis);
       break;
     case 'bear_put_spread':
+      console.log('🔍 DEBUG: bear_put_spread case - calling findOffsettingBullCallSpread');
+      console.log('🔍 DEBUG: Available call strikes:', Object.keys(chainData.call[Object.keys(chainData.call)[0]] || {}).map(k => parseFloat(k)).sort((a, b) => a - b));
+      console.log('🔍 DEBUG: Position short strike:', position.legs.find(l => l.action === 'sell').strike);
       const bullCallSpreadOffsets = OffsetCalculations.findOffsettingBullCallSpread(position, chainData);
+      console.log('🔍 DEBUG: bear_put_spread case - calling findOffsettingBullPutSpread');
       const bullPutSpreadOffsets = OffsetCalculations.findOffsettingBullPutSpread(position, chainData);
+      console.log('🔍 DEBUG: bear_put_spread case - aggregating results');
+      console.log('🔍 DEBUG: bullCallSpreadOffsets found:', bullCallSpreadOffsets.possibleOffsets?.length || 0);
+      console.log('🔍 DEBUG: bullPutSpreadOffsets found:', bullPutSpreadOffsets.possibleOffsets?.length || 0);
+      if (bullCallSpreadOffsets.possibleOffsets?.length > 0) {
+        console.log('🔍 DEBUG: First bull call offset:', bullCallSpreadOffsets.possibleOffsets[0].description);
+      } else {
+        console.log('🔍 DEBUG: No bull call offsets found - checking why...');
+        // Debug why no offsets found
+        const expirationKey = Object.keys(chainData.call)[0];
+        const callStrikes = Object.keys(chainData.call[expirationKey]).map(k => parseFloat(k));
+        const shortStrike = position.legs.find(l => l.action === 'sell').strike;
+        const validLongStrikes = callStrikes.filter(strike => strike < shortStrike);
+        console.log('🔍 DEBUG: Short strike:', shortStrike);
+        console.log('🔍 DEBUG: Valid long strikes (< short strike):', validLongStrikes);
+        console.log('🔍 DEBUG: Offset budget:', position.offsetBudget);
+        
+        // Check a few specific strikes
+        validLongStrikes.slice(0, 3).forEach(longStrike => {
+          const longData = chainData.call[expirationKey][`${longStrike}.0`][0];
+          const shortStrikes = callStrikes.filter(s => s > longStrike);
+          console.log(`🔍 DEBUG: Long ${longStrike}: bid=${longData.bid}, ask=${longData.ask}, short options: ${shortStrikes.join(', ')}`);
+          
+          // Check if there's a matching short strike at spreadWidth distance
+          const expectedShortStrike = longStrike + position.spreadWidth;
+          const hasMatchingShort = shortStrikes.includes(expectedShortStrike);
+          console.log(`🔍 DEBUG: Expected short strike ${expectedShortStrike}: ${hasMatchingShort ? '✅ Found' : '❌ Not found'}`);
+          
+          if (hasMatchingShort) {
+            const shortData = chainData.call[expirationKey][`${expectedShortStrike}.0`][0];
+            const spreadCost = (longData.bid + longData.ask)/2 + (shortData.bid + shortData.ask)/2;
+            console.log(`🔍 DEBUG: Spread cost: $${spreadCost.toFixed(2)}, Budget: $${position.offsetBudget}, Within budget: ${spreadCost <= position.offsetBudget}`);
+          }
+        });
+      }
       offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bullCallSpreadOffsets, bullPutSpreadOffsets]);
       break;
     case 'bear_call_spread':
+      // console.log('🔍 BEAR CALL SPREAD detected - calling findOffsettingBullCallSpread and findOffsettingBullPutSpread');
       const bullCallSpreadOffsets2 = OffsetCalculations.findOffsettingBullCallSpread(position, chainData);
+      // console.log('📊 Bull call spread offsets:', bullCallSpreadOffsets2);
       const bullPutSpreadOffsets2 = OffsetCalculations.findOffsettingBullPutSpread(position, chainData);
+      // console.log('📊 Bull put spread offsets:', bullPutSpreadOffsets2);
       offsettingAnalysis = OffsetCalculations.aggregateOffsettingResults([bullCallSpreadOffsets2, bullPutSpreadOffsets2]);
+      // console.log('📊 Aggregated offsets:', offsettingAnalysis);
       break;
     case 'bull_put_spread':
       const bearCallSpreadOffsets2 = OffsetCalculations.findOffsettingBearCallSpread(position, chainData);
@@ -863,9 +905,10 @@ function convertClientPositionToSharedFormat(currentPositions) {
   // Bull call spread: long lower call, short higher call (debit spread)
   if (hasLongCall && hasShortCall && callPositions.length === 2) {
     console.log('✅ Detected call spread with 2 positions');
-    const sortedCalls = callPositions.sort((a, b) => a.strike - b.strike);
-    const longCall = sortedCalls[0];
-    const shortCall = sortedCalls[1];
+    
+    // Identify long and short based on quantity sign, not strike order
+    const longCall = callPositions.find(cp => cp.qty > 0);
+    const shortCall = callPositions.find(cp => cp.qty < 0);
     
     console.log('📊 Long call:', longCall);
     console.log('📊 Short call:', shortCall);
@@ -912,8 +955,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
     // Bear call spread is a credit spread (negative cost)
     else {
       strategy = 'bear_call_spread';
-      spreadWidth = shortCall.strike - longCall.strike;
-      maxValue = -(spreadWidth * 100 * Math.abs(longCall.qty)); // Negative for credit spreads
+      spreadWidth = Math.abs(shortCall.strike - longCall.strike);
+      maxValue = spreadWidth * 100 * Math.abs(longCall.qty);
       cost = netCost; // Negative value
       
       console.log('✅ Detected BEAR CALL SPREAD:', { strategy, spreadWidth, maxValue, cost });
@@ -926,9 +969,9 @@ function convertClientPositionToSharedFormat(currentPositions) {
   }
   // Put spreads
   else if (hasLongPut && hasShortPut && putPositions.length === 2) {
-    const sortedPuts = putPositions.sort((a, b) => a.strike - b.strike);
-    const shortPut = sortedPuts[0];
-    const longPut = sortedPuts[1];
+    // Identify long and short based on quantity sign, not strike order
+    const longPut = putPositions.find(pp => pp.qty > 0);
+    const shortPut = putPositions.find(pp => pp.qty < 0);
     
     // Use costAdjustment if available (already in total dollars), otherwise calculate from premium
     let longPutCost, shortPutCredit;
@@ -960,8 +1003,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
     // Bull put spread is a credit spread (negative cost)
     else {
       strategy = 'bull_put_spread';
-      spreadWidth = longPut.strike - shortPut.strike;
-      maxValue = -(spreadWidth * 100 * Math.abs(longPut.qty)); // Negative for credit spreads
+      spreadWidth = Math.abs(longPut.strike - shortPut.strike);
+      maxValue = spreadWidth * 100 * Math.abs(longPut.qty);
       cost = netCost; // Negative value
       
       legs = [
@@ -976,7 +1019,10 @@ function convertClientPositionToSharedFormat(currentPositions) {
     return null;
   }
   
-  const offsetBudget = maxValue - cost; // Max profit
+  // For credit spreads, budget is the credit collected
+  // For debit spreads, budget is the remaining profit potential
+  const isCreditSpread = cost < 0;
+  const offsetBudget = isCreditSpread ? Math.abs(cost) : (maxValue - cost);
   
   console.log('✅ Final position object:', {
     strategy,
@@ -1042,9 +1088,10 @@ function convertSharedOffsetsToClientFormat(sharedOffsets, originalPosition) {
       description: offset.description,
       action: formatOffsetAction(offset),
       cost: offset.cost,
-      potentialValue: offset.maxValue,
+      potentialValue: offset.profitPotential,
       lockedProfit: offset.lockedInProfit,
       profitPotential: offset.profitPotential,
+      profitPotentialScore: offset.profitPotentialScore,
       totalProfitPotential: offset.profitPotential,
       riskNeutralized: offset.lockedInProfit >= 0,
       lowLockedClass: lowLockedClass,
@@ -2019,7 +2066,7 @@ function updateOptionsChain(options) {
                     <div class="trade-metrics">
                       <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
                       <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
-                      <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
+                      <div class="trade-score ${profitClass}">Score: ${(trade.profitPotentialScore * 100).toFixed(1)}%</div>
                     </div>
                   </div>
                 `;
@@ -2104,7 +2151,7 @@ function updateOptionsChain(options) {
                     <div class="trade-metrics">
                       <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
                       <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
-                      <div class="trade-total-profit ${profitClass}">Total: $${trade.totalProfitPotential.toFixed(2)}</div>
+                      <div class="trade-score ${profitClass}">Score: ${(trade.profitPotentialScore * 100).toFixed(1)}%</div>
                     </div>
                   </div>
                 `;
