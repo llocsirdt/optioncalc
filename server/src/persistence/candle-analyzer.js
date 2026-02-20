@@ -521,6 +521,110 @@ async function fetchCandleData(symbol) {
 }
 
 /**
+ * Calculate Bollinger Band score for most recent candle
+ * Measures proximity of current close to BB bands relative to middle band
+ * @param {Array} candles - Array of candle objects
+ * @param {Object} bollingerBands - Bollinger band data (upper, middle, lower arrays)
+ * @returns {number} BB score
+ *   0 = at middle band
+ *   1 = at lower band
+ *   >1 = below lower band
+ *   -1 = at upper band
+ *   <-1 = above upper band
+ */
+function calculateBBScore(candles, bollingerBands) {
+  if (!candles || candles.length === 0) {
+    return 0;
+  }
+  
+  if (!bollingerBands || !bollingerBands.upper || !bollingerBands.middle || !bollingerBands.lower) {
+    return 0;
+  }
+  
+  // Get the most recent candle's close price
+  const currentClose = candles[candles.length - 1].close;
+  
+  // Get the most recent Bollinger Band values
+  const upperBand = bollingerBands.upper[bollingerBands.upper.length - 1];
+  const middleBand = bollingerBands.middle[bollingerBands.middle.length - 1];
+  const lowerBand = bollingerBands.lower[bollingerBands.lower.length - 1];
+  
+  // Handle null values (not enough data for BB calculation)
+  if (upperBand === null || middleBand === null || lowerBand === null) {
+    return 0;
+  }
+  
+  // Calculate the distance from middle to each band
+  const upperDistance = upperBand - middleBand;
+  const lowerDistance = middleBand - lowerBand;
+  
+  // Avoid division by zero
+  if (upperDistance === 0 || lowerDistance === 0) {
+    return 0;
+  }
+  
+  // If price is at or above middle band, calculate score relative to upper band
+  if (currentClose >= middleBand) {
+    // Distance from middle to current price
+    const priceDistanceFromMiddle = currentClose - middleBand;
+    // Ratio: negative as we approach upper band
+    const score = -(priceDistanceFromMiddle / upperDistance);
+    return score;
+  } else {
+    // Price is below middle band, calculate score relative to lower band
+    const priceDistanceFromMiddle = middleBand - currentClose;
+    // Ratio: positive as we approach lower band
+    const score = priceDistanceFromMiddle / lowerDistance;
+    return score;
+  }
+}
+
+/**
+ * Calculate trend score based on last 5 candles
+ * Compares each candle's high/low to previous candle
+ * Score range: -10 to +10
+ * @param {Array} candles - Array of candle objects
+ * @param {number} lookback - Number of candles to analyze (default 5)
+ * @returns {number} Trend score
+ */
+function calculateTrendScore(candles, lookback = 5) {
+  if (!candles || candles.length < 2) {
+    return 0;
+  }
+  
+  // Get the most recent N candles
+  const recentCandles = candles.slice(-lookback);
+  
+  if (recentCandles.length < 2) {
+    return 0;
+  }
+  
+  let score = 0;
+  
+  // Compare each candle to the previous one
+  for (let i = 1; i < recentCandles.length; i++) {
+    const current = recentCandles[i];
+    const previous = recentCandles[i - 1];
+    
+    // High comparison
+    if (current.high > previous.high) {
+      score += 1;
+    } else if (current.high < previous.high) {
+      score -= 1;
+    }
+    
+    // Low comparison
+    if (current.low > previous.low) {
+      score += 1;
+    } else if (current.low < previous.low) {
+      score -= 1;
+    }
+  }
+  
+  return score;
+}
+
+/**
  * Calculate Simple Moving Average (SMA) for candle data
  * @param {Array} candles - Array of candle objects with close prices
  * @param {number} period - Number of periods for SMA
@@ -613,6 +717,8 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const sma20 = calculateSMA(candles, 20);
     const sma50 = calculateSMA(candles, 50);
     const bollinger20_2 = calculateBollingerBands(candles, 20, 2);
+    const trendScore = calculateTrendScore(candles, 5);
+    const bbScore = calculateBBScore(candles, bollinger20_2);
     
     // Add indicators to each candle
     const enhancedCandles = candles.map((candle, index) => ({
@@ -636,6 +742,8 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
         sma50: sma50,
         bollinger20_2: bollinger20_2
       },
+      trendScore: trendScore,
+      bbScore: bbScore,
       enhancedAt: new Date().toISOString()
     };
     
