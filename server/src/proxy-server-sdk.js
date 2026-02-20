@@ -6,8 +6,9 @@ require('dotenv').config({ path: '../.env' });
 // Import persistence manager
 const PersistenceManager = require('./persistence/persistence');
 
-// Import shared chains handler and market client
+// Import shared handlers and market client
 const { handleChainsRequest } = require('./persistence/chains-handler');
+const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
 const { marketClient } = require('./persistence/market-client');
 
 const app = express();
@@ -147,6 +148,9 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       
     } else if (path.startsWith('/chains')) {
       result = await handleChainsRequest(path, query, timestamp, persistence, marketClient);
+      
+    } else if (path.startsWith('/pricehistory')) {
+      result = await handlePriceHistoryRequest(path, query, timestamp, marketClient);
       
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
