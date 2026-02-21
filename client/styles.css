@@ -132,7 +132,7 @@ pre {
 
 /* Trading View Styles */
 .tradingview-widget-container {
-  margin: 0;
+  margin: 0 0 10px 0;
   border: 1px solid #e0e3eb;
   border-radius: 4px;
   overflow: hidden;
@@ -218,12 +218,78 @@ pre {
 }
 
 /* Candle Analysis Styles - Two-Row Compact Layout */
+.candle-analysis-container {
+}
+
 .candle-analysis-compact {
   padding: 6px 8px;
   background: #f9f9f9;
   border-radius: 4px;
   border: 1px solid #ddd;
   font-size: 11px;
+}
+
+.collapse-toggle {
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #666;
+  margin-right: 4px;
+  transition: background 0.2s;
+}
+
+.collapse-toggle:hover {
+  background: #e9e9e9;
+}
+
+.candle-details {
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  max-height: 400px;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.candle-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+}
+
+.candle-table thead {
+  position: sticky;
+  top: 0;
+  background: #f5f5f5;
+  z-index: 1;
+}
+
+.candle-table th {
+  padding: 6px 8px;
+  text-align: left;
+  font-weight: 600;
+  color: #555;
+  border-bottom: 2px solid #ddd;
+  white-space: nowrap;
+}
+
+.candle-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #eee;
+  white-space: nowrap;
+}
+
+.candle-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.candle-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .candle-header-row {

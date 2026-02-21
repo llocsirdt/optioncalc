@@ -5,6 +5,14 @@
 
 let candleAnalysisInterval = null;
 
+// Track collapse state for each candle analysis container
+const candleAnalysisCollapseState = {
+  'candle-analysis-1m': true,   // default collapsed
+  'candle-analysis-5m': true,   // default collapsed
+  'candle-analysis-15m': true,  // default collapsed
+  'candle-analysis-60m': true   // default collapsed
+};
+
 /**
  * Get the API base URL (evaluates PROXY_URL at runtime)
  * @returns {string} API base URL
@@ -106,6 +114,26 @@ function formatBBScore(score) {
 }
 
 /**
+ * Toggle collapse state of candle analysis container
+ * @param {string} divId - The div ID to toggle
+ */
+function toggleCandleAnalysis(divId) {
+  const detailsDiv = document.getElementById(`${divId}-details`);
+  const toggleBtn = document.getElementById(`${divId}-toggle`);
+  
+  if (detailsDiv && toggleBtn) {
+    const isExpanded = detailsDiv.style.display !== 'none';
+    const newState = !isExpanded; // true = collapsed, false = expanded
+    
+    detailsDiv.style.display = isExpanded ? 'none' : 'block';
+    toggleBtn.textContent = isExpanded ? '▼' : '▲';
+    
+    // Save the state
+    candleAnalysisCollapseState[divId] = newState;
+  }
+}
+
+/**
  * Display candle analysis data in a div
  * @param {string} divId - The div ID to update
  * @param {Object} candleData - Candle data for the timeframe
@@ -137,20 +165,77 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
   // Get EST time
   const timeEST = latestCandle.timeEST || '--';
   
-  // Build HTML - two lines: header with time/scores, OHLC values below
+  // Get last 50 candles (or all if less than 50)
+  const recentCandles = candles.slice(-50);
+  
+  // Build OHLC table rows for recent candles with indicators
+  let tableRows = '';
+  for (let i = recentCandles.length - 1; i >= 0; i--) {
+    const candle = recentCandles[i];
+    const candleTime = candle.timeEST || '--';
+    const indicators = candle.indicators || {};
+    const bb = indicators.bollinger20_2 || {};
+    const trendScore = candle.trendScore !== undefined ? candle.trendScore : '--';
+    const bbScore = candle.bbScore !== undefined ? candle.bbScore.toFixed(2) : '--';
+    
+    tableRows += `
+      <tr>
+        <td>${candleTime}</td>
+        <td>${formatPrice(candle.open)}</td>
+        <td>${formatPrice(candle.high)}</td>
+        <td>${formatPrice(candle.low)}</td>
+        <td>${formatPrice(candle.close)}</td>
+        <td>${formatPrice(indicators.sma20)}</td>
+        <td>${formatPrice(indicators.ema9)}</td>
+        <td>${formatPrice(bb.upper)}</td>
+        <td>${formatPrice(bb.lower)}</td>
+        <td>${trendScore}</td>
+        <td>${bbScore}</td>
+        <td>${candleTime}</td>
+      </tr>
+    `;
+  }
+  
+  // Build HTML - collapsible container with summary and details
   const html = `
-    <div class="candle-analysis-compact">
-      <div class="candle-header-row">
-        <span class="timeframe-label">${timeframe}</span>
-        <span class="time-est">${timeEST}</span>
-        <span class="score-label">Trend:</span><span class="score-value">${formatTrendScore(trendScore)}</span>
-        <span class="score-label">BB:</span><span class="score-value">${formatBBScore(bbScore)}</span>
+    <div class="candle-analysis-container">
+      <div class="candle-analysis-compact">
+        <div class="candle-header-row">
+          <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">${candleAnalysisCollapseState[divId] ? '▼' : '▲'}</button>
+          <span class="timeframe-label">${timeframe}</span>
+          <span class="time-est">${timeEST}</span>
+          <span class="score-label">Trend:</span><span class="score-value">${formatTrendScore(trendScore)}</span>
+          <span class="score-label">BB:</span><span class="score-value">${formatBBScore(bbScore)}</span>
+        </div>
+        <div class="candle-ohlc-row">
+          <span class="ohlc-label">O:</span><span class="ohlc-value">${formatPrice(latestCandle.open)}</span>
+          <span class="ohlc-label">H:</span><span class="ohlc-value">${formatPrice(latestCandle.high)}</span>
+          <span class="ohlc-label">L:</span><span class="ohlc-value">${formatPrice(latestCandle.low)}</span>
+          <span class="ohlc-label">C:</span><span class="ohlc-value">${formatPrice(latestCandle.close)}</span>
+        </div>
       </div>
-      <div class="candle-ohlc-row">
-        <span class="ohlc-label">O:</span><span class="ohlc-value">${formatPrice(latestCandle.open)}</span>
-        <span class="ohlc-label">H:</span><span class="ohlc-value">${formatPrice(latestCandle.high)}</span>
-        <span class="ohlc-label">L:</span><span class="ohlc-value">${formatPrice(latestCandle.low)}</span>
-        <span class="ohlc-label">C:</span><span class="ohlc-value">${formatPrice(latestCandle.close)}</span>
+      <div id="${divId}-details" class="candle-details" style="display: ${candleAnalysisCollapseState[divId] ? 'none' : 'block'};">
+        <table class="candle-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Open</th>
+              <th>High</th>
+              <th>Low</th>
+              <th>Close</th>
+              <th>SMA20</th>
+              <th>EMA9</th>
+              <th>BB Upper</th>
+              <th>BB Lower</th>
+              <th>Trend</th>
+              <th>BB Score</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
       </div>
     </div>
   `;

@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 11;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -177,20 +177,21 @@ function getPeriodStartTime(datetime, minutes) {
 }
 
 /**
- * Build higher timeframe candles from 1-minute data
- * @param {Array} oneMinCandles - Array of 1-minute candles (with indicators stripped)
- * @param {number} timeframeMinutes - Timeframe in minutes (5, 15, 60)
+ * Build higher timeframe candles from source candles
+ * @param {Array} sourceCandles - Array of source candles (can be 1m, 30m, etc.)
+ * @param {number} timeframeMinutes - Target timeframe in minutes (5, 15, 60)
+ * @param {number} sourceCandleMinutes - Source candle timeframe in minutes (default 1)
  * @returns {Array} Array of aggregated candles
  */
-function buildHigherTimeframeCandles(oneMinCandles, timeframeMinutes) {
-  if (!oneMinCandles || oneMinCandles.length === 0) {
+function buildHigherTimeframeCandles(sourceCandles, timeframeMinutes, sourceCandleMinutes = 1) {
+  if (!sourceCandles || sourceCandles.length === 0) {
     return [];
   }
   
   // Group candles by their period start time
   const periodGroups = new Map();
   
-  for (const candle of oneMinCandles) {
+  for (const candle of sourceCandles) {
     const periodStart = getPeriodStartTime(candle.datetime, timeframeMinutes);
     
     if (!periodGroups.has(periodStart)) {
@@ -206,6 +207,9 @@ function buildHigherTimeframeCandles(oneMinCandles, timeframeMinutes) {
   // Sort by period start time to maintain chronological order
   const sortedPeriods = Array.from(periodGroups.keys()).sort((a, b) => a - b);
   
+  // Calculate expected candle count based on source timeframe
+  const expectedCandleCount = timeframeMinutes / sourceCandleMinutes;
+  
   for (let i = 0; i < sortedPeriods.length; i++) {
     const periodStart = sortedPeriods[i];
     const periodCandles = periodGroups.get(periodStart);
@@ -213,11 +217,10 @@ function buildHigherTimeframeCandles(oneMinCandles, timeframeMinutes) {
     // Skip the last period if it's incomplete (has fewer candles than expected)
     // This prevents showing partial data for incomplete periods
     const isLastPeriod = i === sortedPeriods.length - 1;
-    const expectedCandleCount = timeframeMinutes;
     const hasIncompletePeriod = periodCandles.length < expectedCandleCount;
     
     if (isLastPeriod && hasIncompletePeriod) {
-      console.log(`🕯️ Skipping incomplete last period: ${periodCandles.length}/${expectedCandleCount} candles`);
+      console.log(`🕯️ Skipping incomplete last period: ${periodCandles.length}/${expectedCandleCount} candles at ${new Date(periodStart).toISOString()}`);
       continue;
     }
     
@@ -301,7 +304,12 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
     // Calculate indicators for the aggregated candles
     const sma20 = calculateSMA(aggregatedCandles, 20);
     const sma50 = calculateSMA(aggregatedCandles, 50);
+    const ema9 = calculateEMA(aggregatedCandles, 9);
     const bollinger20_2 = calculateBollingerBands(aggregatedCandles, 20, 2);
+    
+    // Calculate per-candle scores
+    const perCandleTrendScores = calculatePerCandleTrendScores(aggregatedCandles, 5);
+    const perCandleBBScores = calculatePerCandleBBScores(aggregatedCandles, bollinger20_2);
     
     // Add indicators to each candle
     const enhancedCandles = aggregatedCandles.map((candle, index) => ({
@@ -309,12 +317,15 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
       indicators: {
         sma20: sma20[index],
         sma50: sma50[index],
+        ema9: ema9[index],
         bollinger20_2: {
           upper: bollinger20_2.upper[index],
           middle: bollinger20_2.middle[index],
           lower: bollinger20_2.lower[index]
         }
-      }
+      },
+      trendScore: perCandleTrendScores[index],
+      bbScore: perCandleBBScores[index]
     }));
     
     // Update cached data for this timeframe
@@ -326,6 +337,7 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
       indicators: {
         sma20: sma20,
         sma50: sma50,
+        ema9: ema9,
         bollinger20_2: bollinger20_2
       },
       fetchedAt: cachedData[tf.name]?.fetchedAt || new Date().toISOString(),
@@ -396,7 +408,12 @@ async function refresh1MinuteData(symbol) {
     // Recalculate indicators for the updated 1m data
     const sma20 = calculateSMA(mergedCandles, 20);
     const sma50 = calculateSMA(mergedCandles, 50);
+    const ema9 = calculateEMA(mergedCandles, 9);
     const bollinger20_2 = calculateBollingerBands(mergedCandles, 20, 2);
+    
+    // Calculate per-candle scores
+    const perCandleTrendScores = calculatePerCandleTrendScores(mergedCandles, 5);
+    const perCandleBBScores = calculatePerCandleBBScores(mergedCandles, bollinger20_2);
     
     // Add indicators to each candle
     const enhancedCandles = mergedCandles.map((candle, index) => ({
@@ -404,12 +421,15 @@ async function refresh1MinuteData(symbol) {
       indicators: {
         sma20: sma20[index],
         sma50: sma50[index],
+        ema9: ema9[index],
         bollinger20_2: {
           upper: bollinger20_2.upper[index],
           middle: bollinger20_2.middle[index],
           lower: bollinger20_2.lower[index]
         }
-      }
+      },
+      trendScore: perCandleTrendScores[index],
+      bbScore: perCandleBBScores[index]
     }));
     
     // Update cached data
@@ -421,6 +441,7 @@ async function refresh1MinuteData(symbol) {
       indicators: {
         sma20: sma20,
         sma50: sma50,
+        ema9: ema9,
         bollinger20_2: bollinger20_2
       },
       fetchedAt: cachedData['1m'].fetchedAt,
@@ -600,7 +621,7 @@ async function fetchCandleData(symbol) {
   // Build 1h candles from 30m data (API doesn't support 60-minute frequency)
   if (candleData['30m'] && candleData['30m'].candles && candleData['30m'].candles.length > 0) {
     console.log(`🕯️ Building 1h candles from 30m data...`);
-    const aggregated1h = buildHigherTimeframeCandles(candleData['30m'].candles, 60);
+    const aggregated1h = buildHigherTimeframeCandles(candleData['30m'].candles, 60, 30);
     candleData['1h'] = {
       timeframe: '1h',
       candles: aggregated1h,
@@ -725,6 +746,62 @@ function calculateBBScore(candles, bollingerBands) {
 }
 
 /**
+ * Calculate BB scores for each candle in the array
+ * Returns an array of BB scores, one for each candle
+ * @param {Array} candles - Array of candle objects
+ * @param {Object} bollingerBands - Bollinger Bands object with upper, middle, lower arrays
+ * @returns {Array} Array of BB scores
+ */
+function calculatePerCandleBBScores(candles, bollingerBands) {
+  const scores = [];
+  
+  if (!candles || candles.length === 0) {
+    return scores;
+  }
+  
+  if (!bollingerBands || !bollingerBands.upper || !bollingerBands.middle || !bollingerBands.lower) {
+    return candles.map(() => 0);
+  }
+  
+  for (let i = 0; i < candles.length; i++) {
+    const currentClose = candles[i].close;
+    const upperBand = bollingerBands.upper[i];
+    const middleBand = bollingerBands.middle[i];
+    const lowerBand = bollingerBands.lower[i];
+    
+    // Handle null values (not enough data for BB calculation)
+    if (upperBand === null || middleBand === null || lowerBand === null) {
+      scores.push(0);
+      continue;
+    }
+    
+    // Calculate the distance from middle to each band
+    const upperDistance = upperBand - middleBand;
+    const lowerDistance = middleBand - lowerBand;
+    
+    // Avoid division by zero
+    if (upperDistance === 0 || lowerDistance === 0) {
+      scores.push(0);
+      continue;
+    }
+    
+    // If price is at or above middle band, calculate score relative to upper band
+    if (currentClose >= middleBand) {
+      const priceDistanceFromMiddle = currentClose - middleBand;
+      const score = -(priceDistanceFromMiddle / upperDistance);
+      scores.push(score);
+    } else {
+      // Price is below middle band, calculate score relative to lower band
+      const priceDistanceFromMiddle = middleBand - currentClose;
+      const score = priceDistanceFromMiddle / lowerDistance;
+      scores.push(score);
+    }
+  }
+  
+  return scores;
+}
+
+/**
  * Calculate trend score based on last 5 candles
  * Compares each candle's high/low to previous candle
  * Score range: -10 to +10
@@ -770,6 +847,32 @@ function calculateTrendScore(candles, lookback = 5) {
 }
 
 /**
+ * Calculate trend scores for each candle in the array
+ * Returns an array of trend scores, one for each candle
+ * @param {Array} candles - Array of candle objects
+ * @param {number} lookback - Number of candles to analyze (default 5)
+ * @returns {Array} Array of trend scores
+ */
+function calculatePerCandleTrendScores(candles, lookback = 5) {
+  const scores = [];
+  
+  for (let i = 0; i < candles.length; i++) {
+    if (i < 1) {
+      // Not enough data for first candle
+      scores.push(0);
+    } else {
+      // Get candles up to and including current index
+      const candlesUpToNow = candles.slice(0, i + 1);
+      // Calculate trend score for this position
+      const score = calculateTrendScore(candlesUpToNow, lookback);
+      scores.push(score);
+    }
+  }
+  
+  return scores;
+}
+
+/**
  * Calculate Simple Moving Average (SMA) for candle data
  * @param {Array} candles - Array of candle objects with close prices
  * @param {number} period - Number of periods for SMA
@@ -788,6 +891,38 @@ function calculateSMA(candles, period) {
   }
   
   return sma;
+}
+
+/**
+ * Calculate Exponential Moving Average (EMA) for candle data
+ * @param {Array} candles - Array of candle objects with close prices
+ * @param {number} period - Number of periods for EMA
+ * @returns {Array} Array of EMA values (same length as candles)
+ */
+function calculateEMA(candles, period) {
+  const ema = [];
+  const multiplier = 2 / (period + 1);
+  
+  // First EMA value is SMA
+  let sum = 0;
+  for (let i = 0; i < period && i < candles.length; i++) {
+    sum += candles[i].close;
+    if (i < period - 1) {
+      ema.push(null);
+    }
+  }
+  
+  if (candles.length >= period) {
+    ema.push(sum / period);
+    
+    // Calculate EMA for remaining candles
+    for (let i = period; i < candles.length; i++) {
+      const currentEMA = (candles[i].close - ema[i - 1]) * multiplier + ema[i - 1];
+      ema.push(currentEMA);
+    }
+  }
+  
+  return ema;
 }
 
 /**
@@ -861,9 +996,14 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     // Calculate indicators
     const sma20 = calculateSMA(candles, 20);
     const sma50 = calculateSMA(candles, 50);
+    const ema9 = calculateEMA(candles, 9);
     const bollinger20_2 = calculateBollingerBands(candles, 20, 2);
     const trendScore = calculateTrendScore(candles, 5);
     const bbScore = calculateBBScore(candles, bollinger20_2);
+    
+    // Calculate per-candle scores
+    const perCandleTrendScores = calculatePerCandleTrendScores(candles, 5);
+    const perCandleBBScores = calculatePerCandleBBScores(candles, bollinger20_2);
     
     // Add indicators and EST time to each candle
     const enhancedCandles = candles.map((candle, index) => ({
@@ -872,12 +1012,15 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
       indicators: {
         sma20: sma20[index],
         sma50: sma50[index],
+        ema9: ema9[index],
         bollinger20_2: {
           upper: bollinger20_2.upper[index],
           middle: bollinger20_2.middle[index],
           lower: bollinger20_2.lower[index]
         }
-      }
+      },
+      trendScore: perCandleTrendScores[index],
+      bbScore: perCandleBBScores[index]
     }));
     
     enhancedData[timeframe] = {
@@ -886,6 +1029,7 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
       indicators: {
         sma20: sma20,
         sma50: sma50,
+        ema9: ema9,
         bollinger20_2: bollinger20_2
       },
       trendScore: trendScore,
