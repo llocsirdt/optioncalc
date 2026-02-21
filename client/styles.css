@@ -140,6 +140,164 @@ pre {
 
 
 
+/* Candle Analysis Styles */
+.candle-analysis {
+  background: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.candle-analysis-header {
+  font-weight: bold;
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.time-est {
+  font-weight: normal;
+  font-size: 11px;
+  color: #666;
+  font-family: 'Courier New', monospace;
+}
+
+.candle-analysis-ohlc {
+  margin-bottom: 6px;
+}
+
+.ohlc-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.ohlc-label {
+  font-weight: bold;
+  color: #666;
+  min-width: 15px;
+}
+
+.ohlc-value {
+  color: #333;
+  font-family: 'Courier New', monospace;
+}
+
+.candle-analysis-scores {
+  border-top: 1px solid #eee;
+  padding-top: 6px;
+}
+
+.score-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.score-label {
+  font-weight: bold;
+  color: #666;
+  min-width: 45px;
+}
+
+.score-value {
+  color: #333;
+}
+
+.candle-analysis-error {
+  color: #F44336;
+  font-size: 11px;
+  padding: 4px;
+}
+
+/* Candle Analysis Styles - Two-Row Compact Layout */
+.candle-analysis-compact {
+  padding: 6px 8px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  font-size: 11px;
+}
+
+.candle-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+.candle-ohlc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.timeframe-label {
+  font-weight: bold;
+  font-size: 12px;
+  color: #333;
+  min-width: 30px;
+}
+
+.time-est {
+  font-weight: normal;
+  font-size: 10px;
+  color: #666;
+  font-family: 'Courier New', monospace;
+  min-width: 55px;
+}
+
+.ohlc-label {
+  font-weight: 600;
+  color: #666;
+  margin-left: 2px;
+}
+
+.ohlc-value {
+  color: #333;
+  font-family: 'Courier New', monospace;
+  margin-right: 2px;
+}
+
+.score-label {
+  font-weight: 600;
+  color: #666;
+  margin-left: 6px;
+}
+
+.score-value {
+  font-family: 'Courier New', monospace;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.score-value.positive {
+  color: #22c55e;
+}
+
+.score-value.negative {
+  color: #ef4444;
+}
+
+.score-value.neutral {
+  color: #666;
+}
+
+.candle-analysis-error {
+  color: #ef4444;
+  font-style: italic;
+  padding: 8px;
+}
+
 /* Schwab API Integration Styles */
 #schwab-container {
   background: #f5f5f5;

@@ -18,13 +18,14 @@
   <script src="client/lib/single-leg-offsetting.js"></script>
   <script src="client/lib/oc.js"></script>
   <script src="client/lib/expiration-dropdown.js"></script>
+  <script src="client/lib/candle-analysis.js"></script>
 
 
 </head>
 <body>
 
 <div id="header">
-  <h1>Option Calc v2.1.1</h1>
+  <h1>Option Calc v2.2.0</h1>
   
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
@@ -67,6 +68,7 @@
   <!-- TradingView Script -->
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 
+  <div id="candle-analysis-1m"></div>
 
   <!-- TradingView Widget -->
     <div class="tradingview-widget-container">
@@ -113,6 +115,7 @@
       });
     </script>
 
+  <div id="candle-analysis-5m"></div>
 
     <!-- Second TradingView Widget -->
     <div class="tradingview-widget-container">
@@ -160,6 +163,7 @@
       });
     </script>
 
+  <div id="candle-analysis-15m"></div>
 
   <!-- TradingView Widget -->
     <div class="tradingview-widget-container">
@@ -206,6 +210,7 @@
       });
     </script>
 
+  <div id="candle-analysis-60m"></div>
 
     <!-- Second TradingView Widget -->
     <div class="tradingview-widget-container">

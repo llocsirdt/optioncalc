@@ -2363,6 +2363,11 @@ function startLiveDataUpdates() {
     clearInterval(liveDataInterval);
   }
   
+  // Initial candle analysis update
+  if (typeof startCandleAnalysisUpdates === 'function') {
+    startCandleAnalysisUpdates(currentSymbol, 60000); // Update every 60 seconds
+  }
+  
   // Update every 10 seconds
   liveDataInterval = setInterval(() => {
     console.log('⏰ Live data interval check:', { liveDataEnabled, currentSymbol, schwabConnected });
@@ -2385,6 +2390,11 @@ function stopLiveDataUpdates() {
   if (liveDataInterval) {
     clearInterval(liveDataInterval);
     liveDataInterval = null;
+  }
+  
+  // Stop candle analysis updates
+  if (typeof stopCandleAnalysisUpdates === 'function') {
+    stopCandleAnalysisUpdates();
   }
 }
 

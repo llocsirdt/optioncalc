@@ -9,6 +9,9 @@ const { marketClient } = require('./market-client');
 // In-memory cache for candle data (symbol -> date -> data)
 const candleDataCache = new Map();
 
+// Cache version - increment this to invalidate all cached data after logic changes
+const CACHE_VERSION = 8;
+
 // Track if refresh loop is running
 let refreshLoopRunning = false;
 let refreshIntervalId = null;
@@ -20,7 +23,7 @@ let refreshIntervalId = null;
  * @returns {string} Cache key
  */
 function getCacheKey(symbol, date) {
-  return `${symbol}_${date}`;
+  return `${symbol}_${date}_v${CACHE_VERSION}`;
 }
 
 /**
@@ -151,6 +154,29 @@ function isAtTimeframeBoundary(datetime, minutes) {
 }
 
 /**
+ * Get the period start time for a given datetime and timeframe
+ * @param {number} datetime - Epoch milliseconds
+ * @param {number} minutes - Timeframe in minutes (5, 15, 60)
+ * @returns {number} Period start time in epoch milliseconds
+ */
+function getPeriodStartTime(datetime, minutes) {
+  const date = new Date(datetime);
+  const minute = date.getMinutes();
+  const hour = date.getHours();
+  
+  // Calculate the start minute of the period
+  const periodStartMinute = Math.floor(minute / minutes) * minutes;
+  
+  // Create a new date at the period start
+  const periodStart = new Date(date);
+  periodStart.setMinutes(periodStartMinute);
+  periodStart.setSeconds(0);
+  periodStart.setMilliseconds(0);
+  
+  return periodStart.getTime();
+}
+
+/**
  * Build higher timeframe candles from 1-minute data
  * @param {Array} oneMinCandles - Array of 1-minute candles (with indicators stripped)
  * @param {number} timeframeMinutes - Timeframe in minutes (5, 15, 60)
@@ -161,25 +187,75 @@ function buildHigherTimeframeCandles(oneMinCandles, timeframeMinutes) {
     return [];
   }
   
-  const higherTimeframeCandles = [];
-  let currentPeriodCandles = [];
+  // Group candles by their period start time
+  const periodGroups = new Map();
   
-  for (let i = 0; i < oneMinCandles.length; i++) {
-    const candle = oneMinCandles[i];
-    currentPeriodCandles.push(candle);
+  for (const candle of oneMinCandles) {
+    const periodStart = getPeriodStartTime(candle.datetime, timeframeMinutes);
     
-    // Check if we're at the end of a period or the last candle
-    const isLastCandle = i === oneMinCandles.length - 1;
-    const nextCandleStartsNewPeriod = !isLastCandle && 
-      isAtTimeframeBoundary(oneMinCandles[i + 1].datetime, timeframeMinutes);
+    if (!periodGroups.has(periodStart)) {
+      periodGroups.set(periodStart, []);
+    }
     
-    if (nextCandleStartsNewPeriod || isLastCandle) {
-      // Aggregate the current period
-      const aggregated = aggregateCandles(currentPeriodCandles);
-      if (aggregated) {
-        higherTimeframeCandles.push(aggregated);
-      }
-      currentPeriodCandles = [];
+    periodGroups.get(periodStart).push(candle);
+  }
+  
+  // Aggregate each period's candles
+  const higherTimeframeCandles = [];
+  
+  // Sort by period start time to maintain chronological order
+  const sortedPeriods = Array.from(periodGroups.keys()).sort((a, b) => a - b);
+  
+  for (let i = 0; i < sortedPeriods.length; i++) {
+    const periodStart = sortedPeriods[i];
+    const periodCandles = periodGroups.get(periodStart);
+    
+    // Skip the last period if it's incomplete (has fewer candles than expected)
+    // This prevents showing partial data for incomplete periods
+    const isLastPeriod = i === sortedPeriods.length - 1;
+    const expectedCandleCount = timeframeMinutes;
+    const hasIncompletePeriod = periodCandles.length < expectedCandleCount;
+    
+    if (isLastPeriod && hasIncompletePeriod) {
+      console.log(`🕯️ Skipping incomplete last period: ${periodCandles.length}/${expectedCandleCount} candles`);
+      continue;
+    }
+    
+    const aggregated = aggregateCandles(periodCandles);
+    
+    if (aggregated) {
+      // Use the period start time as the candle datetime
+      aggregated.datetime = periodStart;
+      higherTimeframeCandles.push(aggregated);
+    }
+  }
+  
+  // Debug: Log the last TWO periods to verify aggregation
+  if (higherTimeframeCandles.length > 1 && timeframeMinutes === 5) {
+    console.log(`🕯️ DEBUG: Last 2 ${timeframeMinutes}m period aggregations:`);
+    
+    for (let i = Math.max(0, sortedPeriods.length - 2); i < sortedPeriods.length; i++) {
+      const periodStart = sortedPeriods[i];
+      const periodCandles = periodGroups.get(periodStart);
+      const aggregated = higherTimeframeCandles[i];
+      
+      console.log(`\n  Period ${i + 1}:`);
+      console.log(`    Period start: ${new Date(periodStart).toISOString()}`);
+      console.log(`    Number of 1m candles: ${periodCandles.length}`);
+      console.log(`    1m candles:`, periodCandles.map(c => ({
+        time: new Date(c.datetime).toISOString(),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
+      })));
+      console.log(`    Aggregated:`, {
+        datetime: new Date(aggregated.datetime).toISOString(),
+        open: aggregated.open,
+        high: aggregated.high,
+        low: aggregated.low,
+        close: aggregated.close
+      });
     }
   }
   
@@ -286,17 +362,14 @@ async function refresh1MinuteData(symbol) {
     console.log(`🕯️ Refreshing 1m data for ${symbol}...`);
     
     // Fetch latest 1-minute data
-    const freshData = await marketClient.priceHistory(
-      apiSymbol,
-      'day',
-      5,
-      'minute',
-      1,
-      undefined,
-      undefined,
-      undefined,
-      undefined
-    );
+    const options = {
+      periodType: 'day',
+      period: 5,
+      frequencyType: 'minute',
+      frequency: 1
+    };
+    
+    const freshData = await marketClient.priceHistory(apiSymbol, options);
     
     if (!freshData || !freshData.candles || freshData.candles.length === 0) {
       console.log(`🕯️ No new 1m candles for ${symbol}`);
@@ -458,11 +531,15 @@ async function fetchCandleData(symbol) {
   // Clear old cache entries
   clearOldCache();
   
+  // Fetch timeframes from API
+  // Note: For minute data, valid frequencies are 1, 5, 10, 15, 30 (not 60)
+  // For 1h, we'll fetch 30m and aggregate to 1h
+  // For daily, we need periodType=month or year
   const timeframes = [
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 1, name: '1m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 5, name: '5m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, name: '15m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 60, name: '1h' },
+    { frequencyType: 'minute', frequency: 1, name: '1m' },
+    { frequencyType: 'minute', frequency: 5, name: '5m' },
+    { frequencyType: 'minute', frequency: 15, name: '15m' },
+    { frequencyType: 'minute', frequency: 30, name: '30m' },
     { periodType: 'month', period: 1, frequencyType: 'daily', frequency: 1, name: 'daily' }
   ];
   
@@ -476,28 +553,34 @@ async function fetchCandleData(symbol) {
   
   console.log(`🕯️ Using API symbol: ${apiSymbol} for ${symbol}`);
   
-  // Fetch data for each timeframe
+  // Fetch all timeframes from API
   for (const timeframe of timeframes) {
     try {
       console.log(`🕯️ Fetching ${timeframe.name} data for ${symbol}...`);
       
-      const data = await marketClient.priceHistory(
-        apiSymbol,
-        timeframe.periodType,
-        timeframe.period,
-        timeframe.frequencyType,
-        timeframe.frequency,
-        undefined, // startDate
-        undefined, // endDate
-        undefined, // needExtendedHoursData
-        undefined  // needPreviousClose
-      );
+      // Build options object with frequency parameters
+      const options = {
+        frequencyType: timeframe.frequencyType,
+        frequency: timeframe.frequency
+      };
+      
+      // Add periodType and period if specified
+      if (timeframe.periodType) options.periodType = timeframe.periodType;
+      if (timeframe.period) options.period = timeframe.period;
+      
+      const data = await marketClient.priceHistory(apiSymbol, options);
+      
+      // Filter out incomplete last candle for minute-based timeframes
+      let candles = data.candles || [];
+      if (timeframe.frequencyType === 'minute' && candles.length > 0) {
+        candles = filterIncompleteLastCandle(candles, timeframe.frequency);
+      }
       
       // Store only raw candle data (no indicators yet)
       candleData[timeframe.name] = {
         timeframe: timeframe.name,
-        candles: data.candles || [],
-        count: data.candles ? data.candles.length : 0,
+        candles: candles,
+        count: candles.length,
         fetchedAt: new Date().toISOString(),
         raw: true // Flag to indicate this is raw data without indicators
       };
@@ -514,10 +597,72 @@ async function fetchCandleData(symbol) {
     }
   }
   
+  // Build 1h candles from 30m data (API doesn't support 60-minute frequency)
+  if (candleData['30m'] && candleData['30m'].candles && candleData['30m'].candles.length > 0) {
+    console.log(`🕯️ Building 1h candles from 30m data...`);
+    const aggregated1h = buildHigherTimeframeCandles(candleData['30m'].candles, 60);
+    candleData['1h'] = {
+      timeframe: '1h',
+      candles: aggregated1h,
+      count: aggregated1h.length,
+      fetchedAt: new Date().toISOString(),
+      derivedFrom: '30m',
+      raw: true
+    };
+    console.log(`🕯️ ✅ Built ${aggregated1h.length} 1h candles from 30m data`);
+  }
+  
   // Cache the fetched data
   cacheCandleData(symbol, candleData);
   
   return candleData;
+}
+
+/**
+ * Convert epoch milliseconds to EST time string (H:M:S)
+ * @param {number} datetime - Epoch milliseconds
+ * @returns {string} Time in EST format (H:M:S)
+ */
+function toESTTime(datetime) {
+  const date = new Date(datetime);
+  
+  // Convert to EST (UTC-5)
+  const estDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  
+  const hours = estDate.getHours();
+  const minutes = estDate.getMinutes().toString().padStart(2, '0');
+  const seconds = estDate.getSeconds().toString().padStart(2, '0');
+  
+  return `${hours}:${minutes}:${seconds}`;
+}
+
+/**
+ * Filter out incomplete last candle from API data
+ * Checks if the last candle starts a new period but has no subsequent candles
+ * @param {Array} candles - Array of candles
+ * @param {number} timeframeMinutes - Timeframe in minutes (1, 5, 15, 30)
+ * @returns {Array} Filtered candles
+ */
+function filterIncompleteLastCandle(candles, timeframeMinutes) {
+  if (!candles || candles.length < 2) {
+    return candles;
+  }
+  
+  const lastCandle = candles[candles.length - 1];
+  const secondLastCandle = candles[candles.length - 2];
+  
+  // Calculate expected time difference between candles
+  const expectedDiff = timeframeMinutes * 60 * 1000; // milliseconds
+  const actualDiff = lastCandle.datetime - secondLastCandle.datetime;
+  
+  // If the last candle is at the start of a new period (time difference matches),
+  // but it's the only candle in that period, remove it
+  if (actualDiff >= expectedDiff) {
+    console.log(`🕯️ Filtering incomplete last candle at ${new Date(lastCandle.datetime).toISOString()}`);
+    return candles.slice(0, -1);
+  }
+  
+  return candles;
 }
 
 /**
@@ -720,9 +865,10 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const trendScore = calculateTrendScore(candles, 5);
     const bbScore = calculateBBScore(candles, bollinger20_2);
     
-    // Add indicators to each candle
+    // Add indicators and EST time to each candle
     const enhancedCandles = candles.map((candle, index) => ({
       ...candle,
+      timeEST: toESTTime(candle.datetime),
       indicators: {
         sma20: sma20[index],
         sma50: sma50[index],

@@ -53,19 +53,20 @@ async function handlePriceHistoryRequest(path, query, timestamp, marketClient) {
     needPreviousClose
   });
   
-  console.log(`[${timestamp}] 🔗 API Request: marketClient.priceHistory("${apiSymbol}", ...)`);
+  // Build options object (only include defined values)
+  const options = {};
+  if (periodType !== undefined) options.periodType = periodType;
+  if (period !== undefined) options.period = period;
+  if (frequencyType !== undefined) options.frequencyType = frequencyType;
+  if (frequency !== undefined) options.frequency = frequency;
+  if (startDate !== undefined) options.startDate = startDate;
+  if (endDate !== undefined) options.endDate = endDate;
+  if (needExtendedHoursData !== undefined) options.needExtendedHoursData = needExtendedHoursData;
+  if (needPreviousClose !== undefined) options.needPreviousClose = needPreviousClose;
   
-  return await marketClient.priceHistory(
-    apiSymbol,
-    periodType,
-    period,
-    frequencyType,
-    frequency,
-    startDate,
-    endDate,
-    needExtendedHoursData,
-    needPreviousClose
-  );
+  console.log(`[${timestamp}] 🔗 API Request: marketClient.priceHistory("${apiSymbol}", ${JSON.stringify(options)})`);
+  
+  return await marketClient.priceHistory(apiSymbol, options);
 }
 
 module.exports = {
