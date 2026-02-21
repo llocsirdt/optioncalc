@@ -306,13 +306,13 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
   const bearPutResult = offsetManager.findOffsettingBearPutSpread(position, chainData);
   console.log(`    Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
   if (bearPutResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bear put offsets:');
+    //console.log('    Top 5 bear put offsets:');
     bearPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bearPutResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bear put offset (up to 20 total):');
+      //console.log('    Every 5th bear put offset (up to 20 total):');
       for (let i = 9; i < Math.min(bearPutResult.possibleOffsets.length, 100); i += 10) {
         const offset = bearPutResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -326,13 +326,13 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
   const bearCallResult = offsetManager.findOffsettingBearCallSpread(position, chainData);
   console.log(`    Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
   if (bearCallResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bear call offsets:');
+    //console.log('    Top 5 bear call offsets:');
     bearCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bearCallResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bear call offset (up to 20 total):');
+      //console.log('    Every 5th bear call offset (up to 20 total):');
       for (let i = 9; i < Math.min(bearCallResult.possibleOffsets.length, 100); i += 10) {
         const offset = bearCallResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -374,13 +374,13 @@ runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffse
   const bullCallResult = offsetManager.findOffsettingBullCallSpread(position, chainData);
   console.log(`    Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
   if (bullCallResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bull call offsets:');
+    //console.log('    Top 5 bull call offsets:');
     bullCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bullCallResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bull call offset (up to 20 total):');
+      //console.log('    Every 5th bull call offset (up to 20 total):');
       for (let i = 9; i < Math.min(bullCallResult.possibleOffsets.length, 100); i += 10) {
         const offset = bullCallResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -394,13 +394,13 @@ runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffse
   const bullPutResult = offsetManager.findOffsettingBullPutSpread(position, chainData);
   console.log(`    Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
   if (bullPutResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bull put offsets:');
+    //console.log('    Top 5 bull put offsets:');
     bullPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bullPutResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bull put offset (up to 20 total):');
+      //console.log('    Every 5th bull put offset (up to 20 total):');
       for (let i = 9; i < Math.min(bullPutResult.possibleOffsets.length, 100); i += 10) {
         const offset = bullPutResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -462,13 +462,13 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
   }
   console.log(`    Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
   if (bullPutResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bull put offsets:');
+    //console.log('    Top 5 bull put offsets:');
     bullPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bullPutResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bull put offset (up to 20 total):');
+      //console.log('    Every 5th bull put offset (up to 20 total):');
       for (let i = 9; i < Math.min(bullPutResult.possibleOffsets.length, 100); i += 10) {
         const offset = bullPutResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -509,13 +509,13 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
   const bullCallResult = offsetManager.findOffsettingBullCallSpread(position, chainData);
   console.log(`    Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
   if (bullCallResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bull call offsets:');
+    //console.log('    Top 5 bull call offsets:');
     bullCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bullCallResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bull call offset (up to 20 total):');
+      //console.log('    Every 5th bull call offset (up to 20 total):');
       for (let i = 9; i < Math.min(bullCallResult.possibleOffsets.length, 100); i += 10) {
         const offset = bullCallResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -557,13 +557,13 @@ runner.test('Bull Put Spread position - findOffsettingBearCallSpread & findOffse
   const bearCallResult = offsetManager.findOffsettingBearCallSpread(position, chainData);
   console.log(`    Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
   if (bearCallResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bear call offsets:');
+    //console.log('    Top 5 bear call offsets:');
     bearCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bearCallResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bear call offset (up to 20 total):');
+      //console.log('    Every 5th bear call offset (up to 20 total):');
       for (let i = 9; i < Math.min(bearCallResult.possibleOffsets.length, 100); i += 10) {
         const offset = bearCallResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
@@ -577,13 +577,13 @@ runner.test('Bull Put Spread position - findOffsettingBearCallSpread & findOffse
   const bearPutResult = offsetManager.findOffsettingBearPutSpread(position, chainData);
   console.log(`    Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
   if (bearPutResult.possibleOffsets.length > 0) {
-    console.log('    Top 5 bear put offsets:');
+    //console.log('    Top 5 bear put offsets:');
     bearPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
       console.log(`      ${i+1}. ${offset.description || offset.strategy}`);
       console.log(`         Cost: ${offset.cost?.toFixed(0)}, Locked: ${offset.lockedInProfit?.toFixed(0)}, Potential: ${offset.profitPotential?.toFixed(0)}`);
     });
     if (bearPutResult.possibleOffsets.length > 5) {
-      console.log('    Every 5th bear put offset (up to 20 total):');
+      //console.log('    Every 5th bear put offset (up to 20 total):');
       for (let i = 9; i < Math.min(bearPutResult.possibleOffsets.length, 100); i += 10) {
         const offset = bearPutResult.possibleOffsets[i];
         console.log(`      ${i + 1}. ${offset.description || offset.strategy}`);
