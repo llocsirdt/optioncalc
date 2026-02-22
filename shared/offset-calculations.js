@@ -88,16 +88,43 @@
   function findOffsettingBullCallSpread(position, chainData) {
     // console.log('🔍 SHARED: findOffsettingBullCallSpread START', {
     //   strategy: position.strategy,
-    //   shortPutStrike: Math.min(...position.legs.map(leg => leg.strike)),
-    //   longPutStrike: Math.max(...position.legs.map(leg => leg.strike)),
     //   spreadWidth: position.spreadWidth,
     //   offsetBudget: position.offsetBudget
     // });
     
     const possibleOffsets = [];
     
-    const shortPutStrike = Math.min(...position.legs.map(leg => leg.strike));
-    const longPutStrike = Math.max(...position.legs.map(leg => leg.strike));
+    // Determine incoming position type and extract correct reference strikes
+    let referenceStrike;
+    const incomingStrategy = position.strategy;
+    
+    if (incomingStrategy === 'bear_put_spread') {
+      // Bear put spread: long higher strike, short lower strike
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // For bear put spread, reference is the short put (lower strike)
+      referenceStrike = lowerStrike;
+      
+    } else if (incomingStrategy === 'bear_call_spread') {
+      // Bear call spread: short lower strike, long higher strike  
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // For bear call spread, reference is the short call (lower strike)
+      referenceStrike = lowerStrike;
+      
+    } else {
+      // Fallback - shouldn't happen with proper input
+      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    }
+    
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
     const offsetBudget = position.offsetBudget;
         
@@ -120,9 +147,9 @@
     
     // Single unified loop: for each long strike, test all possible short strikes (original width and wider)
     for (const longCallStrike of callStrikes) {
-      // console.log(`🔍 SHARED: Testing longCallStrike ${longCallStrike} vs shortPutStrike ${shortPutStrike}`);
-      if (longCallStrike > shortPutStrike) {
-        // console.log(`🔍 SHARED: Skipping ${longCallStrike} > ${shortPutStrike}`);
+      // console.log(`🔍 SHARED: Testing longCallStrike ${longCallStrike} vs referenceStrike ${referenceStrike}`);
+      if (longCallStrike > referenceStrike) {
+        // console.log(`🔍 SHARED: Skipping ${longCallStrike} > ${referenceStrike}`);
         continue;
       }
       
@@ -346,14 +373,43 @@
   function findOffsettingBearCallSpread(position, chainData) {
     // console.log('🔍 DEBUG findOffsettingBearCallSpread: Starting with position', {
     //   strategy: position.strategy,
-    //   referenceStrike: Math.max(...position.legs.map(leg => leg.strike)),
     //   offsetBudget: position.offsetBudget
     // });
     
     const possibleOffsets = [];
     const addedSpreads = new Set();
     
-    const shortCallStrike = Math.max(...position.legs.map(leg => leg.strike));
+    // Determine incoming position type and extract correct reference strikes
+    let referenceStrike;
+    const incomingStrategy = position.strategy;
+    
+    if (incomingStrategy === 'bull_call_spread') {
+      // Bull call spread: long lower strike, short higher strike
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // For bull call spread, reference is the short call (higher strike)
+      referenceStrike = higherStrike;
+      
+    } else if (incomingStrategy === 'bull_put_spread') {
+      // Bull put spread: short higher strike, long lower strike
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // For bull put spread, reference is the short put (higher strike)
+      referenceStrike = higherStrike;
+      
+    } else {
+      // Fallback - shouldn't happen with proper input
+      referenceStrike = Math.max(...position.legs.map(leg => leg.strike));
+    }
+    
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
     const offsetBudget = position.offsetBudget;
         
@@ -375,8 +431,7 @@
     
     // Single unified loop: for each short strike, test all possible long strikes (original width and wider)
     for (const shortLowerCallStrike of callStrikes) {
-      const longCallStrike = Math.max(...position.legs.map(leg => leg.strike));
-      if (shortLowerCallStrike < longCallStrike) {
+      if (shortLowerCallStrike < referenceStrike) {
         continue;
       }
       
@@ -535,20 +590,39 @@
   function findOffsettingBullPutSpread(position, chainData) {
     const possibleOffsets = [];
     
-    const isBearPutSpread = position.strategy === 'bear_put_spread';
-    const isBearCallSpread = position.strategy === 'bear_call_spread';
+    // Determine incoming position type and extract correct reference strikes
+    let referenceStrike;
+    const incomingStrategy = position.strategy;
+    
+    if (incomingStrategy === 'bear_put_spread') {
+      // Bear put spread: long higher strike, short lower strike
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // For bear put spread, reference is the long put (higher strike)
+      referenceStrike = higherStrike;
+      
+    } else if (incomingStrategy === 'bear_call_spread') {
+      // Bear call spread: short lower strike, long higher strike
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // For bear call spread, reference is the long call (higher strike)
+      referenceStrike = higherStrike;
+      
+    } else {
+      // Fallback - shouldn't happen with proper input
+      referenceStrike = Math.max(...position.legs.map(leg => leg.strike));
+    }
     
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
     const offsetBudget = Math.abs(position.offsetBudget || position.cost);
-    
-    let referenceStrike;
-    if (isBearPutSpread) {
-      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
-    } else if (isBearCallSpread) {
-      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
-    } else {
-      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
-    }
         
     const putOptions = chainData.put || null;
     if (!putOptions || Object.keys(putOptions).length === 0) {
@@ -643,6 +717,9 @@
         
         const bullPutMaxLoss = -(currentSpreadWidth * 100);
         let worstCase, bestCase;
+        
+        const isBearPutSpread = position.strategy === 'bear_put_spread';
+        const isBearCallSpread = position.strategy === 'bear_call_spread';
         
         if (isBearPutSpread) {
           const bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
@@ -763,11 +840,41 @@
   function findOffsettingBearPutSpread(position, chainData) {
     const possibleOffsets = [];
     
-    const shortCallStrike = Math.min(...position.legs.map(leg => leg.strike));
+    // Determine incoming position type and extract correct reference strikes
+    let referenceStrike;
+    const incomingStrategy = position.strategy;
+    
+    if (incomingStrategy === 'bull_call_spread') {
+      // Bull call spread: long lower strike, short higher strike
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // For bull call spread, reference is the long call (lower strike)
+      referenceStrike = lowerStrike;
+      
+    } else if (incomingStrategy === 'bull_put_spread') {
+      // Bull put spread: short higher strike, long lower strike
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // For bull put spread, reference is the long put (lower strike)
+      referenceStrike = lowerStrike;
+      
+    } else {
+      // Fallback - shouldn't happen with proper input
+      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    }
+    
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
     const offsetBudget = position.offsetBudget;
     
-    // console.log(`🔍 BEAR PUT: findOffsettingBearPutSpread START {strategy: '${position.strategy}', shortCallStrike: ${shortCallStrike}, spreadWidth: ${spreadWidth}, offsetBudget: ${offsetBudget}}`);
+    // console.log(`🔍 BEAR PUT: findOffsettingBearPutSpread START {strategy: '${position.strategy}', referenceStrike: ${referenceStrike}, spreadWidth: ${spreadWidth}, offsetBudget: ${offsetBudget}}`);
         
     const putOptions = chainData.put || null;
     if (!putOptions || Object.keys(putOptions).length === 0) {
@@ -790,9 +897,9 @@
     
     // Single unified loop: for each short strike, test all possible long strikes (original width and wider)
     for (const shortPutStrike of putStrikes) {
-      // console.log(`🔍 BEAR PUT: Testing shortPutStrike ${shortPutStrike} vs shortCallStrike ${shortCallStrike}`);
-      if (shortPutStrike < shortCallStrike) {
-        // console.log(`🔍 BEAR PUT: Skipping ${shortPutStrike} < ${shortCallStrike}`);
+      // console.log(`🔍 BEAR PUT: Testing shortPutStrike ${shortPutStrike} vs referenceStrike ${referenceStrike}`);
+      if (shortPutStrike < referenceStrike) {
+        // console.log(`🔍 BEAR PUT: Skipping ${shortPutStrike} < ${referenceStrike}`);
         continue;
       }
       

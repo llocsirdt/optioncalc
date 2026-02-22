@@ -89,7 +89,7 @@ function createStaticChainData() {
     };
     
     // Transform calls
-    Object.entries(chainFile.data.call).forEach(([expiration, strikes]) => {
+    Object.entries(chainFile.data.callExpDateMap).forEach(([expiration, strikes]) => {
       transformedData.call[expiration] = {};
       Object.entries(strikes).forEach(([strike, options]) => {
         const option = options[0]; // Take first option
@@ -102,7 +102,7 @@ function createStaticChainData() {
     });
     
     // Transform puts
-    Object.entries(chainFile.data.put).forEach(([expiration, strikes]) => {
+    Object.entries(chainFile.data.putExpDateMap).forEach(([expiration, strikes]) => {
       transformedData.put[expiration] = {};
       Object.entries(strikes).forEach(([strike, options]) => {
         const option = options[0]; // Take first option
@@ -289,7 +289,7 @@ displayChainDataSample(sampleChainData, '2026-03-31:43');
 
 runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffsettingBearCallSpread', () => {
   // Create bull call spread with favorable debit cost to ensure offsets are found
-  const position = createBullCallSpread(6800, 6900, 10000, -5000); // Lower cost: $4000 vs $5000
+  const position = createBullCallSpread(6850, 6900, 3000, -1000); // Lower cost: $2000
   const chainData = createStaticChainData();
   
   console.log('\n\n\n  📍 Testing Bull Call Spread Position');
@@ -357,7 +357,7 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
 
 runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffsettingBullPutSpread', () => {
   // Create bear put spread with favorable cost to ensure offsets are found
-  const position = createBearPutSpread(7000, 6900, 10000, -7000); // Lower cost: $2000 vs $3000
+  const position = createBearPutSpread(7050, 7000, 3000, -1000); // Lower cost: $2000
   const chainData = createStaticChainData();
   
   console.log('\n\n\n  📍 Testing Bear Put Spread Position');
@@ -425,7 +425,7 @@ runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffse
 
 runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffsettingBullCallSpread', () => {
   // Create bear call spread with reasonable credit (20% higher than spread value)
-  const position = createBearCallSpread(7000, 7100, -10000, 4000); // Credit: -$6000, offset budget: $4000
+  const position = createBearCallSpread(7000, 7050, -5000, 2000); // Credit: -$3000, offset budget: $3000
   const chainData = createStaticChainData();
   
   console.log('\n\n\n  📍 Testing Bear Call Spread Position');
@@ -540,7 +540,7 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
 
 runner.test('Bull Put Spread position - findOffsettingBearCallSpread & findOffsettingBearPutSpread', () => {
   // Create bull put spread with favorable credit to ensure offsets are found
-  const position = createBullPutSpread(6850, 6750, -10000, 5000); // Higher credit: -$5000 vs -$4000
+  const position = createBullPutSpread(6900, 6850, -5000, 2000); // Higher credit: -$3000
   const chainData = createStaticChainData();
   
   console.log('\n\n\n  📍 Testing Bull Put Spread Position');
