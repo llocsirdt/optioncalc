@@ -222,7 +222,7 @@ pre {
 }
 
 .candle-analysis-compact {
-  padding: 6px 8px;
+  padding: 4px;
   background: #f9f9f9;
   border-radius: 4px;
   border: 1px solid #ddd;
@@ -296,7 +296,6 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
   white-space: nowrap;
   background-color: rgba(255, 255, 255, .7);
 }

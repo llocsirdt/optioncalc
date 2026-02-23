@@ -2365,7 +2365,7 @@ function startLiveDataUpdates() {
   
   // Initial candle analysis update
   if (typeof startCandleAnalysisUpdates === 'function') {
-    startCandleAnalysisUpdates(currentSymbol, 60000); // Update every 60 seconds
+    startCandleAnalysisUpdates(currentSymbol, 10000); // Update every 10 seconds to match main data
   }
   
   // Update every 10 seconds

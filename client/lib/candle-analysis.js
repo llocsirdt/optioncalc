@@ -71,17 +71,17 @@ function formatTrendScore(score) {
   
   let color = '#333';
   if (score > 6) {
-    color = '#caffcaff'; // Strong uptrend - light green
+    color = '#00aa00'; // Strong uptrend - light green
   } else if (score < -6) {
-    color = '#ffd0d0ff'; // Strong downtrend - light red
+    color = '#aa0000'; // Strong downtrend - light red
   } else if (score > 3) {
-    color = '#28a228ff'; // Medium uptrend - green
+    color = '#80ff80ff'; // Medium uptrend - green
   } else if (score < -3) {
-    color = '#ae3232ff'; // Medium downtrend - red
+    color = '#ff7f7fff'; // Medium downtrend - red
   } else if (score > 0) {
-    color = '#9dff9dff'; // Weak downtrend - light green
+    color = '#88cc88'; // Weak downtrend - light green
   } else if (score < 0) {
-    color = '#ffa0a0ff'; // Weak downtrend - light red
+    color = '#cc8888'; // Weak downtrend - light red
   }
   
   return `<span style="color: ${color}; font-weight: bold;">${score}</span>`;
@@ -126,13 +126,11 @@ function getTrendBackgroundColor(trendScore) {
   if (trendScore > 0) {
     // Positive trend - shades of green
     const intensity = Math.min(Math.abs(trendScore) / 2, 1); // Normalize to 0-1
-    const greenValue = Math.floor(255 - (intensity * 100)); // 255 -> 155
-    return `rgba(0, ${greenValue}, 0, 1)`; // Light green with transparency
+    return `rgba(0, 200, 0, ${intensity})`; // Light green with transparency
   } else if (trendScore < 0) {
     // Negative trend - shades of red
     const intensity = Math.min(Math.abs(trendScore) / 2, 1); // Normalize to 0-1
-    const redValue = Math.floor(255 - (intensity * 100)); // 255 -> 155
-    return `rgba(${redValue}, 0, 0, 1)`; // Light red with transparency
+    return `rgba(200, 0, 0, ${intensity})`; // Light red with transparency
   } else {
     // Neutral - no color
     return 'transparent';
@@ -148,13 +146,15 @@ function getBBBorderColor(bbScore) {
   if (bbScore < 0) {
     // Negative BB score - oversold - shades of green
     const intensity = Math.min(Math.abs(bbScore) / 2, 1); // Normalize to 0-1
-    const greenValue = Math.floor(255 - (intensity * 50)); // 255 -> 205
-    return `rgb(0, ${greenValue}, 0)`; // Green border
+//    const greenValue = Math.min(255*intensity,255);
+//    return `rgb(0, ${greenValue}, 0)`; // Green border
+    return `rgba(0, 200, 0, ${intensity})`; // Light green with transparency
   } else if (bbScore > 0) {
     // Positive BB score - overbought - shades of red
     const intensity = Math.min(Math.abs(bbScore) / 2, 1); // Normalize to 0-1
-    const redValue = Math.floor(255 - (intensity * 50)); // 255 -> 205
-    return `rgb(${redValue}, 0, 0)`; // Red border
+//    const redValue = Math.min(255*intensity,255);
+//    return `rgb(${redValue}, 0, 0)`; // Red border
+    return `rgba(200, 0, 0, ${intensity})`; // Light red with transparency
   } else {
     // Neutral - default border
     return '#ddd';
@@ -206,19 +206,20 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
     return;
   }
   
-  const latestCandle = candles[candles.length - 1];
+  const latestCandle = candles[0]; // Server returns newest first
   const trendScore = candleData.trendScore || 0;
   const bbScore = candleData.bbScore || 0;
   
   // Get EST time
   const timeEST = latestCandle.timeEST || '--';
   
-  // Get last 50 candles (or all if less than 50)
-  const recentCandles = candles.slice(-50);
+  // Get first 50 candles (server returns newest first, so we take from start)
+  const recentCandles = candles.slice(0, 50);
   
   // Build OHLC table rows for recent candles with indicators
+  // Display with most recent at top, going back in time (same order as server returns)
   let tableRows = '';
-  for (let i = recentCandles.length - 1; i >= 0; i--) {
+  for (let i = 0; i < recentCandles.length; i++) {
     const candle = recentCandles[i];
     const candleTime = candle.timeEST || '--';
     const indicators = candle.indicators || {};
@@ -248,12 +249,22 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
   const backgroundColor = getTrendBackgroundColor(trendScore);
   const borderColor = getBBBorderColor(bbScore);
   
-  // Build HTML - collapsible container with summary and details
+  // Preserve the current collapse state by checking the actual DOM
+  const existingDetails = document.getElementById(`${divId}-details`);
+  let currentState = candleAnalysisCollapseState[divId]; // default to saved state
+  
+  // If element exists, use its actual display state
+  if (existingDetails) {
+    currentState = existingDetails.style.display === 'none';
+    // Update saved state to match reality
+    candleAnalysisCollapseState[divId] = currentState;
+  }
+  
   const html = `
     <div class="candle-analysis-container">
       <div class="candle-analysis-compact" style="background-color: ${backgroundColor}; border: 2px solid ${borderColor};">
         <div class="candle-header-row">
-          <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">${candleAnalysisCollapseState[divId] ? '▼' : '▲'}</button>
+          <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">${currentState ? '▼' : '▲'}</button>
           <span class="timeframe-label">${timeframe}</span>
           <span class="time-est">${timeEST}</span>
           <span class="score-label">Trend:</span><span class="score-value">${formatTrendScore(trendScore)}</span>
@@ -266,7 +277,7 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
           <span class="ohlc-label">C:</span><span class="ohlc-value">${formatPrice(latestCandle.close)}</span>
         </div>
       </div>
-      <div id="${divId}-details" class="candle-details" style="display: ${candleAnalysisCollapseState[divId] ? 'none' : 'block'};">
+      <div id="${divId}-details" class="candle-details" style="display: ${currentState ? 'none' : 'block'};">
         <table class="candle-table">
           <thead>
             <tr>
@@ -352,7 +363,12 @@ async function updateAllCandleAnalysis(symbol) {
       displayCandleAnalysis('candle-analysis-60m', candleData['1h'], '60m');
     }
     
-    console.log('Candle analysis updated successfully');
+    console.log('✅ Candle analysis updated successfully - scores:', {
+  '1m': candleData['1m']?.candles?.[candleData['1m'].candles.length - 1]?.trendScore,
+  '5m': candleData['5m']?.candles?.[candleData['5m'].candles.length - 1]?.trendScore,
+  '15m': candleData['15m']?.candles?.[candleData['15m'].candles.length - 1]?.trendScore,
+  '60m': candleData['1h']?.candles?.[candleData['1h'].candles.length - 1]?.trendScore
+});
   } catch (error) {
     console.error('Failed to update candle analysis:', error);
   }
@@ -372,6 +388,7 @@ function startCandleAnalysisUpdates(symbol, intervalMs = 60000) {
   
   // Set up recurring updates
   candleAnalysisInterval = setInterval(() => {
+    console.log(`🕯️ Updating candle analysis for ${symbol}...`);
     updateAllCandleAnalysis(symbol);
   }, intervalMs);
   

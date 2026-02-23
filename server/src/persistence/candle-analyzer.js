@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 20;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -27,25 +27,19 @@ function getCacheKey(symbol, date) {
 }
 
 /**
- * Check if cached data is valid for today
+ * Check if we have raw candle data for today (for seeding, not analysis)
  * @param {string} symbol - The symbol
- * @returns {boolean} True if valid cached data exists for today
+ * @returns {boolean} True if we have raw candle data for today
  */
-function hasValidCache(symbol) {
+function hasRawCandleData(symbol) {
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   const cacheKey = getCacheKey(symbol, today);
   
   const cached = candleDataCache.get(cacheKey);
   if (!cached) return false;
   
-  // Check if fetchedAt exists and is valid
-  if (!cached.fetchedAt) return false;
-  
-  // Check if data was fetched today
-  const fetchDate = new Date(cached.fetchedAt);
-  if (isNaN(fetchDate.getTime())) return false; // Invalid date
-  
-  return fetchDate.toISOString().split('T')[0] === today;
+  // Check if we have raw candle data
+  return cached.rawCandleData && Object.keys(cached.rawCandleData).length > 0;
 }
 
 /**
@@ -61,22 +55,27 @@ function getCachedData(symbol) {
 }
 
 /**
- * Cache candle data for symbol
+ * Cache raw candle data for symbol and date (separate from analysis)
  * @param {string} symbol - The symbol
- * @param {Object} data - The candle data to cache
+ * @param {Object} rawData - The raw candle data to cache
  */
-function cacheCandleData(symbol, data) {
+function cacheCandleData(symbol, rawData) {
   const today = new Date().toISOString().split('T')[0];
   const cacheKey = getCacheKey(symbol, today);
   
+  // Check if we already have cached data for today
+  const existing = candleDataCache.get(cacheKey);
+  
   const cacheEntry = {
-    ...data,
-    cachedAt: new Date().toISOString(),
-    date: today
+    rawCandleData: rawData,
+    lastUpdated: new Date().toISOString(),
+    date: today,
+    // Preserve any existing metadata
+    ...(existing || {})
   };
   
   candleDataCache.set(cacheKey, cacheEntry);
-  console.log(`🕯️ Cached candle data for ${symbol} (${cacheKey})`);
+  console.log(`🕯️ Cached raw candle data for ${symbol} (${cacheKey})`);
 }
 
 /**
@@ -262,7 +261,8 @@ function buildHigherTimeframeCandles(sourceCandles, timeframeMinutes, sourceCand
     }
   }
   
-  return higherTimeframeCandles;
+  // Return in descending order (newest first) for trend analysis
+  return higherTimeframeCandles.sort((a, b) => b.datetime - a.datetime);
 }
 
 /**
@@ -301,52 +301,15 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
       continue;
     }
     
-    // Calculate indicators for the aggregated candles
-    const sma20 = calculateSMA(aggregatedCandles, 20);
-    const sma50 = calculateSMA(aggregatedCandles, 50);
-    const ema9 = calculateEMA(aggregatedCandles, 9);
-    const bollinger20_2 = calculateBollingerBands(aggregatedCandles, 20, 2);
-    
-    // Calculate per-candle scores
-    const perCandleTrendScores = calculatePerCandleTrendScores(aggregatedCandles, 5);
-    const perCandleBBScores = calculatePerCandleBBScores(aggregatedCandles, bollinger20_2);
-    
-    // Add indicators to each candle
-    const enhancedCandles = aggregatedCandles.map((candle, index) => ({
-      ...candle,
-      indicators: {
-        sma20: sma20[index],
-        sma50: sma50[index],
-        ema9: ema9[index],
-        bollinger20_2: {
-          upper: bollinger20_2.upper[index],
-          middle: bollinger20_2.middle[index],
-          lower: bollinger20_2.lower[index]
-        }
-      },
-      trendScore: perCandleTrendScores[index],
-      bbScore: perCandleBBScores[index]
-    }));
-    
-    // Update cached data for this timeframe
-    cachedData[tf.name] = {
+    // Update cached raw data for this timeframe (analysis will happen on request)
+    cachedData.rawCandleData[tf.name] = {
       timeframe: tf.name,
-      data: { candles: aggregatedCandles },
-      candles: enhancedCandles,
-      count: enhancedCandles.length,
-      indicators: {
-        sma20: sma20,
-        sma50: sma50,
-        ema9: ema9,
-        bollinger20_2: bollinger20_2
-      },
-      fetchedAt: cachedData[tf.name]?.fetchedAt || new Date().toISOString(),
-      enhancedAt: new Date().toISOString(),
-      lastRefreshed: new Date().toISOString(),
+      candles: aggregatedCandles,
+      count: aggregatedCandles.length,
       derivedFrom: '1m'
     };
     
-    console.log(`🕯️ ✅ Updated ${tf.name} with ${enhancedCandles.length} candles for ${symbol}`);
+    console.log(`🕯️ ✅ Updated ${tf.name} raw data with ${aggregatedCandles.length} candles for ${symbol}`);
   }
   
   // Re-cache the updated data
@@ -360,7 +323,7 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
 async function refresh1MinuteData(symbol) {
   try {
     const cachedData = getCachedData(symbol);
-    if (!cachedData || !cachedData['1m']) {
+    if (!cachedData || !cachedData.rawCandleData || !cachedData.rawCandleData['1m']) {
       console.log(`🕯️ No cached 1m data for ${symbol}, skipping refresh`);
       return;
     }
@@ -374,11 +337,14 @@ async function refresh1MinuteData(symbol) {
     console.log(`🕯️ Refreshing 1m data for ${symbol}...`);
     
     // Fetch latest 1-minute data
+    // CRITICAL: Must include endDate=Date.now() to get current day data!
+    // Without endDate, Schwab API defaults to "market close of previous business day"
     const options = {
       periodType: 'day',
       period: 5,
       frequencyType: 'minute',
-      frequency: 1
+      frequency: 1,
+      endDate: Date.now()
     };
     
     const freshData = await marketClient.priceHistory(apiSymbol, options);
@@ -389,7 +355,7 @@ async function refresh1MinuteData(symbol) {
     }
     
     // Get existing candles
-    const existingCandles = cachedData['1m'].candles || [];
+    const existingCandles = cachedData.rawCandleData['1m'].candles || [];
     const existingTimes = new Set(existingCandles.map(c => c.datetime));
     
     // Filter out duplicate candles (only add new ones)
@@ -402,60 +368,22 @@ async function refresh1MinuteData(symbol) {
     
     console.log(`🕯️ Adding ${newCandles.length} new 1m candles for ${symbol}`);
     
-    // Merge new candles with existing ones and sort by datetime
-    const mergedCandles = [...existingCandles, ...newCandles].sort((a, b) => a.datetime - b.datetime);
+    // Merge new candles with existing ones and sort by datetime (newest first for trend analysis)
+    const mergedCandles = [...existingCandles, ...newCandles].sort((a, b) => b.datetime - a.datetime);
     
-    // Recalculate indicators for the updated 1m data
-    const sma20 = calculateSMA(mergedCandles, 20);
-    const sma50 = calculateSMA(mergedCandles, 50);
-    const ema9 = calculateEMA(mergedCandles, 9);
-    const bollinger20_2 = calculateBollingerBands(mergedCandles, 20, 2);
-    
-    // Calculate per-candle scores
-    const perCandleTrendScores = calculatePerCandleTrendScores(mergedCandles, 5);
-    const perCandleBBScores = calculatePerCandleBBScores(mergedCandles, bollinger20_2);
-    
-    // Add indicators to each candle
-    const enhancedCandles = mergedCandles.map((candle, index) => ({
-      ...candle,
-      indicators: {
-        sma20: sma20[index],
-        sma50: sma50[index],
-        ema9: ema9[index],
-        bollinger20_2: {
-          upper: bollinger20_2.upper[index],
-          middle: bollinger20_2.middle[index],
-          lower: bollinger20_2.lower[index]
-        }
-      },
-      trendScore: perCandleTrendScores[index],
-      bbScore: perCandleBBScores[index]
-    }));
-    
-    // Update cached data
-    cachedData['1m'] = {
-      timeframe: '1m',
-      data: { ...freshData, candles: mergedCandles },
-      candles: enhancedCandles,
-      count: enhancedCandles.length,
-      indicators: {
-        sma20: sma20,
-        sma50: sma50,
-        ema9: ema9,
-        bollinger20_2: bollinger20_2
-      },
-      fetchedAt: cachedData['1m'].fetchedAt,
-      enhancedAt: new Date().toISOString(),
-      lastRefreshed: new Date().toISOString()
+    // Update only the raw 1m candle data (analysis will happen on request)
+    cachedData.rawCandleData['1m'] = {
+      candles: mergedCandles,
+      timeframe: '1m'
     };
     
     // Re-cache the updated data
     cacheCandleData(symbol, cachedData);
     
-    console.log(`🕯️ ✅ Refreshed 1m data for ${symbol} (total: ${enhancedCandles.length} candles)`);
+    console.log(`🕯️ ✅ Refreshed 1m raw data for ${symbol} (total: ${mergedCandles.length} candles)`);
     
     // Update higher timeframes (5m, 15m, 1h) from the updated 1m data
-    updateHigherTimeframes(symbol, enhancedCandles);
+    updateHigherTimeframes(symbol, mergedCandles);
     
   } catch (error) {
     console.error(`🕯️ ❌ Failed to refresh 1m data for ${symbol}:`, error.message);
@@ -536,31 +464,42 @@ function stopRefreshLoop() {
 }
 
 /**
- * Fetch candle data for multiple timeframes
+ * Fetch raw candle data for multiple timeframes (seeds cache if needed)
  * @param {string} symbol - The symbol to fetch data for
- * @returns {Promise<Object>} Candle data for all timeframes
+ * @returns {Promise<Object>} Raw candle data for all timeframes
  */
 async function fetchCandleData(symbol) {
-  console.log(`🕯️ Fetching candle data for: ${symbol}`);
+  console.log(`🕯️ Fetching raw candle data for: ${symbol}`);
   
-  // Check cache first
-  if (hasValidCache(symbol)) {
-    console.log(`🕯️ Using cached data for ${symbol}`);
-    return getCachedData(symbol);
+  // Check if we have raw candle data for today
+  if (hasRawCandleData(symbol)) {
+    const cached = getCachedData(symbol);
+    console.log(`🕯️ Using existing raw candle data for ${symbol}`);
+    return cached.rawCandleData;
   }
   
   // Clear old cache entries
   clearOldCache();
   
+  console.log(`🕯️ No raw candle data for today - seeding cache for ${symbol}`);
+  
   // Fetch timeframes from API
+  // IMPORTANT: schwab-client-js expects: priceHistory(symbol: string, options?: PriceHistoryOptions)
+  // where PriceHistoryOptions is a SINGLE object with: periodType, period, frequencyType, frequency, endDate
+  // 
+  // CRITICAL: Must include endDate=Date.now() to get current day data!
+  // Without endDate, Schwab API defaults to "market close of previous business day" per their docs.
+  // 
+  // For current day minute data: periodType='day', period=5, endDate=Date.now()
   // Note: For minute data, valid frequencies are 1, 5, 10, 15, 30 (not 60)
   // For 1h, we'll fetch 30m and aggregate to 1h
   // For daily, we need periodType=month or year
+  const now = Date.now();
   const timeframes = [
-    { frequencyType: 'minute', frequency: 1, name: '1m' },
-    { frequencyType: 'minute', frequency: 5, name: '5m' },
-    { frequencyType: 'minute', frequency: 15, name: '15m' },
-    { frequencyType: 'minute', frequency: 30, name: '30m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' },
     { periodType: 'month', period: 1, frequencyType: 'daily', frequency: 1, name: 'daily' }
   ];
   
@@ -585,9 +524,10 @@ async function fetchCandleData(symbol) {
         frequency: timeframe.frequency
       };
       
-      // Add periodType and period if specified
+      // Add periodType, period, and endDate if specified
       if (timeframe.periodType) options.periodType = timeframe.periodType;
       if (timeframe.period) options.period = timeframe.period;
+      if (timeframe.endDate) options.endDate = timeframe.endDate;
       
       const data = await marketClient.priceHistory(apiSymbol, options);
       
@@ -596,6 +536,9 @@ async function fetchCandleData(symbol) {
       if (timeframe.frequencyType === 'minute' && candles.length > 0) {
         candles = filterIncompleteLastCandle(candles, timeframe.frequency);
       }
+      
+      // Sort candles in descending order (newest first) for trend analysis
+      candles = candles.sort((a, b) => b.datetime - a.datetime);
       
       // Store only raw candle data (no indicators yet)
       candleData[timeframe.name] = {
@@ -647,14 +590,16 @@ async function fetchCandleData(symbol) {
 function toESTTime(datetime) {
   const date = new Date(datetime);
   
-  // Convert to EST (UTC-5)
-  const estDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  // Convert to EST (America/New_York) and format time directly
+  const estTime = date.toLocaleTimeString('en-US', { 
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
   
-  const hours = estDate.getHours();
-  const minutes = estDate.getMinutes().toString().padStart(2, '0');
-  const seconds = estDate.getSeconds().toString().padStart(2, '0');
-  
-  return `${hours}:${minutes}:${seconds}`;
+  return estTime;
 }
 
 /**
@@ -689,14 +634,16 @@ function filterIncompleteLastCandle(candles, timeframeMinutes) {
 /**
  * Calculate Bollinger Band score for most recent candle
  * Measures proximity of current close to BB bands relative to middle band
+ * Positive scores indicate bullish conditions (near/below lower band = oversold)
+ * Negative scores indicate bearish conditions (near/above upper band = overbought)
  * @param {Array} candles - Array of candle objects
  * @param {Object} bollingerBands - Bollinger band data (upper, middle, lower arrays)
  * @returns {number} BB score
- *   0 = at middle band
- *   1 = at lower band
- *   >1 = below lower band
- *   -1 = at upper band
- *   <-1 = above upper band
+ *   0 = at middle band (neutral)
+ *   Positive = near/below lower band (bullish/oversold)
+ *   Negative = near/above upper band (bearish/overbought)
+ *   Higher positive = more bullish (further below lower band)
+ *   Higher negative = more bearish (further above upper band)
  */
 function calculateBBScore(candles, bollingerBands) {
   if (!candles || candles.length === 0) {
@@ -748,6 +695,8 @@ function calculateBBScore(candles, bollingerBands) {
 /**
  * Calculate BB scores for each candle in the array
  * Returns an array of BB scores, one for each candle
+ * Positive scores indicate bullish conditions (near/below lower band = oversold)
+ * Negative scores indicate bearish conditions (near/above upper band = overbought)
  * @param {Array} candles - Array of candle objects
  * @param {Object} bollingerBands - Bollinger Bands object with upper, middle, lower arrays
  * @returns {Array} Array of BB scores
@@ -802,44 +751,59 @@ function calculatePerCandleBBScores(candles, bollingerBands) {
 }
 
 /**
- * Calculate trend score based on last 5 candles
- * Compares each candle's high/low to previous candle
- * Score range: -10 to +10
+ * Calculate trend score using iterative candle comparison algorithm
+ * Starts from most recent candle and works backwards, comparing each candle to the previous one
+ * For each candle: compares high, low, and close vs open to previous candle (+1/-1 each)
+ * Stops when a single candle changes the score by 3 points in the opposite direction of the trend
  * @param {Array} candles - Array of candle objects
- * @param {number} lookback - Number of candles to analyze (default 5)
  * @returns {number} Trend score
  */
-function calculateTrendScore(candles, lookback = 5) {
+function calculateTrendScore(candles) {
   if (!candles || candles.length < 2) {
-    return 0;
-  }
-  
-  // Get the most recent N candles
-  const recentCandles = candles.slice(-lookback);
-  
-  if (recentCandles.length < 2) {
     return 0;
   }
   
   let score = 0;
   
-  // Compare each candle to the previous one
-  for (let i = 1; i < recentCandles.length; i++) {
-    const current = recentCandles[i];
-    const previous = recentCandles[i - 1];
+  // Start from the most recent candle and work backwards
+  for (let i = candles.length - 1; i > 0; i--) {
+    const current = candles[i];
+    const previous = candles[i - 1];
     
-    // High comparison
+    let candleScoreChange = 0;
+    
+    // High comparison: add 1 if current high > previous high, deduct 1 if lower
     if (current.high > previous.high) {
-      score += 1;
+      candleScoreChange += 1;
     } else if (current.high < previous.high) {
-      score -= 1;
+      candleScoreChange -= 1;
     }
     
-    // Low comparison
+    // Low comparison: add 1 if current low > previous low, deduct 1 if lower
     if (current.low > previous.low) {
-      score += 1;
+      candleScoreChange += 1;
     } else if (current.low < previous.low) {
-      score -= 1;
+      candleScoreChange -= 1;
+    }
+    
+    // Close vs Open comparison: add 1 if close > open, deduct 1 if close < open
+    if (current.close > current.open) {
+      candleScoreChange += 1;
+    } else if (current.close < current.open) {
+      candleScoreChange -= 1;
+    }
+    
+    // Apply the score change
+    score += candleScoreChange;
+    
+    // Stop conditions:
+    // If we had a positive score and this candle deducts 3 or more, stop
+    if (score - candleScoreChange > 0 && candleScoreChange <= -3) {
+      break;
+    }
+    // If we had a negative score and this candle adds 3 or more, stop  
+    if (score - candleScoreChange < 0 && candleScoreChange >= 3) {
+      break;
     }
   }
   
@@ -850,10 +814,9 @@ function calculateTrendScore(candles, lookback = 5) {
  * Calculate trend scores for each candle in the array
  * Returns an array of trend scores, one for each candle
  * @param {Array} candles - Array of candle objects
- * @param {number} lookback - Number of candles to analyze (default 5)
  * @returns {Array} Array of trend scores
  */
-function calculatePerCandleTrendScores(candles, lookback = 5) {
+function calculatePerCandleTrendScores(candles) {
   const scores = [];
   
   for (let i = 0; i < candles.length; i++) {
@@ -863,8 +826,8 @@ function calculatePerCandleTrendScores(candles, lookback = 5) {
     } else {
       // Get candles up to and including current index
       const candlesUpToNow = candles.slice(0, i + 1);
-      // Calculate trend score for this position
-      const score = calculateTrendScore(candlesUpToNow, lookback);
+      // Calculate trend score for this position using new algorithm
+      const score = calculateTrendScore(candlesUpToNow);
       scores.push(score);
     }
   }
@@ -881,11 +844,15 @@ function calculatePerCandleTrendScores(candles, lookback = 5) {
 function calculateSMA(candles, period) {
   const sma = [];
   
+  // NOTE: Candles are in descending order (newest first)
+  // For each candle, we need to look forward in the array to get prior candles
   for (let i = 0; i < candles.length; i++) {
-    if (i < period - 1) {
-      sma.push(null); // Not enough data for SMA
+    // Check if we have enough prior candles (forward in array)
+    if (i + period > candles.length) {
+      sma.push(null); // Not enough prior data for SMA
     } else {
-      const sum = candles.slice(i - period + 1, i + 1).reduce((acc, candle) => acc + candle.close, 0);
+      // Get current candle + (period-1) prior candles (indices i to i+period-1)
+      const sum = candles.slice(i, i + period).reduce((acc, candle) => acc + candle.close, 0);
       sma.push(sum / period);
     }
   }
@@ -900,29 +867,35 @@ function calculateSMA(candles, period) {
  * @returns {Array} Array of EMA values (same length as candles)
  */
 function calculateEMA(candles, period) {
-  const ema = [];
+  // NOTE: Candles are in descending order (newest first)
+  // EMA needs to be calculated from oldest to newest, then reversed
+  
   const multiplier = 2 / (period + 1);
+  const emaReversed = [];
   
-  // First EMA value is SMA
-  let sum = 0;
-  for (let i = 0; i < period && i < candles.length; i++) {
-    sum += candles[i].close;
-    if (i < period - 1) {
-      ema.push(null);
-    }
-  }
-  
-  if (candles.length >= period) {
-    ema.push(sum / period);
+  // Work backwards through array (oldest to newest chronologically)
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const chronologicalIndex = candles.length - 1 - i;
     
-    // Calculate EMA for remaining candles
-    for (let i = period; i < candles.length; i++) {
-      const currentEMA = (candles[i].close - ema[i - 1]) * multiplier + ema[i - 1];
-      ema.push(currentEMA);
+    if (chronologicalIndex < period - 1) {
+      emaReversed.push(null);
+    } else if (chronologicalIndex === period - 1) {
+      // First EMA value is SMA of first 'period' candles
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += candles[candles.length - 1 - j].close;
+      }
+      emaReversed.push(sum / period);
+    } else {
+      // Calculate EMA based on previous EMA
+      const prevEMA = emaReversed[chronologicalIndex - 1];
+      const currentEMA = (candles[i].close - prevEMA) * multiplier + prevEMA;
+      emaReversed.push(currentEMA);
     }
   }
   
-  return ema;
+  // Reverse to match newest-first order
+  return emaReversed.reverse();
 }
 
 /**
@@ -937,17 +910,20 @@ function calculateBollingerBands(candles, period = 20, stdDev = 2) {
   const middle = [];
   const lower = [];
   
-  // Calculate SMA (middle band)
+  // Calculate SMA (middle band) - already handles newest-first order
   const sma = calculateSMA(candles, period);
   
+  // NOTE: Candles are in descending order (newest first)
   for (let i = 0; i < candles.length; i++) {
-    if (i < period - 1) {
+    // Check if we have enough prior candles (forward in array)
+    if (i + period > candles.length) {
       upper.push(null);
       middle.push(null);
       lower.push(null);
     } else {
       const currentSMA = sma[i];
-      const recentCandles = candles.slice(i - period + 1, i + 1);
+      // Get current candle + (period-1) prior candles (indices i to i+period-1)
+      const recentCandles = candles.slice(i, i + period);
       
       // Calculate standard deviation
       const squaredDiffs = recentCandles.map(candle => Math.pow(candle.close - currentSMA, 2));
@@ -998,11 +974,11 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const sma50 = calculateSMA(candles, 50);
     const ema9 = calculateEMA(candles, 9);
     const bollinger20_2 = calculateBollingerBands(candles, 20, 2);
-    const trendScore = calculateTrendScore(candles, 5);
+    const trendScore = calculateTrendScore(candles);
     const bbScore = calculateBBScore(candles, bollinger20_2);
     
     // Calculate per-candle scores
-    const perCandleTrendScores = calculatePerCandleTrendScores(candles, 5);
+    const perCandleTrendScores = calculatePerCandleTrendScores(candles);
     const perCandleBBScores = calculatePerCandleBBScores(candles, bollinger20_2);
     
     // Add indicators and EST time to each candle
@@ -1065,7 +1041,7 @@ function limitCandleData(candleData, limit = 100) {
     
     const candles = data.candles;
     console.log(`🕯️ ${timeframe}: ${candles.length} candles before limiting`);
-    const limitedCandles = candles.slice(-limit); // Get last N candles
+    const limitedCandles = candles.slice(0, limit); // Get first N candles (newest first)
     console.log(`🕯️ ${timeframe}: ${limitedCandles.length} candles after limiting`);
     
     // Update indicators arrays to match limited candles
@@ -1074,13 +1050,13 @@ function limitCandleData(candleData, limit = 100) {
     
     for (const [key, values] of Object.entries(indicators)) {
       if (Array.isArray(values)) {
-        limitedIndicators[key] = values.slice(-limit);
+        limitedIndicators[key] = values.slice(0, limit);
       } else if (typeof values === 'object' && values !== null) {
         // Handle nested objects like bollinger bands
         limitedIndicators[key] = {};
         for (const [subKey, subValues] of Object.entries(values)) {
           if (Array.isArray(subValues)) {
-            limitedIndicators[key][subKey] = subValues.slice(-limit);
+            limitedIndicators[key][subKey] = subValues.slice(0, limit);
           } else {
             limitedIndicators[key][subKey] = subValues;
           }
@@ -1201,7 +1177,7 @@ async function analyzeCandles(symbol, options = {}) {
 module.exports = {
   analyzeCandles,
   clearOldCache,
-  hasValidCache,
+  hasRawCandleData,
   getCachedData,
   startRefreshLoop,
   stopRefreshLoop,
