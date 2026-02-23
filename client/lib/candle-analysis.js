@@ -101,17 +101,17 @@ function formatBBScore(score) {
   let label = '';
   
   if (score <= -0.8) {
-    color = '#00aa00'; // At or below lower band - oversold
-    label = ' (oversold)';
-  } else if (score < -0.4) {
-    color = '#88cc88'; // Approaching lower band
-    label = ' (↑)';
-  } else if (score >= 0.8) {
     color = '#aa0000'; // At or above upper band - overbought
     label = ' (overbought)';
-  } else if (score > 0.4) {
+  } else if (score < -0.4) {
     color = '#cc8888'; // Approaching upper band
     label = ' (↓)';
+  } else if (score >= 0.8) {
+    color = '#00aa00'; // At or below lower band - oversold
+    label = ' (oversold)';
+  } else if (score > 0.4) {
+    color = '#88cc88'; // Approaching lower band
+    label = ' (↑)';
   }
   
   return `<span style="color: ${color}; font-weight: bold;">${score.toFixed(2)}${label}</span>`;

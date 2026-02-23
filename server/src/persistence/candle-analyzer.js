@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 25;
+const CACHE_VERSION = 26;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -217,14 +217,13 @@ function buildHigherTimeframeCandles(sourceCandles, timeframeMinutes, sourceCand
     const periodStart = sortedPeriods[i];
     const periodCandles = periodGroups.get(periodStart);
     
-    // Skip the last period if it's incomplete (has fewer candles than expected)
-    // This prevents showing partial data for incomplete periods
+    // Keep all periods including incomplete ones - they have valid OHLC data up to current time
+    // The most recent period may be incomplete but still contains valid data
     const isLastPeriod = i === sortedPeriods.length - 1;
     const hasIncompletePeriod = periodCandles.length < expectedCandleCount;
     
     if (isLastPeriod && hasIncompletePeriod) {
-      console.log(`🕯️ Skipping incomplete last period: ${periodCandles.length}/${expectedCandleCount} candles at ${new Date(periodStart).toISOString()}`);
-      continue;
+      console.log(`🕯️ Including incomplete last period: ${periodCandles.length}/${expectedCandleCount} candles at ${new Date(periodStart).toISOString()}`);
     }
     
     const aggregated = aggregateCandles(periodCandles);
@@ -538,11 +537,8 @@ async function fetchCandleData(symbol) {
       
       const data = await marketClient.priceHistory(apiSymbol, options);
       
-      // Filter out incomplete last candle for minute-based timeframes
+      // Keep all candles including incomplete ones - they have valid OHLC data up to current time
       let candles = data.candles || [];
-      if (timeframe.frequencyType === 'minute' && candles.length > 0) {
-        candles = filterIncompleteLastCandle(candles, timeframe.frequency);
-      }
       
       // Sort candles in descending order (newest first) for trend analysis
       candles = candles.sort((a, b) => b.datetime - a.datetime);
