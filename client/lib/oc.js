@@ -810,7 +810,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
     case 'bear_put_spread':
       console.log('🔍 DEBUG: bear_put_spread case - calling findOffsettingBullCallSpread');
       console.log('🔍 DEBUG: Available call strikes:', Object.keys(chainData.call[Object.keys(chainData.call)[0]] || {}).map(k => parseFloat(k)).sort((a, b) => a - b));
-      console.log('🔍 DEBUG: Position short strike:', position.legs.find(l => l.action === 'sell').strike);
+      console.log('🔍 DEBUG: Position short strike:', position.legs.find(l => l.qty < 0).strike);
       const bullCallSpreadOffsets = OffsetCalculations.findOffsettingBullCallSpread(position, chainData);
       console.log('🔍 DEBUG: bear_put_spread case - calling findOffsettingBullPutSpread');
       const bullPutSpreadOffsets = OffsetCalculations.findOffsettingBullPutSpread(position, chainData);
@@ -824,7 +824,7 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
         // Debug why no offsets found
         const expirationKey = Object.keys(chainData.call)[0];
         const callStrikes = Object.keys(chainData.call[expirationKey]).map(k => parseFloat(k));
-        const shortStrike = position.legs.find(l => l.action === 'sell').strike;
+        const shortStrike = position.legs.find(l => l.qty < 0).strike;
         const validLongStrikes = callStrikes.filter(strike => strike < shortStrike);
         console.log('🔍 DEBUG: Short strike:', shortStrike);
         console.log('🔍 DEBUG: Valid long strikes (< short strike):', validLongStrikes);
@@ -948,8 +948,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
       console.log('✅ Detected BULL CALL SPREAD:', { strategy, spreadWidth, maxValue, cost });
       
       legs = [
-        { action: 'buy', quantity: Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
-        { action: 'sell', quantity: Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
+        { qty: Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
+        { qty: -Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
       ];
     }
     // Bear call spread is a credit spread (negative cost)
@@ -962,8 +962,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
       console.log('✅ Detected BEAR CALL SPREAD:', { strategy, spreadWidth, maxValue, cost });
       
       legs = [
-        { action: 'sell', quantity: Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
-        { action: 'buy', quantity: Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
+        { qty: -Math.abs(longCall.qty), type: 'C', strike: longCall.strike },
+        { qty: Math.abs(shortCall.qty), type: 'C', strike: shortCall.strike }
       ];
     }
   }
@@ -996,8 +996,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
       cost = netCost;
       
       legs = [
-        { action: 'buy', quantity: Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
-        { action: 'sell', quantity: Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
+        { qty: Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
+        { qty: -Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
       ];
     }
     // Bull put spread is a credit spread (negative cost)
@@ -1008,8 +1008,8 @@ function convertClientPositionToSharedFormat(currentPositions) {
       cost = netCost; // Negative value
       
       legs = [
-        { action: 'sell', quantity: Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
-        { action: 'buy', quantity: Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
+        { qty: -Math.abs(longPut.qty), type: 'P', strike: longPut.strike },
+        { qty: Math.abs(shortPut.qty), type: 'P', strike: shortPut.strike }
       ];
     }
   }

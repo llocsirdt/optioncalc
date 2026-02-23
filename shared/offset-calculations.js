@@ -816,8 +816,25 @@
    * Returns object with shortLeg, longLeg, shortStrike, longStrike
    */
   function getShortLongLegs(position) {
-    const shortLeg = position.legs.find(leg => leg.quantity < 0);
-    const longLeg = position.legs.find(leg => leg.quantity > 0);
+    // Debug: Log the position structure
+    console.log('🔍 getShortLongLegs - Position structure:', position);
+    console.log('🔍 getShortLongLegs - Position legs:', position.legs);
+    console.log('🔍 getShortLongLegs - Legs count:', position.legs.length);
+    
+    // Debug: Check each leg
+    position.legs.forEach((leg, index) => {
+      console.log(`🔍 Leg ${index}:`, leg);
+      console.log(`  - qty: ${leg.qty}`);
+      console.log(`  - qty < 0: ${leg.qty < 0}`);
+      console.log(`  - qty > 0: ${leg.qty > 0}`);
+    });
+    
+    // Use qty-based leg identification only
+    const shortLeg = position.legs.find(leg => leg.qty < 0);
+    const longLeg = position.legs.find(leg => leg.qty > 0);
+    
+    console.log('🔍 Found shortLeg:', shortLeg);
+    console.log('🔍 Found longLeg:', longLeg);
     
     if (!shortLeg || !longLeg) {
       throw new Error('Position must have both short and long legs');
