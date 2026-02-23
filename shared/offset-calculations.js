@@ -805,6 +805,26 @@
   }
 
   /**
+   * Helper function to correctly identify short and long legs using quantity
+   * Returns object with shortLeg, longLeg, shortStrike, longStrike
+   */
+  function getShortLongLegs(position) {
+    const shortLeg = position.legs.find(leg => leg.quantity < 0);
+    const longLeg = position.legs.find(leg => leg.quantity > 0);
+    
+    if (!shortLeg || !longLeg) {
+      throw new Error('Position must have both short and long legs');
+    }
+    
+    return {
+      shortLeg,
+      longLeg,
+      shortStrike: shortLeg.strike,
+      longStrike: longLeg.strike
+    };
+  }
+
+  /**
    * Find offsetting Bull Call Spread positions
    */
   function findOffsettingBullCallSpread(position, chainData) {
@@ -820,7 +840,6 @@
     let referenceStrike;
     let offsetBudget;
     let bearPutShortStrike, bearPutLongStrike; // For bear put spread calculations
-    let isBearPutSpread, isBearCallSpread; // Strategy flags
     const incomingStrategy = position.strategy;
     
     // OPTIMIZATION: Calculate shared variables once for all strategies
@@ -853,17 +872,15 @@
       // Goal: Find offsetting BULL CALL SPREAD positions
       // =======================================================================
       
-      // Extract legs from incoming bear put spread
-      const legs = position.legs;
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      // Extract legs from incoming bear put spread using correct quantity-based logic
+      const shortLongLegs = getShortLongLegs(position);
+      const shortStrike = shortLongLegs.shortStrike;
+      const longStrike = shortLongLegs.longStrike;
       
       // LOGIC VALIDATION: For bear put spread offset with bull call spread:
-      // - Reference should be the SHORT put (lower strike) 
+      // - Reference should be the SHORT put 
       // - This creates a "collar-like" structure where we're protected on both sides
-      referenceStrike = lowerStrike;
+      referenceStrike = shortStrike;
       
       // BUDGET LOGIC: For bear put spread offset with bull call spread:
       // - Bear put spread is a DEBIT spread (we paid money to enter)
@@ -872,10 +889,8 @@
       offsetBudget = position.offsetBudget;
       
       // OPTIMIZATION: Calculate position-level variables ONCE for bear put spread
-      const isBearPutSpread = true;
-      const isBearCallSpread = false;
-      bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
-      bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+      bearPutShortStrike = shortStrike;
+      bearPutLongStrike = longStrike;
       
       console.log(`📊 BEAR PUT → BULL CALL: Reference=${referenceStrike}, Budget=${offsetBudget}`);
       console.log(`   Position strikes: Short=${bearPutShortStrike}, Long=${bearPutLongStrike}`);
@@ -900,7 +915,7 @@
       // - Spread width must be ≥ original spread width (50)
       //
       console.log(`🔍 BEAR PUT → BULL CALL: Reference strike set to ${referenceStrike} (short put leg)`);
-      console.log(`   Incoming position: Long ${higherStrike}P + Short ${lowerStrike}P`);
+      console.log(`   Incoming position: Long ${longStrike}P + Short ${shortStrike}P`);
       console.log(`   Will search for bull call spreads with long strike ≤ ${referenceStrike}`);
       
     } else if (incomingStrategy === 'bear_call_spread') {
@@ -910,17 +925,15 @@
       // Goal: Find offsetting BULL CALL SPREAD positions
       // =======================================================================
       
-      // Extract legs from incoming bear call spread
-      const legs = position.legs;
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      // Extract legs from incoming bear call spread using correct quantity-based logic
+      const shortLongLegs = getShortLongLegs(position);
+      const shortStrike = shortLongLegs.shortStrike;
+      const longStrike = shortLongLegs.longStrike;
       
       // LOGIC VALIDATION: For bear call spread offset with bull call spread:
-      // - Reference should be the SHORT call (lower strike)
+      // - Reference should be the SHORT call 
       // - This creates opposing positions that can profit in different scenarios
-      referenceStrike = lowerStrike;
+      referenceStrike = shortStrike;
       
       // BUDGET LOGIC: For bear call spread offset with bull call spread:
       // - Bear call spread is a CREDIT spread (we received money to enter)
@@ -929,12 +942,10 @@
       offsetBudget = position.offsetBudget;
       
       // OPTIMIZATION: Calculate position-level variables ONCE for bear call spread
-      const isBearPutSpread = false;
-      const isBearCallSpread = true;
       // Note: bear call spreads don't use bearPutShortStrike/bearPutLongStrike in calculations
       
       console.log(`📊 BEAR CALL → BULL CALL: Reference=${referenceStrike}, Budget=${offsetBudget}`);
-      console.log(`   Position strikes: Short=${lowerStrike}, Long=${higherStrike}`);
+      console.log(`   Position strikes: Short=${shortStrike}, Long=${longStrike}`);
       
       // BEAR CALL SPREAD SPECIFIC LOGIC:
       // Incoming: Bear Call Spread = Short Lower Call + Long Higher Call
@@ -956,7 +967,7 @@
       // - Spread width must be ≥ original spread width (50)
       //
       console.log(`🔍 BEAR CALL → BULL CALL: Reference strike set to ${referenceStrike} (short call leg)`);
-      console.log(`   Incoming position: Short ${lowerStrike}C + Long ${higherStrike}C`);
+      console.log(`   Incoming position: Short ${shortStrike}C + Long ${longStrike}C`);
       console.log(`   Will search for bull call spreads with long strike ≤ ${referenceStrike}`);
       
     } else {
@@ -1031,7 +1042,7 @@
         // OPTIMIZATION: Use helper function to calculate profit metrics
         const profitMetrics = calculateBullCallProfitMetrics(
           position, spreadCost, offsetMaxValue, longCallStrike, shortCallStrike,
-          isBearPutSpread, isBearCallSpread, bearPutShortStrike, bearPutLongStrike
+          incomingStrategy === 'bear_put_spread', incomingStrategy === 'bear_call_spread', bearPutShortStrike, bearPutLongStrike
         );
         
         const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
@@ -1084,11 +1095,18 @@
     // Pre-calculate position strikes to avoid repeated Math operations in loops
     let bullCallShortStrike, bullCallLongStrike, bullPutShortStrike, bullPutLongStrike;
     if (isBullCallSpread) {
-      bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
-      bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const shortLongLegs = getShortLongLegs(position);
+      bullCallShortStrike = shortLongLegs.shortStrike;
+      bullCallLongStrike = shortLongLegs.longStrike;
     } else if (isBullPutSpread) {
-      bullPutShortStrike = Math.max(...position.legs.map(leg => leg.strike));
-      bullPutLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const shortLongLegs = getShortLongLegs(position);
+      bullPutShortStrike = shortLongLegs.shortStrike;
+      bullPutLongStrike = shortLongLegs.longStrike;
+    } else {
+      // For bear strategies, we still need to calculate bull put strikes for helper functions
+      const shortLongLegs = getShortLongLegs(position);
+      bullPutShortStrike = shortLongLegs.shortStrike;
+      bullPutLongStrike = shortLongLegs.longStrike;
     }
     
     // OPTIMIZATION: Validate data and transform into usable formats at the top
@@ -1117,8 +1135,6 @@
       const legs = position.legs;
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
       
       // LOGIC VALIDATION: For bull call spread offset with bear call spread:
       // - Reference should be the SHORT call (higher strike)
@@ -1165,8 +1181,6 @@
       const legs = position.legs;
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
       
       // LOGIC VALIDATION: For bull put spread offset with bear call spread:
       // - Reference should be the SHORT put (higher strike)
@@ -1343,8 +1357,6 @@
       const legs = position.legs;
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
       
       // LOGIC VALIDATION: For bear put spread offset with bull put spread:
       // - Reference should be the LONG put (higher strike)
@@ -1391,8 +1403,6 @@
       const legs = position.legs;
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
       
       // LOGIC VALIDATION: For bear call spread offset with bull put spread:
       // - Reference should be the LONG call (higher strike)
@@ -1580,8 +1590,6 @@
       const legs = position.legs;
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
       
       // LOGIC VALIDATION: For bull call spread offset with bear put spread:
       // - Reference should be the LONG call (lower strike)
@@ -1628,8 +1636,6 @@
       const legs = position.legs;
       const higherStrike = Math.max(...legs.map(leg => leg.strike));
       const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
       
       // LOGIC VALIDATION: For bull put spread offset with bear put spread:
       // - Reference should be the LONG put (lower strike)
