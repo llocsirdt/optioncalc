@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 22;
+const CACHE_VERSION = 25;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -496,16 +496,17 @@ async function fetchCandleData(symbol) {
   // Without endDate, Schwab API defaults to "market close of previous business day" per their docs.
   // 
   // For current day minute data: periodType='day', period=1, endDate=Date.now()
-  // Note: period=1 gives better OHLC data quality for current day vs period=5
+  // Note: period=1 gives better OHLC data quality for current day
+  // Confirmed working periods: 1m=1day, 5m=2days, 15m=5days, 30m=5days (testing)
   // Note: For minute data, valid frequencies are 1, 5, 10, 15, 30 (not 60)
   // For 1h, we'll fetch 30m and aggregate to 1h
   // For daily, we need periodType=month or year
   const now = Date.now();
   const timeframes = [
     { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
-    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
-    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
-    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' },
+    { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' },
     { periodType: 'month', period: 1, frequencyType: 'daily', frequency: 1, name: 'daily' }
   ];
   
