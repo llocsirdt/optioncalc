@@ -83,6 +83,728 @@
   }
 
   /**
+   * Helper function to validate long call strike for bull call spread
+   * Returns true if strike is valid and has market data, false otherwise
+   */
+  function isValidLongCallStrike(longCallStrike, referenceStrike, expirationStrikes) {
+    // Check strike range - only consider long call strikes AT or BELOW the reference strike
+    if (longCallStrike > referenceStrike) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const longStrikeKey = longCallStrike.toString() + '.0';
+      if (strikes[longStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No market data found
+  }
+
+  /**
+   * Helper function to validate short call strike for bear call spread
+   * Returns true if strike is valid and has market data, false otherwise
+   */
+  function isValidShortCallStrike(shortCallStrike, referenceStrike, expirationStrikes) {
+    // Check strike range - only consider short call strikes AT or ABOVE the reference strike
+    if (shortCallStrike < referenceStrike) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const shortStrikeKey = shortCallStrike.toString() + '.0';
+      if (strikes[shortStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No market data found
+  }
+
+  /**
+   * Helper function to validate short put strike for bull put spread
+   * Returns true if strike is valid and has market data, false otherwise
+   */
+  function isValidShortPutStrike(shortPutStrike, referenceStrike, expirationStrikes) {
+    // Check strike range - only consider short put strikes BELOW the reference strike
+    if (shortPutStrike >= referenceStrike) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const shortStrikeKey = shortPutStrike.toString() + '.0';
+      if (strikes[shortStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No market data found
+  }
+
+  /**
+   * Helper function to validate short put strike for bear put spread
+   * Returns true if strike is valid and has market data, false otherwise
+   */
+  function isValidShortPutStrikeForBear(shortPutStrike, referenceStrike, expirationStrikes) {
+    // Check strike range - only consider short put strikes AT or ABOVE the reference strike
+    if (shortPutStrike < referenceStrike) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const shortStrikeKey = shortPutStrike.toString() + '.0';
+      if (strikes[shortStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No market data found
+  }
+
+  /**
+   * Helper function to validate short call strike for spread creation
+   * Returns true if strike is valid for spread creation, false otherwise
+   */
+  function isValidShortCallForSpread(shortCallStrike, longCallStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes) {
+    // Skip if narrower than original spread width
+    if (currentSpreadWidth < spreadWidth) {
+      return false;
+    }
+    
+    if (addedSpreads.has(spreadKey)) {
+      return false;
+    }
+    
+    // Check if market data exists and is valid
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const shortStrikeKey = shortCallStrike.toString() + '.0';
+      if (strikes[shortStrikeKey]) {
+        const shortCallData = strikes[shortStrikeKey][0];
+        return shortCallData && shortCallData.bid && shortCallData.ask;
+      }
+    }
+    
+    return false; // No valid market data found
+  }
+
+  /**
+   * Helper function to validate long call strike for bear call spread creation
+   * Returns true if strike is valid for spread creation, false otherwise
+   */
+  function isValidLongCallForBearSpread(shortCallStrike, longCallStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes) {
+    // Skip if narrower than original spread width
+    if (currentSpreadWidth < spreadWidth) {
+      return false;
+    }
+    
+    if (addedSpreads.has(spreadKey)) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const longStrikeKey = longCallStrike.toString() + '.0';
+      if (strikes[longStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No valid market data found
+  }
+
+  /**
+   * Helper function to validate long put strike for bull put spread creation
+   * Returns true if strike is valid for spread creation, false otherwise
+   */
+  function isValidLongPutForBullSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes) {
+    // Skip if narrower than original spread width
+    if (currentSpreadWidth < spreadWidth) {
+      return false;
+    }
+    
+    if (addedSpreads.has(spreadKey)) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const longStrikeKey = longPutStrike.toString() + '.0';
+      if (strikes[longStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No valid market data found
+  }
+
+  /**
+   * Helper function to validate long put strike for bear put spread creation
+   * Returns true if strike is valid for spread creation, false otherwise
+   */
+  function isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes) {
+    // Skip if narrower than original spread width
+    if (currentSpreadWidth < spreadWidth) {
+      return false;
+    }
+    
+    if (addedSpreads.has(spreadKey)) {
+      return false;
+    }
+    
+    // Check if market data exists for this strike
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      const longStrikeKey = longPutStrike.toString() + '.0';
+      if (strikes[longStrikeKey]) {
+        return true; // Found valid market data
+      }
+    }
+    
+    return false; // No valid market data found
+  }
+
+  /**
+   * Helper function to retrieve strike data and calculate cost
+   * Returns object with data, cost, and index, or null if no data found
+   */
+  function getStrikeData(strike, strikesArray, expirationStrikes) {
+    const strikeKey = strike.toString() + '.0';
+    
+    // Find market data
+    let marketData = null;
+    for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
+      if (strikes[strikeKey]) {
+        marketData = strikes[strikeKey][0];
+        break;
+      }
+    }
+    
+    if (!marketData) {
+      return null;
+    }
+    
+    return {
+      data: marketData,
+      cost: (marketData.bid + marketData.ask) / 2,
+      index: strikesArray.indexOf(strike)
+    };
+  }
+
+  /**
+   * Helper function to calculate profit metrics for bull call spread offsets
+   * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
+   */
+  function calculateBullCallProfitMetrics(position, spreadCost, offsetMaxValue, longCallStrike, shortCallStrike, isBearPutSpread, isBearCallSpread, bearPutShortStrike, bearPutLongStrike) {
+    let lockedInProfit, profitPotential, profitPotentialScore;
+    
+    if (isBearPutSpread) {
+      const totalCost = position.cost + spreadCost;
+      
+      const bullCallLongStrike = longCallStrike;
+      const bullCallShortStrike = shortCallStrike;
+      
+      // Check if strikes overlap in a way where both can be worthless
+      // Bear put is worthless above bearPutLongStrike
+      // Bull call is worthless below bullCallLongStrike
+      // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
+      if (bullCallLongStrike >= bearPutLongStrike) {
+        // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
+        lockedInProfit = -totalCost; // Worst case: both worthless
+        
+        // Best case: both spreads can reach full value at different price points
+        const combinedMaxValue = position.maxValue + offsetMaxValue;
+        profitPotential = combinedMaxValue - totalCost;
+      } else {
+        // Strikes overlap - at least one spread will have value at any price
+        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+        
+        if (strikesOverlap) {
+          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          lockedInProfit = minMaxValue - totalCost;
+          
+          let maxCombinedValue = 0;
+          
+          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
+            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
+            const bullCallValueAtShort = offsetMaxValue;
+            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
+          }
+          
+          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
+            const bearPutValueAtShort = position.maxValue;
+            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
+            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
+          }
+          
+          if (maxCombinedValue === 0) {
+            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
+          }
+          
+          profitPotential = maxCombinedValue - totalCost;
+        } else {
+          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          const combinedMaxValue = position.maxValue + offsetMaxValue;
+          lockedInProfit = minMaxValue - totalCost;
+          profitPotential = combinedMaxValue - totalCost;
+        }
+      }
+      
+      profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+    } else if (isBearCallSpread) {
+      const bearCallShortStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const bearCallLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const bullCallLongStrike = longCallStrike;
+      const bullCallShortStrike = shortCallStrike;
+      
+      const bearCallCredit = -position.cost;
+      const netCredit = bearCallCredit - spreadCost;
+      
+      const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+      const bullCallMaxValue = offsetMaxValue;
+      
+      const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss + netCredit;
+      const worstCaseLowPrice = netCredit;
+      
+      lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
+      
+      let bestCaseProfit = netCredit;
+      
+      if (bullCallShortStrike >= bearCallShortStrike && bullCallShortStrike <= bearCallLongStrike) {
+        const bullCallValueAtShort = bullCallMaxValue;
+        const bearCallLossAtBullShort = (bullCallShortStrike - bearCallShortStrike) * 100;
+        bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtShort - bearCallLossAtBullShort + netCredit);
+      }
+      
+      if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
+        const bullCallValueAtBearShort = (bearCallShortStrike - bullCallLongStrike) * 100;
+        const bearCallLossAtShort = 0;
+        bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtBearShort + netCredit);
+      }
+      
+      if (bullCallShortStrike < bearCallShortStrike) {
+        bestCaseProfit = Math.max(bestCaseProfit, bullCallMaxValue + netCredit);
+      }
+      
+      profitPotential = bestCaseProfit;
+      profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+      
+    } else {
+      const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
+      const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
+      const totalCost = position.cost + spreadCost;
+      lockedInProfit = minMaxValue - totalCost;
+      profitPotential = maxMaxValue - totalCost;
+      profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    }
+    
+    return {
+      lockedInProfit,
+      profitPotential,
+      profitPotentialScore
+    };
+  }
+
+  /**
+   * Helper function to calculate profit metrics for bear call spread offsets
+   * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
+   */
+  function calculateBearCallProfitMetrics(position, spreadCredit, offsetMaxValue, shortCallStrike, longCallStrike, isBullCallSpread, isBullPutSpread) {
+    let worstCase, bestCase;
+    
+    if (isBullCallSpread) {
+      const bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const bearCallShortStrike = shortCallStrike;
+      const bearCallLongStrike = longCallStrike;
+      
+      const netCost = position.cost - spreadCredit;
+      const strikesOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
+      
+      if (strikesOverlap) {
+        worstCase = position.maxValue + offsetMaxValue - netCost;
+        
+        if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
+          const bullCallValueAtBearCallShort = (bearCallShortStrike - bullCallLongStrike) * 100;
+          bestCase = bullCallValueAtBearCallShort - netCost;
+        } else {
+          bestCase = position.maxValue - netCost;
+        }
+      } else {
+        worstCase = position.maxValue + offsetMaxValue - netCost;
+        bestCase = position.maxValue - netCost;
+      }
+      
+    } else if (isBullPutSpread) {
+      const bullPutCredit = -position.cost;
+      const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+      const bearCallMaxLossAbs = Math.abs(offsetMaxValue);
+      
+      const totalCredit = bullPutCredit + spreadCredit;
+      const maxLossWorstSpread = Math.max(bullPutMaxLoss, bearCallMaxLossAbs);
+      
+      worstCase = -maxLossWorstSpread + totalCredit;
+      bestCase = totalCredit;
+      
+    } else {
+      const positionMaxValue = position.maxValue || 0;
+      worstCase = positionMaxValue + offsetMaxValue + spreadCredit - position.cost;
+      bestCase = positionMaxValue + spreadCredit - position.cost;
+    }
+    
+    const lockedInProfit = worstCase;
+    const profitPotential = bestCase;
+    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    
+    return {
+      lockedInProfit,
+      profitPotential,
+      profitPotentialScore
+    };
+  }
+
+  /**
+   * Helper function to calculate profit metrics for bull put spread offsets
+   * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
+   */
+  function calculateBullPutProfitMetrics(position, spreadCredit, bullPutMaxLoss, shortPutStrike, longPutStrike, isBearPutSpread, isBearCallSpread, bearPutShortStrike, bearPutLongStrike) {
+    let worstCase, bestCase;
+    
+    if (isBearPutSpread) {
+      const bullPutShortStrike = shortPutStrike;
+      const bullPutLongStrike = longPutStrike;
+      const bearPutCost = position.cost;
+      const netCost = bearPutCost - spreadCredit;
+      
+      const bearPutMaxValue = position.maxValue || (position.spreadWidth * 100);
+      const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+      
+      const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost;
+      const worstCaseHighPrice = -netCost;
+      
+      worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+      
+      let bestCaseProfit = -netCost;
+      
+      if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
+        const bearPutValueAtLong = bearPutMaxValue;
+        const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
+        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong - netCost);
+      }
+      
+      if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
+        const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
+        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort - netCost);
+      }
+      
+      if (bearPutLongStrike < bullPutLongStrike) {
+        // Non-overlapping spreads - both can reach full value at different price points
+        const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
+        bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
+      } else {
+        // Strikes overlap - check if they overlap
+        const strikesOverlap = bullPutShortStrike > bearPutLongStrike && bullPutLongStrike < bearPutShortStrike;
+        
+        if (strikesOverlap) {
+          const minMaxValue = Math.min(bearPutMaxValue, Math.abs(bullPutMaxLoss));
+          bestCaseProfit = Math.max(bestCaseProfit, minMaxValue - netCost);
+        } else {
+          const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
+          bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
+        }
+      }
+      
+      bestCase = bestCaseProfit;
+      
+    } else if (isBearCallSpread) {
+      const bearCallCredit = -position.cost;
+      const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+      const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+      
+      const totalCredit = bearCallCredit + spreadCredit;
+      const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
+      
+      worstCase = -maxLossWorstSpread + totalCredit;
+      bestCase = totalCredit;
+      
+    } else {
+      const positionMaxValue = position.maxValue || 0;
+      worstCase = positionMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
+      bestCase = positionMaxValue + spreadCredit - position.cost;
+    }
+    
+    const lockedInProfit = worstCase;
+    const profitPotential = bestCase;
+    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    
+    return {
+      lockedInProfit,
+      profitPotential,
+      profitPotentialScore
+    };
+  }
+
+  /**
+   * Helper function to calculate profit metrics for bear put spread offsets
+   * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
+   */
+  function calculateBearPutProfitMetrics(position, spreadCost, offsetMaxValue, longPutStrike, shortPutStrike, isBullCallSpread, isBullPutSpread, bullCallShortStrike, bullCallLongStrike) {
+    let worstCase, bestCase;
+    
+    if (isBullCallSpread) {
+      const totalCost = position.cost + spreadCost;
+      
+      const bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const bearPutShortStrike = shortPutStrike;
+      const bearPutLongStrike = longPutStrike;
+      
+      // Check if strikes overlap in a way where both can be worthless
+      // Bull call is worthless below bullCallLongStrike
+      // Bear put is worthless above bearPutLongStrike
+      // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
+      if (bullCallLongStrike >= bearPutLongStrike) {
+        // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
+        worstCase = -totalCost; // Worst case: both worthless
+        
+        // Best case: both spreads can reach full value at different price points
+        const combinedMaxValue = position.maxValue + offsetMaxValue;
+        bestCase = combinedMaxValue - totalCost;
+      } else {
+        // Strikes overlap - at least one spread will have value at any price
+        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+        
+        if (strikesOverlap) {
+          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          worstCase = minMaxValue - totalCost;
+          
+          let maxCombinedValue = 0;
+          
+          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
+            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
+            const bearPutValueAtShort = offsetMaxValue;
+            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtBearPutShort + bearPutValueAtShort);
+          }
+          
+          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
+            const bullCallValueAtShort = position.maxValue;
+            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
+            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtShort + bearPutValueAtBullCallShort);
+          }
+          
+          if (maxCombinedValue === 0) {
+            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
+          }
+          
+          bestCase = maxCombinedValue - totalCost;
+        } else {
+          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+          const combinedMaxValue = position.maxValue + offsetMaxValue;
+          worstCase = minMaxValue - totalCost;
+          bestCase = combinedMaxValue - totalCost;
+        }
+      }
+      
+    } else if (isBullPutSpread) {
+      const bullPutShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const bullPutLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+      const bearPutLongStrike = longPutStrike;
+      const bearPutShortStrike = shortPutStrike;
+      
+      const bullPutCredit = -position.cost;
+      const netCredit = bullPutCredit - spreadCost;
+      
+      const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+      const bearPutMaxValue = offsetMaxValue;
+      
+      const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLoss + netCredit;
+      const worstCaseHighPrice = netCredit;
+      
+      worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+      
+      let bestCaseProfit = netCredit;
+      
+      if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
+        const bearPutValueAtLong = bearPutMaxValue;
+        const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
+        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong + netCredit);
+      }
+      
+      if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
+        const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
+        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort + netCredit);
+      }
+      
+      if (bearPutLongStrike < bullPutLongStrike) {
+        bestCaseProfit = Math.max(bestCaseProfit, bearPutMaxValue + netCredit);
+      }
+      
+      bestCase = bestCaseProfit;
+      
+    } else {
+      const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
+      const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
+      const totalCost = position.cost + spreadCost;
+      worstCase = minMaxValue - totalCost;
+      bestCase = maxMaxValue - totalCost;
+    }
+    
+    const lockedInProfit = worstCase;
+    const profitPotential = bestCase;
+    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    
+    return {
+      lockedInProfit,
+      profitPotential,
+      profitPotentialScore
+    };
+  }
+
+  /**
+   * Helper function to create bull call spread object
+   * Returns structured offsetting spread object
+   */
+  function createBullCallSpreadObject(longCallStrike, shortCallStrike, longCallCost, shortCallCost, spreadCost, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore) {
+    return {
+      strategy: 'bull_call_spread',
+      legs: [
+        {
+          action: 'offset',
+          quantity: 1,
+          type: 'C',
+          strike: longCallStrike,
+          cost: longCallCost * 100,
+          originalString: `1c${longCallStrike}@${longCallCost * 100}`
+        },
+        {
+          action: 'offset',
+          quantity: -1,
+          type: 'C',
+          strike: shortCallStrike,
+          cost: -shortCallCost * 100,
+          originalString: `-1c${shortCallStrike}@${-shortCallCost * 100}`
+        }
+      ],
+      cost: spreadCost,
+      spreadWidth: currentSpreadWidth,
+      maxValue: offsetMaxValue,
+      lockedInProfit: lockedInProfit,
+      profitPotential: profitPotential,
+      profitPotentialScore: profitPotentialScore,
+      description: `Bull Call Spread: Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}, Short ${shortCallStrike}C @ ${shortCallCost.toFixed(2)}`
+    };
+  }
+
+  /**
+   * Helper function to create bear call spread object
+   * Returns structured offsetting spread object
+   */
+  function createBearCallSpreadObject(shortCallStrike, longCallStrike, shortCallCredit, longCallCost, spreadCredit, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore) {
+    return {
+      strategy: 'bear_call_spread',
+      legs: [
+        {
+          action: 'offset',
+          quantity: -1,
+          type: 'C',
+          strike: shortCallStrike,
+          cost: -shortCallCredit * 100,
+          originalString: `-1c${shortCallStrike}@${-shortCallCredit * 100}`
+        },
+        {
+          action: 'offset',
+          quantity: 1,
+          type: 'C',
+          strike: longCallStrike,
+          cost: longCallCost * 100,
+          originalString: `1c${longCallStrike}@${longCallCost * 100}`
+        }
+      ],
+      cost: -spreadCredit,
+      spreadWidth: currentSpreadWidth,
+      maxValue: offsetMaxValue,
+      lockedInProfit: lockedInProfit,
+      profitPotential: profitPotential,
+      profitPotentialScore: profitPotentialScore,
+      description: `Bear Call Spread: Short ${shortCallStrike}C @ ${shortCallCredit.toFixed(2)}, Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}`
+    };
+  }
+
+  /**
+   * Helper function to create bull put spread object
+   * Returns structured offsetting spread object
+   */
+  function createBullPutSpreadObject(shortPutStrike, longPutStrike, shortPutCredit, longPutCost, spreadCredit, currentSpreadWidth, bullPutMaxLoss, lockedInProfit, profitPotential, profitPotentialScore) {
+    return {
+      strategy: 'bull_put_spread',
+      legs: [
+        {
+          action: 'offset',
+          quantity: -1,
+          type: 'P',
+          strike: shortPutStrike,
+          cost: -shortPutCredit * 100,
+          originalString: `-1p${shortPutStrike}@${-shortPutCredit * 100}`
+        },
+        {
+          action: 'offset',
+          quantity: 1,
+          type: 'P',
+          strike: longPutStrike,
+          cost: longPutCost * 100,
+          originalString: `1p${longPutStrike}@${longPutCost * 100}`
+        }
+      ],
+      cost: -spreadCredit,
+      spreadWidth: currentSpreadWidth,
+      maxValue: bullPutMaxLoss,
+      lockedInProfit: lockedInProfit,
+      profitPotential: profitPotential,
+      profitPotentialScore: profitPotentialScore,
+      description: `Bull Put Spread: Short ${shortPutStrike}P @ ${shortPutCredit.toFixed(2)}, Long ${longPutStrike}P @ ${longPutCost.toFixed(2)}`
+    };
+  }
+
+  /**
+   * Helper function to create bear put spread object
+   * Returns structured offsetting spread object
+   */
+  function createBearPutSpreadObject(longPutStrike, shortPutStrike, longPutCost, shortPutCost, spreadCost, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore) {
+    return {
+      strategy: 'bear_put_spread',
+      legs: [
+        {
+          action: 'offset',
+          quantity: 1,
+          type: 'P',
+          strike: longPutStrike,
+          cost: longPutCost * 100,
+          originalString: `1p${longPutStrike}@${longPutCost * 100}`
+        },
+        {
+          action: 'offset',
+          quantity: -1,
+          type: 'P',
+          strike: shortPutStrike,
+          cost: -shortPutCost * 100,
+          originalString: `-1p${shortPutStrike}@${-shortPutCost * 100}`
+        }
+      ],
+      cost: spreadCost,
+      spreadWidth: currentSpreadWidth,
+      maxValue: offsetMaxValue,
+      lockedInProfit: lockedInProfit,
+      profitPotential: profitPotential,
+      profitPotentialScore: profitPotentialScore,
+      description: `Bear Put Spread: Long ${longPutStrike}P @ ${longPutCost.toFixed(2)}, Short ${shortPutStrike}P @ ${shortPutCost.toFixed(2)}`
+    };
+  }
+
+  /**
    * Find offsetting Bull Call Spread positions
    */
   function findOffsettingBullCallSpread(position, chainData) {
@@ -96,112 +818,205 @@
     
     // Determine incoming position type and extract correct reference strikes
     let referenceStrike;
+    let offsetBudget;
+    let bearPutShortStrike, bearPutLongStrike; // For bear put spread calculations
+    let isBearPutSpread, isBearCallSpread; // Strategy flags
     const incomingStrategy = position.strategy;
     
-    if (incomingStrategy === 'bear_put_spread') {
-      // Bear put spread: long higher strike, short lower strike
-      const legs = position.legs;
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      
-      // For bear put spread, reference is the short put (lower strike)
-      referenceStrike = lowerStrike;
-      
-    } else if (incomingStrategy === 'bear_call_spread') {
-      // Bear call spread: short lower strike, long higher strike  
-      const legs = position.legs;
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      
-      // For bear call spread, reference is the short call (lower strike)
-      referenceStrike = lowerStrike;
-      
-    } else {
-      // Fallback - shouldn't happen with proper input
-      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
-    }
-    
+    // OPTIMIZATION: Calculate shared variables once for all strategies
     const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
-    const offsetBudget = position.offsetBudget;
-        
     const callOptions = chainData.call || null;
+    let allCallStrikes = new Set();
+    const expirationStrikes = {};
+    let callStrikes = [];
+    const addedSpreads = new Set();
+    
+    // OPTIMIZATION: Validate data and transform into usable formats at the top
+    // Check if call options exist
     if (!callOptions || Object.keys(callOptions).length === 0) {
       return { strategy: 'bull_call_spread', possibleOffsets: [] };
     }
     
-    let allCallStrikes = new Set();
-    const expirationStrikes = {};
-    
+    // Populate call strikes and expiration data
     for (const [expiration, strikes] of Object.entries(callOptions)) {
       const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
       strikeList.forEach(strike => allCallStrikes.add(strike));
       expirationStrikes[expiration] = strikes;
     }
     
-    const callStrikes = Array.from(allCallStrikes).sort((a, b) => b - a);
-    const addedSpreads = new Set();
+    callStrikes = Array.from(allCallStrikes).sort((a, b) => b - a);
+    
+    if (incomingStrategy === 'bear_put_spread') {
+      // =======================================================================
+      // INCOMING: BEAR PUT SPREAD
+      // Bear put spread = long higher strike put + short lower strike put
+      // Goal: Find offsetting BULL CALL SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bear put spread
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // LOGIC VALIDATION: For bear put spread offset with bull call spread:
+      // - Reference should be the SHORT put (lower strike) 
+      // - This creates a "collar-like" structure where we're protected on both sides
+      referenceStrike = lowerStrike;
+      
+      // BUDGET LOGIC: For bear put spread offset with bull call spread:
+      // - Bear put spread is a DEBIT spread (we paid money to enter)
+      // - We can use the position's offsetBudget to buy bull call spreads
+      // - Budget should be the available offsetBudget from the position
+      offsetBudget = position.offsetBudget;
+      
+      // OPTIMIZATION: Calculate position-level variables ONCE for bear put spread
+      const isBearPutSpread = true;
+      const isBearCallSpread = false;
+      bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
+      bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+      
+      console.log(`📊 BEAR PUT → BULL CALL: Reference=${referenceStrike}, Budget=${offsetBudget}`);
+      console.log(`   Position strikes: Short=${bearPutShortStrike}, Long=${bearPutLongStrike}`);
+      
+      // BEAR PUT SPREAD SPECIFIC LOGIC:
+      // Incoming: Bear Put Spread = Long Higher Put + Short Lower Put
+      // Example: Long 7050P + Short 7000P (debit spread, bearish)
+      // 
+      // We want: Bull Call Spread offsets
+      // Target: Long Lower Call + Short Higher Call (debit spread, bullish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bear put spread profits when market goes DOWN
+      // 2. The bull call spread profits when market goes UP  
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7000) becomes our boundary for finding call offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find call strikes AT or BELOW reference strike (7000)
+      // - Long call strike must be ≤ reference strike 
+      // - Short call strike must be > long call strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BEAR PUT → BULL CALL: Reference strike set to ${referenceStrike} (short put leg)`);
+      console.log(`   Incoming position: Long ${higherStrike}P + Short ${lowerStrike}P`);
+      console.log(`   Will search for bull call spreads with long strike ≤ ${referenceStrike}`);
+      
+    } else if (incomingStrategy === 'bear_call_spread') {
+      // =======================================================================
+      // INCOMING: BEAR CALL SPREAD  
+      // Bear call spread = short lower strike call + long higher strike call
+      // Goal: Find offsetting BULL CALL SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bear call spread
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // LOGIC VALIDATION: For bear call spread offset with bull call spread:
+      // - Reference should be the SHORT call (lower strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = lowerStrike;
+      
+      // BUDGET LOGIC: For bear call spread offset with bull call spread:
+      // - Bear call spread is a CREDIT spread (we received money to enter)
+      // - We can use the credit received plus any additional offsetBudget to buy bull call spreads
+      // - Budget should be the position's cost (negative) plus offsetBudget
+      offsetBudget = position.offsetBudget;
+      
+      // OPTIMIZATION: Calculate position-level variables ONCE for bear call spread
+      const isBearPutSpread = false;
+      const isBearCallSpread = true;
+      // Note: bear call spreads don't use bearPutShortStrike/bearPutLongStrike in calculations
+      
+      console.log(`📊 BEAR CALL → BULL CALL: Reference=${referenceStrike}, Budget=${offsetBudget}`);
+      console.log(`   Position strikes: Short=${lowerStrike}, Long=${higherStrike}`);
+      
+      // BEAR CALL SPREAD SPECIFIC LOGIC:
+      // Incoming: Bear Call Spread = Short Lower Call + Long Higher Call
+      // Example: Short 7000C + Long 7050C (credit spread, bearish)
+      //
+      // We want: Bull Call Spread offsets
+      // Target: Long Lower Call + Short Higher Call (debit spread, bullish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bear call spread profits when market goes DOWN (or stays flat)
+      // 2. The bull call spread profits when market goes UP
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7000) becomes our boundary for finding call offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find call strikes AT or BELOW reference strike (7000)
+      // - Long call strike must be ≤ reference strike
+      // - Short call strike must be > long call strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BEAR CALL → BULL CALL: Reference strike set to ${referenceStrike} (short call leg)`);
+      console.log(`   Incoming position: Short ${lowerStrike}C + Long ${higherStrike}C`);
+      console.log(`   Will search for bull call spreads with long strike ≤ ${referenceStrike}`);
+      
+    } else {
+      // =======================================================================
+      // INVALID STRATEGY - ONLY BEAR STRATEGIES SHOULD OFFSET TO BULL CALLS
+      // =======================================================================
+      console.log(`⚠️  INVALID STRATEGY: ${incomingStrategy} - only bear_put_spread or bear_call_spread can offset to bull_call_spread`);
+      return { strategy: 'bull_call_spread', possibleOffsets: [] };
+    }
+    
+    // Data validation and transformation already handled at the top of the function
     
     // Single unified loop: for each long strike, test all possible short strikes (original width and wider)
     for (const longCallStrike of callStrikes) {
-      // console.log(`🔍 SHARED: Testing longCallStrike ${longCallStrike} vs referenceStrike ${referenceStrike}`);
-      if (longCallStrike > referenceStrike) {
-        // console.log(`🔍 SHARED: Skipping ${longCallStrike} > ${referenceStrike}`);
+      // =======================================================================
+      // KEY VALIDATION: This implements our bear put spread offset strategy
+      // =======================================================================
+      // For BEAR PUT → BULL CALL offsets:
+      // - We only consider long call strikes AT or BELOW the reference strike
+      // - Reference strike = short put leg (e.g., 7000)
+      // - This ensures long call strike ≤ 7000, creating proper bullish offset
+      // =======================================================================
+      
+      // Use helper function to validate strike and check market data availability
+      if (!isValidLongCallStrike(longCallStrike, referenceStrike, expirationStrikes)) {
         continue;
       }
       
-      // Get long call data once for this strike
-      let longCallData = null;
-      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-        const longStrikeKey = longCallStrike.toString() + '.0';
-        if (strikes[longStrikeKey]) {
-          longCallData = strikes[longStrikeKey][0];
-          break;
-        }
+      // Get long call data using helper function
+      const longCallStrikeData = getStrikeData(longCallStrike, callStrikes, expirationStrikes);
+      if (!longCallStrikeData) {
+        continue; // Should not happen since validation already passed
       }
       
-      if (!longCallData) {
-        continue;
-      }
-      
-      const longCallCost = (longCallData.bid + longCallData.ask) / 2;
-      const longCallStrikeIndex = callStrikes.indexOf(longCallStrike);
+      const longCallData = longCallStrikeData.data;
+      const longCallCost = longCallStrikeData.cost;
+      const longCallStrikeIndex = longCallStrikeData.index;
       
       // Test all possible short strikes starting from original width and going wider
       for (let i = longCallStrikeIndex - 1; i >= 0; i--) {
         const shortCallStrike = callStrikes[i];
         const currentSpreadWidth = shortCallStrike - longCallStrike;
-        
-        // Skip if narrower than original spread width
-        if (currentSpreadWidth < spreadWidth) {
-          continue;
-        }
-        
         const spreadKey = `${longCallStrike}-${shortCallStrike}`;
-        if (addedSpreads.has(spreadKey)) {
+        
+        // Use helper function to validate spread creation
+        if (!isValidShortCallForSpread(shortCallStrike, longCallStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes)) {
           continue;
         }
         
-        // Get short call data
-        let shortCallData = null;
-        for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-          const shortStrikeKey = shortCallStrike.toString() + '.0';
-          if (strikes[shortStrikeKey]) {
-            shortCallData = strikes[shortStrikeKey][0];
-            break;
-          }
+        // Get short call data using helper function
+        const shortCallStrikeData = getStrikeData(shortCallStrike, callStrikes, expirationStrikes);
+        if (!shortCallStrikeData) {
+          continue; // Should not happen since validation already passed
         }
         
-        if (!shortCallData || !shortCallData.bid || !shortCallData.ask) {
-          continue;
-        }
-        
-        const shortCallCost = (shortCallData.bid + shortCallData.ask) / 2;
+        const shortCallData = shortCallStrikeData.data;
+        const shortCallCost = shortCallStrikeData.cost;
         const spreadCost = (longCallCost - shortCallCost) * 100;
         
+        // OPTIMIZATION: Move budget validation and offset calculation higher up
         // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: cost=$${spreadCost.toFixed(2)}, budget=$${offsetBudget}`);
         
         if (spreadCost > offsetBudget) {
@@ -213,151 +1028,22 @@
         
         const offsetMaxValue = currentSpreadWidth * 100;
         
-        const isBearPutSpread = position.strategy === 'bear_put_spread';
-        const isBearCallSpread = position.strategy === 'bear_call_spread';
+        // OPTIMIZATION: Use helper function to calculate profit metrics
+        const profitMetrics = calculateBullCallProfitMetrics(
+          position, spreadCost, offsetMaxValue, longCallStrike, shortCallStrike,
+          isBearPutSpread, isBearCallSpread, bearPutShortStrike, bearPutLongStrike
+        );
         
-        let lockedInProfit, profitPotential, profitPotentialScore;
-        
-        if (isBearPutSpread) {
-          const totalCost = position.cost + spreadCost;
-          
-          const bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bullCallLongStrike = longCallStrike;
-          const bullCallShortStrike = shortCallStrike;
-          
-          // Check if strikes overlap in a way where both can be worthless
-          // Bear put is worthless above bearPutLongStrike
-          // Bull call is worthless below bullCallLongStrike
-          // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
-          if (bullCallLongStrike >= bearPutLongStrike) {
-            // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
-            lockedInProfit = -totalCost; // Worst case: both worthless
-            
-            // Best case: both spreads can reach full value at different price points
-            const combinedMaxValue = position.maxValue + offsetMaxValue;
-            profitPotential = combinedMaxValue - totalCost;
-          } else {
-            // Strikes overlap - at least one spread will have value at any price
-            const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
-            // console.log(`🔍 SHARED: Overlap check: ${bullCallLongStrike} < ${bearPutLongStrike} = ${bullCallLongStrike < bearPutLongStrike}, ${bearPutShortStrike} < ${bullCallShortStrike} = ${bearPutShortStrike < bullCallShortStrike}, Overlap = ${strikesOverlap}`);
-            
-            if (strikesOverlap) {
-              // console.log('🔍 SHARED: Using OVERLAPPING calculation');
-              const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-              lockedInProfit = minMaxValue - totalCost;
-              
-              let maxCombinedValue = 0;
-              
-              if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-                const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-                const bullCallValueAtShort = offsetMaxValue;
-                maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
-              }
-              
-              if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-                const bearPutValueAtShort = position.maxValue;
-                const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-                maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
-              }
-              
-              if (maxCombinedValue === 0) {
-                maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-              }
-              
-              profitPotential = maxCombinedValue - totalCost;
-              // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
-            } else {
-              // console.log('🔍 SHARED: Using NON-OVERLAPPING calculation');
-              const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-              const combinedMaxValue = position.maxValue + offsetMaxValue;
-              lockedInProfit = minMaxValue - totalCost;
-              profitPotential = combinedMaxValue - totalCost;
-              // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
-            }
-          }
-          
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-          
-        } else if (isBearCallSpread) {
-          const bearCallShortStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bearCallLongStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bullCallLongStrike = longCallStrike;
-          const bullCallShortStrike = shortCallStrike;
-          
-          const bearCallCredit = -position.cost;
-          const netCredit = bearCallCredit - spreadCost;
-          
-          const bearCallMaxLoss = Math.abs(position.maxValue || 0);
-          const bullCallMaxValue = offsetMaxValue;
-          
-          const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss + netCredit;
-          const worstCaseLowPrice = netCredit;
-          
-          lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
-          
-          let bestCaseProfit = netCredit;
-          
-          if (bullCallShortStrike >= bearCallShortStrike && bullCallShortStrike <= bearCallLongStrike) {
-            const bullCallValueAtShort = bullCallMaxValue;
-            const bearCallLossAtBullShort = (bullCallShortStrike - bearCallShortStrike) * 100;
-            bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtShort - bearCallLossAtBullShort + netCredit);
-          }
-          
-          if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
-            const bullCallValueAtBearShort = (bearCallShortStrike - bullCallLongStrike) * 100;
-            const bearCallLossAtShort = 0;
-            bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtBearShort + netCredit);
-          }
-          
-          if (bullCallShortStrike < bearCallShortStrike) {
-            bestCaseProfit = Math.max(bestCaseProfit, bullCallMaxValue + netCredit);
-          }
-          
-          profitPotential = bestCaseProfit;
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-          
-        } else {
-          const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
-          const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
-          const totalCost = position.cost + spreadCost;
-          lockedInProfit = minMaxValue - totalCost;
-          profitPotential = maxMaxValue - totalCost;
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-        }
+        const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
         if (lockedInProfit < 0) {
           continue;
         }
         
-        const offsettingSpread = {
-          strategy: 'bull_call_spread',
-          legs: [
-            {
-              action: 'offset',
-              quantity: 1,
-              type: 'C',
-              strike: longCallStrike,
-              cost: longCallCost * 100,
-              originalString: `1c${longCallStrike}@${longCallCost * 100}`
-            },
-            {
-              action: 'offset',
-              quantity: -1,
-              type: 'C',
-              strike: shortCallStrike,
-              cost: -shortCallCost * 100,
-              originalString: `-1c${shortCallStrike}@${-shortCallCost * 100}`
-            }
-          ],
-          cost: spreadCost,
-          spreadWidth: currentSpreadWidth,
-          maxValue: offsetMaxValue,
-          lockedInProfit: lockedInProfit,
-          profitPotential: profitPotential,
-          profitPotentialScore: profitPotentialScore,
-          description: `Bull Call Spread: Long ${longCallStrike}C @ ${longCallCost.toFixed(2)}, Short ${shortCallStrike}C @ ${shortCallCost.toFixed(2)}`
-        };
+        // OPTIMIZATION: Use helper function to create offsetting spread object
+        const offsettingSpread = createBullCallSpreadObject(
+          longCallStrike, shortCallStrike, longCallCost, shortCallCost, spreadCost, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore
+        );
         
         possibleOffsets.push(offsettingSpread);
         addedSpreads.add(spreadKey);
@@ -377,111 +1063,191 @@
     // });
     
     const possibleOffsets = [];
-    const addedSpreads = new Set();
     
     // Determine incoming position type and extract correct reference strikes
     let referenceStrike;
+    let offsetBudget;
     const incomingStrategy = position.strategy;
     
-    if (incomingStrategy === 'bull_call_spread') {
-      // Bull call spread: long lower strike, short higher strike
-      const legs = position.legs;
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      
-      // For bull call spread, reference is the short call (higher strike)
-      referenceStrike = higherStrike;
-      
-    } else if (incomingStrategy === 'bull_put_spread') {
-      // Bull put spread: short higher strike, long lower strike
-      const legs = position.legs;
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      
-      // For bull put spread, reference is the short put (higher strike)
-      referenceStrike = higherStrike;
-      
-    } else {
-      // Fallback - shouldn't happen with proper input
-      referenceStrike = Math.max(...position.legs.map(leg => leg.strike));
+    // OPTIMIZATION: Calculate shared variables once for all strategies
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const callOptions = chainData.call || null;
+    let allCallStrikes = new Set();
+    const expirationStrikes = {};
+    let callStrikes = [];
+    const addedSpreads = new Set();
+    
+    // OPTIMIZATION: Calculate position-level variables ONCE instead of repeating in loops
+    const isBullCallSpread = incomingStrategy === 'bull_call_spread';
+    const isBullPutSpread = incomingStrategy === 'bull_put_spread';
+    
+    // Pre-calculate position strikes to avoid repeated Math operations in loops
+    let bullCallShortStrike, bullCallLongStrike, bullPutShortStrike, bullPutLongStrike;
+    if (isBullCallSpread) {
+      bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+    } else if (isBullPutSpread) {
+      bullPutShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      bullPutLongStrike = Math.min(...position.legs.map(leg => leg.strike));
     }
     
-    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
-    const offsetBudget = position.offsetBudget;
-        
-    const callOptions = chainData.call || null;
+    // OPTIMIZATION: Validate data and transform into usable formats at the top
+    // Check if call options exist
     if (!callOptions || Object.keys(callOptions).length === 0) {
       return { strategy: 'bear_call_spread', possibleOffsets: [] };
     }
     
-    let allCallStrikes = new Set();
-    const expirationStrikes = {};
-    
+    // Populate call strikes and expiration data
     for (const [expiration, strikes] of Object.entries(callOptions)) {
       const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
       strikeList.forEach(strike => allCallStrikes.add(strike));
       expirationStrikes[expiration] = strikes;
     }
     
-    const callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b);
+    callStrikes = Array.from(allCallStrikes).sort((a, b) => a - b);
+    
+    if (incomingStrategy === 'bull_call_spread') {
+      // =======================================================================
+      // INCOMING: BULL CALL SPREAD
+      // Bull call spread = long lower strike call + short higher strike call
+      // Goal: Find offsetting BEAR CALL SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bull call spread
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // LOGIC VALIDATION: For bull call spread offset with bear call spread:
+      // - Reference should be the SHORT call (higher strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = higherStrike;
+      
+      // BUDGET LOGIC: For bull call spread offset with bear call spread:
+      // - Bull call spread is a DEBIT spread (we paid money to enter)
+      // - We can use the position's offsetBudget to sell bear call spreads (generate credit)
+      // - Budget should be the available offsetBudget from the position
+      offsetBudget = position.offsetBudget;
+      
+      // BULL CALL SPREAD SPECIFIC LOGIC:
+      // Incoming: Bull Call Spread = Long Lower Call + Short Higher Call
+      // Example: Long 7000C + Short 7050C (debit spread, bullish)
+      //
+      // We want: Bear Call Spread offsets
+      // Target: Short Lower Call + Long Higher Call (credit spread, bearish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bull call spread profits when market goes UP
+      // 2. The bear call spread profits when market goes DOWN (or stays flat)
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7050) becomes our boundary for finding call offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find call strikes AT or ABOVE reference strike (7050)
+      // - Short call strike must be ≥ reference strike
+      // - Long call strike must be > short call strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BULL CALL → BEAR CALL: Reference strike set to ${referenceStrike} (short call leg)`);
+      console.log(`   Incoming position: Long ${lowerStrike}C + Short ${higherStrike}C`);
+      console.log(`   Will search for bear call spreads with short strike ≥ ${referenceStrike}`);
+      
+    } else if (incomingStrategy === 'bull_put_spread') {
+      // =======================================================================
+      // INCOMING: BULL PUT SPREAD
+      // Bull put spread = short higher strike put + long lower strike put
+      // Goal: Find offsetting BEAR CALL SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bull put spread
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // LOGIC VALIDATION: For bull put spread offset with bear call spread:
+      // - Reference should be the SHORT put (higher strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = higherStrike;
+      
+      // BUDGET LOGIC: For bull put spread offset with bear call spread:
+      // - Bull put spread is a CREDIT spread (we received money to enter)
+      // - We can use the credit received plus any additional offsetBudget to sell bear call spreads
+      // - Budget should be the position's cost (negative) plus offsetBudget
+      offsetBudget = position.offsetBudget;
+      
+      // BULL PUT SPREAD SPECIFIC LOGIC:
+      // Incoming: Bull Put Spread = Short Higher Put + Long Lower Put
+      // Example: Short 7050P + Long 7000P (credit spread, bullish)
+      //
+      // We want: Bear Call Spread offsets
+      // Target: Short Lower Call + Long Higher Call (credit spread, bearish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bull put spread profits when market goes UP (or stays flat)
+      // 2. The bear call spread profits when market goes DOWN (or stays flat)
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7050) becomes our boundary for finding call offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find call strikes AT or ABOVE reference strike (7050)
+      // - Short call strike must be ≥ reference strike
+      // - Long call strike must be > short call strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BULL PUT → BEAR CALL: Reference strike set to ${referenceStrike} (short put leg)`);
+      console.log(`   Incoming position: Short ${higherStrike}P + Long ${lowerStrike}P`);
+      console.log(`   Will search for bear call spreads with short strike ≥ ${referenceStrike}`);
+      
+    } else {
+      // =======================================================================
+      // INVALID STRATEGY - ONLY BULL STRATEGIES SHOULD OFFSET TO BEAR CALLS
+      // =======================================================================
+      console.log(`⚠️  INVALID STRATEGY: ${incomingStrategy} - only bull_call_spread or bull_put_spread can offset to bear_call_spread`);
+      return { strategy: 'bear_call_spread', possibleOffsets: [] };
+    }
+    
+    // Data validation and transformation already handled at the top of the function
     
     // Single unified loop: for each short strike, test all possible long strikes (original width and wider)
     for (const shortLowerCallStrike of callStrikes) {
-      if (shortLowerCallStrike < referenceStrike) {
+      // Use helper function to validate strike and check market data availability
+      if (!isValidShortCallStrike(shortLowerCallStrike, referenceStrike, expirationStrikes)) {
         continue;
       }
       
-      // Get short call data once for this strike
-      let shortLowerCallData = null;
-      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-        const shortStrikeKey = shortLowerCallStrike.toString() + '.0';
-        if (strikes[shortStrikeKey]) {
-          shortLowerCallData = strikes[shortStrikeKey][0];
-          break;
-        }
+      // Get short call data using helper function
+      const shortLowerCallStrikeData = getStrikeData(shortLowerCallStrike, callStrikes, expirationStrikes);
+      if (!shortLowerCallStrikeData) {
+        continue; // Should not happen since validation already passed
       }
       
-      if (!shortLowerCallData) {
-        continue;
-      }
-      
-      const shortLowerCallCredit = (shortLowerCallData.bid + shortLowerCallData.ask) / 2;
-      const shortLowerCallStrikeIndex = callStrikes.indexOf(shortLowerCallStrike);
+      const shortLowerCallData = shortLowerCallStrikeData.data;
+      const shortLowerCallCredit = shortLowerCallStrikeData.cost;
+      const shortLowerCallStrikeIndex = shortLowerCallStrikeData.index;
       
       // Test all possible long strikes starting from original width and going wider
       for (let i = shortLowerCallStrikeIndex + 1; i < callStrikes.length; i++) {
         const longHigherCallStrike = callStrikes[i];
         const currentSpreadWidth = longHigherCallStrike - shortLowerCallStrike;
-        
-        // Skip if narrower than original spread width
-        if (currentSpreadWidth < spreadWidth) {
-          continue;
-        }
-        
         const spreadKey = `${shortLowerCallStrike}-${longHigherCallStrike}`;
-        if (addedSpreads.has(spreadKey)) {
+        
+        // Use helper function to validate spread creation
+        if (!isValidLongCallForBearSpread(shortLowerCallStrike, longHigherCallStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes)) {
           continue;
         }
         
-        // Get long call data
-        let longHigherCallData = null;
-        for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-          const longStrikeKey = longHigherCallStrike.toString() + '.0';
-          if (strikes[longStrikeKey]) {
-            longHigherCallData = strikes[longStrikeKey][0];
-            break;
-          }
+        // Get long call data using helper function
+        const longHigherCallStrikeData = getStrikeData(longHigherCallStrike, callStrikes, expirationStrikes);
+        if (!longHigherCallStrikeData) {
+          continue; // Should not happen since validation already passed
         }
         
-        if (!longHigherCallData) {
-          continue;
-        }
-        
-        const longHigherCallCost = (longHigherCallData.bid + longHigherCallData.ask) / 2;
+        const longHigherCallData = longHigherCallStrikeData.data;
+        const longHigherCallCost = longHigherCallStrikeData.cost;
         const spreadCredit = (shortLowerCallCredit - longHigherCallCost) * 100;
         
         if (spreadCredit <= 0) {
@@ -489,56 +1255,14 @@
         }
         
         const offsetMaxValue = -(currentSpreadWidth * 100);
-        const bearCallMaxLoss = offsetMaxValue;
         
-        const isBullCallSpread = position.strategy === 'bull_call_spread';
-        const isBullPutSpread = position.strategy === 'bull_put_spread';
+        // OPTIMIZATION: Use helper function to calculate profit metrics
+        const profitMetrics = calculateBearCallProfitMetrics(
+          position, spreadCredit, offsetMaxValue, shortLowerCallStrike, longHigherCallStrike,
+          position.strategy === 'bull_call_spread', position.strategy === 'bull_put_spread'
+        );
         
-        let worstCase, bestCase;
-        
-        if (isBullCallSpread) {
-          const bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bearCallShortStrike = shortLowerCallStrike;
-          const bearCallLongStrike = longHigherCallStrike;
-          
-          const netCost = position.cost - spreadCredit;
-          const strikesOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
-          
-          if (strikesOverlap) {
-            worstCase = position.maxValue + bearCallMaxLoss - netCost;
-            
-            if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
-              const bullCallValueAtBearCallShort = (bearCallShortStrike - bullCallLongStrike) * 100;
-              bestCase = bullCallValueAtBearCallShort - netCost;
-            } else {
-              bestCase = position.maxValue - netCost;
-            }
-          } else {
-            worstCase = position.maxValue + bearCallMaxLoss - netCost;
-            bestCase = position.maxValue - netCost;
-          }
-          
-        } else if (isBullPutSpread) {
-          const bullPutCredit = -position.cost;
-          const bullPutMaxLoss = Math.abs(position.maxValue || 0);
-          const bearCallMaxLossAbs = Math.abs(bearCallMaxLoss);
-          
-          const totalCredit = bullPutCredit + spreadCredit;
-          const maxLossWorstSpread = Math.max(bullPutMaxLoss, bearCallMaxLossAbs);
-          
-          worstCase = -maxLossWorstSpread + totalCredit;
-          bestCase = totalCredit;
-          
-        } else {
-          const positionMaxValue = position.maxValue || 0;
-          worstCase = positionMaxValue + bearCallMaxLoss + spreadCredit - position.cost;
-          bestCase = positionMaxValue + spreadCredit - position.cost;
-        }
-        
-        const lockedInProfit = worstCase;
-        const profitPotential = bestCase;
-        const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
         // console.log(`🔍 SHARED: Spread ${longCallStrike}-${shortCallStrike}: lockedInProfit=$${lockedInProfit.toFixed(2)}, profitPotential=$${profitPotential.toFixed(2)}`);
         
@@ -547,34 +1271,10 @@
           continue;
         }
         
-        const offsettingSpread = {
-          strategy: 'bear_call_spread',
-          legs: [
-            {
-              action: 'offset',
-              quantity: -1,
-              type: 'C',
-              strike: shortLowerCallStrike,
-              cost: -shortLowerCallCredit * 100,
-              originalString: `-1c${shortLowerCallStrike}@${-shortLowerCallCredit * 100}`
-            },
-            {
-              action: 'offset',
-              quantity: 1,
-              type: 'C',
-              strike: longHigherCallStrike,
-              cost: longHigherCallCost * 100,
-              originalString: `1c${longHigherCallStrike}@${longHigherCallCost * 100}`
-            }
-          ],
-          cost: -spreadCredit,
-          spreadWidth: currentSpreadWidth,
-          maxValue: offsetMaxValue,
-          lockedInProfit: lockedInProfit,
-          profitPotential: profitPotential,
-          profitPotentialScore: profitPotentialScore,
-          description: `Bear Call Spread: Short ${shortLowerCallStrike}C @ ${shortLowerCallCredit.toFixed(2)}, Long ${longHigherCallStrike}C @ ${longHigherCallCost.toFixed(2)}`
-        };
+        // OPTIMIZATION: Use helper function to create offsetting spread object
+        const offsettingSpread = createBearCallSpreadObject(
+          shortLowerCallStrike, longHigherCallStrike, shortLowerCallCredit, longHigherCallCost, spreadCredit, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore
+        );
         
         possibleOffsets.push(offsettingSpread);
         addedSpreads.add(spreadKey);
@@ -592,113 +1292,191 @@
     
     // Determine incoming position type and extract correct reference strikes
     let referenceStrike;
+    let offsetBudget;
     const incomingStrategy = position.strategy;
     
-    if (incomingStrategy === 'bear_put_spread') {
-      // Bear put spread: long higher strike, short lower strike
-      const legs = position.legs;
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      
-      // For bear put spread, reference is the long put (higher strike)
-      referenceStrike = higherStrike;
-      
-    } else if (incomingStrategy === 'bear_call_spread') {
-      // Bear call spread: short lower strike, long higher strike
-      const legs = position.legs;
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      
-      // For bear call spread, reference is the long call (higher strike)
-      referenceStrike = higherStrike;
-      
-    } else {
-      // Fallback - shouldn't happen with proper input
-      referenceStrike = Math.max(...position.legs.map(leg => leg.strike));
+    // OPTIMIZATION: Calculate shared variables once for all strategies
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const putOptions = chainData.put || null;
+    let allPutStrikes = new Set();
+    const expirationStrikes = {};
+    let putStrikes = [];
+    const addedSpreads = new Set();
+    
+    // OPTIMIZATION: Calculate position-level variables ONCE instead of repeating in loops
+    const isBearPutSpread = incomingStrategy === 'bear_put_spread';
+    const isBearCallSpread = incomingStrategy === 'bear_call_spread';
+    
+    // Pre-calculate position strikes to avoid repeated Math operations in loops
+    let bearPutShortStrike, bearPutLongStrike, bearCallShortStrike, bearCallLongStrike;
+    if (isBearPutSpread) {
+      bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
+      bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+    } else if (isBearCallSpread) {
+      bearCallShortStrike = Math.min(...position.legs.map(leg => leg.strike));
+      bearCallLongStrike = Math.max(...position.legs.map(leg => leg.strike));
     }
     
-    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
-    const offsetBudget = Math.abs(position.offsetBudget || position.cost);
-        
-    const putOptions = chainData.put || null;
+    // OPTIMIZATION: Validate data and transform into usable formats at the top
+    // Check if put options exist
     if (!putOptions || Object.keys(putOptions).length === 0) {
       return { strategy: 'bull_put_spread', possibleOffsets: [] };
     }
     
-    let allPutStrikes = new Set();
-    const expirationStrikes = {};
-    
+    // Populate put strikes and expiration data
     for (const [expiration, strikes] of Object.entries(putOptions)) {
       const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
       strikeList.forEach(strike => allPutStrikes.add(strike));
       expirationStrikes[expiration] = strikes;
     }
     
-    const putStrikes = Array.from(allPutStrikes).sort((a, b) => b - a);
-    const addedSpreads = new Set();
+    putStrikes = Array.from(allPutStrikes).sort((a, b) => b - a);
+    
+    if (incomingStrategy === 'bear_put_spread') {
+      // =======================================================================
+      // INCOMING: BEAR PUT SPREAD
+      // Bear put spread = long higher strike put + short lower strike put
+      // Goal: Find offsetting BULL PUT SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bear put spread
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // LOGIC VALIDATION: For bear put spread offset with bull put spread:
+      // - Reference should be the LONG put (higher strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = higherStrike;
+      
+      // BUDGET LOGIC: For bear put spread offset with bull put spread:
+      // - Bear put spread is a DEBIT spread (we paid money to enter)
+      // - We can use the position's offsetBudget to sell bull put spreads (generate credit)
+      // - Budget should be the available offsetBudget from the position
+      offsetBudget = position.offsetBudget;
+      
+      // BEAR PUT SPREAD SPECIFIC LOGIC:
+      // Incoming: Bear Put Spread = Long Higher Put + Short Lower Put
+      // Example: Long 7050P + Short 7000P (debit spread, bearish)
+      //
+      // We want: Bull Put Spread offsets
+      // Target: Short Higher Put + Long Lower Put (credit spread, bullish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bear put spread profits when market goes DOWN
+      // 2. The bull put spread profits when market goes UP (or stays flat)
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7050) becomes our boundary for finding put offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find put strikes AT or BELOW reference strike (7050)
+      // - Short put strike must be ≤ reference strike
+      // - Long put strike must be < short put strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BEAR PUT → BULL PUT: Reference strike set to ${referenceStrike} (long put leg)`);
+      console.log(`   Incoming position: Long ${higherStrike}P + Short ${lowerStrike}P`);
+      console.log(`   Will search for bull put spreads with short strike ≤ ${referenceStrike}`);
+      
+    } else if (incomingStrategy === 'bear_call_spread') {
+      // =======================================================================
+      // INCOMING: BEAR CALL SPREAD
+      // Bear call spread = short lower strike call + long higher strike call
+      // Goal: Find offsetting BULL PUT SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bear call spread
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // LOGIC VALIDATION: For bear call spread offset with bull put spread:
+      // - Reference should be the LONG call (higher strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = higherStrike;
+      
+      // BUDGET LOGIC: For bear call spread offset with bull put spread:
+      // - Bear call spread is a CREDIT spread (we received money to enter)
+      // - We can use the credit received plus any additional offsetBudget to sell bull put spreads
+      // - Budget should be the position's cost (negative) plus offsetBudget
+      offsetBudget = position.offsetBudget;
+      
+      // BEAR CALL SPREAD SPECIFIC LOGIC:
+      // Incoming: Bear Call Spread = Short Lower Call + Long Higher Call
+      // Example: Short 7000C + Long 7050C (credit spread, bearish)
+      //
+      // We want: Bull Put Spread offsets
+      // Target: Short Higher Put + Long Lower Put (credit spread, bullish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bear call spread profits when market goes DOWN (or stays flat)
+      // 2. The bull put spread profits when market goes UP (or stays flat)
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7050) becomes our boundary for finding put offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find put strikes AT or BELOW reference strike (7050)
+      // - Short put strike must be ≤ reference strike
+      // - Long put strike must be < short put strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BEAR CALL → BULL PUT: Reference strike set to ${referenceStrike} (long call leg)`);
+      console.log(`   Incoming position: Short ${lowerStrike}C + Long ${higherStrike}C`);
+      console.log(`   Will search for bull put spreads with short strike ≤ ${referenceStrike}`);
+      
+    } else {
+      // =======================================================================
+      // INVALID STRATEGY - ONLY BEAR STRATEGIES SHOULD OFFSET TO BULL PUTS
+      // =======================================================================
+      console.log(`⚠️  INVALID STRATEGY: ${incomingStrategy} - only bear_put_spread or bear_call_spread can offset to bull_put_spread`);
+      return { strategy: 'bull_put_spread', possibleOffsets: [] };
+    }
+    
+    // Data validation and transformation already handled at the top of the function
     
     // Single unified loop: for each short strike, test all possible long strikes (original width and wider)
     for (const shortHigherPutStrike of putStrikes) {
       // console.log(`🔍 BULL PUT: Testing shortHigherPutStrike ${shortHigherPutStrike} vs referenceStrike ${referenceStrike}`);
-      if (shortHigherPutStrike >= referenceStrike) {
-        // console.log(`🔍 BULL PUT: Skipping ${shortHigherPutStrike} >= ${referenceStrike} - bull put strikes must be lower than bear put strikes`);
+      
+      // Use helper function to validate strike and check market data availability
+      if (!isValidShortPutStrike(shortHigherPutStrike, referenceStrike, expirationStrikes)) {
         continue;
       }
       
-      // Get short put data once for this strike
-      let shortHigherPutData = null;
-      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-        const shortStrikeKey = shortHigherPutStrike.toString() + '.0';
-        if (strikes[shortStrikeKey]) {
-          shortHigherPutData = strikes[shortStrikeKey][0];
-          break;
-        }
+      // Get short put data using helper function
+      const shortHigherPutStrikeData = getStrikeData(shortHigherPutStrike, putStrikes, expirationStrikes);
+      if (!shortHigherPutStrikeData) {
+        continue; // Should not happen since validation already passed
       }
       
-      if (!shortHigherPutData) {
-        continue;
-      }
-      
-      const shortHigherPutCredit = (shortHigherPutData.bid + shortHigherPutData.ask) / 2;
-      const shortHigherPutStrikeIndex = putStrikes.indexOf(shortHigherPutStrike);
+      const shortHigherPutData = shortHigherPutStrikeData.data;
+      const shortHigherPutCredit = shortHigherPutStrikeData.cost;
+      const shortHigherPutStrikeIndex = shortHigherPutStrikeData.index;
       
       // Test all possible long strikes starting from original width and going wider
       for (let i = shortHigherPutStrikeIndex + 1; i < putStrikes.length; i++) {
         const longLowerPutStrike = putStrikes[i];
         const currentSpreadWidth = shortHigherPutStrike - longLowerPutStrike;
-        
-        // Skip if narrower than original spread width
-        if (currentSpreadWidth < spreadWidth) {
-          continue;
-        }
-        
         const spreadKey = `${shortHigherPutStrike}-${longLowerPutStrike}`;
         // console.log(`🔍 BULL PUT: Trying spread ${shortHigherPutStrike}-${longLowerPutStrike}`);
         
-        if (addedSpreads.has(spreadKey)) {
+        // Use helper function to validate spread creation
+        if (!isValidLongPutForBullSpread(shortHigherPutStrike, longLowerPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes)) {
           continue;
         }
         
-        // Get long put data
-        let longLowerPutData = null;
-        for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-          const longStrikeKey = longLowerPutStrike.toString() + '.0';
-          if (strikes[longStrikeKey]) {
-            longLowerPutData = strikes[longStrikeKey][0];
-            break;
-          }
+        // Get long put data using helper function
+        const longLowerPutStrikeData = getStrikeData(longLowerPutStrike, putStrikes, expirationStrikes);
+        if (!longLowerPutStrikeData) {
+          continue; // Should not happen since validation already passed
         }
         
-        if (!longLowerPutData) {
-          // console.log(`🔍 BULL PUT: Missing data for ${shortHigherPutStrike}-${longLowerPutStrike}: short=${!!shortHigherPutData}, long=${!!longLowerPutData}`);
-          continue;
-        }
-        
-        const longLowerPutCost = (longLowerPutData.bid + longLowerPutData.ask) / 2;
+        const longLowerPutData = longLowerPutStrikeData.data;
+        const longLowerPutCost = longLowerPutStrikeData.cost;
         const spreadCredit = (shortHigherPutCredit - longLowerPutCost) * 100;
       
         // console.log(`🔍 BULL PUT: Spread ${shortHigherPutStrike}-${longLowerPutStrike}: credit=$${spreadCredit.toFixed(2)}, budget=$${offsetBudget}`);
@@ -716,115 +1494,24 @@
         }
         
         const bullPutMaxLoss = -(currentSpreadWidth * 100);
-        let worstCase, bestCase;
         
-        const isBearPutSpread = position.strategy === 'bear_put_spread';
-        const isBearCallSpread = position.strategy === 'bear_call_spread';
+        // OPTIMIZATION: Use helper function to calculate profit metrics
+        const profitMetrics = calculateBullPutProfitMetrics(
+          position, spreadCredit, bullPutMaxLoss, shortHigherPutStrike, longLowerPutStrike,
+          position.strategy === 'bear_put_spread', position.strategy === 'bear_call_spread',
+          Math.min(...position.legs.map(leg => leg.strike)), Math.max(...position.legs.map(leg => leg.strike))
+        );
         
-        if (isBearPutSpread) {
-          const bearPutShortStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bearPutLongStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bullPutShortStrike = shortHigherPutStrike;
-          const bullPutLongStrike = longLowerPutStrike;
-          const bearPutCost = position.cost;
-          const netCost = bearPutCost - spreadCredit;
-          
-          const bearPutMaxValue = position.maxValue || (spreadWidth * 100);
-          const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
-          
-          const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost;
-          const worstCaseHighPrice = -netCost;
-          
-          worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
-          
-          let bestCaseProfit = -netCost;
-          
-          if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
-            const bearPutValueAtLong = bearPutMaxValue;
-            const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
-            bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong - netCost);
-          }
-          
-          if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
-            const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
-            bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort - netCost);
-          }
-          
-          if (bearPutLongStrike < bullPutLongStrike) {
-            // Non-overlapping spreads - both can reach full value at different price points
-            const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
-            bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
-          } else {
-            // Strikes overlap - check if they overlap
-            const strikesOverlap = bullPutShortStrike > bearPutLongStrike && bullPutLongStrike < bearPutShortStrike;
-            // console.log(`🔍 BULL PUT: Overlap check: ${bullPutShortStrike} > ${bearPutLongStrike} = ${bullPutShortStrike > bearPutLongStrike}, ${bullPutLongStrike} < ${bearPutShortStrike} = ${bullPutLongStrike < bearPutShortStrike}, Overlap = ${strikesOverlap}`);
-            
-            if (strikesOverlap) {
-              // console.log('🔍 BULL PUT: Using OVERLAPPING calculation');
-              const minMaxValue = Math.min(bearPutMaxValue, Math.abs(bullPutMaxLoss));
-              bestCaseProfit = Math.max(bestCaseProfit, minMaxValue - netCost);
-            } else {
-              // console.log('🔍 BULL PUT: Using NON-OVERLAPPING calculation');
-              const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
-              bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
-            }
-          }
-          
-          bestCase = bestCaseProfit;
-          
-        } else if (isBearCallSpread) {
-          const bearCallCredit = -position.cost;
-          const bearCallMaxLoss = Math.abs(position.maxValue || 0);
-          const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
-          
-          const totalCredit = bearCallCredit + spreadCredit;
-          const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
-          
-          worstCase = -maxLossWorstSpread + totalCredit;
-          bestCase = totalCredit;
-          
-        } else {
-          const positionMaxValue = position.maxValue || 0;
-          worstCase = positionMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
-          bestCase = positionMaxValue + spreadCredit - position.cost;
-        }
-        
-        const lockedInProfit = worstCase;
-        const profitPotential = bestCase;
-        const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+        const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
         if (lockedInProfit < 0) {
           continue;
         }
         
-        const offsettingSpread = {
-          strategy: 'bull_put_spread',
-          legs: [
-            {
-              action: 'offset',
-              quantity: -1,
-              type: 'P',
-              strike: shortHigherPutStrike,
-              cost: -shortHigherPutCredit * 100,
-              originalString: `-1p${shortHigherPutStrike}@${-shortHigherPutCredit * 100}`
-            },
-            {
-              action: 'offset',
-              quantity: 1,
-              type: 'P',
-              strike: longLowerPutStrike,
-              cost: longLowerPutCost * 100,
-              originalString: `1p${longLowerPutStrike}@${longLowerPutCost * 100}`
-            }
-          ],
-          cost: -spreadCredit,
-          spreadWidth: currentSpreadWidth,
-          maxValue: bullPutMaxLoss,
-          lockedInProfit: lockedInProfit,
-          profitPotential: profitPotential,
-          profitPotentialScore: profitPotentialScore,
-          description: `Bull Put Spread: Short ${shortHigherPutStrike}P @ ${shortHigherPutCredit.toFixed(2)}, Long ${longLowerPutStrike}P @ ${longLowerPutCost.toFixed(2)}`
-        };
+        // OPTIMIZATION: Use helper function to create offsetting spread object
+        const offsettingSpread = createBullPutSpreadObject(
+          shortHigherPutStrike, longLowerPutStrike, shortHigherPutCredit, longLowerPutCost, spreadCredit, currentSpreadWidth, bullPutMaxLoss, lockedInProfit, profitPotential, profitPotentialScore
+        );
         
         possibleOffsets.push(offsettingSpread);
         addedSpreads.add(spreadKey);
@@ -842,115 +1529,194 @@
     
     // Determine incoming position type and extract correct reference strikes
     let referenceStrike;
+    let offsetBudget;
     const incomingStrategy = position.strategy;
     
-    if (incomingStrategy === 'bull_call_spread') {
-      // Bull call spread: long lower strike, short higher strike
-      const legs = position.legs;
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      
-      // For bull call spread, reference is the long call (lower strike)
-      referenceStrike = lowerStrike;
-      
-    } else if (incomingStrategy === 'bull_put_spread') {
-      // Bull put spread: short higher strike, long lower strike
-      const legs = position.legs;
-      const higherStrike = Math.max(...legs.map(leg => leg.strike));
-      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
-      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
-      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
-      
-      // For bull put spread, reference is the long put (lower strike)
-      referenceStrike = lowerStrike;
-      
-    } else {
-      // Fallback - shouldn't happen with proper input
-      referenceStrike = Math.min(...position.legs.map(leg => leg.strike));
+    // OPTIMIZATION: Calculate shared variables once for all strategies
+    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
+    const putOptions = chainData.put || null;
+    let allPutStrikes = new Set();
+    const expirationStrikes = {};
+    let putStrikes = [];
+    const addedSpreads = new Set();
+    
+    // OPTIMIZATION: Calculate position-level variables ONCE instead of repeating in loops
+    const isBullCallSpread = incomingStrategy === 'bull_call_spread';
+    const isBullPutSpread = incomingStrategy === 'bull_put_spread';
+    
+    // Pre-calculate position strikes to avoid repeated Math operations in loops
+    let bullCallShortStrike, bullCallLongStrike, bullPutShortStrike, bullPutLongStrike;
+    if (isBullCallSpread) {
+      bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
+    } else if (isBullPutSpread) {
+      bullPutShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      bullPutLongStrike = Math.min(...position.legs.map(leg => leg.strike));
     }
     
-    const spreadWidth = position.spreadWidth || Math.abs(position.legs[0].strike - position.legs[1].strike);
-    const offsetBudget = position.offsetBudget;
-    
-    // console.log(`🔍 BEAR PUT: findOffsettingBearPutSpread START {strategy: '${position.strategy}', referenceStrike: ${referenceStrike}, spreadWidth: ${spreadWidth}, offsetBudget: ${offsetBudget}}`);
-        
-    const putOptions = chainData.put || null;
+    // OPTIMIZATION: Validate data and transform into usable formats at the top
+    // Check if put options exist
     if (!putOptions || Object.keys(putOptions).length === 0) {
       return { strategy: 'bear_put_spread', possibleOffsets: [] };
     }
     
-    let allPutStrikes = new Set();
-    const expirationStrikes = {};
-    
+    // Populate put strikes and expiration data
     for (const [expiration, strikes] of Object.entries(putOptions)) {
       const strikeList = Object.keys(strikes).map(strike => parseFloat(strike));
       strikeList.forEach(strike => allPutStrikes.add(strike));
       expirationStrikes[expiration] = strikes;
     }
     
-    const putStrikes = Array.from(allPutStrikes).sort((a, b) => a - b);
-    const addedSpreads = new Set();
+    putStrikes = Array.from(allPutStrikes).sort((a, b) => a - b);
+    
+    if (incomingStrategy === 'bull_call_spread') {
+      // =======================================================================
+      // INCOMING: BULL CALL SPREAD
+      // Bull call spread = long lower strike call + short higher strike call
+      // Goal: Find offsetting BEAR PUT SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bull call spread
+      const legs = position.legs;
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      
+      // LOGIC VALIDATION: For bull call spread offset with bear put spread:
+      // - Reference should be the LONG call (lower strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = lowerStrike;
+      
+      // BUDGET LOGIC: For bull call spread offset with bear put spread:
+      // - Bull call spread is a DEBIT spread (we paid money to enter)
+      // - We can use the position's offsetBudget to buy bear put spreads
+      // - Budget should be the available offsetBudget from the position
+      offsetBudget = position.offsetBudget;
+      
+      // BULL CALL SPREAD SPECIFIC LOGIC:
+      // Incoming: Bull Call Spread = Long Lower Call + Short Higher Call
+      // Example: Long 7000C + Short 7050C (debit spread, bullish)
+      //
+      // We want: Bear Put Spread offsets
+      // Target: Long Higher Put + Short Lower Put (debit spread, bearish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bull call spread profits when market goes UP
+      // 2. The bear put spread profits when market goes DOWN
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7000) becomes our boundary for finding put offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find put strikes AT or ABOVE reference strike (7000)
+      // - Long put strike must be ≥ reference strike
+      // - Short put strike must be < long put strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BULL CALL → BEAR PUT: Reference strike set to ${referenceStrike} (long call leg)`);
+      console.log(`   Incoming position: Long ${lowerStrike}C + Short ${higherStrike}C`);
+      console.log(`   Will search for bear put spreads with long strike ≥ ${referenceStrike}`);
+      
+    } else if (incomingStrategy === 'bull_put_spread') {
+      // =======================================================================
+      // INCOMING: BULL PUT SPREAD
+      // Bull put spread = short higher strike put + long lower strike put
+      // Goal: Find offsetting BEAR PUT SPREAD positions
+      // =======================================================================
+      
+      // Extract legs from incoming bull put spread
+      const legs = position.legs;
+      const higherStrike = Math.max(...legs.map(leg => leg.strike));
+      const lowerStrike = Math.min(...legs.map(leg => leg.strike));
+      const higherStrikeLeg = legs.find(leg => leg.strike === higherStrike);
+      const lowerStrikeLeg = legs.find(leg => leg.strike === lowerStrike);
+      
+      // LOGIC VALIDATION: For bull put spread offset with bear put spread:
+      // - Reference should be the LONG put (lower strike)
+      // - This creates opposing positions that can profit in different scenarios
+      referenceStrike = lowerStrike;
+      
+      // BUDGET LOGIC: For bull put spread offset with bear put spread:
+      // - Bull put spread is a CREDIT spread (we received money to enter)
+      // - We can use the credit received plus any additional offsetBudget to buy bear put spreads
+      // - Budget should be the position's cost (negative) plus offsetBudget
+      offsetBudget = position.offsetBudget;
+      
+      // BULL PUT SPREAD SPECIFIC LOGIC:
+      // Incoming: Bull Put Spread = Short Higher Put + Long Lower Put
+      // Example: Short 7050P + Long 7000P (credit spread, bullish)
+      //
+      // We want: Bear Put Spread offsets
+      // Target: Long Higher Put + Short Lower Put (debit spread, bearish)
+      //
+      // STRATEGY RATIONALE:
+      // 1. The bull put spread profits when market goes UP (or stays flat)
+      // 2. The bear put spread profits when market goes DOWN
+      // 3. This creates opposing positions that can profit in different scenarios
+      // 4. Reference strike (7000) becomes our boundary for finding put offsets
+      //
+      // OFFSET GENERATION LOGIC:
+      // - Find put strikes AT or ABOVE reference strike (7000)
+      // - Long put strike must be ≥ reference strike
+      // - Short put strike must be < long put strike
+      // - Spread width must be ≥ original spread width (50)
+      //
+      console.log(`🔍 BULL PUT → BEAR PUT: Reference strike set to ${referenceStrike} (long put leg)`);
+      console.log(`   Incoming position: Short ${higherStrike}P + Long ${lowerStrike}P`);
+      console.log(`   Will search for bear put spreads with long strike ≥ ${referenceStrike}`);
+      
+    } else {
+      // =======================================================================
+      // INVALID STRATEGY - ONLY BULL STRATEGIES SHOULD OFFSET TO BEAR PUTS
+      // =======================================================================
+      console.log(`⚠️  INVALID STRATEGY: ${incomingStrategy} - only bull_call_spread or bull_put_spread can offset to bear_put_spread`);
+      return { strategy: 'bear_put_spread', possibleOffsets: [] };
+    }
+    
+    // console.log(`🔍 BEAR PUT: findOffsettingBearPutSpread START {strategy: '${position.strategy}', referenceStrike: ${referenceStrike}, spreadWidth: ${spreadWidth}, offsetBudget: ${offsetBudget}}`);
+        
+    // Data validation and transformation already handled at the top of the function
     
     // console.log(`🔍 BEAR PUT: Testing ${putStrikes.length} put strikes`);
     
     // Single unified loop: for each short strike, test all possible long strikes (original width and wider)
     for (const shortPutStrike of putStrikes) {
       // console.log(`🔍 BEAR PUT: Testing shortPutStrike ${shortPutStrike} vs referenceStrike ${referenceStrike}`);
-      if (shortPutStrike < referenceStrike) {
-        // console.log(`🔍 BEAR PUT: Skipping ${shortPutStrike} < ${referenceStrike}`);
+      
+      // Use helper function to validate strike and check market data availability
+      if (!isValidShortPutStrikeForBear(shortPutStrike, referenceStrike, expirationStrikes)) {
         continue;
       }
       
-      // Get short put data once for this strike
-      let shortPutData = null;
-      for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-        const shortStrikeKey = shortPutStrike.toString() + '.0';
-        if (strikes[shortStrikeKey]) {
-          shortPutData = strikes[shortStrikeKey][0];
-          break;
-        }
+      // Get short put data using helper function
+      const shortPutStrikeData = getStrikeData(shortPutStrike, putStrikes, expirationStrikes);
+      if (!shortPutStrikeData) {
+        continue; // Should not happen since validation already passed
       }
       
-      if (!shortPutData) {
-        continue;
-      }
-      
-      const shortPutCost = (shortPutData.bid + shortPutData.ask) / 2;
-      const shortPutStrikeIndex = putStrikes.indexOf(shortPutStrike);
+      const shortPutData = shortPutStrikeData.data;
+      const shortPutCost = shortPutStrikeData.cost;
+      const shortPutStrikeIndex = shortPutStrikeData.index;
       
       // Test all possible long strikes starting from original width and going wider
       for (let i = shortPutStrikeIndex + 1; i < putStrikes.length; i++) {
         const longPutStrike = putStrikes[i];
         const currentSpreadWidth = longPutStrike - shortPutStrike;
-        
-        // Skip if narrower than original spread width
-        if (currentSpreadWidth < spreadWidth) {
-          continue;
-        }
-        
         const spreadKey = `${longPutStrike}-${shortPutStrike}`;
         
-        if (addedSpreads.has(spreadKey)) {
+        // Use helper function to validate spread creation
+        if (!isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes)) {
           continue;
         }
         
-        // Get long put data
-        let longPutData = null;
-        for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
-          const longStrikeKey = longPutStrike.toString() + '.0';
-          if (strikes[longStrikeKey]) {
-            longPutData = strikes[longStrikeKey][0];
-            break;
-          }
+        // Get long put data using helper function
+        const longPutStrikeData = getStrikeData(longPutStrike, putStrikes, expirationStrikes);
+        if (!longPutStrikeData) {
+          continue; // Should not happen since validation already passed
         }
         
-        if (!longPutData) {
-          continue;
-        }
-        
-        const longPutCost = (longPutData.bid + longPutData.ask) / 2;
+        const longPutData = longPutStrikeData.data;
+        const longPutCost = longPutStrikeData.cost;
         const spreadCost = (longPutCost - shortPutCost) * 100;
       
         // console.log(`🔍 BEAR PUT: Spread ${longPutStrike}-${shortPutStrike}: cost=$${spreadCost.toFixed(2)}, budget=$${offsetBudget}`);
@@ -962,148 +1728,23 @@
         
         const offsetMaxValue = currentSpreadWidth * 100;
         
-        const isBullCallSpread = position.strategy === 'bull_call_spread';
-        const isBullPutSpread = position.strategy === 'bull_put_spread';
+        // OPTIMIZATION: Use helper function to calculate profit metrics
+        const profitMetrics = calculateBearPutProfitMetrics(
+          position, spreadCost, offsetMaxValue, longPutStrike, shortPutStrike,
+          position.strategy === 'bull_call_spread', position.strategy === 'bull_put_spread',
+          Math.min(...position.legs.map(leg => leg.strike)), Math.max(...position.legs.map(leg => leg.strike))
+        );
         
-        let lockedInProfit, profitPotential, profitPotentialScore;
-        
-        if (isBullCallSpread) {
-          const totalCost = position.cost + spreadCost;
-          
-          const bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bearPutShortStrike = shortPutStrike;
-          const bearPutLongStrike = longPutStrike;
-          
-          // Check if strikes overlap in a way where both can be worthless
-          // Bull call is worthless below bullCallLongStrike
-          // Bear put is worthless above bearPutLongStrike
-          // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
-          if (bullCallLongStrike >= bearPutLongStrike) {
-            // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
-            lockedInProfit = -totalCost; // Worst case: both worthless
-            
-            // Best case: both spreads can reach full value at different price points
-            const combinedMaxValue = position.maxValue + offsetMaxValue;
-            profitPotential = combinedMaxValue - totalCost;
-          } else {
-            // Strikes overlap - at least one spread will have value at any price
-            const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
-            console.log(`🔍 SHARED: Overlap check: ${bullCallLongStrike} < ${bearPutLongStrike} = ${bullCallLongStrike < bearPutLongStrike}, ${bearPutShortStrike} < ${bullCallShortStrike} = ${bearPutShortStrike < bullCallShortStrike}, Overlap = ${strikesOverlap}`);
-            
-            if (strikesOverlap) {
-              console.log('🔍 SHARED: Using OVERLAPPING calculation');
-              const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-              lockedInProfit = minMaxValue - totalCost;
-              
-              let maxCombinedValue = 0;
-              
-              if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-                const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-                const bearPutValueAtShort = offsetMaxValue;
-                maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtBearPutShort + bearPutValueAtShort);
-              }
-              
-              if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-                const bullCallValueAtShort = position.maxValue;
-                const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-                maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtShort + bearPutValueAtBullCallShort);
-              }
-              
-              if (maxCombinedValue === 0) {
-                maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-              }
-              
-              profitPotential = maxCombinedValue - totalCost;
-            } else {
-              console.log('🔍 SHARED: Using NON-OVERLAPPING calculation');
-              const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-              const combinedMaxValue = position.maxValue + offsetMaxValue;
-              lockedInProfit = minMaxValue - totalCost;
-              profitPotential = combinedMaxValue - totalCost;
-            }
-          }
-          
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-          
-        } else if (isBullPutSpread) {
-          const bullPutShortStrike = Math.max(...position.legs.map(leg => leg.strike));
-          const bullPutLongStrike = Math.min(...position.legs.map(leg => leg.strike));
-          const bearPutLongStrike = longPutStrike;
-          const bearPutShortStrike = shortPutStrike;
-          
-          const bullPutCredit = -position.cost;
-          const netCredit = bullPutCredit - spreadCost;
-          
-          const bullPutMaxLoss = Math.abs(position.maxValue || 0);
-          const bearPutMaxValue = offsetMaxValue;
-          
-          const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLoss + netCredit;
-          const worstCaseHighPrice = netCredit;
-          
-          lockedInProfit = Math.min(worstCaseLowPrice, worstCaseHighPrice);
-          
-          let bestCaseProfit = netCredit;
-          
-          if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
-            const bearPutValueAtLong = bearPutMaxValue;
-            const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
-            bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong + netCredit);
-          }
-          
-          if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
-            const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
-            bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort + netCredit);
-          }
-          
-          if (bearPutLongStrike < bullPutLongStrike) {
-            bestCaseProfit = Math.max(bestCaseProfit, bearPutMaxValue + netCredit);
-          }
-          
-          profitPotential = bestCaseProfit;
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-          
-        } else {
-          const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
-          const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
-          const totalCost = position.cost + spreadCost;
-          lockedInProfit = minMaxValue - totalCost;
-          profitPotential = maxMaxValue - totalCost;
-          profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
-        }
+        const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
         if (lockedInProfit < 0) {
           continue;
         }
         
-        const offsettingSpread = {
-          strategy: 'bear_put_spread',
-          legs: [
-            {
-              action: 'offset',
-              quantity: 1,
-              type: 'P',
-              strike: longPutStrike,
-              cost: longPutCost * 100,
-              originalString: `1p${longPutStrike}@${longPutCost * 100}`
-            },
-            {
-              action: 'offset',
-              quantity: -1,
-              type: 'P',
-              strike: shortPutStrike,
-              cost: -shortPutCost * 100,
-              originalString: `-1p${shortPutStrike}@${-shortPutCost * 100}`
-            }
-          ],
-          cost: spreadCost,
-          spreadWidth: currentSpreadWidth,
-          maxValue: offsetMaxValue,
-          lockedInProfit: lockedInProfit,
-          profitPotential: profitPotential,
-          profitPotentialScore: profitPotentialScore,
-          description: `Bear Put Spread: Long ${longPutStrike}P @ ${longPutCost.toFixed(2)}, Short ${shortPutStrike}P @ ${shortPutCost.toFixed(2)}`
-        };
+        // OPTIMIZATION: Use helper function to create offsetting spread object
+        const offsettingSpread = createBearPutSpreadObject(
+          longPutStrike, shortPutStrike, longPutCost, shortPutCost, spreadCost, currentSpreadWidth, offsetMaxValue, lockedInProfit, profitPotential, profitPotentialScore
+        );
         
         possibleOffsets.push(offsettingSpread);
         addedSpreads.add(spreadKey);
