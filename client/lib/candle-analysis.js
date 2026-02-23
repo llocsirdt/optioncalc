@@ -69,15 +69,19 @@ function formatTrendScore(score) {
     return '<span>--</span>';
   }
   
-  let color = '#666';
-  if (score > 5) {
-    color = '#00aa00'; // Strong uptrend - green
+  let color = '#333';
+  if (score > 6) {
+    color = '#caffcaff'; // Strong uptrend - light green
+  } else if (score < -6) {
+    color = '#ffd0d0ff'; // Strong downtrend - light red
+  } else if (score > 3) {
+    color = '#28a228ff'; // Medium uptrend - green
+  } else if (score < -3) {
+    color = '#ae3232ff'; // Medium downtrend - red
   } else if (score > 0) {
-    color = '#88cc88'; // Weak uptrend - light green
-  } else if (score < -5) {
-    color = '#aa0000'; // Strong downtrend - red
+    color = '#9dff9dff'; // Weak downtrend - light green
   } else if (score < 0) {
-    color = '#cc8888'; // Weak downtrend - light red
+    color = '#ffa0a0ff'; // Weak downtrend - light red
   }
   
   return `<span style="color: ${color}; font-weight: bold;">${score}</span>`;
@@ -93,24 +97,68 @@ function formatBBScore(score) {
     return '<span>--</span>';
   }
   
-  let color = '#666';
+  let color = '#333'; // default
   let label = '';
   
-  if (score >= 1) {
+  if (score <= -0.8) {
     color = '#00aa00'; // At or below lower band - oversold
     label = ' (oversold)';
-  } else if (score > 0.5) {
-    color = '#88cc88'; // Approaching lower band
-    label = ' (↓)';
-  } else if (score <= -1) {
+  } else if (score >= 0.8) {
     color = '#aa0000'; // At or above upper band - overbought
     label = ' (overbought)';
-  } else if (score < -0.5) {
-    color = '#cc8888'; // Approaching upper band
+  } else if (score < -0.4) {
+    color = '#88cc88'; // Approaching lower band
     label = ' (↑)';
+  } else if (score > 0.4) {
+    color = '#cc8888'; // Approaching upper band
+    label = ' (↓)';
   }
   
   return `<span style="color: ${color}; font-weight: bold;">${score.toFixed(2)}${label}</span>`;
+}
+
+/**
+ * Calculate background color based on trend score
+ * @param {number} trendScore - Trend score (positive = bullish, negative = bearish)
+ * @returns {string} Background color
+ */
+function getTrendBackgroundColor(trendScore) {
+  if (trendScore > 0) {
+    // Positive trend - shades of green
+    const intensity = Math.min(Math.abs(trendScore) / 2, 1); // Normalize to 0-1
+    const greenValue = Math.floor(255 - (intensity * 100)); // 255 -> 155
+    return `rgba(0, ${greenValue}, 0, 1)`; // Light green with transparency
+  } else if (trendScore < 0) {
+    // Negative trend - shades of red
+    const intensity = Math.min(Math.abs(trendScore) / 2, 1); // Normalize to 0-1
+    const redValue = Math.floor(255 - (intensity * 100)); // 255 -> 155
+    return `rgba(${redValue}, 0, 0, 1)`; // Light red with transparency
+  } else {
+    // Neutral - no color
+    return 'transparent';
+  }
+}
+
+/**
+ * Calculate border color based on BB score
+ * @param {number} bbScore - BB score (negative = oversold/green, positive = overbought/red)
+ * @returns {string} Border color
+ */
+function getBBBorderColor(bbScore) {
+  if (bbScore < 0) {
+    // Negative BB score - oversold - shades of green
+    const intensity = Math.min(Math.abs(bbScore) / 2, 1); // Normalize to 0-1
+    const greenValue = Math.floor(255 - (intensity * 50)); // 255 -> 205
+    return `rgb(0, ${greenValue}, 0)`; // Green border
+  } else if (bbScore > 0) {
+    // Positive BB score - overbought - shades of red
+    const intensity = Math.min(Math.abs(bbScore) / 2, 1); // Normalize to 0-1
+    const redValue = Math.floor(255 - (intensity * 50)); // 255 -> 205
+    return `rgb(${redValue}, 0, 0)`; // Red border
+  } else {
+    // Neutral - default border
+    return '#ddd';
+  }
 }
 
 /**
@@ -196,10 +244,14 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
     `;
   }
   
+  // Calculate colors based on scores
+  const backgroundColor = getTrendBackgroundColor(trendScore);
+  const borderColor = getBBBorderColor(bbScore);
+  
   // Build HTML - collapsible container with summary and details
   const html = `
     <div class="candle-analysis-container">
-      <div class="candle-analysis-compact">
+      <div class="candle-analysis-compact" style="background-color: ${backgroundColor}; border: 2px solid ${borderColor};">
         <div class="candle-header-row">
           <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">${candleAnalysisCollapseState[divId] ? '▼' : '▲'}</button>
           <span class="timeframe-label">${timeframe}</span>

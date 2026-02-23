@@ -298,6 +298,7 @@ pre {
   gap: 8px;
   margin-bottom: 4px;
   white-space: nowrap;
+  background-color: rgba(255, 255, 255, .7);
 }
 
 .candle-ohlc-row {
@@ -305,6 +306,8 @@ pre {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  padding: 2px 0;
+  background-color: rgba(255, 255, 255, .7);
 }
 
 .timeframe-label {
