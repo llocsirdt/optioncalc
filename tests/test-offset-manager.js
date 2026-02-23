@@ -30,10 +30,10 @@ class TestRunner {
       try {
         await test.fn();
         this.passed++;
-        console.log(`✅ ${test.name}`);
+        console.log(`\n ✅ ${test.name}`);
       } catch (error) {
         this.failed++;
-        console.log(`❌ ${test.name}`);
+        console.log(`\n ❌ ${test.name}`);
         console.log(`   Error: ${error.message}`);
         if (error.expected !== undefined) {
           console.log(`   Expected: ${JSON.stringify(error.expected)}`);
@@ -304,7 +304,7 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
   // Test findOffsettingBearPutSpread
   console.log('\n  Testing findOffsettingBearPutSpread:');
   const bearPutResult = offsetManager.findOffsettingBearPutSpread(position, chainData);
-  console.log(`    Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
+  console.log(`\n !!! Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
   if (bearPutResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bear put offsets:');
     bearPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -324,7 +324,7 @@ runner.test('Bull Call Spread position - findOffsettingBearPutSpread & findOffse
   // Test findOffsettingBearCallSpread
   console.log('\n  Testing findOffsettingBearCallSpread:');
   const bearCallResult = offsetManager.findOffsettingBearCallSpread(position, chainData);
-  console.log(`    Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
+  console.log(`\n !!! Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
   if (bearCallResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bear call offsets:');
     bearCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -372,7 +372,7 @@ runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffse
   // Test findOffsettingBullCallSpread
   console.log('\n  Testing findOffsettingBullCallSpread:');
   const bullCallResult = offsetManager.findOffsettingBullCallSpread(position, chainData);
-  console.log(`    Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
+  console.log(`\n !!! Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
   if (bullCallResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bull call offsets:');
     bullCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -392,7 +392,7 @@ runner.test('Bear Put Spread position - findOffsettingBullCallSpread & findOffse
   // Test findOffsettingBullPutSpread
   console.log('\n  Testing findOffsettingBullPutSpread:');
   const bullPutResult = offsetManager.findOffsettingBullPutSpread(position, chainData);
-  console.log(`    Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
+  console.log(`\n !!! Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
   if (bullPutResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bull put offsets:');
     bullPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -437,20 +437,10 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
     strikes: position.legs.map(l => `${l.quantity}${l.type}@${l.strike}`)
   }, null, 2));
   
-  // Test findOffsettingBullPutSpread with debug info
+  // Test findOffsettingBullPutSpread
   console.log('\n  Testing findOffsettingBullPutSpread:');
-  console.log(`    Position reference strike (should be short call): ${Math.min(...position.legs.map(l => l.strike))}`);
   console.log(`    Position offset budget: $${position.offsetBudget}`);
-  console.log(`    Chain data put keys: ${Object.keys(chainData.put)}`);
-  console.log(`    Chain data has put options: ${!!chainData.put}`);
-  console.log(`    Chain data put options type: ${typeof chainData.put}`);
-  
-  const referenceStrike = Math.min(...position.legs.map(l => l.strike));
-  const allPutStrikes = Object.keys(chainData.put['2026-03-31:43'] || chainData.put[Object.keys(chainData.put)[0]] || {}).map(k => parseFloat(k));
-  const availablePutStrikes = allPutStrikes.filter(s => s < referenceStrike);
-  console.log(`    All put strikes count: ${allPutStrikes.length}`);
-  console.log(`    Available put strikes below reference: ${availablePutStrikes.slice(0, 10)}`);
-  console.log(`    Available put strikes count: ${availablePutStrikes.length}`);
+  console.log(`    Looking for bull put spreads with spreadWidth: ${position.spreadWidth}`);
   
   let bullPutResult;
   try {
@@ -460,7 +450,7 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
     console.log(`    Offset manager error: ${error.message}`);
     throw error;
   }
-  console.log(`    Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
+  console.log(`\n !!! Found ${bullPutResult.possibleOffsets.length} bull put spread offsets`);
   if (bullPutResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bull put offsets:');
     bullPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -507,7 +497,7 @@ runner.test('Bear Call Spread position - findOffsettingBullPutSpread & findOffse
   console.log(`    Position offset budget: $${position.offsetBudget}`);
   console.log(`    Looking for bull call spreads with spreadWidth: ${position.spreadWidth}`);
   const bullCallResult = offsetManager.findOffsettingBullCallSpread(position, chainData);
-  console.log(`    Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
+  console.log(`\n !!! Found ${bullCallResult.possibleOffsets.length} bull call spread offsets`);
   if (bullCallResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bull call offsets:');
     bullCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -555,7 +545,7 @@ runner.test('Bull Put Spread position - findOffsettingBearCallSpread & findOffse
   // Test findOffsettingBearCallSpread
   console.log('\n  Testing findOffsettingBearCallSpread:');
   const bearCallResult = offsetManager.findOffsettingBearCallSpread(position, chainData);
-  console.log(`    Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
+  console.log(`\n !!! Found ${bearCallResult.possibleOffsets.length} bear call spread offsets`);
   if (bearCallResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bear call offsets:');
     bearCallResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
@@ -575,7 +565,7 @@ runner.test('Bull Put Spread position - findOffsettingBearCallSpread & findOffse
   // Test findOffsettingBearPutSpread
   console.log('\n  Testing findOffsettingBearPutSpread:');
   const bearPutResult = offsetManager.findOffsettingBearPutSpread(position, chainData);
-  console.log(`    Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
+  console.log(`\n !!! Found ${bearPutResult.possibleOffsets.length} bear put spread offsets`);
   if (bearPutResult.possibleOffsets.length > 0) {
     //console.log('    Top 5 bear put offsets:');
     bearPutResult.possibleOffsets.slice(0, 5).forEach((offset, i) => {
