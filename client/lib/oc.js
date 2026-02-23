@@ -11,6 +11,9 @@ let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {st
 let selectedPositionsCost = 0;
 let currentOptionsData = []; // Store current options data for real-time updates
 
+// Track textInput focus state to prevent updates while user is typing
+let textInputHasFocus = false;
+
 // Function to parse offsetting trade and click corresponding table cells
 function clickOffsettingTrade(tradeDescription, tradeAction) {
   console.log('🎯 Clicking offsetting trade:', tradeDescription);
@@ -499,6 +502,12 @@ function updateSelectedPositionsDisplay(optionsData = null) {
 function updateTextInputWithTempPositions(tempPositions) {
   const textInput = document.getElementById('textInput');
   if (!textInput) return;
+  
+  // Don't update textInput while user is typing
+  if (textInputHasFocus) {
+    console.log('⏸️ Skipping textInput update - user is typing');
+    return;
+  }
   
   const currentText = textInput.value;
   const tempOptionArrayValue = tempPositions.join(',');
@@ -2418,6 +2427,20 @@ function initSlider() {
 // Initialize slider when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
   initSlider();
+  
+  // Set up focus/blur handlers for textInput to prevent updates while typing
+  const textInput = document.getElementById('textInput');
+  if (textInput) {
+    textInput.addEventListener('focus', () => {
+      textInputHasFocus = true;
+      console.log('✏️ textInput focused - updates paused');
+    });
+    
+    textInput.addEventListener('blur', () => {
+      textInputHasFocus = false;
+      console.log('✅ textInput blurred - updates resumed');
+    });
+  }
   
   // Load appropriate input on page load
   const symbol = document.getElementById('symbol-input')?.value.trim();

@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 20;
+const CACHE_VERSION = 22;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -126,11 +126,15 @@ function aggregateCandles(oneMinCandles) {
     return null;
   }
   
+  // NOTE: Input candles are in descending order (newest first)
+  // So we need to reverse the logic:
+  // - First candle (index 0) is the NEWEST (has the close price)
+  // - Last candle (index length-1) is the OLDEST (has the open price)
   return {
-    open: oneMinCandles[0].open,
+    open: oneMinCandles[oneMinCandles.length - 1].open,  // Oldest candle's open
     high: Math.max(...oneMinCandles.map(c => c.high)),
     low: Math.min(...oneMinCandles.map(c => c.low)),
-    close: oneMinCandles[oneMinCandles.length - 1].close,
+    close: oneMinCandles[0].close,  // Newest candle's close
     volume: oneMinCandles.reduce((sum, c) => sum + c.volume, 0),
     datetime: oneMinCandles[0].datetime // Use the start time of the period
   };
@@ -339,9 +343,10 @@ async function refresh1MinuteData(symbol) {
     // Fetch latest 1-minute data
     // CRITICAL: Must include endDate=Date.now() to get current day data!
     // Without endDate, Schwab API defaults to "market close of previous business day"
+    // Note: period=1 gives better OHLC data quality for current day vs period=5
     const options = {
       periodType: 'day',
-      period: 5,
+      period: 1,
       frequencyType: 'minute',
       frequency: 1,
       endDate: Date.now()
@@ -490,16 +495,17 @@ async function fetchCandleData(symbol) {
   // CRITICAL: Must include endDate=Date.now() to get current day data!
   // Without endDate, Schwab API defaults to "market close of previous business day" per their docs.
   // 
-  // For current day minute data: periodType='day', period=5, endDate=Date.now()
+  // For current day minute data: periodType='day', period=1, endDate=Date.now()
+  // Note: period=1 gives better OHLC data quality for current day vs period=5
   // Note: For minute data, valid frequencies are 1, 5, 10, 15, 30 (not 60)
   // For 1h, we'll fetch 30m and aggregate to 1h
   // For daily, we need periodType=month or year
   const now = Date.now();
   const timeframes = [
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
-    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' },
+    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
+    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
+    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
+    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' },
     { periodType: 'month', period: 1, frequencyType: 'daily', frequency: 1, name: 'daily' }
   ];
   
@@ -974,12 +980,14 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const sma50 = calculateSMA(candles, 50);
     const ema9 = calculateEMA(candles, 9);
     const bollinger20_2 = calculateBollingerBands(candles, 20, 2);
-    const trendScore = calculateTrendScore(candles);
-    const bbScore = calculateBBScore(candles, bollinger20_2);
     
     // Calculate per-candle scores
     const perCandleTrendScores = calculatePerCandleTrendScores(candles);
     const perCandleBBScores = calculatePerCandleBBScores(candles, bollinger20_2);
+    
+    // Overall scores are the most recent candle's scores (index 0 since newest-first)
+    const trendScore = perCandleTrendScores[0] || 0;
+    const bbScore = perCandleBBScores[0] || 0;
     
     // Add indicators and EST time to each candle
     const enhancedCandles = candles.map((candle, index) => ({
