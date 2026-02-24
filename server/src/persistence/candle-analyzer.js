@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 30;
+const CACHE_VERSION = 31;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -309,13 +309,13 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
     const existingData = cachedData.rawCandleData[tf.name];
     let mergedCandles = aggregatedCandles;
     
-    if (existingData && existingData.candles) {
+    if (existingData && existingData.candles && existingData.candles.length > 0) {
       // Find the cutoff point (start of today's data in existing candles)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayStartMs = todayStart.getTime();
       
-      // Keep existing candles that are before today
+      // Keep existing candles that are before today (historical data)
       const historicalCandles = existingData.candles.filter(c => c.datetime < todayStartMs);
       
       // Combine historical with today's aggregated candles
@@ -325,11 +325,13 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
     }
     
     // Update cached raw data for this timeframe (analysis will happen on request)
+    // Preserve the original source if it exists (API or 1m derived)
     cachedData.rawCandleData[tf.name] = {
       timeframe: tf.name,
       candles: mergedCandles,
       count: mergedCandles.length,
-      derivedFrom: '1m'
+      derivedFrom: '1m',
+      originalSource: existingData?.originalSource || existingData?.derivedFrom || 'api'
     };
     
     console.log(`🕯️ ✅ Updated ${tf.name} raw data with ${aggregatedCandles.length} candles for ${symbol}`);
