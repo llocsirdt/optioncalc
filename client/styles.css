@@ -758,6 +758,35 @@ pre {
   opacity: 0.6;
 }
 
+/* Selected offset analysis display */
+#selected-offset-analysis {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #fff3cd;
+  border: 2px solid #ffc107;
+  border-radius: 8px;
+}
+
+#selected-offset-analysis h4 {
+  margin: 0 0 10px 0;
+  color: #856404;
+  font-size: 14px;
+}
+
+.offset-trade.selected-offset {
+  background-color: #fff9e6;
+  border: 2px solid #ffc107;
+  box-shadow: 0 4px 8px rgba(255, 193, 7, 0.3);
+}
+
+.offset-trade.selected-offset .trade-description strong {
+  color: #856404;
+}
+
+.offset-trade.selected-offset .trade-action {
+  color: #856404;
+}
+
 .trade-description {
   flex: 1;
 }

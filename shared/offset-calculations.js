@@ -511,12 +511,13 @@
         const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
         bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
       } else {
-        // Strikes overlap - check if they overlap
-        const strikesOverlap = bullPutShortStrike > bearPutLongStrike && bullPutLongStrike < bearPutShortStrike;
+        // Check if the bull put spread strikes are within the bear put spread range
+        const strikesOverlap = bullPutShortStrike > bearPutShortStrike && bullPutLongStrike < bearPutLongStrike;
         
         if (strikesOverlap) {
-          const minMaxValue = Math.min(bearPutMaxValue, Math.abs(bullPutMaxLoss));
-          bestCaseProfit = Math.max(bestCaseProfit, minMaxValue - netCost);
+          // Bull put spread is completely inside bear put spread
+          // Best case is already calculated in the specific price point checks above
+          // Don't add combined max value since they can't both be at max simultaneously
         } else {
           const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
           bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
@@ -1752,7 +1753,12 @@
     findOffsettingBullCallSpread,
     findOffsettingBearCallSpread,
     findOffsettingBullPutSpread,
-    findOffsettingBearPutSpread
+    findOffsettingBearPutSpread,
+    // Export profit metrics calculation functions for use in selected-offset-analyzer
+    calculateBullCallProfitMetrics,
+    calculateBearCallProfitMetrics,
+    calculateBullPutProfitMetrics,
+    calculateBearPutProfitMetrics
   };
 
   // Node.js / CommonJS

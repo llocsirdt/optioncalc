@@ -10,7 +10,7 @@ const { marketClient } = require('./market-client');
 const candleDataCache = new Map();
 
 // Cache version - increment this to invalidate all cached data after logic changes
-const CACHE_VERSION = 26;
+const CACHE_VERSION = 30;
 
 // Track if refresh loop is running
 let refreshLoopRunning = false;
@@ -70,6 +70,7 @@ function cacheCandleData(symbol, rawData) {
     rawCandleData: rawData,
     lastUpdated: new Date().toISOString(),
     date: today,
+    cacheVersion: CACHE_VERSION,
     // Preserve any existing metadata
     ...(existing || {})
   };
@@ -304,11 +305,30 @@ function updateHigherTimeframes(symbol, oneMinCandles) {
       continue;
     }
     
+    // Merge new candles with existing data, preserving historical candles
+    const existingData = cachedData.rawCandleData[tf.name];
+    let mergedCandles = aggregatedCandles;
+    
+    if (existingData && existingData.candles) {
+      // Find the cutoff point (start of today's data in existing candles)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayStartMs = todayStart.getTime();
+      
+      // Keep existing candles that are before today
+      const historicalCandles = existingData.candles.filter(c => c.datetime < todayStartMs);
+      
+      // Combine historical with today's aggregated candles
+      mergedCandles = [...historicalCandles, ...aggregatedCandles];
+      
+      console.log(`🕯️ Merged ${historicalCandles.length} historical + ${aggregatedCandles.length} today's candles for ${tf.name}`);
+    }
+    
     // Update cached raw data for this timeframe (analysis will happen on request)
     cachedData.rawCandleData[tf.name] = {
       timeframe: tf.name,
-      candles: aggregatedCandles,
-      count: aggregatedCandles.length,
+      candles: mergedCandles,
+      count: mergedCandles.length,
       derivedFrom: '1m'
     };
     
@@ -478,8 +498,21 @@ async function fetchCandleData(symbol) {
   // Check if we have raw candle data for today
   if (hasRawCandleData(symbol)) {
     const cached = getCachedData(symbol);
-    console.log(`🕯️ Using existing raw candle data for ${symbol}`);
-    return cached.rawCandleData;
+    console.log(`🕯️ Using existing raw candle data for ${symbol} (cache key: ${getCacheKey(symbol, new Date().toISOString().split('T')[0])})`);
+    
+    // Debug: Show cache version
+    console.log(`🕯️ Cache version: ${CACHE_VERSION}, Cache entry version: ${cached?.cacheVersion || 'unknown'}`);
+    
+    // Force refresh if cache version doesn't match
+    if (cached && cached.cacheVersion !== CACHE_VERSION) {
+      console.log(`🕯️ Cache version mismatch, forcing refresh for ${symbol}`);
+      // Clear the old cache entry
+      const today = new Date().toISOString().split('T')[0];
+      const cacheKey = getCacheKey(symbol, today);
+      candleDataCache.delete(cacheKey);
+    } else {
+      return cached.rawCandleData;
+    }
   }
   
   // Clear old cache entries
@@ -535,10 +568,61 @@ async function fetchCandleData(symbol) {
       if (timeframe.period) options.period = timeframe.period;
       if (timeframe.endDate) options.endDate = timeframe.endDate;
       
+      console.log(`🕯️ API request for ${timeframe.name}:`, options);
+      
       const data = await marketClient.priceHistory(apiSymbol, options);
+      
+      console.log(`🕯️ API response for ${timeframe.name}: ${data.candles?.length || 0} candles received`);
+      
+      if (data.candles && data.candles.length > 0) {
+        console.log(`🕯️ ${timeframe.name} first candle:`, new Date(data.candles[0].datetime).toISOString());
+        console.log(`🕯️ ${timeframe.name} last candle:`, new Date(data.candles[data.candles.length - 1].datetime).toISOString());
+      }
       
       // Keep all candles including incomplete ones - they have valid OHLC data up to current time
       let candles = data.candles || [];
+      
+      // Filter out zero-value candles (extended hours with no trading activity)
+      // BUT keep all valid candles regardless of position in the array
+      const beforeFilter = candles.length;
+      const originalCandles = [...candles];
+      candles = candles.filter(candle => {
+        return candle.open !== 0 || candle.high !== 0 || candle.low !== 0 || candle.close !== 0;
+      });
+      
+      if (beforeFilter !== candles.length) {
+        console.log(`🕯️ Filtered out ${beforeFilter - candles.length} zero-value candles from ${timeframe.name}: ${beforeFilter} → ${candles.length}`);
+        
+        // Count zero vs valid candles
+        const zeroCandles = originalCandles.filter(c => c.open === 0 && c.high === 0 && c.low === 0 && c.close === 0);
+        const validCandles = originalCandles.filter(c => !(c.open === 0 && c.high === 0 && c.low === 0 && c.close === 0));
+        console.log(`🕯️ ${timeframe.name} breakdown: ${zeroCandles.length} zero candles, ${validCandles.length} valid candles`);
+        
+        // Show sample of zero candles
+        if (zeroCandles.length > 0) {
+          console.log(`🕯️ Sample zero candles:`, zeroCandles.slice(0, 3).map(c => ({
+            time: new Date(c.datetime).toISOString(),
+            open: c.open,
+            close: c.close
+          })));
+        }
+        
+        // Show first and last valid candles
+        if (validCandles.length > 0) {
+          console.log(`🕯️ First valid candle:`, {
+            time: new Date(validCandles[0].datetime).toISOString(),
+            open: validCandles[0].open,
+            close: validCandles[0].close
+          });
+          console.log(`🕯️ Last valid candle:`, {
+            time: new Date(validCandles[validCandles.length - 1].datetime).toISOString(),
+            open: validCandles[validCandles.length - 1].open,
+            close: validCandles[validCandles.length - 1].close
+          });
+        }
+      } else {
+        console.log(`🕯️ No zero-value candles filtered from ${timeframe.name}: ${beforeFilter} candles`);
+      }
       
       // Sort candles in descending order (newest first) for trend analysis
       candles = candles.sort((a, b) => b.datetime - a.datetime);
@@ -950,10 +1034,17 @@ function calculateBollingerBands(candles, period = 20, stdDev = 2) {
  */
 function enhanceCandleDataWithIndicators(symbol, candleData) {
   console.log(`🕯️ Enhancing candle data with technical indicators...`);
+  console.log(`🕯️ Available timeframes:`, Object.keys(candleData));
   
   const enhancedData = {};
   
   for (const [timeframe, data] of Object.entries(candleData)) {
+    console.log(`🕯️ Processing timeframe ${timeframe}:`, {
+      hasError: !!data.error,
+      candleCount: data.candles?.length || 0,
+      hasIndicators: !!data.indicators
+    });
+    
     if (data.error) {
       // Skip timeframes with errors
       enhancedData[timeframe] = data;
@@ -963,6 +1054,7 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const candles = data.candles;
     
     if (!candles || candles.length === 0) {
+      console.log(`🕯️ Skipping ${timeframe}: No candles available`);
       enhancedData[timeframe] = {
         ...data,
         indicators: { message: 'No candles available for indicators' }

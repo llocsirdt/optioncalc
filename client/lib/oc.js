@@ -326,10 +326,11 @@ function handleOptionCellClick(event, optionsData) {
   if (optionsData && optionsData.length > 0) {
     optionData = optionsData.find(option => {
       const optionStrike = option.strike;
-      const optionType = option.optionType; // 'call' or 'put'
+      const optionType = option.type || option.optionType; // 'c'/'p' or 'call'/'put'
       
       return Math.abs(optionStrike - strike) < 0.01 && 
-             ((isCall && optionType === 'call') || (!isCall && optionType === 'put'));
+             ((isCall && (optionType === 'c' || optionType === 'call')) || 
+              (!isCall && (optionType === 'p' || optionType === 'put')));
     });
   }
   
@@ -496,6 +497,120 @@ function updateSelectedPositionsDisplay(optionsData = null) {
   
   // Update textInput with tempOptionArray
   updateTextInputWithTempPositions(tempPositions);
+  
+  // Analyze selected positions for offsetting opportunities
+  console.log('🧪 Checking if analyzeSelectedOffsetPosition exists:', typeof analyzeSelectedOffsetPosition);
+  if (typeof analyzeSelectedOffsetPosition === 'function') {
+    // Get the initial position from textInput
+    const textInput = document.getElementById('textInput');
+    let initialPosition = null;
+    
+    console.log('🧪 textInput value:', textInput?.value);
+    
+    if (textInput && textInput.value) {
+      try {
+        // The textInput already contains a JavaScript object, not a JSON string
+        // We need to evaluate it or parse it differently
+        let inputData;
+        
+        // Try to parse as JSON first
+        try {
+          inputData = JSON.parse(textInput.value);
+        } catch (jsonError) {
+          // If JSON parsing fails, try to extract optionArray using regex
+          console.log('🧪 JSON parse failed, trying regex extraction');
+          const optionArrayMatch = textInput.value.match(/"optionArray"\s*:\s*"([^"]+)"/);
+          if (optionArrayMatch) {
+            inputData = { optionArray: optionArrayMatch[1] };
+          }
+        }
+        
+        console.log('🧪 Parsed inputData:', inputData);
+        if (inputData && inputData.optionArray) {
+          // Parse the initial position to get strategy and metrics
+          initialPosition = parseInitialPositionForAnalysis(inputData.optionArray);
+          console.log('🧪 Parsed initial position:', initialPosition);
+        }
+      } catch (e) {
+        console.log('Could not parse initial position for offset analysis:', e);
+      }
+    }
+    
+    console.log('🧪 Calling analyzeSelectedOffsetPosition with:', selectedTablePositions.size, 'positions');
+    analyzeSelectedOffsetPosition(selectedTablePositions, initialPosition);
+  } else {
+    console.warn('⚠️ analyzeSelectedOffsetPosition function not found!');
+  }
+}
+
+// Function to parse initial position for offset analysis
+function parseInitialPositionForAnalysis(optionArrayString) {
+  if (!optionArrayString) return null;
+  
+  // Parse the option array string to extract legs
+  const legs = [];
+  const positions = optionArrayString.split(',').map(s => s.trim()).filter(s => s);
+  
+  for (const pos of positions) {
+    // Match format: +1c100@250 or -1p200@-150
+    const match = pos.match(/^([+-]?)(\d+)([cp])(\d+)@(-?\d+)$/);
+    if (match) {
+      const [, sign, qty, type, strike, cost] = match;
+      const quantity = parseInt(qty) * (sign === '-' ? -1 : 1);
+      legs.push({
+        qty: quantity,
+        quantity: quantity,
+        type: type.toUpperCase(),
+        strike: parseFloat(strike),
+        cost: parseFloat(cost)
+      });
+    }
+  }
+  
+  if (legs.length === 0) return null;
+  
+  // Determine strategy
+  let strategy = 'unknown';
+  let totalCost = legs.reduce((sum, leg) => sum + leg.cost, 0);
+  let spreadWidth = 0;
+  let maxValue = 0;
+  
+  if (legs.length === 2) {
+    const sorted = legs.sort((a, b) => a.strike - b.strike);
+    const lower = sorted[0];
+    const upper = sorted[1];
+    spreadWidth = upper.strike - lower.strike;
+    
+    if (lower.type === upper.type) {
+      if (lower.type === 'P') {
+        // Put spread
+        if (lower.quantity < 0 && upper.quantity > 0) {
+          strategy = 'bear_put_spread';
+          maxValue = spreadWidth * 100;
+        } else if (lower.quantity > 0 && upper.quantity < 0) {
+          strategy = 'bull_put_spread';
+          maxValue = spreadWidth * 100;
+        }
+      } else if (lower.type === 'C') {
+        // Call spread
+        if (lower.quantity > 0 && upper.quantity < 0) {
+          strategy = 'bull_call_spread';
+          maxValue = spreadWidth * 100;
+        } else if (lower.quantity < 0 && upper.quantity > 0) {
+          strategy = 'bear_call_spread';
+          maxValue = spreadWidth * 100;
+        }
+      }
+    }
+  }
+  
+  return {
+    strategy: strategy,
+    cost: totalCost,
+    maxValue: maxValue,
+    spreadWidth: spreadWidth,
+    legs: legs
+  };
 }
 
 // Function to update textInput textarea with tempOptionArray while preserving formatting
@@ -634,6 +749,11 @@ function clearSelectedPositions() {
   selectedCells.forEach(cell => {
     cell.classList.remove('selected-bid', 'selected-ask');
   });
+  
+  // Hide the selected offset analysis
+  if (typeof hideSelectedOffsetAnalysis === 'function') {
+    hideSelectedOffsetAnalysis();
+  }
   
   // Update display
   updateSelectedPositionsDisplay(currentOptionsData);

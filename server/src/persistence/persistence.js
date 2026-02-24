@@ -756,6 +756,17 @@ class PersistenceManager {
       for (const symbolExpiration of Object.keys(positions)) {
         const [symbol, expiration] = symbolExpiration.split('_');
         
+        // Check if expiration is in the past (expired)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set to start of day for comparison
+        const expirationDate = new Date(expiration);
+        
+        if (expirationDate < today) {
+          console.log(`⚠️ Skipping expired position ${symbolExpiration} (expired: ${expiration})`);
+          chainDataMap[symbolExpiration] = null;
+          continue;
+        }
+        
         // Get or fetch fresh option chain data
         const chainData = await this.getOrFetchChainData(symbol, expiration);
         chainDataMap[symbolExpiration] = chainData;

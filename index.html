@@ -16,6 +16,7 @@
   <script src="client/lib/bull-call-spread-offsetting.js"></script>
   <script src="client/lib/bear-put-spread-offsetting.js"></script>
   <script src="client/lib/single-leg-offsetting.js"></script>
+  <script src="client/lib/selected-offset-analyzer.js"></script>
   <script src="client/lib/oc.js"></script>
   <script src="client/lib/expiration-dropdown.js"></script>
   <script src="client/lib/candle-analysis.js"></script>
@@ -25,7 +26,7 @@
 <body>
 
 <div id="header">
-  <h1>Option Calc v2.2.4</h1>
+  <h1>Option Calc v2.2.5</h1>
   
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
@@ -139,6 +140,12 @@
           </div>
         </div>
       </div>
+    </div>
+    
+    <!-- Selected Offsetting Position Analysis -->
+    <div id="selected-offset-analysis" style="display: none;">
+      <h4>🧪 Selected Offset Analysis</h4>
+      <div id="selected-offset-content"></div>
     </div>
     
     <!-- Options Chain Display -->
