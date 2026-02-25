@@ -2207,7 +2207,12 @@ function updateOptionsChain(options) {
             // Update the UI with combined results
             const col4Element = document.getElementById('container-col4');
             if (col4Element && combinedHtml) {
+              // Preserve the selected-offset-analysis element
+              const selectedOffsetAnalysis = document.getElementById('selected-offset-analysis');
               col4Element.innerHTML = combinedHtml;
+              if (selectedOffsetAnalysis) {
+                col4Element.insertBefore(selectedOffsetAnalysis, col4Element.firstChild);
+              }
               console.log('✅ Combined offsetting trades (server + client) updated in container-col4');
               
               // Set up click handlers for client-side offsetting trade elements
@@ -2368,7 +2373,12 @@ function updateOptionsChain(options) {
       // Handle fallback for client-side only (when no server data available)
       const col4Element = document.getElementById('container-col4');
       if (col4Element && offsettingTradesHtml) {
+        // Preserve the selected-offset-analysis element
+        const selectedOffsetAnalysis = document.getElementById('selected-offset-analysis');
         col4Element.innerHTML = offsettingTradesHtml;
+        if (selectedOffsetAnalysis) {
+          col4Element.insertBefore(selectedOffsetAnalysis, col4Element.firstChild);
+        }
         console.log('✅ Offsetting trades (client-side fallback) updated in container-col4');
         
         // Set up click handlers for offsetting trade elements in container-col4

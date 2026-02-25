@@ -298,8 +298,19 @@
    * Helper function to calculate profit metrics for bull call spread offsets
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
-  function calculateBullCallProfitMetrics(position, spreadCost, offsetMaxValue, longCallStrike, shortCallStrike, isBearPutSpread, isBearCallSpread) {
+  function calculateBullCallProfitMetrics(position, offsettingPosition) {
     let lockedInProfit, profitPotential, profitPotentialScore;
+    
+    // Extract offsetting position properties
+    const spreadCost = offsettingPosition.cost;
+    const offsetMaxValue = offsettingPosition.maxValue;
+    const offsetLegs = getShortLongLegs(offsettingPosition);
+    const longCallStrike = offsetLegs.longStrike;
+    const shortCallStrike = offsetLegs.shortStrike;
+    
+    // Determine position strategy
+    const isBearPutSpread = position.strategy === 'bear_put_spread';
+    const isBearCallSpread = position.strategy === 'bear_call_spread';
     
     if (isBearPutSpread) {
       const totalCost = position.cost + spreadCost;
@@ -361,8 +372,9 @@
       profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
     } else if (isBearCallSpread) {
-      const bearCallShortStrike = Math.min(...position.legs.map(leg => leg.strike));
-      const bearCallLongStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const positionLegs = getShortLongLegs(position);
+      const bearCallShortStrike = positionLegs.shortStrike;
+      const bearCallLongStrike = positionLegs.longStrike;
       const bullCallLongStrike = longCallStrike;
       const bullCallShortStrike = shortCallStrike;
       
@@ -418,12 +430,24 @@
    * Helper function to calculate profit metrics for bear call spread offsets
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
-  function calculateBearCallProfitMetrics(position, spreadCredit, offsetMaxValue, shortCallStrike, longCallStrike, isBullCallSpread, isBullPutSpread) {
+  function calculateBearCallProfitMetrics(position, offsettingPosition) {
     let worstCase, bestCase;
     
+    // Extract offsetting position properties
+    const spreadCredit = -offsettingPosition.cost; // Bear call spread receives credit
+    const offsetMaxValue = offsettingPosition.maxValue;
+    const offsetLegs = getShortLongLegs(offsettingPosition);
+    const shortCallStrike = offsetLegs.shortStrike;
+    const longCallStrike = offsetLegs.longStrike;
+    
+    // Determine position strategy
+    const isBullCallSpread = position.strategy === 'bull_call_spread';
+    const isBullPutSpread = position.strategy === 'bull_put_spread';
+    
     if (isBullCallSpread) {
-      const bullCallLongStrike = Math.min(...position.legs.map(leg => leg.strike));
-      const bullCallShortStrike = Math.max(...position.legs.map(leg => leg.strike));
+      const positionLegs = getShortLongLegs(position);
+      const bullCallLongStrike = positionLegs.longStrike;
+      const bullCallShortStrike = positionLegs.shortStrike;
       const bearCallShortStrike = shortCallStrike;
       const bearCallLongStrike = longCallStrike;
       
@@ -476,10 +500,24 @@
    * Helper function to calculate profit metrics for bull put spread offsets
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
-  function calculateBullPutProfitMetrics(position, spreadCredit, bullPutMaxLoss, shortPutStrike, longPutStrike, isBearPutSpread, isBearCallSpread, bearPutShortStrike, bearPutLongStrike) {
+  function calculateBullPutProfitMetrics(position, offsettingPosition) {
     let worstCase, bestCase;
     
+    // Extract offsetting position properties
+    const spreadCredit = -offsettingPosition.cost; // Bull put spread receives credit
+    const bullPutMaxLoss = offsettingPosition.maxValue;
+    const offsetLegs = getShortLongLegs(offsettingPosition);
+    const shortPutStrike = offsetLegs.shortStrike;
+    const longPutStrike = offsetLegs.longStrike;
+    
+    // Determine position strategy
+    const isBearPutSpread = position.strategy === 'bear_put_spread';
+    const isBearCallSpread = position.strategy === 'bear_call_spread';
+    
     if (isBearPutSpread) {
+      const positionLegs = getShortLongLegs(position);
+      const bearPutShortStrike = positionLegs.shortStrike;
+      const bearPutLongStrike = positionLegs.longStrike;
       const bullPutShortStrike = shortPutStrike;
       const bullPutLongStrike = longPutStrike;
       const bearPutCost = position.cost;
@@ -558,15 +596,26 @@
    * Helper function to calculate profit metrics for bear put spread offsets
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
-  function calculateBearPutProfitMetrics(position, spreadCost, offsetMaxValue, longPutStrike, shortPutStrike, isBullCallSpread, isBullPutSpread, bullCallShortStrike, bullCallLongStrike) {
+  function calculateBearPutProfitMetrics(position, offsettingPosition) {
     let worstCase, bestCase;
+    
+    // Extract offsetting position properties
+    const spreadCost = offsettingPosition.cost;
+    const offsetMaxValue = offsettingPosition.maxValue;
+    const offsetLegs = getShortLongLegs(offsettingPosition);
+    const longPutStrike = offsetLegs.longStrike;
+    const shortPutStrike = offsetLegs.shortStrike;
+    
+    // Determine position strategy
+    const isBullCallSpread = position.strategy === 'bull_call_spread';
+    const isBullPutSpread = position.strategy === 'bull_put_spread';
     
     if (isBullCallSpread) {
       const totalCost = position.cost + spreadCost;
       
-      const shortLongLegs = getShortLongLegs(position);
-      const bullCallLongStrike = shortLongLegs.longStrike;
-      const bullCallShortStrike = shortLongLegs.shortStrike;
+      const positionLegs = getShortLongLegs(position);
+      const bullCallLongStrike = positionLegs.longStrike;
+      const bullCallShortStrike = positionLegs.shortStrike;
       const bearPutShortStrike = shortPutStrike;
       const bearPutLongStrike = longPutStrike;
       
@@ -617,9 +666,9 @@
       }
       
     } else if (isBullPutSpread) {
-      const shortLongLegs = getShortLongLegs(position);
-      const bullPutShortStrike = shortLongLegs.shortStrike;
-      const bullPutLongStrike = shortLongLegs.longStrike;
+      const positionLegs = getShortLongLegs(position);
+      const bullPutShortStrike = positionLegs.shortStrike;
+      const bullPutLongStrike = positionLegs.longStrike;
       const bearPutLongStrike = longPutStrike;
       const bearPutShortStrike = shortPutStrike;
       
@@ -1061,11 +1110,19 @@
         
         const offsetMaxValue = currentSpreadWidth * 100;
         
+        // Create offsetting position object
+        const offsettingPosition = {
+          cost: spreadCost,
+          maxValue: offsetMaxValue,
+          strategy: 'bull_call_spread',
+          legs: [
+            { strike: longCallStrike, qty: 1 },  // long leg (bought)
+            { strike: shortCallStrike, qty: -1 }  // short leg (sold)
+          ]
+        };
+        
         // OPTIMIZATION: Use helper function to calculate profit metrics
-        const profitMetrics = calculateBullCallProfitMetrics(
-          position, spreadCost, offsetMaxValue, longCallStrike, shortCallStrike,
-          incomingStrategy === 'bear_put_spread', incomingStrategy === 'bear_call_spread'
-        );
+        const profitMetrics = calculateBullCallProfitMetrics(position, offsettingPosition);
         
         const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
@@ -1275,11 +1332,19 @@
         
         const offsetMaxValue = -(currentSpreadWidth * 100);
         
+        // Create offsetting position object
+        const offsettingPosition = {
+          cost: -spreadCredit,  // Bear call spread receives credit, so cost is negative
+          maxValue: offsetMaxValue,
+          strategy: 'bear_call_spread',
+          legs: [
+            { strike: shortLowerCallStrike, qty: -1 },  // short leg (sold)
+            { strike: longHigherCallStrike, qty: 1 }    // long leg (bought)
+          ]
+        };
+        
         // OPTIMIZATION: Use helper function to calculate profit metrics
-        const profitMetrics = calculateBearCallProfitMetrics(
-          position, spreadCredit, offsetMaxValue, shortLowerCallStrike, longHigherCallStrike,
-          position.strategy === 'bull_call_spread', position.strategy === 'bull_put_spread'
-        );
+        const profitMetrics = calculateBearCallProfitMetrics(position, offsettingPosition);
         
         const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
@@ -1500,12 +1565,19 @@
         
         const bullPutMaxLoss = -(currentSpreadWidth * 100);
         
+        // Create offsetting position object
+        const offsettingPosition = {
+          cost: -spreadCredit,  // Bull put spread receives credit, so cost is negative
+          maxValue: bullPutMaxLoss,
+          strategy: 'bull_put_spread',
+          legs: [
+            { strike: shortHigherPutStrike, qty: -1 },  // short leg (sold)
+            { strike: longLowerPutStrike, qty: 1 }      // long leg (bought)
+          ]
+        };
+        
         // OPTIMIZATION: Use helper function to calculate profit metrics
-        const profitMetrics = calculateBullPutProfitMetrics(
-          position, spreadCredit, bullPutMaxLoss, shortHigherPutStrike, longLowerPutStrike,
-          position.strategy === 'bear_put_spread', position.strategy === 'bear_call_spread',
-          Math.min(...position.legs.map(leg => leg.strike)), Math.max(...position.legs.map(leg => leg.strike))
-        );
+        const profitMetrics = calculateBullPutProfitMetrics(position, offsettingPosition);
         
         const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
@@ -1720,12 +1792,19 @@
         
         const offsetMaxValue = currentSpreadWidth * 100;
         
+        // Create offsetting position object
+        const offsettingPosition = {
+          cost: spreadCost,
+          maxValue: offsetMaxValue,
+          strategy: 'bear_put_spread',
+          legs: [
+            { strike: longPutStrike, qty: 1 },   // long leg (bought)
+            { strike: shortPutStrike, qty: -1 }  // short leg (sold)
+          ]
+        };
+        
         // OPTIMIZATION: Use helper function to calculate profit metrics
-        const profitMetrics = calculateBearPutProfitMetrics(
-          position, spreadCost, offsetMaxValue, longPutStrike, shortPutStrike,
-          position.strategy === 'bull_call_spread', position.strategy === 'bull_put_spread',
-          Math.min(...position.legs.map(leg => leg.strike)), Math.max(...position.legs.map(leg => leg.strike))
-        );
+        const profitMetrics = calculateBearPutProfitMetrics(position, offsettingPosition);
         
         const { lockedInProfit, profitPotential, profitPotentialScore } = profitMetrics;
         
