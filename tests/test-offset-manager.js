@@ -133,7 +133,7 @@ function createBullCallSpread(longStrike, shortStrike, longCost, shortCost) {
     legs: [
       {
         action: 'initial',
-        quantity: 1,
+        qty: 1,
         type: 'C',
         strike: longStrike,
         cost: longCost,
@@ -141,7 +141,7 @@ function createBullCallSpread(longStrike, shortStrike, longCost, shortCost) {
       },
       {
         action: 'initial',
-        quantity: -1,
+        qty: -1,
         type: 'C',
         strike: shortStrike,
         cost: shortCost,
@@ -161,7 +161,7 @@ function createBearCallSpread(shortStrike, longStrike, shortCost, longCost) {
     legs: [
       {
         action: 'initial',
-        quantity: 1,
+        qty: 1,
         type: 'C',
         strike: longStrike,
         cost: longCost,
@@ -169,7 +169,7 @@ function createBearCallSpread(shortStrike, longStrike, shortCost, longCost) {
       },
       {
         action: 'initial',
-        quantity: -1,
+        qty: -1,
         type: 'C',
         strike: shortStrike,
         cost: shortCost,
@@ -189,7 +189,7 @@ function createBullPutSpread(shortStrike, longStrike, shortCost, longCost) {
     legs: [
       {
         action: 'initial',
-        quantity: -1,
+        qty: -1,
         type: 'P',
         strike: shortStrike,
         cost: shortCost,
@@ -197,7 +197,7 @@ function createBullPutSpread(shortStrike, longStrike, shortCost, longCost) {
       },
       {
         action: 'initial',
-        quantity: 1,
+        qty: 1,
         type: 'P',
         strike: longStrike,
         cost: longCost,
@@ -217,7 +217,7 @@ function createBearPutSpread(longStrike, shortStrike, longCost, shortCost) {
     legs: [
       {
         action: 'initial',
-        quantity: 1,
+        qty: 1,
         type: 'P',
         strike: longStrike,
         cost: longCost,
@@ -225,7 +225,7 @@ function createBearPutSpread(longStrike, shortStrike, longCost, shortCost) {
       },
       {
         action: 'initial',
-        quantity: -1,
+        qty: -1,
         type: 'P',
         strike: shortStrike,
         cost: shortCost,

@@ -864,7 +864,7 @@
       legs: [
         {
           action: 'offset',
-          quantity: 1,
+          qty: 1,
           type: 'C',
           strike: longCallStrike,
           cost: longCallCost * 100,
@@ -872,7 +872,7 @@
         },
         {
           action: 'offset',
-          quantity: -1,
+          qty: -1,
           type: 'C',
           strike: shortCallStrike,
           cost: -shortCallCost * 100,
@@ -899,7 +899,7 @@
       legs: [
         {
           action: 'offset',
-          quantity: -1,
+          qty: -1,
           type: 'C',
           strike: shortCallStrike,
           cost: -shortCallCredit * 100,
@@ -907,7 +907,7 @@
         },
         {
           action: 'offset',
-          quantity: 1,
+          qty: 1,
           type: 'C',
           strike: longCallStrike,
           cost: longCallCost * 100,
@@ -934,7 +934,7 @@
       legs: [
         {
           action: 'offset',
-          quantity: -1,
+          qty: -1,
           type: 'P',
           strike: shortPutStrike,
           cost: -shortPutCredit * 100,
@@ -942,7 +942,7 @@
         },
         {
           action: 'offset',
-          quantity: 1,
+          qty: 1,
           type: 'P',
           strike: longPutStrike,
           cost: longPutCost * 100,
@@ -969,7 +969,7 @@
       legs: [
         {
           action: 'offset',
-          quantity: 1,
+          qty: 1,
           type: 'P',
           strike: longPutStrike,
           cost: longPutCost * 100,
@@ -977,7 +977,7 @@
         },
         {
           action: 'offset',
-          quantity: -1,
+          qty: -1,
           type: 'P',
           strike: shortPutStrike,
           cost: -shortPutCost * 100,
@@ -999,25 +999,9 @@
    * Returns object with shortLeg, longLeg, shortStrike, longStrike
    */
   function getShortLongLegs(position) {
-    // Debug: Log the position structure
-    console.log('🔍 getShortLongLegs - Position structure:', position);
-    console.log('🔍 getShortLongLegs - Position legs:', position.legs);
-    console.log('🔍 getShortLongLegs - Legs count:', position.legs.length);
-    
-    // Debug: Check each leg
-    position.legs.forEach((leg, index) => {
-      console.log(`🔍 Leg ${index}:`, leg);
-      console.log(`  - qty: ${leg.qty}`);
-      console.log(`  - qty < 0: ${leg.qty < 0}`);
-      console.log(`  - qty > 0: ${leg.qty > 0}`);
-    });
-    
-    // Use qty-based leg identification only
+    // Use qty-based leg identification
     const shortLeg = position.legs.find(leg => leg.qty < 0);
     const longLeg = position.legs.find(leg => leg.qty > 0);
-    
-    console.log('🔍 Found shortLeg:', shortLeg);
-    console.log('🔍 Found longLeg:', longLeg);
     
     if (!shortLeg || !longLeg) {
       throw new Error('Position must have both short and long legs');
