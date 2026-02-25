@@ -305,112 +305,123 @@
     const spreadCost = offsettingPosition.cost;
     const offsetMaxValue = offsettingPosition.maxValue;
     const offsetLegs = getShortLongLegs(offsettingPosition);
-    const longCallStrike = offsetLegs.longStrike;
-    const shortCallStrike = offsetLegs.shortStrike;
+    const bullCallLongStrike = offsetLegs.longStrike;
+    const bullCallShortStrike = offsetLegs.shortStrike;
     
-    // Determine position strategy
-    const isBearPutSpread = position.strategy === 'bear_put_spread';
-    const isBearCallSpread = position.strategy === 'bear_call_spread';
+    // Extract position properties
+    const positionLegs = getShortLongLegs(position);
+    const positionShortStrike = positionLegs.shortStrike;
+    const positionLongStrike = positionLegs.longStrike;
     
-    if (isBearPutSpread) {
+    // Determine if positions are on same side or opposite sides of chain
+    const offsetStrategy = offsettingPosition.strategy; // Always 'bull_call_spread' for this function
+    const positionStrategy = position.strategy;
+    
+    // SCENARIO 1: OPPOSITE SIDES - Bull Call (offsetting) + Bear Put (position)
+    // Puts on left, calls on right - opposite sides of chain
+    if (positionStrategy === 'bear_put_spread') {
+      const bearPutShortStrike = positionShortStrike;
+      const bearPutLongStrike = positionLongStrike;
       const totalCost = position.cost + spreadCost;
       
-      const bullCallLongStrike = longCallStrike;
-      const bullCallShortStrike = shortCallStrike;
+      // Check if spreads overlap
+      // Bear put: profitable below bearPutLongStrike, max value at bearPutShortStrike and below
+      // Bull call: profitable above bullCallLongStrike, max value at bullCallShortStrike and above
+      const spreadsOverlap = bullCallLongStrike < bearPutLongStrike;
       
-      // Calculate bear put strikes using quantity-based logic
-      const shortLongLegs = getShortLongLegs(position);
-      const bearPutShortStrike = shortLongLegs.shortStrike;
-      const bearPutLongStrike = shortLongLegs.longStrike;
-      
-      // Check if strikes overlap in a way where both can be worthless
-      // Bear put is worthless above bearPutLongStrike
-      // Bull call is worthless below bullCallLongStrike
-      // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
-      if (bullCallLongStrike >= bearPutLongStrike) {
-        // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
-        lockedInProfit = -totalCost; // Worst case: both worthless
+      if (spreadsOverlap) {
+        // SCENARIO 1A: OPPOSITE SIDES - OVERLAPPING
+        // Worst case: one spread reaches max while the other is worthless
+        const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+        lockedInProfit = minMaxValue - totalCost;
         
-        // Best case: both spreads can reach full value at different price points
-        const combinedMaxValue = position.maxValue + offsetMaxValue;
-        profitPotential = combinedMaxValue - totalCost;
-      } else {
-        // Strikes overlap - at least one spread will have value at any price
-        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+        // Best case: both spreads reach max value, minus overlap at short legs
+        // If short legs overlap, we subtract the double-counted region
+        const shortLegsOverlap = bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike;
         
-        if (strikesOverlap) {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          lockedInProfit = minMaxValue - totalCost;
-          
-          let maxCombinedValue = 0;
-          
-          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-            const bullCallValueAtShort = offsetMaxValue;
-            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtBullCallShort + bullCallValueAtShort);
-          }
-          
-          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-            const bearPutValueAtShort = position.maxValue;
-            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-            maxCombinedValue = Math.max(maxCombinedValue, bearPutValueAtShort + bullCallValueAtBearPutShort);
-          }
-          
-          if (maxCombinedValue === 0) {
-            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-          }
-          
+        if (shortLegsOverlap) {
+          // Subtract the overlap region between the two short strikes
+          const overlapAmount = Math.abs(bearPutShortStrike - bullCallShortStrike) * 100;
+          const maxCombinedValue = position.maxValue + offsetMaxValue - overlapAmount;
           profitPotential = maxCombinedValue - totalCost;
         } else {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          const combinedMaxValue = position.maxValue + offsetMaxValue;
-          lockedInProfit = minMaxValue - totalCost;
-          profitPotential = combinedMaxValue - totalCost;
+          // No overlap at short legs - both can reach full value independently
+          const maxCombinedValue = position.maxValue + offsetMaxValue;
+          profitPotential = maxCombinedValue - totalCost;
         }
+      } else {
+        // SCENARIO 1B: OPPOSITE SIDES - NON-OVERLAPPING (GAP BETWEEN SPREADS)
+        // TODO: Determine correct calculation
+        // Current logic from lines 330-336
+        lockedInProfit = -totalCost; // Worst case: both worthless in the gap
+        const combinedMaxValue = position.maxValue + offsetMaxValue;
+        profitPotential = combinedMaxValue - totalCost;
       }
       
       profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
-    } else if (isBearCallSpread) {
-      const positionLegs = getShortLongLegs(position);
-      const bearCallShortStrike = positionLegs.shortStrike;
-      const bearCallLongStrike = positionLegs.longStrike;
-      const bullCallLongStrike = longCallStrike;
-      const bullCallShortStrike = shortCallStrike;
+    // SCENARIO 2: SAME SIDE - Bull Call (offsetting) + Bear Call (position)
+    // Both are call spreads - same side of chain
+    } else if (positionStrategy === 'bear_call_spread') {
+      const bearCallShortStrike = positionShortStrike;
+      const bearCallLongStrike = positionLongStrike;
       
       const bearCallCredit = -position.cost;
       const netCredit = bearCallCredit - spreadCost;
       
-      const bearCallMaxLoss = Math.abs(position.maxValue || 0);
-      const bullCallMaxValue = offsetMaxValue;
+      // Check if spreads overlap
+      // Bear call: short at bearCallShortStrike, long at bearCallLongStrike (bearCallShortStrike < bearCallLongStrike)
+      // Bull call: long at bullCallLongStrike, short at bullCallShortStrike (bullCallLongStrike < bullCallShortStrike)
+      const spreadsOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
       
-      const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss + netCredit;
-      const worstCaseLowPrice = netCredit;
-      
-      lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
-      
-      let bestCaseProfit = netCredit;
-      
-      if (bullCallShortStrike >= bearCallShortStrike && bullCallShortStrike <= bearCallLongStrike) {
-        const bullCallValueAtShort = bullCallMaxValue;
-        const bearCallLossAtBullShort = (bullCallShortStrike - bearCallShortStrike) * 100;
-        bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtShort - bearCallLossAtBullShort + netCredit);
+      if (spreadsOverlap) {
+        // SCENARIO 2A: SAME SIDE - OVERLAPPING
+        // Bull call (debit) + Bear call (credit) on same side
+        const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+        const bullCallMaxValue = offsetMaxValue;
+        
+        // Worst case: price goes very high (bull call maxes, bear call loses max)
+        // OR price stays low (both expire worthless, keep net credit)
+        const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss + netCredit;
+        const worstCaseLowPrice = netCredit;
+        lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
+        
+        // Best case: price lands at optimal point in overlap
+        // At bearCallShortStrike: bull call has some value, bear call has no loss yet
+        const bullCallValueAtBearShort = Math.max(0, (bearCallShortStrike - bullCallLongStrike) * 100);
+        const profitAtBearShort = bullCallValueAtBearShort + netCredit;
+        
+        // At bullCallShortStrike: bull call maxes, bear call has some loss
+        const bearCallLossAtBullShort = Math.max(0, (bullCallShortStrike - bearCallShortStrike) * 100);
+        const profitAtBullShort = bullCallMaxValue - bearCallLossAtBullShort + netCredit;
+        
+        profitPotential = Math.max(netCredit, profitAtBearShort, profitAtBullShort);
+      } else {
+        // SCENARIO 2B: SAME SIDE - NON-OVERLAPPING
+        // Bull call (debit) + Bear call (credit) on same side, no overlap
+        // Short legs are at same strike or wider apart
+        const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+        const bullCallMaxValue = offsetMaxValue;
+        
+        // Worst case: price goes very high (bull call maxes, bear call loses max)
+        // OR price stays low (both expire worthless, net credit/cost)
+        const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss + netCredit;
+        const worstCaseLowPrice = netCredit;
+        lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
+        
+        // Best case: price lands between the spreads or at optimal point
+        // Since they don't overlap, best case is typically just the net credit
+        // or bull call at max with no bear call loss (if bull call is lower)
+        profitPotential = Math.max(netCredit, bullCallMaxValue + netCredit);
       }
       
-      if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
-        const bullCallValueAtBearShort = (bearCallShortStrike - bullCallLongStrike) * 100;
-        const bearCallLossAtShort = 0;
-        bestCaseProfit = Math.max(bestCaseProfit, bullCallValueAtBearShort + netCredit);
-      }
-      
-      if (bullCallShortStrike < bearCallShortStrike) {
-        bestCaseProfit = Math.max(bestCaseProfit, bullCallMaxValue + netCredit);
-      }
-      
-      profitPotential = bestCaseProfit;
       profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
       
+    // SCENARIO 3 & 4: Bull Call (offsetting) + Bull Call or Bull Put (position)
+    // These should not be valid offsetting scenarios for a bull call offset
     } else {
+      // Invalid scenario - bull call cannot offset another bull call or bull put
+      console.warn(`⚠️ Invalid offsetting scenario: Bull Call offset for ${positionStrategy}`);
       const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
       const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
       const totalCost = position.cost + spreadCost;
@@ -431,63 +442,131 @@
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
   function calculateBearCallProfitMetrics(position, offsettingPosition) {
-    let worstCase, bestCase;
+    let lockedInProfit, profitPotential, profitPotentialScore;
     
     // Extract offsetting position properties
     const spreadCredit = -offsettingPosition.cost; // Bear call spread receives credit
     const offsetMaxValue = offsettingPosition.maxValue;
     const offsetLegs = getShortLongLegs(offsettingPosition);
-    const shortCallStrike = offsetLegs.shortStrike;
-    const longCallStrike = offsetLegs.longStrike;
+    const bearCallShortStrike = offsetLegs.shortStrike;
+    const bearCallLongStrike = offsetLegs.longStrike;
     
-    // Determine position strategy
-    const isBullCallSpread = position.strategy === 'bull_call_spread';
-    const isBullPutSpread = position.strategy === 'bull_put_spread';
+    // Extract position properties
+    const positionLegs = getShortLongLegs(position);
+    const positionShortStrike = positionLegs.shortStrike;
+    const positionLongStrike = positionLegs.longStrike;
     
-    if (isBullCallSpread) {
-      const positionLegs = getShortLongLegs(position);
-      const bullCallLongStrike = positionLegs.longStrike;
-      const bullCallShortStrike = positionLegs.shortStrike;
-      const bearCallShortStrike = shortCallStrike;
-      const bearCallLongStrike = longCallStrike;
+    // Determine if positions are on same side or opposite sides of chain
+    const offsetStrategy = offsettingPosition.strategy; // Always 'bear_call_spread' for this function
+    const positionStrategy = position.strategy;
+    
+    // SCENARIO 1: SAME SIDE - Bear Call (offsetting) + Bull Call (position)
+    // Both are call spreads - same side of chain
+    if (positionStrategy === 'bull_call_spread') {
+      const bullCallLongStrike = positionLongStrike;
+      const bullCallShortStrike = positionShortStrike;
       
       const netCost = position.cost - spreadCredit;
-      const strikesOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
       
-      if (strikesOverlap) {
-        worstCase = position.maxValue + offsetMaxValue - netCost;
+      // Check if spreads overlap
+      // Bull call: long at bullCallLongStrike, short at bullCallShortStrike (bullCallLongStrike < bullCallShortStrike)
+      // Bear call: short at bearCallShortStrike, long at bearCallLongStrike (bearCallShortStrike < bearCallLongStrike)
+      const spreadsOverlap = bullCallLongStrike < bearCallLongStrike && bearCallShortStrike < bullCallShortStrike;
+      
+      if (spreadsOverlap) {
+        // SCENARIO 1A: SAME SIDE - OVERLAPPING
+        // Bear call (credit) + Bull call (debit) on same side
+        const bullCallMaxValue = position.maxValue;
+        const bearCallMaxLoss = Math.abs(offsetMaxValue);
         
-        if (bearCallShortStrike >= bullCallLongStrike && bearCallShortStrike <= bullCallShortStrike) {
-          const bullCallValueAtBearCallShort = (bearCallShortStrike - bullCallLongStrike) * 100;
-          bestCase = bullCallValueAtBearCallShort - netCost;
-        } else {
-          bestCase = position.maxValue - netCost;
-        }
+        // Worst case: price goes very high (bull call maxes, bear call loses max)
+        // OR price stays low (both expire worthless, net cost paid)
+        const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss - netCost;
+        const worstCaseLowPrice = -netCost;
+        lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
+        
+        // Best case: price lands at optimal point in overlap
+        // At bearCallShortStrike: bull call has some value, bear call has no loss yet
+        const bullCallValueAtBearShort = Math.max(0, (bearCallShortStrike - bullCallLongStrike) * 100);
+        const profitAtBearShort = bullCallValueAtBearShort - netCost;
+        
+        // At bullCallShortStrike: bull call maxes, bear call has some loss
+        const bearCallLossAtBullShort = Math.max(0, (bullCallShortStrike - bearCallShortStrike) * 100);
+        const profitAtBullShort = bullCallMaxValue - bearCallLossAtBullShort - netCost;
+        
+        profitPotential = Math.max(-netCost, profitAtBearShort, profitAtBullShort);
       } else {
-        worstCase = position.maxValue + offsetMaxValue - netCost;
-        bestCase = position.maxValue - netCost;
+        // SCENARIO 1B: SAME SIDE - NON-OVERLAPPING
+        // Bear call (credit) + Bull call (debit) on same side, no overlap
+        // Short legs are at same strike or wider apart
+        const bullCallMaxValue = position.maxValue;
+        const bearCallMaxLoss = Math.abs(offsetMaxValue);
+        
+        // Worst case: price goes very high (bull call maxes, bear call loses max)
+        // OR price stays low (both expire worthless, net cost paid)
+        const worstCaseHighPrice = bullCallMaxValue - bearCallMaxLoss - netCost;
+        const worstCaseLowPrice = -netCost;
+        lockedInProfit = Math.min(worstCaseHighPrice, worstCaseLowPrice);
+        
+        // Best case: price lands between the spreads or at optimal point
+        // Since they don't overlap, best case is bull call at max with no bear call loss
+        profitPotential = Math.max(-netCost, bullCallMaxValue - netCost);
       }
       
-    } else if (isBullPutSpread) {
+    // SCENARIO 2: OPPOSITE SIDES - Bear Call (offsetting) + Bull Put (position)
+    // Puts on left, calls on right - opposite sides of chain
+    } else if (positionStrategy === 'bull_put_spread') {
+      const bullPutShortStrike = positionShortStrike;
+      const bullPutLongStrike = positionLongStrike;
+      
       const bullPutCredit = -position.cost;
-      const bullPutMaxLoss = Math.abs(position.maxValue || 0);
-      const bearCallMaxLossAbs = Math.abs(offsetMaxValue);
-      
       const totalCredit = bullPutCredit + spreadCredit;
-      const maxLossWorstSpread = Math.max(bullPutMaxLoss, bearCallMaxLossAbs);
       
-      worstCase = -maxLossWorstSpread + totalCredit;
-      bestCase = totalCredit;
+      // Check if spreads overlap
+      // Bull put: short at bullPutShortStrike, long at bullPutLongStrike (bullPutLongStrike < bullPutShortStrike)
+      // Bear call: short at bearCallShortStrike, long at bearCallLongStrike (bearCallShortStrike < bearCallLongStrike)
+      // Since puts are below calls, they typically don't overlap
+      const spreadsOverlap = bullPutShortStrike > bearCallShortStrike;
       
+      if (spreadsOverlap) {
+        // SCENARIO 2A: OPPOSITE SIDES - OVERLAPPING
+        // Bull put and bear call overlap (unusual - puts and calls on opposite sides)
+        // This is rare but possible if strikes cross over
+        const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+        const bearCallMaxLossAbs = Math.abs(offsetMaxValue);
+        
+        // Worst case: one spread loses max
+        const maxLossWorstSpread = Math.max(bullPutMaxLoss, bearCallMaxLossAbs);
+        lockedInProfit = -maxLossWorstSpread + totalCredit;
+        
+        // Best case: both spreads expire worthless, keep all credit
+        profitPotential = totalCredit;
+      } else {
+        // SCENARIO 2B: OPPOSITE SIDES - NON-OVERLAPPING
+        // Bull put (below) and bear call (above) with gap between
+        // Both credit spreads on opposite sides
+        const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+        const bearCallMaxLossAbs = Math.abs(offsetMaxValue);
+        
+        // Worst case: one spread loses max (price moves far in one direction)
+        const maxLossWorstSpread = Math.max(bullPutMaxLoss, bearCallMaxLossAbs);
+        lockedInProfit = -maxLossWorstSpread + totalCredit;
+        
+        // Best case: price stays in the gap, both spreads expire worthless
+        profitPotential = totalCredit;
+      }
+      
+    // SCENARIO 3 & 4: Bear Call (offsetting) + Bear Call or Bear Put (position)
+    // These should not be valid offsetting scenarios for a bear call offset
     } else {
+      // Invalid scenario - bear call cannot offset another bear call or bear put
+      console.warn(`⚠️ Invalid offsetting scenario: Bear Call offset for ${positionStrategy}`);
       const positionMaxValue = position.maxValue || 0;
-      worstCase = positionMaxValue + offsetMaxValue + spreadCredit - position.cost;
-      bestCase = positionMaxValue + spreadCredit - position.cost;
+      lockedInProfit = positionMaxValue + offsetMaxValue + spreadCredit - position.cost;
+      profitPotential = positionMaxValue + spreadCredit - position.cost;
     }
     
-    const lockedInProfit = worstCase;
-    const profitPotential = bestCase;
-    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
     
     return {
       lockedInProfit,
@@ -501,89 +580,132 @@
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
   function calculateBullPutProfitMetrics(position, offsettingPosition) {
-    let worstCase, bestCase;
+    let lockedInProfit, profitPotential, profitPotentialScore;
     
     // Extract offsetting position properties
     const spreadCredit = -offsettingPosition.cost; // Bull put spread receives credit
     const bullPutMaxLoss = offsettingPosition.maxValue;
     const offsetLegs = getShortLongLegs(offsettingPosition);
-    const shortPutStrike = offsetLegs.shortStrike;
-    const longPutStrike = offsetLegs.longStrike;
+    const bullPutShortStrike = offsetLegs.shortStrike;
+    const bullPutLongStrike = offsetLegs.longStrike;
     
-    // Determine position strategy
-    const isBearPutSpread = position.strategy === 'bear_put_spread';
-    const isBearCallSpread = position.strategy === 'bear_call_spread';
+    // Extract position properties
+    const positionLegs = getShortLongLegs(position);
+    const positionShortStrike = positionLegs.shortStrike;
+    const positionLongStrike = positionLegs.longStrike;
     
-    if (isBearPutSpread) {
-      const positionLegs = getShortLongLegs(position);
-      const bearPutShortStrike = positionLegs.shortStrike;
-      const bearPutLongStrike = positionLegs.longStrike;
-      const bullPutShortStrike = shortPutStrike;
-      const bullPutLongStrike = longPutStrike;
+    // Determine if positions are on same side or opposite sides of chain
+    const offsetStrategy = offsettingPosition.strategy; // Always 'bull_put_spread' for this function
+    const positionStrategy = position.strategy;
+    
+    // SCENARIO 1: SAME SIDE - Bull Put (offsetting) + Bear Put (position)
+    // Both are put spreads - same side of chain
+    if (positionStrategy === 'bear_put_spread') {
+      const bearPutShortStrike = positionShortStrike;
+      const bearPutLongStrike = positionLongStrike;
+      
       const bearPutCost = position.cost;
       const netCost = bearPutCost - spreadCredit;
       
-      const bearPutMaxValue = position.maxValue || (position.spreadWidth * 100);
-      const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+      // Check if spreads overlap
+      // Bear put: long at bearPutLongStrike, short at bearPutShortStrike (bearPutLongStrike < bearPutShortStrike)
+      // Bull put: long at bullPutLongStrike, short at bullPutShortStrike (bullPutLongStrike < bullPutShortStrike)
+      const spreadsOverlap = bullPutShortStrike > bearPutShortStrike && bullPutLongStrike < bearPutLongStrike;
       
-      const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost;
-      const worstCaseHighPrice = -netCost;
-      
-      worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
-      
-      let bestCaseProfit = -netCost;
-      
-      if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
-        const bearPutValueAtLong = bearPutMaxValue;
-        const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
-        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong - netCost);
-      }
-      
-      if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
-        const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
-        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort - netCost);
-      }
-      
-      if (bearPutLongStrike < bullPutLongStrike) {
-        // Non-overlapping spreads - both can reach full value at different price points
-        const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
-        bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
-      } else {
-        // Check if the bull put spread strikes are within the bear put spread range
-        const strikesOverlap = bullPutShortStrike > bearPutShortStrike && bullPutLongStrike < bearPutLongStrike;
+      if (spreadsOverlap) {
+        // SCENARIO 1A: SAME SIDE - OVERLAPPING
+        // Bear put (debit) + Bull put (credit) on same side
+        const bearPutMaxValue = position.maxValue || (position.spreadWidth * 100);
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
         
-        if (strikesOverlap) {
-          // Bull put spread is completely inside bear put spread
-          // Best case is already calculated in the specific price point checks above
-          // Don't add combined max value since they can't both be at max simultaneously
-        } else {
-          const combinedMaxValue = bearPutMaxValue + Math.abs(bullPutMaxLoss);
-          bestCaseProfit = Math.max(bestCaseProfit, combinedMaxValue - netCost);
-        }
+        // Worst case: price goes very low (bear put maxes, bull put loses max)
+        // OR price stays high (both expire worthless, net cost paid)
+        const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost;
+        const worstCaseHighPrice = -netCost;
+        lockedInProfit = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+        
+        // Best case: price lands at optimal point in overlap
+        // At bullPutShortStrike: bear put has some value, bull put has no loss yet
+        const bearPutValueAtBullShort = Math.max(0, (bearPutLongStrike - bullPutShortStrike) * 100);
+        const profitAtBullShort = bearPutValueAtBullShort - netCost;
+        
+        // At bearPutShortStrike: bear put maxes, bull put has some loss
+        const bullPutLossAtBearShort = Math.max(0, (bullPutShortStrike - bearPutShortStrike) * 100);
+        const profitAtBearShort = bearPutMaxValue - bullPutLossAtBearShort - netCost;
+        
+        profitPotential = Math.max(-netCost, profitAtBullShort, profitAtBearShort);
+      } else {
+        // SCENARIO 1B: SAME SIDE - NON-OVERLAPPING
+        // Bear put (debit) + Bull put (credit) on same side, no overlap
+        // Short legs are at same strike or wider apart
+        const bearPutMaxValue = position.maxValue || (position.spreadWidth * 100);
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+        
+        // Worst case: price goes very low (bear put maxes, bull put loses max)
+        // OR price stays high (both expire worthless, net cost paid)
+        const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLossAbs - netCost;
+        const worstCaseHighPrice = -netCost;
+        lockedInProfit = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+        
+        // Best case: price lands between the spreads or at optimal point
+        // Since they don't overlap, best case is bear put at max with no bull put loss
+        profitPotential = Math.max(-netCost, bearPutMaxValue - netCost);
       }
       
-      bestCase = bestCaseProfit;
+    // SCENARIO 2: OPPOSITE SIDES - Bull Put (offsetting) + Bear Call (position)
+    // Puts on left, calls on right - opposite sides of chain
+    } else if (positionStrategy === 'bear_call_spread') {
+      const bearCallShortStrike = positionShortStrike;
+      const bearCallLongStrike = positionLongStrike;
       
-    } else if (isBearCallSpread) {
       const bearCallCredit = -position.cost;
-      const bearCallMaxLoss = Math.abs(position.maxValue || 0);
-      const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
-      
       const totalCredit = bearCallCredit + spreadCredit;
-      const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
       
-      worstCase = -maxLossWorstSpread + totalCredit;
-      bestCase = totalCredit;
+      // Check if spreads overlap
+      // Bull put: short at bullPutShortStrike, long at bullPutLongStrike (bullPutLongStrike < bullPutShortStrike)
+      // Bear call: short at bearCallShortStrike, long at bearCallLongStrike (bearCallShortStrike < bearCallLongStrike)
+      // Since puts are below calls, they typically don't overlap
+      const spreadsOverlap = bullPutShortStrike > bearCallShortStrike;
       
+      if (spreadsOverlap) {
+        // SCENARIO 2A: OPPOSITE SIDES - OVERLAPPING
+        // Bear call and bull put overlap (unusual - calls and puts on opposite sides)
+        // This is rare but possible if strikes cross over
+        const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+        
+        // Worst case: one spread loses max
+        const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
+        lockedInProfit = -maxLossWorstSpread + totalCredit;
+        
+        // Best case: both spreads expire worthless, keep all credit
+        profitPotential = totalCredit;
+      } else {
+        // SCENARIO 2B: OPPOSITE SIDES - NON-OVERLAPPING
+        // Bear call (above) and bull put (below) with gap between
+        // Both credit spreads on opposite sides - classic iron condor setup
+        const bearCallMaxLoss = Math.abs(position.maxValue || 0);
+        const bullPutMaxLossAbs = Math.abs(bullPutMaxLoss);
+        
+        // Worst case: one spread loses max (price moves far in one direction)
+        const maxLossWorstSpread = Math.max(bearCallMaxLoss, bullPutMaxLossAbs);
+        lockedInProfit = -maxLossWorstSpread + totalCredit;
+        
+        // Best case: price stays in the gap, both spreads expire worthless
+        profitPotential = totalCredit;
+      }
+      
+    // SCENARIO 3 & 4: Bull Put (offsetting) + Bull Put or Bull Call (position)
+    // These should not be valid offsetting scenarios for a bull put offset
     } else {
+      // Invalid scenario - bull put cannot offset another bull put or bull call
+      console.warn(`⚠️ Invalid offsetting scenario: Bull Put offset for ${positionStrategy}`);
       const positionMaxValue = position.maxValue || 0;
-      worstCase = positionMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
-      bestCase = positionMaxValue + spreadCredit - position.cost;
+      lockedInProfit = positionMaxValue + bullPutMaxLoss + spreadCredit - position.cost;
+      profitPotential = positionMaxValue + spreadCredit - position.cost;
     }
     
-    const lockedInProfit = worstCase;
-    const profitPotential = bestCase;
-    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
     
     return {
       lockedInProfit,
@@ -597,122 +719,133 @@
    * Returns object with lockedInProfit, profitPotential, and profitPotentialScore
    */
   function calculateBearPutProfitMetrics(position, offsettingPosition) {
-    let worstCase, bestCase;
+    let lockedInProfit, profitPotential, profitPotentialScore;
     
     // Extract offsetting position properties
     const spreadCost = offsettingPosition.cost;
     const offsetMaxValue = offsettingPosition.maxValue;
     const offsetLegs = getShortLongLegs(offsettingPosition);
-    const longPutStrike = offsetLegs.longStrike;
-    const shortPutStrike = offsetLegs.shortStrike;
+    const bearPutLongStrike = offsetLegs.longStrike;
+    const bearPutShortStrike = offsetLegs.shortStrike;
     
-    // Determine position strategy
-    const isBullCallSpread = position.strategy === 'bull_call_spread';
-    const isBullPutSpread = position.strategy === 'bull_put_spread';
+    // Extract position properties
+    const positionLegs = getShortLongLegs(position);
+    const positionShortStrike = positionLegs.shortStrike;
+    const positionLongStrike = positionLegs.longStrike;
     
-    if (isBullCallSpread) {
+    // Determine if positions are on same side or opposite sides of chain
+    const offsetStrategy = offsettingPosition.strategy; // Always 'bear_put_spread' for this function
+    const positionStrategy = position.strategy;
+    
+    // SCENARIO 1: OPPOSITE SIDES - Bear Put (offsetting) + Bull Call (position)
+    // Puts on left, calls on right - opposite sides of chain
+    if (positionStrategy === 'bull_call_spread') {
+      const bullCallLongStrike = positionLongStrike;
+      const bullCallShortStrike = positionShortStrike;
       const totalCost = position.cost + spreadCost;
       
-      const positionLegs = getShortLongLegs(position);
-      const bullCallLongStrike = positionLegs.longStrike;
-      const bullCallShortStrike = positionLegs.shortStrike;
-      const bearPutShortStrike = shortPutStrike;
-      const bearPutLongStrike = longPutStrike;
+      // Check if spreads overlap
+      // Bull call: profitable above bullCallLongStrike, max value at bullCallShortStrike and above
+      // Bear put: profitable below bearPutLongStrike, max value at bearPutShortStrike and below
+      const spreadsOverlap = bullCallLongStrike < bearPutLongStrike;
       
-      // Check if strikes overlap in a way where both can be worthless
-      // Bull call is worthless below bullCallLongStrike
-      // Bear put is worthless above bearPutLongStrike
-      // If bullCallLongStrike >= bearPutLongStrike, there's a gap where both are worthless
-      if (bullCallLongStrike >= bearPutLongStrike) {
-        // Both spreads can be worthless between bearPutLongStrike and bullCallLongStrike
-        worstCase = -totalCost; // Worst case: both worthless
+      if (spreadsOverlap) {
+        // SCENARIO 1A: OPPOSITE SIDES - OVERLAPPING
+        // Worst case: one spread reaches max while the other is worthless
+        const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
+        lockedInProfit = minMaxValue - totalCost;
         
-        // Best case: both spreads can reach full value at different price points
-        const combinedMaxValue = position.maxValue + offsetMaxValue;
-        bestCase = combinedMaxValue - totalCost;
-      } else {
-        // Strikes overlap - at least one spread will have value at any price
-        const strikesOverlap = bullCallLongStrike < bearPutLongStrike && bearPutShortStrike < bullCallShortStrike;
+        // Best case: both spreads reach max value, minus overlap at short legs
+        // If short legs overlap, we subtract the double-counted region
+        const shortLegsOverlap = bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike;
         
-        if (strikesOverlap) {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          worstCase = minMaxValue - totalCost;
-          
-          let maxCombinedValue = 0;
-          
-          if (bearPutShortStrike >= bullCallLongStrike && bearPutShortStrike <= bullCallShortStrike) {
-            const bullCallValueAtBearPutShort = (bearPutShortStrike - bullCallLongStrike) * 100;
-            const bearPutValueAtShort = offsetMaxValue;
-            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtBearPutShort + bearPutValueAtShort);
-          }
-          
-          if (bullCallShortStrike >= bearPutShortStrike && bullCallShortStrike <= bearPutLongStrike) {
-            const bullCallValueAtShort = position.maxValue;
-            const bearPutValueAtBullCallShort = (bearPutLongStrike - bullCallShortStrike) * 100;
-            maxCombinedValue = Math.max(maxCombinedValue, bullCallValueAtShort + bearPutValueAtBullCallShort);
-          }
-          
-          if (maxCombinedValue === 0) {
-            maxCombinedValue = Math.max(position.maxValue, offsetMaxValue);
-          }
-          
-          bestCase = maxCombinedValue - totalCost;
+        if (shortLegsOverlap) {
+          // Subtract the overlap region between the two short strikes
+          const overlapAmount = Math.abs(bearPutShortStrike - bullCallShortStrike) * 100;
+          const maxCombinedValue = position.maxValue + offsetMaxValue - overlapAmount;
+          profitPotential = maxCombinedValue - totalCost;
         } else {
-          const minMaxValue = Math.min(position.maxValue, offsetMaxValue);
-          const combinedMaxValue = position.maxValue + offsetMaxValue;
-          worstCase = minMaxValue - totalCost;
-          bestCase = combinedMaxValue - totalCost;
+          // No overlap at short legs - both can reach full value independently
+          const maxCombinedValue = position.maxValue + offsetMaxValue;
+          profitPotential = maxCombinedValue - totalCost;
         }
+      } else {
+        // SCENARIO 1B: OPPOSITE SIDES - NON-OVERLAPPING (GAP BETWEEN SPREADS)
+        // TODO: Determine correct calculation
+        // Current logic from lines 708-714
+        lockedInProfit = -totalCost; // Worst case: both worthless in the gap
+        const combinedMaxValue = position.maxValue + offsetMaxValue;
+        profitPotential = combinedMaxValue - totalCost;
       }
       
-    } else if (isBullPutSpread) {
-      const positionLegs = getShortLongLegs(position);
-      const bullPutShortStrike = positionLegs.shortStrike;
-      const bullPutLongStrike = positionLegs.longStrike;
-      const bearPutLongStrike = longPutStrike;
-      const bearPutShortStrike = shortPutStrike;
+    // SCENARIO 2: SAME SIDE - Bear Put (offsetting) + Bull Put (position)
+    // Both are put spreads - same side of chain
+    } else if (positionStrategy === 'bull_put_spread') {
+      const bullPutShortStrike = positionShortStrike;
+      const bullPutLongStrike = positionLongStrike;
       
       const bullPutCredit = -position.cost;
       const netCredit = bullPutCredit - spreadCost;
       
-      const bullPutMaxLoss = Math.abs(position.maxValue || 0);
-      const bearPutMaxValue = offsetMaxValue;
+      // Check if spreads overlap
+      // Bull put: short at bullPutShortStrike, long at bullPutLongStrike (bullPutLongStrike < bullPutShortStrike)
+      // Bear put: long at bearPutLongStrike, short at bearPutShortStrike (bearPutLongStrike < bearPutShortStrike)
+      const spreadsOverlap = bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike;
       
-      const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLoss + netCredit;
-      const worstCaseHighPrice = netCredit;
-      
-      worstCase = Math.min(worstCaseLowPrice, worstCaseHighPrice);
-      
-      let bestCaseProfit = netCredit;
-      
-      if (bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike) {
-        const bearPutValueAtLong = bearPutMaxValue;
-        const bullPutLossAtBearLong = (bullPutShortStrike - bearPutLongStrike) * 100;
-        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtLong - bullPutLossAtBearLong + netCredit);
+      if (spreadsOverlap) {
+        // SCENARIO 2A: SAME SIDE - OVERLAPPING
+        // Bull put (credit) + Bear put (debit) on same side
+        const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+        const bearPutMaxValue = offsetMaxValue;
+        
+        // Worst case: price goes very low (bear put maxes, bull put loses max)
+        // OR price stays high (both expire worthless, keep net credit)
+        const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLoss + netCredit;
+        const worstCaseHighPrice = netCredit;
+        lockedInProfit = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+        
+        // Best case: price lands at optimal point in overlap
+        // At bullPutShortStrike: bear put has some value, bull put has no loss yet
+        const bearPutValueAtBullShort = Math.max(0, (bearPutLongStrike - bullPutShortStrike) * 100);
+        const profitAtBullShort = bearPutValueAtBullShort + netCredit;
+        
+        // At bearPutShortStrike: bear put maxes, bull put has some loss
+        const bullPutLossAtBearShort = Math.max(0, (bullPutShortStrike - bearPutShortStrike) * 100);
+        const profitAtBearShort = bearPutMaxValue - bullPutLossAtBearShort + netCredit;
+        
+        profitPotential = Math.max(netCredit, profitAtBullShort, profitAtBearShort);
+      } else {
+        // SCENARIO 2B: SAME SIDE - NON-OVERLAPPING
+        // Bull put (credit) + Bear put (debit) on same side, no overlap
+        // Short legs are at same strike or wider apart
+        const bullPutMaxLoss = Math.abs(position.maxValue || 0);
+        const bearPutMaxValue = offsetMaxValue;
+        
+        // Worst case: price goes very low (bear put maxes, bull put loses max)
+        // OR price stays high (both expire worthless, keep net credit)
+        const worstCaseLowPrice = bearPutMaxValue - bullPutMaxLoss + netCredit;
+        const worstCaseHighPrice = netCredit;
+        lockedInProfit = Math.min(worstCaseLowPrice, worstCaseHighPrice);
+        
+        // Best case: price lands between the spreads or at optimal point
+        // Since they don't overlap, best case is typically just the net credit
+        // or bear put at max with no bull put loss (if bear put is lower)
+        profitPotential = Math.max(netCredit, bearPutMaxValue + netCredit);
       }
       
-      if (bullPutShortStrike >= bearPutShortStrike && bullPutShortStrike <= bearPutLongStrike) {
-        const bearPutValueAtBullShort = (bearPutLongStrike - bullPutShortStrike) * 100;
-        bestCaseProfit = Math.max(bestCaseProfit, bearPutValueAtBullShort + netCredit);
-      }
-      
-      if (bearPutLongStrike < bullPutLongStrike) {
-        bestCaseProfit = Math.max(bestCaseProfit, bearPutMaxValue + netCredit);
-      }
-      
-      bestCase = bestCaseProfit;
-      
+    // SCENARIO 3 & 4: Bear Put (offsetting) + Bear Put or Bear Call (position)
+    // These should not be valid offsetting scenarios for a bear put offset
     } else {
+      // Invalid scenario - bear put cannot offset another bear put or bear call
+      console.warn(`⚠️ Invalid offsetting scenario: Bear Put offset for ${positionStrategy}`);
       const minMaxValue = Math.min(position.maxValue || 0, offsetMaxValue);
       const maxMaxValue = Math.max(position.maxValue || 0, offsetMaxValue);
       const totalCost = position.cost + spreadCost;
-      worstCase = minMaxValue - totalCost;
-      bestCase = maxMaxValue - totalCost;
+      lockedInProfit = minMaxValue - totalCost;
+      profitPotential = maxMaxValue - totalCost;
     }
     
-    const lockedInProfit = worstCase;
-    const profitPotential = bestCase;
-    const profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
+    profitPotentialScore = profitPotential !== 0 ? lockedInProfit / profitPotential : 0;
     
     return {
       lockedInProfit,

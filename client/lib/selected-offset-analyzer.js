@@ -174,124 +174,80 @@ function calculateSpreadMetrics(spreadInfo, initialPosition) {
     // Use calculateBullPutProfitMetrics from offset-calculations.js
     const bullPutMaxLoss = -(spreadInfo.spreadWidth * 100);
     
-    // Extract bear put strikes if initial position is bear put spread
-    let bearPutShortStrike = 0;
-    let bearPutLongStrike = 0;
-    
-    if (position.strategy === 'bear_put_spread' && position.legs.length >= 2) {
-      // For bear put spread: short put is lower strike (qty < 0), long put is higher strike (qty > 0)
-      const shortLeg = position.legs.find(leg => leg.qty < 0 && leg.type === 'P');
-      const longLeg = position.legs.find(leg => leg.qty > 0 && leg.type === 'P');
-      bearPutShortStrike = shortLeg ? shortLeg.strike : 0;
-      bearPutLongStrike = longLeg ? longLeg.strike : 0;
-      console.log('🧪 Bear put strikes:', { bearPutShortStrike, bearPutLongStrike, shortLeg, longLeg });
-    }
+    // Create offsetting position object
+    const offsettingPosition = {
+      cost: -spreadInfo.spreadCredit,  // Bull put spread receives credit, so cost is negative
+      maxValue: bullPutMaxLoss,
+      strategy: 'bull_put_spread',
+      legs: [
+        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+      ]
+    };
     
     profitMetrics = window.OffsetCalculations.calculateBullPutProfitMetrics(
       position,
-      spreadInfo.spreadCredit,
-      bullPutMaxLoss,
-      spreadInfo.shortStrike,
-      spreadInfo.longStrike,
-      position.strategy === 'bear_put_spread',
-      position.strategy === 'bear_call_spread',
-      bearPutShortStrike,
-      bearPutLongStrike
+      offsettingPosition
     );
     
   } else if (spreadInfo.type === 'bear_put_spread') {
     // Use calculateBearPutProfitMetrics from offset-calculations.js
     const bearPutMaxValue = spreadInfo.spreadWidth * 100;
-    const bearPutCost = -spreadInfo.spreadCredit; // Debit spread
     
-    // Extract bull call strikes if initial position is bull call spread
-    let bullCallShortStrike = 0;
-    let bullCallLongStrike = 0;
-    
-    if (position.strategy === 'bull_call_spread' && position.legs.length >= 2) {
-      const shortLeg = position.legs.find(leg => leg.qty < 0 && leg.type === 'C');
-      const longLeg = position.legs.find(leg => leg.qty > 0 && leg.type === 'C');
-      bullCallShortStrike = shortLeg ? shortLeg.strike : 0;
-      bullCallLongStrike = longLeg ? longLeg.strike : 0;
-    }
+    // Create offsetting position object
+    const offsettingPosition = {
+      cost: -spreadInfo.spreadCredit,  // Bear put spread is debit spread
+      maxValue: bearPutMaxValue,
+      strategy: 'bear_put_spread',
+      legs: [
+        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+      ]
+    };
     
     profitMetrics = window.OffsetCalculations.calculateBearPutProfitMetrics(
       position,
-      bearPutCost,
-      bearPutMaxValue,
-      spreadInfo.longStrike,
-      spreadInfo.shortStrike,
-      position.strategy === 'bull_put_spread',
-      position.strategy === 'bull_call_spread',
-      bullCallShortStrike,
-      bullCallLongStrike
+      offsettingPosition
     );
     
   } else if (spreadInfo.type === 'bull_call_spread') {
     // Use calculateBullCallProfitMetrics from offset-calculations.js
     const bullCallMaxValue = spreadInfo.spreadWidth * 100;
-    const bullCallCost = -spreadInfo.spreadCredit; // Debit spread
     
-    // Extract bear call or bear put strikes if needed
-    let bearCallShortStrike = 0;
-    let bearCallLongStrike = 0;
-    
-    if (position.strategy === 'bear_call_spread' && position.legs.length >= 2) {
-      const shortLeg = position.legs.find(leg => leg.qty < 0 && leg.type === 'C');
-      const longLeg = position.legs.find(leg => leg.qty > 0 && leg.type === 'C');
-      bearCallShortStrike = shortLeg ? shortLeg.strike : 0;
-      bearCallLongStrike = longLeg ? longLeg.strike : 0;
-    }
-    
-    console.log('🧪 Calling calculateBullCallProfitMetrics with:', {
-      position,
-      bullCallCost,
-      bullCallMaxValue,
-      longStrike: spreadInfo.longStrike,
-      shortStrike: spreadInfo.shortStrike,
-      isBearCallSpread: position.strategy === 'bear_call_spread',
-      isBearPutSpread: position.strategy === 'bear_put_spread',
-      bearCallShortStrike,
-      bearCallLongStrike
-    });
+    // Create offsetting position object
+    const offsettingPosition = {
+      cost: -spreadInfo.spreadCredit,  // Bull call spread is debit spread
+      maxValue: bullCallMaxValue,
+      strategy: 'bull_call_spread',
+      legs: [
+        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+      ]
+    };
     
     profitMetrics = window.OffsetCalculations.calculateBullCallProfitMetrics(
       position,
-      bullCallCost,
-      bullCallMaxValue,
-      spreadInfo.longStrike,
-      spreadInfo.shortStrike,
-      position.strategy === 'bear_put_spread',
-      position.strategy === 'bear_call_spread',
-      bearCallShortStrike,
-      bearCallLongStrike
+      offsettingPosition
     );
     
   } else if (spreadInfo.type === 'bear_call_spread') {
     // Use calculateBearCallProfitMetrics from offset-calculations.js
     const bearCallMaxLoss = -(spreadInfo.spreadWidth * 100);
     
-    // Extract bull call strikes if initial position is bull call spread
-    let bullCallShortStrike = 0;
-    let bullCallLongStrike = 0;
-    
-    if (position.strategy === 'bull_call_spread' && position.legs.length >= 2) {
-      const shortLeg = position.legs.find(leg => leg.qty < 0 && leg.type === 'C');
-      const longLeg = position.legs.find(leg => leg.qty > 0 && leg.type === 'C');
-      bullCallShortStrike = shortLeg ? shortLeg.strike : 0;
-      bullCallLongStrike = longLeg ? longLeg.strike : 0;
-    }
+    // Create offsetting position object
+    const offsettingPosition = {
+      cost: -spreadInfo.spreadCredit,  // Bear call spread receives credit, so cost is negative
+      maxValue: bearCallMaxLoss,
+      strategy: 'bear_call_spread',
+      legs: [
+        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+      ]
+    };
     
     profitMetrics = window.OffsetCalculations.calculateBearCallProfitMetrics(
       position,
-      spreadInfo.spreadCredit,
-      bearCallMaxLoss,
-      spreadInfo.shortStrike,
-      spreadInfo.longStrike,
-      position.strategy === 'bull_call_spread',
-      position.strategy === 'bull_put_spread',
-      bullCallShortStrike,
-      bullCallLongStrike
+      offsettingPosition
     );
   }
   
