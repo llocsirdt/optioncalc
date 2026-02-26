@@ -230,16 +230,16 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
     tableRows += `
       <tr>
         <td>${candleTime}</td>
-        <td>${formatPrice(candle.open)}</td>
-        <td>${formatPrice(candle.high)}</td>
-        <td>${formatPrice(candle.low)}</td>
-        <td>${formatPrice(candle.close)}</td>
+        <td>${trendScore}</td>
+        <td>${bbScore}</td>
         <td>${formatPrice(indicators.sma20)}</td>
         <td>${formatPrice(indicators.ema9)}</td>
         <td>${formatPrice(bb.upper)}</td>
         <td>${formatPrice(bb.lower)}</td>
-        <td>${trendScore}</td>
-        <td>${bbScore}</td>
+        <td>${formatPrice(candle.open)}</td>
+        <td>${formatPrice(candle.high)}</td>
+        <td>${formatPrice(candle.low)}</td>
+        <td>${formatPrice(candle.close)}</td>
         <td>${candleTime}</td>
       </tr>
     `;
@@ -262,9 +262,9 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
   
   const html = `
     <div class="candle-analysis-container">
-      <div class="candle-analysis-compact" style="background-color: ${backgroundColor}; border: 2px solid ${borderColor};">
+      <div class="candle-analysis-compact" style="background-color: ${backgroundColor}; border: 2px solid ${borderColor}; cursor: pointer;" onclick="toggleCandleAnalysis('${divId}')">
         <div class="candle-header-row">
-          <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">${currentState ? '▼' : '▲'}</button>
+          <button id="${divId}-toggle" class="collapse-toggle" title="Toggle details">${currentState ? '▼' : '▲'}</button>
           <span class="timeframe-label">${timeframe}</span>
           <span class="time-est">${timeEST}</span>
           <span class="score-label">Trend:</span><span class="score-value">${formatTrendScore(trendScore)}</span>
@@ -282,16 +282,16 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
           <thead>
             <tr>
               <th>Time</th>
-              <th>Open</th>
-              <th>High</th>
-              <th>Low</th>
-              <th>Close</th>
+              <th>Trend</th>
+              <th>BB Score</th>
               <th>SMA20</th>
               <th>EMA9</th>
               <th>BB Upper</th>
               <th>BB Lower</th>
-              <th>Trend</th>
-              <th>BB Score</th>
+              <th>Open</th>
+              <th>High</th>
+              <th>Low</th>
+              <th>Close</th>
               <th>Time</th>
             </tr>
           </thead>
