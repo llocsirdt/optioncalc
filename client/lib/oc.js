@@ -1421,32 +1421,6 @@ function findOffsettingTradesLegacy(currentPositions, marketData, underlyingPric
   console.log(`  putPositions:`, putPositions,`  hasLongPut: ${hasLongPut}`,`  hasShortPut: ${hasShortPut}`);
   console.log(`  isBearPutSpread: ${isBearPutSpread}`);
 
-  if (isBullCallSpread) {
-    processBullCallSpreadOffsetting(
-      callPositions, 
-      putPositions, 
-      marketData, 
-      underlyingPrice, 
-      maxPotentialProfit, 
-      totalCostPaid, 
-      originalSpreadWidth, 
-      offsettingTrades
-    );
-  }
-  
-  if (isBearPutSpread) {
-    processBearPutSpreadOffsetting(
-      callPositions, 
-      putPositions, 
-      marketData, 
-      underlyingPrice, 
-      maxPotentialProfit, 
-      totalCostPaid, 
-      originalSpreadWidth, 
-      offsettingTrades
-    );
-  }
-  
   // Find offsetting opportunities
   currentPositions.forEach(position => {
     const positionQty = position.qty;
