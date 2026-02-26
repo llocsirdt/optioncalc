@@ -749,6 +749,7 @@ class PersistenceManager {
   async findOffsettingPositions() {
     try {
       const positions = await this.getAllPositions();
+      console.log(`📊 getAllPositions returned:`, Object.keys(positions));
       
       // Fetch chain data for all symbol/expiration combinations
       const chainDataMap = {};
@@ -768,13 +769,19 @@ class PersistenceManager {
         }
         
         // Get or fetch fresh option chain data
+        console.log(`🔍 Fetching chain data for ${symbol} ${expiration}`);
         const chainData = await this.getOrFetchChainData(symbol, expiration);
+        console.log(`📊 Chain data for ${symbolExpiration}:`, chainData ? 'exists' : 'null', chainData ? `calls: ${Object.keys(chainData.call || {}).length}, puts: ${Object.keys(chainData.put || {}).length}` : '');
         chainDataMap[symbolExpiration] = chainData;
       }
       
-      return await this.offsetManager.findOffsettingPositions(positions, chainDataMap);
+      console.log(`🔍 Calling offsetManager.findOffsettingPositions with ${Object.keys(positions).length} positions`);
+      const result = await this.offsetManager.findOffsettingPositions(positions, chainDataMap);
+      console.log(`📊 offsetManager.findOffsettingPositions returned:`, Object.keys(result));
+      return result;
     } catch (error) {
       console.error('❌ Failed to find offsetting positions:', error.message);
+      console.error(error.stack);
       return {};
     }
   }

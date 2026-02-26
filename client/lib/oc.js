@@ -1,5 +1,6 @@
 // Global variables to store the full option data
 let fullOptionArray = []; // Stores the original, uncombined options in the order they were entered
+let syntheticPositionArray = []; // Stores synthetic position for offsetting analysis (if provided)
 let combinedOptionMap = new Map(); // Stores the combined options for chart rendering
 let fullCost = 0;
 let fullMinStrike = 0;
@@ -519,17 +520,35 @@ function updateSelectedPositionsDisplay(optionsData = null) {
         } catch (jsonError) {
           // If JSON parsing fails, try to extract optionArray using regex
           console.log('🧪 JSON parse failed, trying regex extraction');
-          const optionArrayMatch = textInput.value.match(/"optionArray"\s*:\s*"([^"]+)"/);
+          const optionArrayMatch = textInput.value.match(/"optionArray"\s*:\s*"([^"]+)"/); 
           if (optionArrayMatch) {
             inputData = { optionArray: optionArrayMatch[1] };
+          }
+          // Also try to extract syntheticPosition
+          const syntheticMatch = textInput.value.match(/"syntheticPosition"\s*:\s*"([^"]+)"/); 
+          if (syntheticMatch) {
+            inputData = inputData || {};
+            inputData.syntheticPosition = syntheticMatch[1];
           }
         }
         
         console.log('🧪 Parsed inputData:', inputData);
-        if (inputData && inputData.optionArray) {
-          // Parse the initial position to get strategy and metrics
+        console.log('🔍 syntheticPosition value:', inputData?.syntheticPosition);
+        console.log('🔍 optionArray value:', inputData?.optionArray);
+        
+        // Prefer syntheticPosition if provided, otherwise use optionArray
+        if (inputData && inputData.syntheticPosition) {
+          console.log('🎯 Using syntheticPosition as initial position');
+          console.log('🎯 syntheticPosition string:', inputData.syntheticPosition);
+          initialPosition = parseInitialPositionForAnalysis(inputData.syntheticPosition);
+          console.log('🎯 Parsed synthetic position result:', initialPosition);
+        } else if (inputData && inputData.optionArray) {
+          console.log('📊 Using optionArray as initial position (no syntheticPosition found)');
+          console.log('📊 optionArray string:', inputData.optionArray);
           initialPosition = parseInitialPositionForAnalysis(inputData.optionArray);
-          console.log('🧪 Parsed initial position:', initialPosition);
+          console.log('📊 Parsed initial position result:', initialPosition);
+        } else {
+          console.log('⚠️ No syntheticPosition or optionArray found in inputData');
         }
       } catch (e) {
         console.log('Could not parse initial position for offset analysis:', e);
@@ -545,11 +564,17 @@ function updateSelectedPositionsDisplay(optionsData = null) {
 
 // Function to parse initial position for offset analysis
 function parseInitialPositionForAnalysis(optionArrayString) {
-  if (!optionArrayString) return null;
+  console.log('🔧 parseInitialPositionForAnalysis called with:', optionArrayString);
+  
+  if (!optionArrayString) {
+    console.log('⚠️ optionArrayString is null/undefined');
+    return null;
+  }
   
   // Parse the option array string to extract legs
   const legs = [];
   const positions = optionArrayString.split(',').map(s => s.trim()).filter(s => s);
+  console.log('🔧 Split positions:', positions);
   
   for (const pos of positions) {
     // Match format: +1c100@250 or -1p200@-150
@@ -557,17 +582,26 @@ function parseInitialPositionForAnalysis(optionArrayString) {
     if (match) {
       const [, sign, qty, type, strike, cost] = match;
       const quantity = parseInt(qty) * (sign === '-' ? -1 : 1);
-      legs.push({
+      const leg = {
         qty: quantity,
         quantity: quantity,
         type: type.toUpperCase(),
         strike: parseFloat(strike),
         cost: parseFloat(cost)
-      });
+      };
+      console.log('🔧 Parsed leg from', pos, ':', leg);
+      legs.push(leg);
+    } else {
+      console.log('⚠️ Could not parse position:', pos);
     }
   }
   
-  if (legs.length === 0) return null;
+  if (legs.length === 0) {
+    console.log('⚠️ No legs parsed, returning null');
+    return null;
+  }
+  
+  console.log('🔧 Total legs parsed:', legs.length);
   
   // Determine strategy
   let strategy = 'unknown';
@@ -604,13 +638,16 @@ function parseInitialPositionForAnalysis(optionArrayString) {
     }
   }
   
-  return {
+  const result = {
     strategy: strategy,
     cost: totalCost,
     maxValue: maxValue,
     spreadWidth: spreadWidth,
     legs: legs
   };
+  
+  console.log('🔧 parseInitialPositionForAnalysis result:', result);
+  return result;
 }
 
 // Function to update textInput textarea with tempOptionArray while preserving formatting
@@ -890,6 +927,41 @@ function getAverageAskPrice(currentStrike, positions) {
   return averageAsk;
 }
 
+// Helper function to format position summary HTML
+function formatPositionSummary(position) {
+  if (!position || !position.legs || position.legs.length === 0) {
+    return '';
+  }
+  
+  let html = '<div class="position-info">';
+  html += '<div class="position-summary">';
+  
+  // Show legs
+  const legDescriptions = position.legs.map(leg => {
+    const type = leg.type === 'C' || leg.type === 'c' ? 'Call' : 'Put';
+    const action = leg.qty > 0 ? 'Long' : 'Short';
+    const qty = Math.abs(leg.qty);
+    return `${action} ${qty} ${type} @ ${leg.strike}`;
+  }).join(' | ');
+  html += `<div class="position-legs"><strong>Position:</strong> ${legDescriptions}</div>`;
+  
+  // Show financials
+  const costLabel = position.cost < 0 ? 'Credit' : 'Cost';
+  const costValue = Math.abs(position.cost);
+  html += '<div class="position-financials">';
+  html += `<span><strong>${costLabel}:</strong> $${costValue.toFixed(0)}</span> | `;
+  html += `<span><strong>Max Value:</strong> $${Math.abs(position.maxValue).toFixed(0)}</span> | `;
+  html += `<span><strong>Width:</strong> ${position.spreadWidth}</span>`;
+  if (position.offsetBudget !== undefined) {
+    html += ` | <span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span>`;
+  }
+  html += '</div>';
+  
+  html += '</div></div>';
+  
+  return html;
+}
+
 // Find offsetting trades that neutralize risk
 function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   console.log('::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::');
@@ -1004,7 +1076,10 @@ function findOffsettingTrades(currentPositions, marketData, underlyingPrice) {
   console.log('🎯 Found offsetting trades:', offsettingTrades);
   console.log(`📊 Total offsetting opportunities: ${offsettingTrades.length}`);
   
-  return offsettingTrades;
+  return {
+    position: position,
+    trades: offsettingTrades
+  };
 }
 
 // Helper: Convert client positions to shared format
@@ -2124,9 +2199,10 @@ function updateOptionsChain(options) {
           console.log('🔍 Fetching server-side offsetting analysis...');
           fetchOffsettingAnalysis(symbol, expiration).then(serverResult => {
             // Get client-side offsetting trades
-            const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
-            console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
-            console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
+            const positionsForAnalysis = syntheticPositionArray.length > 0 ? syntheticPositionArray : fullOptionArray;
+            console.log('🎯 Using positions for offsetting analysis:', positionsForAnalysis.length > 0 && syntheticPositionArray.length > 0 ? 'syntheticPositionArray' : 'fullOptionArray');
+            const offsettingResult = findOffsettingTrades(positionsForAnalysis, options, underlyingPrice);
+            console.log('🔍 findOffsettingTrades returned:', offsettingResult);
             
             let combinedHtml = '';
             
@@ -2136,11 +2212,17 @@ function updateOptionsChain(options) {
             }
             
             // Add client-side results below
-            if (offsettingTrades && offsettingTrades.length > 0) {
+            if (offsettingResult && offsettingResult.trades && offsettingResult.trades.length > 0) {
               combinedHtml += '<div class="offsetting-trades client-based">';
-              combinedHtml += '<h4>🎯 Risk Offsetting Opportunities (Client)</h4>';
               
-              offsettingTrades.forEach((trade, index) => {
+              // Format strategy name
+              const strategyName = offsettingResult.position.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+              combinedHtml += `<h4>🎯 Risk Offsetting Opportunities (Client) - ${strategyName}</h4>`;
+              
+              // Add position summary
+              combinedHtml += formatPositionSummary(offsettingResult.position);
+              
+              offsettingResult.trades.forEach((trade, index) => {
                 const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
                 
                 // Check if locked profit is less than 10% of the cost (only for debit spreads)
@@ -2233,12 +2315,20 @@ function updateOptionsChain(options) {
             console.error('❌ Error fetching server-side offsetting analysis:', error);
             
             // Fall back to client-side only
-            const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
-            if (offsettingTrades && offsettingTrades.length > 0) {
+            const positionsForAnalysis = syntheticPositionArray.length > 0 ? syntheticPositionArray : fullOptionArray;
+            console.log('🎯 Using positions for offsetting analysis (error fallback):', positionsForAnalysis.length > 0 && syntheticPositionArray.length > 0 ? 'syntheticPositionArray' : 'fullOptionArray');
+            const offsettingResult = findOffsettingTrades(positionsForAnalysis, options, underlyingPrice);
+            if (offsettingResult && offsettingResult.trades && offsettingResult.trades.length > 0) {
               offsettingTradesHtml += '<div class="offsetting-trades">';
-              offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
               
-              offsettingTrades.forEach((trade, index) => {
+              // Format strategy name
+              const strategyName = offsettingResult.position.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+              offsettingTradesHtml += `<h4>🎯 Risk Offsetting Opportunities - ${strategyName}</h4>`;
+              
+              // Add position summary
+              offsettingTradesHtml += formatPositionSummary(offsettingResult.position);
+              
+              offsettingResult.trades.forEach((trade, index) => {
                 const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
                 const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
                 const lowLockedClass = (trade.cost > 0 && trade.lockedProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
@@ -2270,15 +2360,22 @@ function updateOptionsChain(options) {
           });
         } else {
           // No symbol/expiration, just show client-side
-          const offsettingTrades = findOffsettingTrades(fullOptionArray, options, underlyingPrice);
-          console.log('🔍 findOffsettingTrades returned:', offsettingTrades);
-          console.log('🔍 offsettingTrades type:', typeof offsettingTrades);
+          const positionsForAnalysis = syntheticPositionArray.length > 0 ? syntheticPositionArray : fullOptionArray;
+          console.log('🎯 Using positions for offsetting analysis (no server):', positionsForAnalysis.length > 0 && syntheticPositionArray.length > 0 ? 'syntheticPositionArray' : 'fullOptionArray');
+          const offsettingResult = findOffsettingTrades(positionsForAnalysis, options, underlyingPrice);
+          console.log('🔍 findOffsettingTrades returned:', offsettingResult);
           
-          if (offsettingTrades && offsettingTrades.length > 0) {
+          if (offsettingResult && offsettingResult.trades && offsettingResult.trades.length > 0) {
             offsettingTradesHtml += '<div class="offsetting-trades">';
-            offsettingTradesHtml += '<h4>🎯 Risk Offsetting Opportunities</h4>';
             
-            offsettingTrades.forEach((trade, index) => {
+            // Format strategy name
+            const strategyName = offsettingResult.position.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            offsettingTradesHtml += `<h4>🎯 Risk Offsetting Opportunities - ${strategyName}</h4>`;
+            
+            // Add position summary
+            offsettingTradesHtml += formatPositionSummary(offsettingResult.position);
+            
+            offsettingResult.trades.forEach((trade, index) => {
               const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
               
               // Check if locked profit is less than 10% of the cost (only for debit spreads)
@@ -2819,6 +2916,37 @@ function processInput() {
           }
         });
       }
+    }
+    
+    // Process syntheticPosition if it exists
+    syntheticPositionArray = [];
+    if (processedJSON.syntheticPosition) {
+      console.log('🎯 Found syntheticPosition in input:', processedJSON.syntheticPosition);
+      if (typeof processedJSON.syntheticPosition === 'string') {
+        syntheticPositionArray = processedJSON.syntheticPosition
+          .split(',')
+          .map(optionStr => optionStr.trim())
+          .filter(optionStr => optionStr)
+          .map(optionStr => processOptionString(optionStr));
+      } else if (Array.isArray(processedJSON.syntheticPosition)) {
+        processedJSON.syntheticPosition.forEach(option => {
+          if (typeof option === 'string') {
+            syntheticPositionArray.push(processOptionString(option.trim()));
+          } else if (typeof option === 'object' && option !== null) {
+            syntheticPositionArray.push({
+              qty: typeof option.qty === 'string' ? 
+                parseInt(option.qty.trim(), 10) : (option.qty || 1),
+              type: option.type?.toString()?.toLowerCase()?.trim(),
+              strike: typeof option.strike === 'string' ? 
+                parseFloat(option.strike.trim()) : option.strike,
+              costAdjustment: option.costAdjustment ? parseFloat(option.costAdjustment) : 0
+            });
+          }
+        });
+      }
+      console.log('🎯 Parsed syntheticPositionArray:', syntheticPositionArray);
+    } else {
+      console.log('📊 No syntheticPosition found, will use fullOptionArray for offsetting analysis');
     }
     
     fullCost = (processedJSON.cost || 0) + totalCostAdjustment;
