@@ -8,7 +8,7 @@ const { marketClient } = require('./market-client');
 // IMMUTABLE base cache - populated ONCE per symbol, NEVER overwritten
 const baseCandleCache = new Map();
 
-const CACHE_VERSION = 33;
+const CACHE_VERSION = 35;
 
 /**
  * Check if we have base cache for symbol
@@ -33,7 +33,7 @@ async function populateBaseCache(symbol) {
   
   const now = Date.now();
   const timeframes = [
-    { periodType: 'day', period: 1, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
+    { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
     { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' }
@@ -97,7 +97,7 @@ async function getLatest1mCandles(symbol, sinceTime) {
   
   const options = {
     periodType: 'day',
-    period: 1,
+    period: 2,
     frequencyType: 'minute',
     frequency: 1,
     endDate: Date.now()
@@ -116,6 +116,43 @@ async function getLatest1mCandles(symbol, sinceTime) {
   candles.sort((a, b) => b.datetime - a.datetime);
   
   return candles;
+}
+
+/**
+ * Aggregate 30m candles into 60m candles
+ */
+function aggregate30mTo60m(candles30m) {
+  if (!candles30m || candles30m.length === 0) return [];
+  
+  const aggregated = [];
+  
+  // Group 30m candles in pairs to create 60m candles
+  // Candles are sorted newest first, so we need to process them in reverse pairs
+  for (let i = candles30m.length - 1; i >= 0; i -= 2) {
+    const candle1 = candles30m[i];
+    const candle2 = i > 0 ? candles30m[i - 1] : null;
+    
+    if (!candle2) {
+      // Odd number of candles, skip the last one
+      continue;
+    }
+    
+    // candle1 is older, candle2 is newer (since array is newest first)
+    // For 60m candle: use older candle's open, newer candle's close
+    aggregated.push({
+      datetime: candle1.datetime, // Use the older candle's timestamp as the boundary
+      open: candle1.open,
+      high: Math.max(candle1.high, candle2.high),
+      low: Math.min(candle1.low, candle2.low),
+      close: candle2.close,
+      volume: candle1.volume + candle2.volume
+    });
+  }
+  
+  // Sort newest first
+  aggregated.sort((a, b) => b.datetime - a.datetime);
+  
+  return aggregated;
 }
 
 /**
@@ -253,23 +290,15 @@ async function createWorkingData(symbol) {
     workingData['5m'].candles = [...new5m, ...workingData['5m'].candles];
     workingData['15m'].candles = [...new15m, ...workingData['15m'].candles];
     workingData['30m'].candles = [...new30m, ...workingData['30m'].candles];
-    
-    // Build 1h from 30m (base + new)
-    workingData['1h'] = {
-      timeframe: '1h',
-      candles: aggregateToTimeframe(workingData['30m'].candles, 60, 30),
-      count: 0,
-      raw: true
-    };
-  } else {
-    // No new candles, just build 1h from base 30m
-    workingData['1h'] = {
-      timeframe: '1h',
-      candles: aggregateToTimeframe(workingData['30m'].candles, 60, 30),
-      count: 0,
-      raw: true
-    };
   }
+  
+  // Always build 1h from 30m data (whether we have new candles or not)
+  workingData['1h'] = {
+    timeframe: '1h',
+    candles: aggregate30mTo60m(workingData['30m'].candles),
+    count: 0,
+    raw: true
+  };
   
   // Update counts and add metadata
   workingData['5m'].timeframe = '5m';

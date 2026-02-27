@@ -1233,8 +1233,8 @@
           maxValue: offsetMaxValue,
           strategy: 'bull_call_spread',
           legs: [
-            { strike: longCallStrike, qty: 1 },  // long leg (bought)
-            { strike: shortCallStrike, qty: -1 }  // short leg (sold)
+            { strike: longCallStrike, qty: 1, type: 'C' },  // long leg (bought)
+            { strike: shortCallStrike, qty: -1, type: 'C' }  // short leg (sold)
           ]
         };
         
@@ -1455,8 +1455,8 @@
           maxValue: offsetMaxValue,
           strategy: 'bear_call_spread',
           legs: [
-            { strike: shortLowerCallStrike, qty: -1 },  // short leg (sold)
-            { strike: longHigherCallStrike, qty: 1 }    // long leg (bought)
+            { strike: shortLowerCallStrike, qty: -1, type: 'C' },  // short leg (sold)
+            { strike: longHigherCallStrike, qty: 1, type: 'C' }    // long leg (bought)
           ]
         };
         
@@ -1688,8 +1688,8 @@
           maxValue: bullPutMaxLoss,
           strategy: 'bull_put_spread',
           legs: [
-            { strike: shortHigherPutStrike, qty: -1 },  // short leg (sold)
-            { strike: longLowerPutStrike, qty: 1 }      // long leg (bought)
+            { strike: shortHigherPutStrike, qty: -1, type: 'P' },  // short leg (sold)
+            { strike: longLowerPutStrike, qty: 1, type: 'P' }      // long leg (bought)
           ]
         };
         
@@ -1915,8 +1915,8 @@
           maxValue: offsetMaxValue,
           strategy: 'bear_put_spread',
           legs: [
-            { strike: longPutStrike, qty: 1 },   // long leg (bought)
-            { strike: shortPutStrike, qty: -1 }  // short leg (sold)
+            { strike: longPutStrike, qty: 1, type: 'P' },   // long leg (bought)
+            { strike: shortPutStrike, qty: -1, type: 'P' }  // short leg (sold)
           ]
         };
         

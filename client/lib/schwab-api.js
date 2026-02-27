@@ -69,9 +69,9 @@ async function fetchOffsettingAnalysis(symbol, expiration) {
           const costValue = Math.abs(position.cost);
           offsettingHtml += `<div class="position-financials">`;
           offsettingHtml += `<span><strong>${costLabel}:</strong> $${costValue.toFixed(0)}</span> | `;
+          offsettingHtml += `<span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span> | `;
           offsettingHtml += `<span><strong>Max Value:</strong> $${Math.abs(position.maxValue).toFixed(0)}</span> | `;
-          offsettingHtml += `<span><strong>Width:</strong> ${position.spreadWidth}</span> | `;
-          offsettingHtml += `<span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span>`;
+          offsettingHtml += `<span><strong>Width:</strong> ${position.spreadWidth}</span>`;
           offsettingHtml += `</div>`;
           
           offsettingHtml += `</div></div>`;
@@ -104,9 +104,12 @@ async function fetchOffsettingAnalysis(symbol, expiration) {
             let action = '';
             if (offset.legs && offset.legs.length > 0) {
               action = offset.legs.map(leg => {
+                // Server-side now provides type property (C/P), same as client-side
                 const type = leg.type === 'C' ? 'Call' : 'Put';
-                const side = leg.quantity > 0 ? 'Buy' : 'Sell';
-                return `${side} ${Math.abs(leg.quantity)} ${type} ${leg.strike}`;
+                // Server-side uses 'qty' property, not 'quantity'
+                const qty = leg.qty || leg.quantity || 0;
+                const side = qty > 0 ? 'Buy' : 'Sell';
+                return `${side} ${Math.abs(qty)} ${type} ${leg.strike}`;
               }).join(', ');
             }
             

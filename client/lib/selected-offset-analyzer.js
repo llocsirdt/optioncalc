@@ -6,11 +6,6 @@
 
 // Function to analyze selected offsetting positions
 function analyzeSelectedOffsetPosition(selectedPositions, initialPosition) {
-  console.log('🧪 analyzeSelectedOffsetPosition called');
-  console.log('🧪 selectedPositions:', selectedPositions);
-  console.log('🧪 selectedPositions.size:', selectedPositions?.size);
-  console.log('🧪 initialPosition:', initialPosition);
-  
   if (!selectedPositions || selectedPositions.size === 0) {
     console.log('🧪 No positions selected, hiding analysis');
     hideSelectedOffsetAnalysis();
@@ -19,7 +14,6 @@ function analyzeSelectedOffsetPosition(selectedPositions, initialPosition) {
   
   // Convert selected positions to array
   const positionsArray = Array.from(selectedPositions.values());
-  console.log('🧪 positionsArray:', positionsArray);
   
   // Need at least 2 legs for a spread
   if (positionsArray.length < 2) {
@@ -30,7 +24,6 @@ function analyzeSelectedOffsetPosition(selectedPositions, initialPosition) {
   
   // Determine if this is a valid offsetting spread
   const spreadInfo = identifySpreadType(positionsArray);
-  console.log('🧪 spreadInfo:', spreadInfo);
   
   if (!spreadInfo) {
     console.log('🧪 No valid spread identified, hiding analysis');
@@ -38,11 +31,8 @@ function analyzeSelectedOffsetPosition(selectedPositions, initialPosition) {
     return;
   }
   
-  console.log('🎯 Identified spread:', spreadInfo);
-  
   // Calculate profit metrics using offset-calculations.js functions
   const metrics = calculateSpreadMetrics(spreadInfo, initialPosition);
-  console.log('🧪 metrics:', metrics);
   
   if (metrics) {
     console.log('✅ Displaying selected offset analysis');
@@ -119,17 +109,6 @@ function identifySpreadType(positions) {
   const spreadWidth = Math.abs(shortStrike - longStrike);
   const maxLoss = spreadWidth * 100;
   
-  console.log('🧪 Spread calculation:', {
-    spreadType,
-    shortStrike,
-    longStrike,
-    shortPrice,
-    longPrice,
-    spreadCredit,
-    lower,
-    upper
-  });
-  
   return {
     type: spreadType,
     optionType: optionType,
@@ -180,8 +159,8 @@ function calculateSpreadMetrics(spreadInfo, initialPosition) {
       maxValue: bullPutMaxLoss,
       strategy: 'bull_put_spread',
       legs: [
-        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
-        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+        { strike: spreadInfo.shortStrike, qty: -1, type: 'P' },  // short leg (sold)
+        { strike: spreadInfo.longStrike, qty: 1, type: 'P' }      // long leg (bought)
       ]
     };
     
@@ -200,8 +179,8 @@ function calculateSpreadMetrics(spreadInfo, initialPosition) {
       maxValue: bearPutMaxValue,
       strategy: 'bear_put_spread',
       legs: [
-        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
-        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+        { strike: spreadInfo.longStrike, qty: 1, type: 'P' },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1, type: 'P' }  // short leg (sold)
       ]
     };
     
@@ -220,8 +199,8 @@ function calculateSpreadMetrics(spreadInfo, initialPosition) {
       maxValue: bullCallMaxValue,
       strategy: 'bull_call_spread',
       legs: [
-        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
-        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+        { strike: spreadInfo.longStrike, qty: 1, type: 'C' },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1, type: 'C' }  // short leg (sold)
       ]
     };
     
@@ -240,8 +219,8 @@ function calculateSpreadMetrics(spreadInfo, initialPosition) {
       maxValue: bearCallMaxLoss,
       strategy: 'bear_call_spread',
       legs: [
-        { strike: spreadInfo.longStrike, qty: 1 },   // long leg (bought)
-        { strike: spreadInfo.shortStrike, qty: -1 }  // short leg (sold)
+        { strike: spreadInfo.longStrike, qty: 1, type: 'C' },   // long leg (bought)
+        { strike: spreadInfo.shortStrike, qty: -1, type: 'C' }  // short leg (sold)
       ]
     };
     

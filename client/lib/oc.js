@@ -950,11 +950,11 @@ function formatPositionSummary(position) {
   const costValue = Math.abs(position.cost);
   html += '<div class="position-financials">';
   html += `<span><strong>${costLabel}:</strong> $${costValue.toFixed(0)}</span> | `;
+  if (position.offsetBudget !== undefined) {
+    html += `<span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span> | `;
+  }
   html += `<span><strong>Max Value:</strong> $${Math.abs(position.maxValue).toFixed(0)}</span> | `;
   html += `<span><strong>Width:</strong> ${position.spreadWidth}</span>`;
-  if (position.offsetBudget !== undefined) {
-    html += ` | <span><strong>Offset Budget:</strong> $${position.offsetBudget.toFixed(0)}</span>`;
-  }
   html += '</div>';
   
   html += '</div></div>';
@@ -2271,9 +2271,14 @@ function updateOptionsChain(options) {
               }
               console.log('✅ Combined offsetting trades (server + client) updated in container-col4');
               
-              // Set up click handlers for client-side offsetting trade elements
+              // Set up click handlers for ALL offsetting trade elements (both server and client-side)
               const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
-              offsettingTradeElements.forEach(element => {
+              console.log(`🎯 Setting up click handlers for ${offsettingTradeElements.length} offsetting trade elements`);
+              offsettingTradeElements.forEach((element, idx) => {
+                const isServerBased = element.closest('.server-based') !== null;
+                const isClientBased = element.closest('.client-based') !== null;
+                console.log(`  - Element ${idx}: ${isServerBased ? 'SERVER' : isClientBased ? 'CLIENT' : 'UNKNOWN'} - ${element.dataset.description}`);
+                
                 element.addEventListener('click', function(event) {
                   event.preventDefault();
                   event.stopPropagation();
@@ -2454,7 +2459,10 @@ function updateOptionsChain(options) {
         
         // Set up click handlers for offsetting trade elements in container-col4
         const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');
-        offsettingTradeElements.forEach(element => {
+        console.log(`🎯 Setting up click handlers for ${offsettingTradeElements.length} offsetting trade elements (fallback path)`);
+        offsettingTradeElements.forEach((element, idx) => {
+          console.log(`  - Fallback element ${idx}: ${element.dataset.description}`);
+          
           element.addEventListener('click', function(event) {
             event.preventDefault();
             event.stopPropagation();
