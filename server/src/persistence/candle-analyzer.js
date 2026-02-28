@@ -8,7 +8,10 @@ const { marketClient } = require('./market-client');
 // IMMUTABLE base cache - populated ONCE per symbol, NEVER overwritten
 const baseCandleCache = new Map();
 
-const CACHE_VERSION = 45;
+const CACHE_VERSION = 46;
+
+// Maximum number of candles to keep per timeframe
+const CANDLE_LIMIT = 1000;
 
 /**
  * Check if we have base cache for symbol
@@ -34,7 +37,7 @@ async function populateBaseCache(symbol) {
   const now = Date.now();
   const timeframes = [
     { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
-    { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
+    { periodType: 'day', period: 3, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' }
   ];
@@ -300,21 +303,16 @@ async function createWorkingData(symbol) {
   const baseCache = baseCandleCache.get(cacheKey);
   const workingData = JSON.parse(JSON.stringify(baseCache.candleData));
   
-  console.log(`🕯️ 🔄 Creating working data for ${symbol}`);
-  
   // Get the newest candle time from base 1m cache
   const base1m = workingData['1m'];
   if (!base1m || !base1m.candles || base1m.candles.length === 0) {
-    console.log(`🕯️ ⚠️ No base 1m data, returning base cache only`);
     return workingData;
   }
   
   const newestBase1mTime = base1m.candles[0].datetime;
-  console.log(`🕯️   Base 1m newest: ${new Date(newestBase1mTime).toISOString()}`);
   
   // Fetch new 1m candles since the newest base candle
   const new1mCandles = await getLatest1mCandles(symbol, newestBase1mTime);
-  console.log(`🕯️   Fetched ${new1mCandles.length} new 1m candles`);
   
   if (new1mCandles.length > 0) {
     console.log(`🕯️   New 1m newest: ${new Date(new1mCandles[0].datetime).toISOString()}`);
@@ -368,11 +366,6 @@ async function createWorkingData(symbol) {
   workingData['30m'].count = workingData['30m'].candles.length;
   
   workingData['1h'].count = workingData['1h'].candles.length;
-  
-  console.log(`🕯️   5m: ${workingData['5m'].count} candles`);
-  console.log(`🕯️   15m: ${workingData['15m'].count} candles`);
-  console.log(`🕯️   30m: ${workingData['30m'].count} candles`);
-  console.log(`🕯️   1h: ${workingData['1h'].count} candles`);
   
   return workingData;
 }
@@ -555,17 +548,9 @@ function calculatePerCandleTrendScores(candles) {
  * Enhance candle data with technical indicators
  */
 function enhanceCandleDataWithIndicators(symbol, candleData) {
-  console.log(`🕯️ Enhancing candle data with technical indicators...`);
-  console.log(`🕯️ Available timeframes:`, Object.keys(candleData));
-  
   const enhancedData = {};
   
   for (const [timeframe, data] of Object.entries(candleData)) {
-    console.log(`🕯️ Processing timeframe ${timeframe}:`, {
-      hasError: !!data.error,
-      candleCount: data.candles?.length || 0,
-      hasIndicators: !!data.indicators
-    });
     
     if (data.error) {
       enhancedData[timeframe] = data;
@@ -635,10 +620,8 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
 /**
  * Limit candles to most recent N candles
  */
-function limitCandleData(candleData, limit = 100) {
+function limitCandleData(candleData, limit = CANDLE_LIMIT) {
   const limitedData = {};
-  
-  console.log(`🕯️ Limiting candle data to ${limit} candles per timeframe...`);
   
   for (const [timeframe, data] of Object.entries(candleData)) {
     if (data.error || !data.candles) {
@@ -647,9 +630,7 @@ function limitCandleData(candleData, limit = 100) {
     }
     
     const candles = data.candles;
-    console.log(`🕯️ ${timeframe}: ${candles.length} candles before limiting`);
     const limitedCandles = candles.slice(0, limit);
-    console.log(`🕯️ ${timeframe}: ${limitedCandles.length} candles after limiting`);
     
     const indicators = data.indicators || {};
     const limitedIndicators = {};
@@ -707,20 +688,12 @@ async function analyzeCandles(symbol, options = {}) {
   
   try {
     const candleData = await createWorkingData(symbol);
-    console.log(`🕯️ Step 1 complete: Working data ready for ${Object.keys(candleData).length} timeframes`);
     
-    console.log(`🕯️ Step 2: Enhancing with technical indicators...`);
     let enhancedCandleData = enhanceCandleDataWithIndicators(symbol, candleData);
-    console.log(`🕯️ Step 2 complete: Enhanced ${Object.keys(enhancedCandleData).length} timeframes`);
-    
-    console.log(`🕯️ Step 3: Limiting to 100 candles per timeframe...`);
-    enhancedCandleData = limitCandleData(enhancedCandleData, 100);
-    console.log(`🕯️ Step 3 complete`);
+    enhancedCandleData = limitCandleData(enhancedCandleData, CANDLE_LIMIT);
     
     if (options.timeframe) {
-      console.log(`🕯️ Step 4: Filtering to ${options.timeframe} timeframe...`);
       enhancedCandleData = filterTimeframe(enhancedCandleData, options.timeframe);
-      console.log(`🕯️ Step 4 complete`);
     }
     
     const analysis = {
@@ -729,8 +702,8 @@ async function analyzeCandles(symbol, options = {}) {
       status: 'analysis_complete',
       candleData: enhancedCandleData,
       message: options.timeframe 
-        ? `Candle analysis completed for ${options.timeframe} timeframe (limited to 100 candles)`
-        : 'Candle analysis completed with technical indicators (limited to 100 candles per timeframe)'
+        ? `Candle analysis completed for ${options.timeframe} timeframe (limited to ${CANDLE_LIMIT} candles)`
+        : `Candle analysis completed with technical indicators (limited to ${CANDLE_LIMIT} candles per timeframe)`
     };
     
     console.log(`🕯️ ✅ Candle analysis completed for ${symbol}${options.timeframe ? ` (${options.timeframe})` : ''}`);

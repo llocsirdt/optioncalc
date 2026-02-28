@@ -213,8 +213,8 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
   // Get EST time
   const timeEST = latestCandle.timeEST || '--';
   
-  // Get first 50 candles (server returns newest first, so we take from start)
-  const recentCandles = candles.slice(0, 50);
+  // Get first 500 candles (server returns newest first, so we take from start)
+  const recentCandles = candles.slice(0, 1000);
   
   // Build OHLC table rows for recent candles with indicators
   // Display with most recent at top, going back in time (same order as server returns)

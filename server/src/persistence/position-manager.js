@@ -266,6 +266,193 @@ class PositionManager {
       maxValue: this.calculateMaximumValuePotential(positionArray)
     };
   }
+
+  /**
+   * Try to cover a bull position
+   */
+  async tryCoverBullPosition(symbolExpiration, position) {
+    console.log(`🐂 Trying to cover bull position: ${symbolExpiration}`);
+    // TODO: Implement bull position covering logic
+  }
+
+  /**
+   * Try to cover a bear position
+   */
+  async tryCoverBearPosition(symbolExpiration, position) {
+    console.log(`🐻 Trying to cover bear position: ${symbolExpiration}`);
+    // TODO: Implement bear position covering logic
+  }
+
+  /**
+   * Try to open a new bull position
+   */
+  async tryOpenBullPosition(symbol, expiration) {
+    console.log(`🐂 Trying to open new bull position: ${symbol}_${expiration}`);
+    // TODO: Implement bull position opening logic
+  }
+
+  /**
+   * Try to open a new bear position
+   */
+  async tryOpenBearPosition(symbol, expiration) {
+    console.log(`🐻 Trying to open new bear position: ${symbol}_${expiration}`);
+    // TODO: Implement bear position opening logic
+  }
+
+  /**
+   * Check positions and log summary data
+   * This method will be called by the server loop every 10 seconds
+   */
+  async checkPositions() {
+    try {
+      // Read the positions.json file
+      const fs = require('fs').promises;
+      const path = require('path');
+      const positionsPath = path.join(__dirname, 'positions.json');
+      
+      // Import candle analyzer
+      const { analyzeCandles } = require('./candle-analyzer');
+      
+      // Check if positions file exists
+      try {
+        await fs.access(positionsPath);
+      } catch (error) {
+        console.log('📊 Position Check: No positions file found');
+        return;
+      }
+      
+      // Read and parse positions data
+      const positionsData = await fs.readFile(positionsPath, 'utf8');
+      const positions = JSON.parse(positionsData);
+      
+      // Generate summary and track covered/uncovered positions
+      const summary = {
+        totalPositions: Object.keys(positions).length,
+        symbolExpirations: Object.keys(positions),
+        totalLegs: 0,
+        strategies: {},
+        totalCost: 0,
+        coveredPositions: [], // Reset each cycle
+        uncoveredPositions: [] // Reset each cycle
+      };
+      
+      // Analyze each position
+      for (const [symbolExpiration, positionArray] of Object.entries(positions)) {
+        // The positions.json file contains enriched position objects with strategy already calculated
+        if (Array.isArray(positionArray) && positionArray.length > 0) {
+          // Use the first position in the array (most recent)
+          const position = positionArray[0];
+          summary.totalLegs += position.legs ? position.legs.length : 1;
+          
+          // Use the already-calculated strategy and cost
+          const strategy = position.strategy || 'unknown';
+          const cost = position.cost || 0;
+          summary.totalCost += cost;
+          
+          // Count strategies
+          summary.strategies[strategy] = (summary.strategies[strategy] || 0) + 1;
+          
+          // Track covered vs uncovered positions
+          if (position.covered) {
+            summary.coveredPositions.push(symbolExpiration);
+          } else {
+            summary.uncoveredPositions.push(symbolExpiration);
+          }
+        }
+      }
+      
+      // Get candle analysis for each position symbol
+      console.log('🕯️ Getting candle analysis for position symbols...');
+      const candleAnalysisResults = {};
+      
+      for (const symbolExpiration of summary.symbolExpirations) {
+        const [symbol] = symbolExpiration.split('_');
+        try {
+          console.log(`  🕯️ Analyzing ${symbol}...`);
+          const candleAnalysis = await analyzeCandles(`$${symbol}`); // No timeframe filter - get all timeframes
+          candleAnalysisResults[symbol] = {
+            success: true,
+            availableTimeframes: candleAnalysis.candleData ? Object.keys(candleAnalysis.candleData) : [],
+            lastUpdate: candleAnalysis.timestamp
+          };
+          console.log(`    ✅ ${symbol} analysis complete`);
+        } catch (error) {
+          console.error(`    ❌ Error analyzing ${symbol}:`, error.message);
+          candleAnalysisResults[symbol] = {
+            success: false,
+            error: error.message
+          };
+        }
+      }
+      
+      // Process uncovered positions
+      if (summary.uncoveredPositions.length > 0) {
+        console.log('🔄 Processing uncovered positions...');
+        
+        for (const symbolExpiration of summary.uncoveredPositions) {
+          // Get the position data
+          const positionArray = positions[symbolExpiration];
+          if (Array.isArray(positionArray) && positionArray.length > 0) {
+            const position = positionArray[0];
+            const strategy = position.strategy || 'unknown';
+            
+            // Determine if it's a bull or bear position and call appropriate function
+            if (strategy.includes('bull')) {
+              await this.tryCoverBullPosition(symbolExpiration, position);
+            } else if (strategy.includes('bear')) {
+              await this.tryCoverBearPosition(symbolExpiration, position);
+            } else {
+              console.log(`❓ Unknown strategy for ${symbolExpiration}: ${strategy}`);
+            }
+          }
+        }
+      }
+      
+      // Try to open new positions for covered symbol_date combinations
+      console.log('🔄 Checking for opportunities to open new positions...');
+      
+      // Find symbol_date combinations that are covered but not uncovered
+      // These are valid candidates for opening new positions
+      for (const symbolExpiration of summary.coveredPositions) {
+        if (!summary.uncoveredPositions.includes(symbolExpiration)) {
+          // This symbol_date is covered but not uncovered, so we can try to open a new position
+          const [symbol, expiration] = symbolExpiration.split('_');
+          
+          console.log(`  ${symbol}: Found covered position for ${expiration}, attempting to open new position for same date`);
+          
+          // Randomly decide between bull or bear for now (this can be made smarter later)
+          const shouldOpenBull = Math.random() > 0.5;
+          
+          if (shouldOpenBull) {
+            await this.tryOpenBullPosition(symbol, expiration);
+          } else {
+            await this.tryOpenBearPosition(symbol, expiration);
+          }
+        }
+      }
+      
+      // Log summary
+      console.log('📊 Position Check Summary:');
+      console.log(`  Total Positions: ${summary.totalPositions}, Total Legs: ${summary.totalLegs}, Total Cost: $${summary.totalCost.toFixed(2)}`);
+      console.log(`  Strategies: ${JSON.stringify(summary.strategies)}`);
+      console.log(`  Symbol/Expirations: ${summary.symbolExpirations.join(', ')}`);
+      console.log(`  Covered Positions: ${summary.coveredPositions.length > 0 ? summary.coveredPositions.join(', ') : 'None'}`);
+      console.log(`  Uncovered Positions: ${summary.uncoveredPositions.length > 0 ? summary.uncoveredPositions.join(', ') : 'None'}`);
+      
+      // Log candle analysis results
+      console.log('🕯️ Candle Analysis Results:');
+      for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
+        if (result.success) {
+          console.log(`  ${symbol}: ✅ Available timeframes: ${result.availableTimeframes.join(', ')}`);
+        } else {
+          console.log(`  ${symbol}: ❌ Error - ${result.error}`);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Error checking positions:', error.message);
+    }
+  }
 }
 
 module.exports = PositionManager;

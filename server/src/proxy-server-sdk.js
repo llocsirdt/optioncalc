@@ -1072,6 +1072,24 @@ async function startServer() {
         console.log(``);
         console.log(`🔒 Trading endpoints disabled in production mode`);
       }
+      
+      // Start position check loop
+      console.log(``);
+      console.log(`🔄 Starting position check loop (every 10 seconds)...`);
+      let positionCheckInterval = null;
+      
+      // Only start one interval
+      if (!positionCheckInterval) {
+        positionCheckInterval = setInterval(async () => {
+          try {
+            await persistence.positionManager.checkPositions();
+          } catch (error) {
+            console.error('❌ Error in position check loop:', error.message);
+          }
+        }, 10000); // 10 seconds
+        
+        console.log(`✅ Position check loop started`);
+      }
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);
