@@ -8,7 +8,7 @@ const { marketClient } = require('./market-client');
 // IMMUTABLE base cache - populated ONCE per symbol, NEVER overwritten
 const baseCandleCache = new Map();
 
-const CACHE_VERSION = 35;
+const CACHE_VERSION = 45;
 
 /**
  * Check if we have base cache for symbol
@@ -126,27 +126,81 @@ function aggregate30mTo60m(candles30m) {
   
   const aggregated = [];
   
-  // Group 30m candles in pairs to create 60m candles
-  // Candles are sorted newest first, so we need to process them in reverse pairs
-  for (let i = candles30m.length - 1; i >= 0; i -= 2) {
-    const candle1 = candles30m[i];
-    const candle2 = i > 0 ? candles30m[i - 1] : null;
+  // Group candles by hour to prevent duplicates
+  const hourlyGroups = new Map();
+  
+  // Process each 30-minute candle
+  for (const candle of candles30m) {
+    const candleTime = new Date(candle.datetime);
+    const hour = candleTime.getHours();
+    const minutes = candleTime.getMinutes();
     
-    if (!candle2) {
-      // Odd number of candles, skip the last one
-      continue;
+    // Determine which hour this candle belongs to
+    let targetHour;
+    
+    // Special case: 9:30 AM candle belongs to 9:00 AM hour (market opens at 9:30)
+    if (hour === 9 && minutes === 30) {
+      targetHour = 9;
+    } else {
+      // For all other cases: 
+      // - XX:00 candle belongs to XX:00 hour
+      // - XX:30 candle belongs to XX+1:00 hour (next hour)
+      targetHour = minutes === 0 ? hour : hour + 1;
     }
     
-    // candle1 is older, candle2 is newer (since array is newest first)
-    // For 60m candle: use older candle's open, newer candle's close
-    aggregated.push({
-      datetime: candle1.datetime, // Use the older candle's timestamp as the boundary
-      open: candle1.open,
-      high: Math.max(candle1.high, candle2.high),
-      low: Math.min(candle1.low, candle2.low),
-      close: candle2.close,
-      volume: candle1.volume + candle2.volume
-    });
+    // Create hour boundary timestamp
+    const hourBoundary = new Date(candleTime);
+    hourBoundary.setHours(targetHour, 0, 0, 0);
+    const hourKey = hourBoundary.getTime();
+    
+    // Initialize hour group if not exists
+    if (!hourlyGroups.has(hourKey)) {
+      hourlyGroups.set(hourKey, {
+        datetime: hourKey,
+        candles: [],
+        is9amHour: targetHour === 9
+      });
+    }
+    
+    // Add candle to the appropriate hour group
+    hourlyGroups.get(hourKey).candles.push(candle);
+  }
+  
+  // Convert each hour group into a 60m candle
+  for (const [hourKey, group] of hourlyGroups) {
+    const { candles, is9amHour } = group;
+    
+    if (is9amHour && candles.length === 1 && new Date(candles[0].datetime).getHours() === 9) {
+      // 9:00 AM special case: only have 9:30 AM candle
+      const candle930 = candles[0];
+      aggregated.push({
+        datetime: hourKey,
+        open: candle930.open,
+        high: candle930.high,
+        low: candle930.low,
+        close: candle930.close,
+        volume: candle930.volume
+      });
+    } else if (candles.length >= 1) {
+      // Normal case: aggregate all candles in this hour
+      // Sort candles by time to ensure proper open/close
+      candles.sort((a, b) => a.datetime - b.datetime);
+      
+      const open = candles[0].open;
+      const close = candles[candles.length - 1].close;
+      const high = Math.max(...candles.map(c => c.high));
+      const low = Math.min(...candles.map(c => c.low));
+      const volume = candles.reduce((sum, c) => sum + c.volume, 0);
+      
+      aggregated.push({
+        datetime: hourKey,
+        open,
+        high,
+        low,
+        close,
+        volume
+      });
+    }
   }
   
   // Sort newest first
