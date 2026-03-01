@@ -1082,7 +1082,7 @@ async function startServer() {
       if (!positionCheckInterval) {
         positionCheckInterval = setInterval(async () => {
           try {
-            await persistence.positionManager.checkPositions();
+            await persistence.positionManager.checkPositions(persistence);
           } catch (error) {
             console.error('❌ Error in position check loop:', error.message);
           }

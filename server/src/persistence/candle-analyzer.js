@@ -146,9 +146,9 @@ function aggregate30mTo60m(candles30m) {
       targetHour = 9;
     } else {
       // For all other cases: 
-      // - XX:00 candle belongs to XX:00 hour
-      // - XX:30 candle belongs to XX+1:00 hour (next hour)
-      targetHour = minutes === 0 ? hour : hour + 1;
+      // Both XX:00 and XX:30 candles belong to the same hour
+      // Example: 10:00 and 10:30 both belong to 10:00 hour
+      targetHour = hour;
     }
     
     // Create hour boundary timestamp
@@ -744,6 +744,12 @@ module.exports = {
   populateBaseCache,
   hasBaseCache,
   getCachedSymbols,
+  enhanceCandleDataWithIndicators,
+  calculateSMA,
+  calculateEMA,
+  calculateBollingerBands,
+  calculatePerCandleBBScores,
+  aggregate30mTo60m,
   clearBaseCache: (symbol) => {
     const cacheKey = `${symbol}_v${CACHE_VERSION}`;
     baseCandleCache.delete(cacheKey);

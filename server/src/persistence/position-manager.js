@@ -300,30 +300,313 @@ class PositionManager {
   }
 
   /**
+   * Check if we should cover a specific position based on simple strategy
+   * @param {string} symbolExpiration - The symbol_date combination
+   * @param {Object} position - The position object
+   * @returns {boolean} - True if covering was attempted, false otherwise
+   */
+  async checkSimpleCover(symbolExpiration, position) {
+    const strategy = position.strategy || 'unknown';
+    
+    // Determine if it's a bull or bear position and call appropriate function
+    if (strategy.includes('bull')) {
+      await this.tryCoverBullPosition(symbolExpiration, position);
+      return true;
+    } else if (strategy.includes('bear')) {
+      await this.tryCoverBearPosition(symbolExpiration, position);
+      return true;
+    } else {
+      console.log(`❓ Unknown strategy for ${symbolExpiration}: ${strategy}`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should open a new position based on simple 5m BB score strategy
+   * @param {string} symbol - The symbol to check
+   * @param {string} expiration - The expiration date
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if conditions were met, false otherwise
+   */
+  async checkSimple5mBBScoreOpen(symbol, expiration, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 5-minute candle data to check BB score
+      const candleData5m = candleAnalysis.candleData['5m'];
+      
+      if (candleData5m && candleData5m.candles && candleData5m.candles.length > 0) {
+        // Get the most recent candle (first in array since server returns newest first)
+        const latestCandle = candleData5m.candles[0];
+        const bbScore = latestCandle.bbScore;
+        
+        console.log(`  ${symbol}: Latest 5m BB score: ${bbScore}`);
+        
+        // Make decision based on BB score
+        if (bbScore < -1) {
+          console.log(`  ${symbol}: 5m BB score indicates bull signal (bb < -1), opening bull position`);
+          await this.tryOpenBullPosition(symbol, expiration);
+          return true;
+        } else if (bbScore > 1) {
+          console.log(`  ${symbol}: 5m BB score indicates bear signal (bb > 1), opening bear position`);
+          await this.tryOpenBearPosition(symbol, expiration);
+          return true;
+        } else {
+          console.log(`  ${symbol}: 5m BB score neutral (-1 <= bb <= 1), skipping position opening`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: No 5m candle data available, skipping position opening`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position opening`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should open a new position based on simple 15m BB score strategy
+   * @param {string} symbol - The symbol to check
+   * @param {string} expiration - The expiration date
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if conditions were met, false otherwise
+   */
+  async checkSimple15mBBScoreOpen(symbol, expiration, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 15-minute candle data to check BB score
+      const candleData15m = candleAnalysis.candleData['15m'];
+      
+      if (candleData15m && candleData15m.candles && candleData15m.candles.length > 0) {
+        // Get the most recent candle (first in array since server returns newest first)
+        const latestCandle = candleData15m.candles[0];
+        const bbScore = latestCandle.bbScore;
+        
+        console.log(`  ${symbol}: Latest 15m BB score: ${bbScore}`);
+        
+        // Make decision based on BB score
+        if (bbScore < -1) {
+          console.log(`  ${symbol}: 15m BB score indicates bull signal (bb < -1), opening bull position`);
+          await this.tryOpenBullPosition(symbol, expiration);
+          return true;
+        } else if (bbScore > 1) {
+          console.log(`  ${symbol}: 15m BB score indicates bear signal (bb > 1), opening bear position`);
+          await this.tryOpenBearPosition(symbol, expiration);
+          return true;
+        } else {
+          console.log(`  ${symbol}: 15m BB score neutral (-1 <= bb <= 1), skipping position opening`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: No 15m candle data available, skipping position opening`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position opening`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should open a new position based on simple 15m and 60m BB score strategy
+   * @param {string} symbol - The symbol to check
+   * @param {string} expiration - The expiration date
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if conditions were met, false otherwise
+   */
+  async checkSimple15and60mBBScoreOpen(symbol, expiration, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 15-minute and 60-minute candle data to check BB scores
+      const candleData15m = candleAnalysis.candleData['15m'];
+      const candleData60m = candleAnalysis.candleData['1h'];
+      
+      if (candleData15m && candleData15m.candles && candleData15m.candles.length > 0 &&
+          candleData60m && candleData60m.candles && candleData60m.candles.length > 0) {
+        
+        // Get the most recent candles (first in array since server returns newest first)
+        const latestCandle15m = candleData15m.candles[0];
+        const latestCandle60m = candleData60m.candles[0];
+        const bbScore15m = latestCandle15m.bbScore;
+        const bbScore60m = latestCandle60m.bbScore;
+        
+        console.log(`  ${symbol}: Latest 15m BB score: ${bbScore15m}, 60m BB score: ${bbScore60m}`);
+        
+        // Make decision based on both BB scores - both must agree
+        if (bbScore15m < -1 && bbScore60m < -1) {
+          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate bull signal (bb < -1), opening bull position`);
+          await this.tryOpenBullPosition(symbol, expiration);
+          return true;
+        } else if (bbScore15m > 1 && bbScore60m > 1) {
+          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate bear signal (bb > 1), opening bear position`);
+          await this.tryOpenBearPosition(symbol, expiration);
+          return true;
+        } else {
+          console.log(`  ${symbol}: BB scores do not agree or are neutral (15m: ${bbScore15m}, 60m: ${bbScore60m}), skipping position opening`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: Missing 15m or 60m candle data, skipping position opening`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position opening`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should cover a position based on simple 5m BB score strategy
+   * @param {string} symbolExpiration - The symbol_date combination
+   * @param {Object} position - The position object
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if covering was attempted, false otherwise
+   */
+  async checkSimple5mBBScoreCover(symbolExpiration, position, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 5-minute candle data to check BB score
+      const candleData5m = candleAnalysis.candleData['5m'];
+      
+      if (candleData5m && candleData5m.candles && candleData5m.candles.length > 0) {
+        // Get the most recent candle (first in array since server returns newest first)
+        const latestCandle = candleData5m.candles[0];
+        const bbScore = latestCandle.bbScore;
+        
+        const [symbol] = symbolExpiration.split('_');
+        console.log(`  ${symbol}: Latest 5m BB score: ${bbScore}`);
+        
+        // Make decision based on BB score - opposite of opening logic
+        if (bbScore > 1) {
+          console.log(`  ${symbol}: 5m BB score indicates cover bull position (bb > 1), covering bull position`);
+          await this.tryCoverBullPosition(symbolExpiration, position);
+          return true;
+        } else if (bbScore < -1) {
+          console.log(`  ${symbol}: 5m BB score indicates cover bear position (bb < -1), covering bear position`);
+          await this.tryCoverBearPosition(symbolExpiration, position);
+          return true;
+        } else {
+          console.log(`  ${symbol}: 5m BB score neutral (-1 <= bb <= 1), skipping position covering`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: No 5m candle data available, skipping position covering`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position covering`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should cover a position based on simple 15m BB score strategy
+   * @param {string} symbolExpiration - The symbol_date combination
+   * @param {Object} position - The position object
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if covering was attempted, false otherwise
+   */
+  async checkSimple15mBBScoreCover(symbolExpiration, position, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 15-minute candle data to check BB score
+      const candleData15m = candleAnalysis.candleData['15m'];
+      
+      if (candleData15m && candleData15m.candles && candleData15m.candles.length > 0) {
+        // Get the most recent candle (first in array since server returns newest first)
+        const latestCandle = candleData15m.candles[0];
+        const bbScore = latestCandle.bbScore;
+        
+        const [symbol] = symbolExpiration.split('_');
+        console.log(`  ${symbol}: Latest 15m BB score: ${bbScore}`);
+        
+        // Make decision based on BB score - opposite of opening logic
+        if (bbScore > 1) {
+          console.log(`  ${symbol}: 15m BB score indicates cover bull position (bb > 1), covering bull position`);
+          await this.tryCoverBullPosition(symbolExpiration, position);
+          return true;
+        } else if (bbScore < -1) {
+          console.log(`  ${symbol}: 15m BB score indicates cover bear position (bb < -1), covering bear position`);
+          await this.tryCoverBearPosition(symbolExpiration, position);
+          return true;
+        } else {
+          console.log(`  ${symbol}: 15m BB score neutral (-1 <= bb <= 1), skipping position covering`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: No 15m candle data available, skipping position covering`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position covering`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if we should cover a position based on simple 15m and 60m BB score strategy
+   * @param {string} symbolExpiration - The symbol_date combination
+   * @param {Object} position - The position object
+   * @param {Object} candleAnalysis - Candle analysis data for the symbol
+   * @returns {boolean} - True if covering was attempted, false otherwise
+   */
+  async checkSimple15and60mBBScoreCover(symbolExpiration, position, candleAnalysis) {
+    if (candleAnalysis && candleAnalysis.success) {
+      // Get the 15-minute and 60-minute candle data to check BB scores
+      const candleData15m = candleAnalysis.candleData['15m'];
+      const candleData60m = candleAnalysis.candleData['1h'];
+      
+      if (candleData15m && candleData15m.candles && candleData15m.candles.length > 0 &&
+          candleData60m && candleData60m.candles && candleData60m.candles.length > 0) {
+        
+        // Get the most recent candles (first in array since server returns newest first)
+        const latestCandle15m = candleData15m.candles[0];
+        const latestCandle60m = candleData60m.candles[0];
+        const bbScore15m = latestCandle15m.bbScore;
+        const bbScore60m = latestCandle60m.bbScore;
+        
+        const [symbol] = symbolExpiration.split('_');
+        console.log(`  ${symbol}: Latest 15m BB score: ${bbScore15m}, 60m BB score: ${bbScore60m}`);
+        
+        // Make decision based on both BB scores - both must agree, opposite of opening logic
+        if (bbScore15m > 1 && bbScore60m > 1) {
+          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bull position (bb > 1), covering bull position`);
+          await this.tryCoverBullPosition(symbolExpiration, position);
+          return true;
+        } else if (bbScore15m < -1 && bbScore60m < -1) {
+          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bear position (bb < -1), covering bear position`);
+          await this.tryCoverBearPosition(symbolExpiration, position);
+          return true;
+        } else {
+          console.log(`  ${symbol}: BB scores do not agree or are neutral (15m: ${bbScore15m}, 60m: ${bbScore60m}), skipping position covering`);
+          return false;
+        }
+      } else {
+        console.log(`  ${symbol}: Missing 15m or 60m candle data, skipping position covering`);
+        return false;
+      }
+    } else {
+      console.log(`  ${symbol}: No candle analysis available, skipping position covering`);
+      return false;
+    }
+  }
+
+  /**
    * Check positions and log summary data
    * This method will be called by the server loop every 10 seconds
    */
-  async checkPositions() {
+  async checkPositions(persistenceManager) {
     try {
-      // Read the positions.json file
-      const fs = require('fs').promises;
-      const path = require('path');
-      const positionsPath = path.join(__dirname, 'positions.json');
-      
       // Import candle analyzer
       const { analyzeCandles } = require('./candle-analyzer');
       
-      // Check if positions file exists
-      try {
-        await fs.access(positionsPath);
-      } catch (error) {
-        console.log('📊 Position Check: No positions file found');
+      // Get positions from persistence manager
+      if (!persistenceManager) {
+        console.log('📊 Position Check: No persistence manager provided');
         return;
       }
       
-      // Read and parse positions data
-      const positionsData = await fs.readFile(positionsPath, 'utf8');
-      const positions = JSON.parse(positionsData);
+      const positions = await persistenceManager.getAllPositions();
+      
+      if (!positions || Object.keys(positions).length === 0) {
+        console.log('📊 Position Check: No positions available');
+        return;
+      }
       
       // Generate summary and track covered/uncovered positions
       const summary = {
@@ -373,7 +656,8 @@ class PositionManager {
           candleAnalysisResults[symbol] = {
             success: true,
             availableTimeframes: candleAnalysis.candleData ? Object.keys(candleAnalysis.candleData) : [],
-            lastUpdate: candleAnalysis.timestamp
+            lastUpdate: candleAnalysis.timestamp,
+            candleData: candleAnalysis.candleData // Store full candle data for BB score analysis
           };
           console.log(`    ✅ ${symbol} analysis complete`);
         } catch (error) {
@@ -382,6 +666,16 @@ class PositionManager {
             success: false,
             error: error.message
           };
+        }
+      }
+
+      // Log candle analysis results
+      console.log('🕯️ Candle Analysis Results:');
+      for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
+        if (result.success) {
+          console.log(`  ${symbol}: ✅ Available timeframes: ${result.availableTimeframes.join(', ')}`);
+        } else {
+          console.log(`  ${symbol}: ❌ Error - ${result.error}`);
         }
       }
       
@@ -394,16 +688,10 @@ class PositionManager {
           const positionArray = positions[symbolExpiration];
           if (Array.isArray(positionArray) && positionArray.length > 0) {
             const position = positionArray[0];
-            const strategy = position.strategy || 'unknown';
             
-            // Determine if it's a bull or bear position and call appropriate function
-            if (strategy.includes('bull')) {
-              await this.tryCoverBullPosition(symbolExpiration, position);
-            } else if (strategy.includes('bear')) {
-              await this.tryCoverBearPosition(symbolExpiration, position);
-            } else {
-              console.log(`❓ Unknown strategy for ${symbolExpiration}: ${strategy}`);
-            }
+            // Use the strategy function to determine if we should cover this position
+            const coverResult = await this.checkSimpleCover(symbolExpiration, position);
+            console.log(`🔄 Cover strategy function returned: ${coverResult}`);
           }
         }
       }
@@ -418,16 +706,20 @@ class PositionManager {
           // This symbol_date is covered but not uncovered, so we can try to open a new position
           const [symbol, expiration] = symbolExpiration.split('_');
           
-          console.log(`  ${symbol}: Found covered position for ${expiration}, attempting to open new position for same date`);
+          console.log(`  ${symbol}: Found covered position for ${expiration}, checking candle analysis for new position`);
           
-          // Randomly decide between bull or bear for now (this can be made smarter later)
-          const shouldOpenBull = Math.random() > 0.5;
+          // Get candle analysis for this symbol
+          const candleAnalysis = candleAnalysisResults[symbol];
           
-          if (shouldOpenBull) {
-            await this.tryOpenBullPosition(symbol, expiration);
-          } else {
-            await this.tryOpenBearPosition(symbol, expiration);
-          }
+          // Use the strategy function to determine if we should open a position
+          const simple15mResponse = await this.checkSimple15mBBScoreOpen(symbol, expiration, candleAnalysis);
+          const simple15m60mResponse = await this.checkSimple15and60mBBScoreOpen(symbol, expiration, candleAnalysis);
+          
+          // For now, just log the result - we'll react to it later
+          console.log(`  ${symbol}: checkSimple15mBBScoreOpen Strategy function returned: ${simple15mResponse}`);
+          console.log(`  ${symbol}: checkSimple15and60mBBScoreOpenStrategy function returned: ${simple15m60mResponse}`);
+        } else {
+          console.log(`  ${symbol}: No candle analysis available, skipping position opening`);
         }
       }
       
@@ -438,16 +730,7 @@ class PositionManager {
       console.log(`  Symbol/Expirations: ${summary.symbolExpirations.join(', ')}`);
       console.log(`  Covered Positions: ${summary.coveredPositions.length > 0 ? summary.coveredPositions.join(', ') : 'None'}`);
       console.log(`  Uncovered Positions: ${summary.uncoveredPositions.length > 0 ? summary.uncoveredPositions.join(', ') : 'None'}`);
-      
-      // Log candle analysis results
-      console.log('🕯️ Candle Analysis Results:');
-      for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
-        if (result.success) {
-          console.log(`  ${symbol}: ✅ Available timeframes: ${result.availableTimeframes.join(', ')}`);
-        } else {
-          console.log(`  ${symbol}: ❌ Error - ${result.error}`);
-        }
-      }
+
       
     } catch (error) {
       console.error('❌ Error checking positions:', error.message);

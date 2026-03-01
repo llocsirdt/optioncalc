@@ -23,6 +23,9 @@ server/src/persistence/server-state.backup.json
 server/src/persistence/positions.json
 server/nodemon.json
 
+# Backtest output files (large JSON files with historical data)
+tests/backtest/backtest-controller-*.json
+
 # Node.js dependencies
 node_modules/
 npm-debug.log*
