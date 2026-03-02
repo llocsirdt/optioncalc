@@ -42,9 +42,9 @@ function checkSimple5mBBScoreOpen(analysis) {
     return { action: 'none', bbScore5m: null };
   }
   
-  if (bbScore5m < -1) {
+  if (bbScore5m > 1) {
     return { action: 'open_bull', bbScore5m };
-  } else if (bbScore5m > 1) {
+  } else if (bbScore5m < -1) {
     return { action: 'open_bear', bbScore5m };
   } else {
     return { action: 'none', bbScore5m };
@@ -62,9 +62,9 @@ function checkSimple15mBBScoreOpen(analysis) {
     return { action: 'none', bbScore15m: null };
   }
   
-  if (bbScore15m < -1) {
+  if (bbScore15m > 1) {
     return { action: 'open_bull', bbScore15m };
-  } else if (bbScore15m > 1) {
+  } else if (bbScore15m < -1) {
     return { action: 'open_bear', bbScore15m };
   } else {
     return { action: 'none', bbScore15m };
@@ -74,8 +74,8 @@ function checkSimple15mBBScoreOpen(analysis) {
 /**
  * Check if we should cover an existing position based on 5m BB score
  * Opposite logic from opening:
- * - Bull position: cover when BB score > 1 (price moved up, exit)
- * - Bear position: cover when BB score < -1 (price moved down, exit)
+ * - Bull position: cover when BB score < -1 (price moved above middle, exit)
+ * - Bear position: cover when BB score > 1 (price moved below middle, exit)
  * Returns: {action: 'cover'|'hold', bbScore5m: value}
  */
 function checkSimple5mBBScoreCover(position, analysis) {
@@ -86,13 +86,13 @@ function checkSimple5mBBScoreCover(position, analysis) {
   }
   
   if (position.type === 'bull') {
-    // Bull position: cover when BB score > 1 (price moved up)
-    if (bbScore5m > 1) {
+    // Bull position: cover when BB score < -1 (price moved above middle)
+    if (bbScore5m < -1) {
       return { action: 'cover', bbScore5m };
     }
   } else if (position.type === 'bear') {
-    // Bear position: cover when BB score < -1 (price moved down)
-    if (bbScore5m < -1) {
+    // Bear position: cover when BB score > 1 (price moved below middle)
+    if (bbScore5m > 1) {
       return { action: 'cover', bbScore5m };
     }
   }
@@ -103,8 +103,8 @@ function checkSimple5mBBScoreCover(position, analysis) {
 /**
  * Check if we should cover an existing position based on 15m BB score
  * Opposite logic from opening:
- * - Bull position: cover when BB score > 1 (price moved up, exit)
- * - Bear position: cover when BB score < -1 (price moved down, exit)
+ * - Bull position: cover when BB score < -1 (price moved above middle, exit)
+ * - Bear position: cover when BB score > 1 (price moved below middle, exit)
  * Returns: {action: 'cover'|'hold', bbScore15m: value}
  */
 function checkSimple15mBBScoreCover(position, analysis) {
@@ -115,13 +115,13 @@ function checkSimple15mBBScoreCover(position, analysis) {
   }
   
   if (position.type === 'bull') {
-    // Bull position: cover when BB score > 1 (price moved up)
-    if (bbScore15m > 1) {
+    // Bull position: cover when BB score < -1 (price moved above middle)
+    if (bbScore15m < -1) {
       return { action: 'cover', bbScore15m };
     }
   } else if (position.type === 'bear') {
-    // Bear position: cover when BB score < -1 (price moved down)
-    if (bbScore15m < -1) {
+    // Bear position: cover when BB score > 1 (price moved below middle)
+    if (bbScore15m > 1) {
       return { action: 'cover', bbScore15m };
     }
   }

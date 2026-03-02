@@ -811,6 +811,37 @@ class BacktestController {
         console.log(`📊 Position still open at market close - added EOD entry`);
       }
       
+      // Calculate approximate profitability
+      let totalProfitLoss = 0;
+      let openPrice = null;
+      let positionType = null;
+      
+      for (const action of this.strategyActions) {
+        if (action.action === 'open_bull' || action.action === 'open_bear') {
+          openPrice = action.closePrice;
+          positionType = action.position.type;
+        } else if (action.action === 'cover' && openPrice !== null) {
+          const coverPrice = action.closePrice;
+          const priceDiff = coverPrice - openPrice;
+          
+          // Bull: profit when price goes up (cover > open)
+          // Bear: profit when price goes down (open > cover)
+          const profitLoss = positionType === 'bull' ? priceDiff : -priceDiff;
+          totalProfitLoss += profitLoss;
+          
+          openPrice = null;
+          positionType = null;
+        } else if (action.action === 'eod_open' && openPrice !== null) {
+          // Calculate unrealized P&L for open position at EOD
+          const eodPrice = action.closePrice;
+          const priceDiff = eodPrice - openPrice;
+          const unrealizedPL = positionType === 'bull' ? priceDiff : -priceDiff;
+          totalProfitLoss += unrealizedPL;
+        }
+      }
+      
+      console.log(`📊 Total Profit/Loss (points): ${totalProfitLoss.toFixed(4)}`);
+      
       // Save results to file
       const outputPath = path.join(__dirname, `backtest-${symbol}-${backtestDate}.json`);
       await fs.writeFile(outputPath, JSON.stringify(this.results, null, 2));
@@ -823,7 +854,8 @@ class BacktestController {
           backtestDate,
           openStrategy: openMethod,
           coverStrategy: coverMethod,
-          totalActions: this.strategyActions.length
+          totalActions: this.strategyActions.length,
+          totalProfitLoss: parseFloat(totalProfitLoss.toFixed(4))
         },
         actions: this.strategyActions
       };
