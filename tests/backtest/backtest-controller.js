@@ -21,7 +21,8 @@ const {
   calculateSMA, 
   calculateEMA, 
   calculateBollingerBands,
-  aggregate30mTo60m
+  aggregate30mTo60m,
+  calculatePerCandleTrendScores
 } = require(candleAnalyzerPath);
 
 // Import production strategy logic functions
@@ -37,6 +38,7 @@ const {
 class BacktestController {
   constructor() {
     this.results = [];
+    this.strategyActions = []; // Track only position changes (opens/covers)
     this.openPosition = null; // Track current open position {type: 'bull'|'bear', openedAt: timestamp, bbScore15m: value}
   }
 
@@ -80,45 +82,90 @@ class BacktestController {
       endDate: priorDayMs
     });
     seedData['5m'] = (data5m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+    // Filter to market hours only (9:30 AM - 4:00 PM ET)
+    seedData['5m'] = this.filterMarketHours(seedData['5m']);
     // Sort newest first
     seedData['5m'].sort((a, b) => b.datetime - a.datetime);
-    console.log(`   ✅ Received ${seedData['5m'].length} candles`);
+    console.log(`   ✅ Received ${seedData['5m'].length} candles (market hours only)`);
     if (seedData['5m'].length > 0) {
       const first = seedData['5m'][0];
       const last = seedData['5m'][seedData['5m'].length - 1];
       console.log(`   📍 Range: ${new Date(last.datetime).toISOString()} to ${new Date(first.datetime).toISOString()}`);
     }
     
-    // 2. Fetch 1 day of 15m candles ending on prior day - base for BB calculations
-    console.log(`\n🕯️  Fetching 15m candles (1 day ending ${priorDayObj.toISOString().split('T')[0]})...`);
+    // 2. Fetch 5 days of 15m candles ending on prior day
+    // Production fetches 5 days ending "now" (includes partial 2/27)
+    // Backtest fetches 5 days ending 2/26 (complete days, no current day)
+    // Both get same date range: production has 2/23-2/27, backtest has 2/22-2/26
+    console.log(`\n🕯️  Fetching 15m candles (5 days ending ${priorDayObj.toISOString().split('T')[0]})...`);
     const data15m = await marketClient.priceHistory(apiSymbol, {
       periodType: 'day',
-      period: 1,
+      period: 5,
       frequencyType: 'minute',
       frequency: 15,
       endDate: priorDayMs
     });
     seedData['15m'] = (data15m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+    // Filter to market hours only (9:30 AM - 4:00 PM ET)
+    seedData['15m'] = this.filterMarketHours(seedData['15m']);
     // Sort newest first
     seedData['15m'].sort((a, b) => b.datetime - a.datetime);
-    console.log(`   ✅ Received ${seedData['15m'].length} candles`);
+    
+    // Filter to match production's date range
+    // Production fetches 5 days ending "now" (2/27) = gets 2/23-2/27
+    // Backtest fetches 5 days ending 2/26 = gets 2/20-2/26 (includes 2/20 which production doesn't have)
+    // Keep only candles from 2/23 onwards to match production's historical range
+    if (seedData['15m'].length > 0) {
+      const cutoffDate = new Date(backtestDateObj);
+      cutoffDate.setDate(cutoffDate.getDate() - 4); // 4 days before backtest date = 2/23
+      cutoffDate.setHours(0, 0, 0, 0);
+      
+      seedData['15m'] = seedData['15m'].filter(c => {
+        const candleDate = new Date(c.datetime);
+        const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+        return candleDateOnly >= cutoffDate;
+      });
+    }
+    console.log(`   ✅ Received ${seedData['15m'].length} candles (filtered to match production date range)`);
     if (seedData['15m'].length > 0) {
       const first = seedData['15m'][0];
       const last = seedData['15m'][seedData['15m'].length - 1];
       console.log(`   📍 Range: ${new Date(last.datetime).toISOString()} to ${new Date(first.datetime).toISOString()}`);
     }
     
-    // 3. Fetch 3 days of 30m candles ending on prior day (2/26) - for 60m aggregation
-    console.log(`\n🕯️  Fetching 30m candles (3 days ending ${priorDayObj.toISOString().split('T')[0]})...`);
+    // 3. Fetch 5 days of 30m candles ending on prior day (2/26) - for 60m aggregation
+    // Production fetches 5 days of 30m and aggregates to 1h (35 candles)
+    // Backtest fetches 5 days of 30m ending 2/26 and aggregates to 60m
+    console.log(`\n🕯️  Fetching 30m candles (5 days ending ${priorDayObj.toISOString().split('T')[0]})...`);
     const data30m = await marketClient.priceHistory(apiSymbol, {
       periodType: 'day',
-      period: 3,
+      period: 5,
       frequencyType: 'minute',
       frequency: 30,
       endDate: priorDayMs
     });
     seedData['30m'] = (data30m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-    console.log(`   ✅ Received ${seedData['30m'].length} candles`);
+    // Filter to market hours only (9:30 AM - 4:00 PM ET)
+    seedData['30m'] = this.filterMarketHours(seedData['30m']);
+    // Sort newest first
+    seedData['30m'].sort((a, b) => b.datetime - a.datetime);
+    
+    // Filter to match production's date range
+    // Production: 5 days ending "now" (2/27) = 2/23-2/27
+    // Backtest: 5 days ending 2/26 = 2/20-2/26 (includes 2/20 which production doesn't have)
+    // Keep only candles from 2/23 onwards to match production's historical range
+    if (seedData['30m'].length > 0) {
+      const cutoffDate = new Date(backtestDateObj);
+      cutoffDate.setDate(cutoffDate.getDate() - 4); // 4 days before backtest date = 2/23
+      cutoffDate.setHours(0, 0, 0, 0);
+      
+      seedData['30m'] = seedData['30m'].filter(c => {
+        const candleDate = new Date(c.datetime);
+        const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+        return candleDateOnly >= cutoffDate;
+      });
+    }
+    console.log(`   ✅ Received ${seedData['30m'].length} candles (filtered to match production date range)`);
     if (seedData['30m'].length > 0) {
       const first = seedData['30m'][0];
       const last = seedData['30m'][seedData['30m'].length - 1];
@@ -135,7 +182,9 @@ class BacktestController {
       endDate: backtestDateMs
     });
     seedData['1m'] = (data1m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-    console.log(`   ✅ Received ${seedData['1m'].length} candles`);
+    // Filter to market hours only (9:30 AM - 4:00 PM ET)
+    seedData['1m'] = this.filterMarketHours(seedData['1m']);
+    console.log(`   ✅ Received ${seedData['1m'].length} candles (market hours only)`);
     if (seedData['1m'].length > 0) {
       const first = seedData['1m'][0];
       const last = seedData['1m'][seedData['1m'].length - 1];
@@ -196,6 +245,24 @@ class BacktestController {
   }
 
   /**
+   * Filter candles to only include regular market hours (9:30 AM - 4:00 PM ET)
+   * Excludes pre-market and after-hours candles
+   */
+  filterMarketHours(candles) {
+    return candles.filter(c => {
+      const d = new Date(c.datetime);
+      const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const hour = estDate.getHours();
+      const minute = estDate.getMinutes();
+      const totalMinutes = hour * 60 + minute;
+      
+      // Market hours: 9:30 AM (570 min) to 4:00 PM (960 min)
+      // 4:00 PM is market close, so we include up to 3:59 PM (959 min)
+      return totalMinutes >= 570 && totalMinutes < 960;
+    });
+  }
+
+  /**
    * Aggregate multiple 1m candles into a single OHLC candle
    * Candles should be in chronological order (oldest to newest)
    */
@@ -206,7 +273,7 @@ class BacktestController {
     const sorted = [...candles].sort((a, b) => a.datetime - b.datetime);
     
     return {
-      datetime: sorted[sorted.length - 1].datetime, // Use newest timestamp
+      datetime: sorted[0].datetime, // Use oldest timestamp (start of period) to match Schwab
       open: sorted[0].open,
       high: Math.max(...sorted.map(c => c.high)),
       low: Math.min(...sorted.map(c => c.low)),
@@ -329,9 +396,10 @@ class BacktestController {
           
           // === 1-MINUTE ANALYSIS ===
           const candles1mForBB = candles1m.slice(currentIndex, currentIndex + 21);
-          const candles1mForEMA = candles1m.slice(currentIndex, currentIndex + 10);
+          const candles1mForEMA = candles1m.slice(currentIndex); // Use full array for rolling EMA
+          const candles1mForTrend = candles1m.slice(currentIndex); // Use full array for trend score
           
-          let bb1m = null, sma1m = null, bbScore1m = null, ema1m = null;
+          let bb1m = null, sma1m = null, bbScore1m = null, ema1m = null, trendScore1m = null;
           
           if (candles1mForBB.length >= 21) {
             bb1m = calculateBollingerBands(candles1mForBB, 20, 2);
@@ -339,8 +407,14 @@ class BacktestController {
             bbScore1m = calculateBBScore(currentCandle.close, bb1m.upper[0], bb1m.middle[0], bb1m.lower[0]);
           }
           
-          if (candles1mForEMA.length >= 10) {
-            ema1m = calculateEMA(candles1mForEMA, 10);
+          if (candles1mForEMA.length >= 9) {
+            const emaArray = calculateEMA(candles1mForEMA, 9);
+            ema1m = emaArray[0]; // Use value at index 0 (newest candle)
+          }
+          
+          if (candles1mForTrend.length >= 2) {
+            const trendScores = calculatePerCandleTrendScores(candles1mForTrend);
+            trendScore1m = trendScores[0]; // Use value at index 0 (newest candle)
           }
           
           // === 5-MINUTE ANALYSIS ===
@@ -350,7 +424,7 @@ class BacktestController {
           
           const currentTotalMin = hour * 60 + minute;
           const boundary5m = Math.floor(currentTotalMin / 5) * 5;
-          const is5mBoundary = minute % 5 === 0 && minute > 30;
+          const is5mBoundary = minute % 5 === 0 && currentTotalMin > 570; // After 9:30
           
           // At 5m boundary, save previous period's complete candle to working array
           if (is5mBoundary) {
@@ -380,9 +454,10 @@ class BacktestController {
           
           // For BB/EMA: [current partial] + [working complete candles] + [seed data]
           candles5mForBB = [candle5m, ...workingCandles['5m'], ...candles5m].slice(0, 21);
-          candles5mForEMA = [candle5m, ...workingCandles['5m'], ...candles5m].slice(0, 10);
+          candles5mForEMA = [candle5m, ...workingCandles['5m'], ...candles5m]; // Use full array for rolling EMA
+          const candles5mForTrend = [candle5m, ...workingCandles['5m'], ...candles5m]; // Use full array for trend score
           
-          let bb5m = null, sma5m = null, bbScore5m = null, ema5m = null;
+          let bb5m = null, sma5m = null, bbScore5m = null, ema5m = null, trendScore5m = null;
           
           if (candles5mForBB.length >= 21) {
             bb5m = calculateBollingerBands(candles5mForBB, 20, 2);
@@ -390,8 +465,14 @@ class BacktestController {
             bbScore5m = calculateBBScore(candle5m.close, bb5m.upper[0], bb5m.middle[0], bb5m.lower[0]);
           }
           
-          if (candles5mForEMA.length >= 10) {
-            ema5m = calculateEMA(candles5mForEMA, 10);
+          if (candles5mForEMA.length >= 9) {
+            const emaArray = calculateEMA(candles5mForEMA, 9);
+            ema5m = emaArray[0]; // Use value at index 0 (newest candle)
+          }
+          
+          if (candles5mForTrend.length >= 2) {
+            const trendScores = calculatePerCandleTrendScores(candles5mForTrend);
+            trendScore5m = trendScores[0]; // Use value at index 0 (newest candle)
           }
           
           // === 15-MINUTE ANALYSIS ===
@@ -401,7 +482,9 @@ class BacktestController {
           
           // Calculate 15m boundary (aligned to market open at 9:30)
           const boundary15m = Math.floor((currentTotalMin - 570) / 15) * 15 + 570; // 570 = 9:30
-          const is15mBoundary = (minute === 45 || (minute === 0 && hour > 9)) && minute > 30;
+          // Detect when a 15m period completes: :44, :59, :14, :29
+          // These are 14 minutes after the start: 30+14=44, 45+14=59, 00+14=14, 15+14=29
+          const is15mBoundary = (currentTotalMin - 584) % 15 === 0 && currentTotalMin >= 584; // 584 = 9:44
           
           // At 15m boundary, save previous period's complete candle to working array
           if (is15mBoundary) {
@@ -431,9 +514,10 @@ class BacktestController {
           
           // For BB/EMA: [current partial] + [working complete candles] + [seed data]
           candles15mForBB = [candle15m, ...workingCandles['15m'], ...candles15m].slice(0, 21);
-          candles15mForEMA = [candle15m, ...workingCandles['15m'], ...candles15m].slice(0, 10);
+          candles15mForEMA = [candle15m, ...workingCandles['15m'], ...candles15m]; // Use full array for rolling EMA
+          const candles15mForTrend = [candle15m, ...workingCandles['15m'], ...candles15m]; // Use full array for trend score
           
-          let bb15m = null, sma15m = null, bbScore15m = null, ema15m = null;
+          let bb15m = null, sma15m = null, bbScore15m = null, ema15m = null, trendScore15m = null;
           
           if (candles15mForBB.length >= 21) {
             bb15m = calculateBollingerBands(candles15mForBB, 20, 2);
@@ -441,8 +525,14 @@ class BacktestController {
             bbScore15m = calculateBBScore(candle15m.close, bb15m.upper[0], bb15m.middle[0], bb15m.lower[0]);
           }
           
-          if (candles15mForEMA.length >= 10) {
-            ema15m = calculateEMA(candles15mForEMA, 10);
+          if (candles15mForEMA.length >= 9) {
+            const emaArray = calculateEMA(candles15mForEMA, 9);
+            ema15m = emaArray[0]; // Use value at index 0 (newest candle)
+          }
+          
+          if (candles15mForTrend.length >= 2) {
+            const trendScores = calculatePerCandleTrendScores(candles15mForTrend);
+            trendScore15m = trendScores[0]; // Use value at index 0 (newest candle)
           }
           
           // === 60-MINUTE ANALYSIS ===
@@ -451,40 +541,57 @@ class BacktestController {
           let candle60m, candles60mForBB, candles60mForEMA;
           
           // Calculate 60m boundary
-          // First candle: 9:30-9:59 (boundary = 570)
+          // First candle: timestamp 09:00 but data from 09:30-09:59 (matches production)
           // After 10:00: align to clock hours (600, 660, 720, etc.)
           let boundary60m;
           if (currentTotalMin < 600) {
-            // Before 10:00 - use 9:30 boundary
-            boundary60m = 570;
+            boundary60m = 540; // 09:00 (timestamp, even though data starts at 09:30)
           } else {
-            // 10:00 and after - align to clock hours
             boundary60m = Math.floor(currentTotalMin / 60) * 60;
           }
+          // Detect when 60m periods complete: 09:59, 10:59, 11:59, 12:59, 13:59, 14:59, 15:59
+          const is60mBoundary = minute === 59 && hour >= 9;
           
-          // Boundary detection: at 10:00, 11:00, 12:00, etc.
-          const is60mBoundary = currentTotalMin >= 600 && minute === 0;
-          
-          // At 60m boundary, save previous period's complete candle to working array
-          if (is60mBoundary) {
-            let prevBoundary;
-            if (currentTotalMin === 600) {
-              // At 10:00, save the first candle (9:30-9:59)
-              prevBoundary = 570;
-            } else {
-              // At 11:00, 12:00, etc., save the previous hour
-              prevBoundary = boundary60m - 60;
-            }
+          if (is60mBoundary && currentTotalMin > 599) {
+            // At 10:59, save the PREVIOUS completed hour (09:00-09:59)
+            // At 11:59, save the PREVIOUS completed hour (10:00-10:59)
+            // The CURRENT hour (10:00-10:59 at 10:59) is the "current candle", not a working candle
+            const currentHourStart = Math.floor(currentTotalMin / 60) * 60;
+            const prevHourStart = currentHourStart - 60;
+            const prevHourEnd = currentHourStart - 1;
             
-            const prevCandles = backtestDay1mCandles.filter(c => {
+            // Only add if we haven't already added this period
+            // At 10:59: save 09:00-09:59 (if not already in working)
+            // At 11:59: save 10:00-10:59 (if not already in working)
+            const alreadyHasPrevHour = workingCandles['60m'].some(c => {
               const d = new Date(c.datetime);
               const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
               const totalMin = estDate.getHours() * 60 + estDate.getMinutes();
-              return totalMin >= prevBoundary && totalMin < boundary60m;
+              return totalMin === prevHourStart || (prevHourStart === 540 && totalMin === 540);
             });
-            if (prevCandles.length > 0) {
-              const completeCandle = this.aggregateCandles(prevCandles);
-              workingCandles['60m'].unshift(completeCandle);
+            
+            if (!alreadyHasPrevHour) {
+              const prevCandles = backtestDay1mCandles.filter(c => {
+                const d = new Date(c.datetime);
+                const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                const totalMin = estDate.getHours() * 60 + estDate.getMinutes();
+                // For 09:00-09:59, data only exists from 09:30-09:59
+                if (prevHourStart === 540) {
+                  return totalMin >= 570 && totalMin <= 599;
+                }
+                return totalMin >= prevHourStart && totalMin <= prevHourEnd;
+              });
+              if (prevCandles.length > 0) {
+                const completeCandle = this.aggregateCandles(prevCandles);
+                // Set datetime to hour start (09:00, 10:00, etc.)
+                const backtestDateObj = new Date(backtestDate);
+                const year = backtestDateObj.getFullYear();
+                const month = backtestDateObj.getMonth();
+                const day = backtestDateObj.getDate();
+                const hour = Math.floor(prevHourStart / 60);
+                completeCandle.datetime = new Date(year, month, day, hour, 0, 0).getTime();
+                workingCandles['60m'].unshift(completeCandle);
+              }
             }
           }
           
@@ -499,11 +606,21 @@ class BacktestController {
           // Aggregate into current 60m candle (partial or complete)
           candle60m = this.aggregateCandles(candles60mPeriod);
           
+          // Override datetime for first 60m candle to use 09:00 timestamp (matches production)
+          if (currentTotalMin >= 570 && currentTotalMin < 600) {
+            const backtestDateObj = new Date(backtestDate);
+            const year = backtestDateObj.getFullYear();
+            const month = backtestDateObj.getMonth();
+            const day = backtestDateObj.getDate();
+            candle60m.datetime = new Date(year, month, day, 9, 0, 0).getTime();
+          }
+          
           // For BB/EMA: [current partial] + [working complete candles] + [seed data]
           candles60mForBB = [candle60m, ...workingCandles['60m'], ...seedData['60m']].slice(0, 21);
-          candles60mForEMA = [candle60m, ...workingCandles['60m'], ...seedData['60m']].slice(0, 10);
+          candles60mForEMA = [candle60m, ...workingCandles['60m'], ...seedData['60m']]; // Use full array for rolling EMA
+          const candles60mForTrend = [candle60m, ...workingCandles['60m'], ...seedData['60m']]; // Use full array for trend score
           
-          let bb60m = null, sma60m = null, bbScore60m = null, ema60m = null;
+          let bb60m = null, sma60m = null, bbScore60m = null, ema60m = null, trendScore60m = null;
           
           if (candles60mForBB.length >= 21) {
             bb60m = calculateBollingerBands(candles60mForBB, 20, 2);
@@ -511,8 +628,14 @@ class BacktestController {
             bbScore60m = calculateBBScore(candle60m.close, bb60m.upper[0], bb60m.middle[0], bb60m.lower[0]);
           }
           
-          if (candles60mForEMA.length >= 10) {
-            ema60m = calculateEMA(candles60mForEMA, 10);
+          if (candles60mForEMA.length >= 9) {
+            const emaArray = calculateEMA(candles60mForEMA, 9);
+            ema60m = emaArray[0]; // Use value at index 0 (newest candle)
+          }
+          
+          if (candles60mForTrend.length >= 2) {
+            const trendScores = calculatePerCandleTrendScores(candles60mForTrend);
+            trendScore60m = trendScores[0]; // Use value at index 0 (newest candle)
           }
           
           // === STRATEGY EXECUTION ===
@@ -540,6 +663,15 @@ class BacktestController {
                 bbScore5m: openResult.bbScore5m
               };
               opened = true;
+              
+              // Track strategy action
+              this.strategyActions.push({
+                timestamp,
+                datetime: currentCandle.datetime,
+                action: 'open_bull',
+                strategyMethod,
+                position: { ...this.openPosition }
+              });
             } else if (openResult.action === 'open_bear') {
               this.openPosition = {
                 type: 'bear',
@@ -547,6 +679,15 @@ class BacktestController {
                 bbScore5m: openResult.bbScore5m
               };
               opened = true;
+              
+              // Track strategy action
+              this.strategyActions.push({
+                timestamp,
+                datetime: currentCandle.datetime,
+                action: 'open_bear',
+                strategyMethod,
+                position: { ...this.openPosition }
+              });
             }
           } else {
             // Have open position - check if we should cover it
@@ -554,6 +695,15 @@ class BacktestController {
             const coverResult = checkSimple5mBBScoreCover(this.openPosition, analysisForStrategy);
             
             if (coverResult.action === 'cover') {
+              // Track strategy action before clearing position
+              this.strategyActions.push({
+                timestamp,
+                datetime: currentCandle.datetime,
+                action: 'cover',
+                strategyMethod,
+                position: { ...this.openPosition }
+              });
+              
               this.openPosition = null;
               covered = true;
             }
@@ -578,8 +728,9 @@ class BacktestController {
                 bbmiddle: bb1m ? bb1m.middle[0] : null,
                 bblower: bb1m ? bb1m.lower[0] : null,
                 sma: sma1m ? sma1m[0] : null,
-                ema: ema1m ? ema1m[0] : null,
-                bbScore: bbScore1m
+                ema: ema1m,
+                bbScore: bbScore1m,
+                trendScore: trendScore1m
               },
               '5m': {
                 open: candle5m.open,
@@ -591,8 +742,9 @@ class BacktestController {
                 bbmiddle: bb5m ? bb5m.middle[0] : null,
                 bblower: bb5m ? bb5m.lower[0] : null,
                 sma: sma5m ? sma5m[0] : null,
-                ema: ema5m ? ema5m[0] : null,
-                bbScore: bbScore5m
+                ema: ema5m,
+                bbScore: bbScore5m,
+                trendScore: trendScore5m
               },
               '15m': {
                 open: candle15m.open,
@@ -604,8 +756,9 @@ class BacktestController {
                 bbmiddle: bb15m ? bb15m.middle[0] : null,
                 bblower: bb15m ? bb15m.lower[0] : null,
                 sma: sma15m ? sma15m[0] : null,
-                ema: ema15m ? ema15m[0] : null,
-                bbScore: bbScore15m
+                ema: ema15m,
+                bbScore: bbScore15m,
+                trendScore: trendScore15m
               },
               '60m': {
                 open: candle60m.open,
@@ -617,8 +770,9 @@ class BacktestController {
                 bbmiddle: bb60m ? bb60m.middle[0] : null,
                 bblower: bb60m ? bb60m.lower[0] : null,
                 sma: sma60m ? sma60m[0] : null,
-                ema: ema60m ? ema60m[0] : null,
-                bbScore: bbScore60m
+                ema: ema60m,
+                bbScore: bbScore60m,
+                trendScore: trendScore60m
               }
             }
           };
@@ -634,11 +788,17 @@ class BacktestController {
       
       console.log(`\n✅ Completed full trading day analysis`);
       console.log(`📊 Total results: ${this.results.length}`);
+      console.log(`📊 Strategy actions: ${this.strategyActions.length}`);
       
       // Save results to file
-      const outputPath = path.join(__dirname, `backtest-controller-${symbol}-${backtestDate}.json`);
+      const outputPath = path.join(__dirname, `backtest-${symbol}-${backtestDate}.json`);
       await fs.writeFile(outputPath, JSON.stringify(this.results, null, 2));
       console.log(`\n💾 Results saved to: ${outputPath}`);
+      
+      // Save strategy actions to separate file
+      const actionsPath = path.join(__dirname, `backtest-actions-${symbol}-${backtestDate}.json`);
+      await fs.writeFile(actionsPath, JSON.stringify(this.strategyActions, null, 2));
+      console.log(`💾 Strategy actions saved to: ${actionsPath}`);
       
       // Show key timestamps
       console.log(`\n📊 Key Timestamp BB Scores:`);

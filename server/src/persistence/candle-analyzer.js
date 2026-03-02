@@ -65,6 +65,9 @@ async function populateBaseCache(symbol) {
       // Filter out zero-value candles
       candles = candles.filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
       
+      // Filter to market hours only (9:30 AM - 4:00 PM ET)
+      candles = filterMarketHours(candles);
+      
       // Sort newest first
       candles.sort((a, b) => b.datetime - a.datetime);
       
@@ -114,6 +117,9 @@ async function getLatest1mCandles(symbol, sinceTime) {
   
   // Filter out zero-value candles
   candles = candles.filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+  
+  // Filter to market hours only (9:30 AM - 4:00 PM ET)
+  candles = filterMarketHours(candles);
   
   // Sort newest first
   candles.sort((a, b) => b.datetime - a.datetime);
@@ -618,6 +624,24 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
 }
 
 /**
+ * Filter candles to only include regular market hours (9:30 AM - 4:00 PM ET)
+ * Excludes pre-market and after-hours candles
+ */
+function filterMarketHours(candles) {
+  return candles.filter(c => {
+    const d = new Date(c.datetime);
+    const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const hour = estDate.getHours();
+    const minute = estDate.getMinutes();
+    const totalMinutes = hour * 60 + minute;
+    
+    // Market hours: 9:30 AM (570 min) to 4:00 PM (960 min)
+    // 4:00 PM is market close, so we include up to 3:59 PM (959 min)
+    return totalMinutes >= 570 && totalMinutes < 960;
+  });
+}
+
+/**
  * Limit candles to most recent N candles
  */
 function limitCandleData(candleData, limit = CANDLE_LIMIT) {
@@ -749,6 +773,7 @@ module.exports = {
   calculateEMA,
   calculateBollingerBands,
   calculatePerCandleBBScores,
+  calculatePerCandleTrendScores,
   aggregate30mTo60m,
   clearBaseCache: (symbol) => {
     const cacheKey = `${symbol}_v${CACHE_VERSION}`;

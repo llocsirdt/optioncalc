@@ -22,8 +22,9 @@ const candleAnalyzerPath = path.resolve(__dirname, '../../server/src/persistence
 const { analyzeCandles } = require(candleAnalyzerPath);
 
 class CandleDataValidator {
-  constructor() {
-    // No need to instantiate - analyzeCandles is a function
+  constructor(symbol, backtestDate) {
+    this.symbol = symbol;
+    this.backtestDate = backtestDate;
   }
 
   /**
@@ -44,10 +45,10 @@ class CandleDataValidator {
   }
 
   /**
-   * Get candle from backtest data
+   * Get candle from backtest results
    */
   async getBacktestCandle(timestamp, timeframe) {
-    const backtestFile = path.join(__dirname, 'backtest-controller-NDX-2026-02-27.json');
+    const backtestFile = path.join(__dirname, `backtest-${this.symbol}-${this.backtestDate}.json`);
     const backtestData = JSON.parse(await fs.readFile(backtestFile, 'utf8'));
     
     const entry = backtestData.find(e => e.timestamp === timestamp);
@@ -311,9 +312,9 @@ class CandleDataValidator {
     // Otherwise use the backtest datetime
     let schwabDatetime = backtest.datetime;
     if (schwabTime) {
-      // Parse schwabTime (HH:MM format) and construct datetime for Feb 27, 2026
+      // Parse schwabTime (HH:MM format) and construct datetime for the backtest date
       const [hours, minutes] = schwabTime.split(':').map(Number);
-      const schwabDate = new Date('2026-02-27T00:00:00-05:00');
+      const schwabDate = new Date(`${this.backtestDate}T00:00:00-05:00`);
       schwabDate.setHours(hours, minutes, 0, 0);
       schwabDatetime = schwabDate.getTime();
     }
@@ -423,15 +424,17 @@ class CandleDataValidator {
    * Run validation for multiple test cases
    */
   async runValidation() {
-    console.log('🧪 Starting Candle Data Consistency Validation\n');
+    console.log(`🧪 Starting Candle Data Consistency Validation`);
+    console.log(`   Date: ${this.backtestDate}`);
+    console.log(`   Symbol: ${this.symbol}\n`);
     
     const testCases = [
-      { symbol: 'NDX', timestamp: '09:34', timeframe: '5m', description: 'First complete 5m candle (09:30-09:34)', schwabTime: '09:30' },
-      { symbol: 'NDX', timestamp: '09:44', timeframe: '15m', description: 'First complete 15m candle (09:30-09:44)', schwabTime: '09:30' },
-      { symbol: 'NDX', timestamp: '09:59', timeframe: '60m', description: 'First complete 60m candle (09:30-09:59)', schwabTime: '09:30' },
-      { symbol: 'NDX', timestamp: '10:59', timeframe: '60m', description: 'Second complete 60m candle (10:00-10:59)', schwabTime: '10:00' },
-      { symbol: 'NDX', timestamp: '12:04', timeframe: '5m', description: 'Midday 5m candle (12:00-12:04)', schwabTime: '12:00' },
-      { symbol: 'NDX', timestamp: '14:44', timeframe: '15m', description: 'Afternoon 15m candle (14:30-14:44)', schwabTime: '14:30' },
+      { symbol: this.symbol, timestamp: '09:34', timeframe: '5m', description: 'First complete 5m candle (09:30-09:34)', schwabTime: '09:30' },
+      { symbol: this.symbol, timestamp: '09:44', timeframe: '15m', description: 'First complete 15m candle (09:30-09:44)', schwabTime: '09:30' },
+      { symbol: this.symbol, timestamp: '09:59', timeframe: '60m', description: 'First complete 60m candle (09:30-09:59)', schwabTime: '09:30' },
+      { symbol: this.symbol, timestamp: '10:59', timeframe: '60m', description: 'Second complete 60m candle (10:00-10:59)', schwabTime: '10:00' },
+      { symbol: this.symbol, timestamp: '12:04', timeframe: '5m', description: 'Midday 5m candle (12:00-12:04)', schwabTime: '12:00' },
+      { symbol: this.symbol, timestamp: '14:44', timeframe: '15m', description: 'Afternoon 15m candle (14:30-14:44)', schwabTime: '14:30' },
     ];
     
     for (const testCase of testCases) {
@@ -449,8 +452,11 @@ class CandleDataValidator {
   }
 }
 
-// Run validation
-const validator = new CandleDataValidator();
+// Run validation - accept symbol and date from command line
+const symbol = process.argv[2] || 'NDX';
+const backtestDate = process.argv[3] || '2026-02-27';
+
+const validator = new CandleDataValidator(symbol, backtestDate);
 validator.runValidation().catch(error => {
   console.error('Fatal error:', error);
   process.exit(1);

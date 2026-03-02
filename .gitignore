@@ -24,7 +24,9 @@ server/src/persistence/positions.json
 server/nodemon.json
 
 # Backtest output files (large JSON files with historical data)
-tests/backtest/backtest-controller-*.json
+tests/backtest/backtest-*.json
+tests/backtest/backtest-actions-*.json
+tests/backtest/production-analysis-*.json
 
 # Node.js dependencies
 node_modules/
