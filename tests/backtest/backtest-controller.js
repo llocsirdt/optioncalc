@@ -288,11 +288,13 @@ class BacktestController {
   /**
    * Run backtest
    */
-  async runBacktest(symbol, backtestDate) {
+  async runBacktest(symbol, backtestDate, openMethod = 'checkSimple5mBBScoreOpen', coverMethod = 'checkSimple5mBBScoreCover') {
     try {
       console.log(`🧪 Starting Correct Algorithm Backtest`);
       console.log(`   Symbol: ${symbol}`);
       console.log(`   Backtest Date: ${backtestDate}`);
+      console.log(`   Open Strategy: ${openMethod}`);
+      console.log(`   Cover Strategy: ${coverMethod}`);
       
       const seedData = await this.fetchSeedData(symbol, backtestDate);
       
@@ -653,8 +655,9 @@ class BacktestController {
           
           if (!this.openPosition) {
             // No open position - check if we should open one
-            strategyMethod = 'checkSimple5mBBScoreOpen';
-            const openResult = checkSimple5mBBScoreOpen(analysisForStrategy);
+            strategyMethod = openMethod;
+            const openStrategyFn = require(strategyLogicPath)[openMethod];
+            const openResult = openStrategyFn(analysisForStrategy);
             
             if (openResult.action === 'open_bull') {
               this.openPosition = {
@@ -670,6 +673,7 @@ class BacktestController {
                 datetime: currentCandle.datetime,
                 action: 'open_bull',
                 strategyMethod,
+                closePrice: currentCandle.close,
                 position: { ...this.openPosition }
               });
             } else if (openResult.action === 'open_bear') {
@@ -686,13 +690,15 @@ class BacktestController {
                 datetime: currentCandle.datetime,
                 action: 'open_bear',
                 strategyMethod,
+                closePrice: currentCandle.close,
                 position: { ...this.openPosition }
               });
             }
           } else {
             // Have open position - check if we should cover it
-            strategyMethod = 'checkSimple5mBBScoreCover';
-            const coverResult = checkSimple5mBBScoreCover(this.openPosition, analysisForStrategy);
+            strategyMethod = coverMethod;
+            const coverStrategyFn = require(strategyLogicPath)[coverMethod];
+            const coverResult = coverStrategyFn(this.openPosition, analysisForStrategy);
             
             if (coverResult.action === 'cover') {
               // Track strategy action before clearing position
@@ -701,6 +707,7 @@ class BacktestController {
                 datetime: currentCandle.datetime,
                 action: 'cover',
                 strategyMethod,
+                closePrice: currentCandle.close,
                 position: { ...this.openPosition }
               });
               
@@ -790,14 +797,42 @@ class BacktestController {
       console.log(`📊 Total results: ${this.results.length}`);
       console.log(`📊 Strategy actions: ${this.strategyActions.length}`);
       
+      // Add end-of-day entry if position still open at market close
+      if (this.openPosition) {
+        const lastResult = this.results[this.results.length - 1];
+        this.strategyActions.push({
+          timestamp: lastResult.timestamp,
+          datetime: lastResult.datetime,
+          action: 'eod_open',
+          strategyMethod: 'N/A',
+          closePrice: lastResult.analysis['1m'].close,
+          position: { ...this.openPosition }
+        });
+        console.log(`📊 Position still open at market close - added EOD entry`);
+      }
+      
       // Save results to file
       const outputPath = path.join(__dirname, `backtest-${symbol}-${backtestDate}.json`);
       await fs.writeFile(outputPath, JSON.stringify(this.results, null, 2));
       console.log(`\n💾 Results saved to: ${outputPath}`);
       
-      // Save strategy actions to separate file
-      const actionsPath = path.join(__dirname, `backtest-actions-${symbol}-${backtestDate}.json`);
-      await fs.writeFile(actionsPath, JSON.stringify(this.strategyActions, null, 2));
+      // Save strategy actions to separate file with metadata header
+      const actionsOutput = {
+        metadata: {
+          symbol,
+          backtestDate,
+          openStrategy: openMethod,
+          coverStrategy: coverMethod,
+          totalActions: this.strategyActions.length
+        },
+        actions: this.strategyActions
+      };
+      
+      // Create filename with strategy method names (simplified)
+      const openMethodShort = openMethod.replace('checkSimple', '').replace('Open', '');
+      const coverMethodShort = coverMethod.replace('checkSimple', '').replace('Cover', '');
+      const actionsPath = path.join(__dirname, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}.json`);
+      await fs.writeFile(actionsPath, JSON.stringify(actionsOutput, null, 2));
       console.log(`💾 Strategy actions saved to: ${actionsPath}`);
       
       // Show key timestamps
@@ -821,9 +856,11 @@ class BacktestController {
 if (require.main === module) {
   const symbol = process.argv[2] || 'NDX';
   const backtestDate = process.argv[3] || '2026-02-27';
+  const openMethod = process.argv[4] || 'checkSimple5mBBScoreOpen';
+  const coverMethod = process.argv[5] || 'checkSimple5mBBScoreCover';
   
   const backtest = new BacktestController();
-  backtest.runBacktest(symbol, backtestDate);
+  backtest.runBacktest(symbol, backtestDate, openMethod, coverMethod);
 }
 
 module.exports = { BacktestController };
