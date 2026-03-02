@@ -63,6 +63,11 @@ class BacktestController {
     const backtestDateObj = new Date(year, month - 1, day, 12, 0, 0); // Noon to avoid timezone issues
     const priorDayObj = new Date(year, month - 1, day - 1, 12, 0, 0);
     
+    // Ensure prior day lands on a trading day (skip weekends)
+    while (priorDayObj.getDay() === 0 || priorDayObj.getDay() === 6) {
+      priorDayObj.setDate(priorDayObj.getDate() - 1);
+    }
+    
     const backtestDateMs = backtestDateObj.getTime();
     const priorDayMs = priorDayObj.getTime();
     
@@ -144,7 +149,8 @@ class BacktestController {
       frequency: 30,
       endDate: priorDayMs
     });
-    seedData['30m'] = (data30m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+    const unfiltered30m = (data30m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+    seedData['30m'] = [...unfiltered30m];
     // Filter to market hours only (9:30 AM - 4:00 PM ET)
     seedData['30m'] = this.filterMarketHours(seedData['30m']);
     // Sort newest first
@@ -164,6 +170,11 @@ class BacktestController {
         const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
         return candleDateOnly >= cutoffDate;
       });
+      const unique30mDates = new Set(seedData['30m'].map(c => new Date(c.datetime).toDateString()));
+      if (unique30mDates.size < 3) {
+        console.log(`   ⚠️ 30m cutoff filter left only ${unique30mDates.size} trading day(s); restoring full seed range to maintain indicator history.`);
+        seedData['30m'] = [...unfiltered30m];
+      }
     }
     console.log(`   ✅ Received ${seedData['30m'].length} candles (filtered to match production date range)`);
     if (seedData['30m'].length > 0) {
@@ -701,14 +712,22 @@ class BacktestController {
             const coverResult = coverStrategyFn(this.openPosition, analysisForStrategy);
             
             if (coverResult.action === 'cover') {
-              // Track strategy action before clearing position
+              // Track strategy action with current candle data at time of cover
               this.strategyActions.push({
                 timestamp,
                 datetime: currentCandle.datetime,
                 action: 'cover',
                 strategyMethod,
                 closePrice: currentCandle.close,
-                position: { ...this.openPosition }
+                bbScore1m: bbScore1m,
+                bbScore5m: bbScore5m,
+                bbScore15m: bbScore15m,
+                bbScore60m: bbScore60m,
+                openedPosition: {
+                  type: this.openPosition.type,
+                  openedAt: this.openPosition.openedAt,
+                  openBBScore: this.openPosition.bbScore5m || this.openPosition.bbScore15m
+                }
               });
               
               this.openPosition = null;
