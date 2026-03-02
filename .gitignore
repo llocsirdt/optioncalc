@@ -27,6 +27,8 @@ server/nodemon.json
 tests/backtest/backtest-*.json
 tests/backtest/backtest-actions-*.json
 tests/backtest/production-analysis-*.json
+tests/backtest/backtest-data/
+tests/backtest/backtest-actions/
 
 # Node.js dependencies
 node_modules/

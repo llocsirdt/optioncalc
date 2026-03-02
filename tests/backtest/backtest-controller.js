@@ -862,7 +862,9 @@ class BacktestController {
       console.log(`📊 Total Profit/Loss (points): ${totalProfitLoss.toFixed(4)}`);
       
       // Save results to file
-      const outputPath = path.join(__dirname, `backtest-${symbol}-${backtestDate}.json`);
+      const dataDir = path.join(__dirname, 'backtest-data');
+      await fs.mkdir(dataDir, { recursive: true });
+      const outputPath = path.join(dataDir, `backtest-${symbol}-${backtestDate}.json`);
       await fs.writeFile(outputPath, JSON.stringify(this.results, null, 2));
       console.log(`\n💾 Results saved to: ${outputPath}`);
       
@@ -882,7 +884,9 @@ class BacktestController {
       // Create filename with strategy method names (simplified)
       const openMethodShort = openMethod.replace('checkSimple', '').replace('Open', '');
       const coverMethodShort = coverMethod.replace('checkSimple', '').replace('Cover', '');
-      const actionsPath = path.join(__dirname, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}.json`);
+      const actionsDir = path.join(__dirname, 'backtest-actions');
+      await fs.mkdir(actionsDir, { recursive: true });
+      const actionsPath = path.join(actionsDir, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}.json`);
       await fs.writeFile(actionsPath, JSON.stringify(actionsOutput, null, 2));
       console.log(`💾 Strategy actions saved to: ${actionsPath}`);
       

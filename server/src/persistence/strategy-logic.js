@@ -32,6 +32,31 @@ function calculateBBScore(currentClose, upperBand, middleBand, lowerBand) {
 }
 
 /**
+ * Check if we should open a position based on both 15m and 60m BB scores
+ * Requires both timeframes to agree on direction
+ * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore15m, bbScore60m}
+ */
+function checkSimple15and60mBBScoreOpen(analysis) {
+  const bbScore15m = analysis['15m'].bbScore;
+  const bbScore60m = analysis['60m'].bbScore;
+  
+  if (
+    bbScore15m === null || bbScore15m === undefined ||
+    bbScore60m === null || bbScore60m === undefined
+  ) {
+    return { action: 'none', bbScore15m: bbScore15m ?? null, bbScore60m: bbScore60m ?? null };
+  }
+  
+  if (bbScore15m > 1 && bbScore60m > 1) {
+    return { action: 'open_bull', bbScore15m, bbScore60m };
+  } else if (bbScore15m < -1 && bbScore60m < -1) {
+    return { action: 'open_bear', bbScore15m, bbScore60m };
+  } else {
+    return { action: 'none', bbScore15m, bbScore60m };
+  }
+}
+
+/**
  * Check if we should open a position based on 5m BB score
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore5m: value}
  */
@@ -129,10 +154,40 @@ function checkSimple15mBBScoreCover(position, analysis) {
   return { action: 'hold', bbScore15m };
 }
 
+/**
+ * Check if we should cover based on both 15m and 60m BB scores
+ * Returns: {action: 'cover'|'hold', bbScore15m, bbScore60m}
+ */
+function checkSimple15and60mBBScoreCover(position, analysis) {
+  const bbScore15m = analysis['15m'].bbScore;
+  const bbScore60m = analysis['60m'].bbScore;
+  
+  if (
+    bbScore15m === null || bbScore15m === undefined ||
+    bbScore60m === null || bbScore60m === undefined
+  ) {
+    return { action: 'hold', bbScore15m: bbScore15m ?? null, bbScore60m: bbScore60m ?? null };
+  }
+  
+  if (position.type === 'bull') {
+    if (bbScore15m < -1 && bbScore60m < -1) {
+      return { action: 'cover', bbScore15m, bbScore60m };
+    }
+  } else if (position.type === 'bear') {
+    if (bbScore15m > 1 && bbScore60m > 1) {
+      return { action: 'cover', bbScore15m, bbScore60m };
+    }
+  }
+  
+  return { action: 'hold', bbScore15m, bbScore60m };
+}
+
 module.exports = {
   calculateBBScore,
   checkSimple5mBBScoreOpen,
   checkSimple15mBBScoreOpen,
   checkSimple5mBBScoreCover,
-  checkSimple15mBBScoreCover
+  checkSimple15mBBScoreCover,
+  checkSimple15and60mBBScoreOpen,
+  checkSimple15and60mBBScoreCover
 };

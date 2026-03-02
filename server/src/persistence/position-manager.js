@@ -9,8 +9,10 @@
 const {
   checkSimple5mBBScoreOpen: strategyCheckSimple5mBBScoreOpen,
   checkSimple15mBBScoreOpen: strategyCheckSimple15mBBScoreOpen,
+  checkSimple15and60mBBScoreOpen: strategyCheckSimple15and60mBBScoreOpen,
   checkSimple5mBBScoreCover: strategyCheckSimple5mBBScoreCover,
-  checkSimple15mBBScoreCover: strategyCheckSimple15mBBScoreCover
+  checkSimple15mBBScoreCover: strategyCheckSimple15mBBScoreCover,
+  checkSimple15and60mBBScoreCover: strategyCheckSimple15and60mBBScoreCover
 } = require('./strategy-logic');
 
 class PositionManager {
@@ -442,13 +444,17 @@ class PositionManager {
         
         console.log(`  ${symbol}: Latest 15m BB score: ${bbScore15m}, 60m BB score: ${bbScore60m}`);
         
-        // Make decision based on both BB scores - both must agree
-        // Corrected logic: positive bbScore (>1) = oversold = open bull, negative bbScore (<-1) = overbought = open bear
-        if (bbScore15m > 1 && bbScore60m > 1) {
+        const analysis = {
+          '15m': { bbScore: bbScore15m },
+          '60m': { bbScore: bbScore60m }
+        };
+        const result = strategyCheckSimple15and60mBBScoreOpen(analysis);
+        
+        if (result.action === 'open_bull') {
           console.log(`  ${symbol}: Both 15m and 60m BB scores indicate bull signal (bb > 1), opening bull position`);
           await this.tryOpenBullPosition(symbol, expiration);
           return true;
-        } else if (bbScore15m < -1 && bbScore60m < -1) {
+        } else if (result.action === 'open_bear') {
           console.log(`  ${symbol}: Both 15m and 60m BB scores indicate bear signal (bb < -1), opening bear position`);
           await this.tryOpenBearPosition(symbol, expiration);
           return true;
@@ -585,15 +591,20 @@ class PositionManager {
         const [symbol] = symbolExpiration.split('_');
         console.log(`  ${symbol}: Latest 15m BB score: ${bbScore15m}, 60m BB score: ${bbScore60m}`);
         
-        // Make decision based on both BB scores - both must agree, opposite of opening logic
-        // Corrected logic: bull covers when bbScore < -1 (price moved up), bear covers when bbScore > 1 (price moved down)
-        if (position.type === 'bull' && bbScore15m < -1 && bbScore60m < -1) {
-          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bull position (bb < -1), covering bull position`);
-          await this.tryCoverBullPosition(symbolExpiration, position);
-          return true;
-        } else if (position.type === 'bear' && bbScore15m > 1 && bbScore60m > 1) {
-          console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bear position (bb > 1), covering bear position`);
-          await this.tryCoverBearPosition(symbolExpiration, position);
+        const analysis = {
+          '15m': { bbScore: bbScore15m },
+          '60m': { bbScore: bbScore60m }
+        };
+        const result = strategyCheckSimple15and60mBBScoreCover(position, analysis);
+        
+        if (result.action === 'cover') {
+          if (position.type === 'bull') {
+            console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bull position (bb < -1), covering bull position`);
+            await this.tryCoverBullPosition(symbolExpiration, position);
+          } else if (position.type === 'bear') {
+            console.log(`  ${symbol}: Both 15m and 60m BB scores indicate cover bear position (bb > 1), covering bear position`);
+            await this.tryCoverBearPosition(symbolExpiration, position);
+          }
           return true;
         } else {
           console.log(`  ${symbol}: BB scores do not agree or are neutral (15m: ${bbScore15m}, 60m: ${bbScore60m}), skipping position covering`);
@@ -711,9 +722,11 @@ class PositionManager {
           const positionArray = positions[symbolExpiration];
           if (Array.isArray(positionArray) && positionArray.length > 0) {
             const position = positionArray[0];
+            const [symbol] = symbolExpiration.split('_');
+            const candleAnalysis = candleAnalysisResults[symbol];
             
-            // Use the strategy function to determine if we should cover this position
-            const coverResult = await this.checkSimpleCover(symbolExpiration, position);
+            // Use the 5m strategy function to determine if we should cover this position
+            const coverResult = await this.checkSimple5mBBScoreCover(symbolExpiration, position, candleAnalysis);
             console.log(`🔄 Cover strategy function returned: ${coverResult}`);
           }
         }
