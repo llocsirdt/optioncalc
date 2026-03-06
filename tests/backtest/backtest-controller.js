@@ -301,12 +301,29 @@ class BacktestController {
    */
   async runBacktest(symbol, backtestDate, openMethod = 'checkSimple5mBBScoreOpen', coverMethod = 'checkSimple5mBBScoreCover') {
     try {
+      // Reset strategy state for new day
+      const { resetPriceTrailState, resetPriceTrailv2State, resetPriceTrailv3State } = require(strategyLogicPath);
+      if (resetPriceTrailState) resetPriceTrailState();
+      if (resetPriceTrailv2State) resetPriceTrailv2State();
+      if (resetPriceTrailv3State) resetPriceTrailv3State();
+
+      const runTimestamp = new Date().toISOString();
       console.log(`🧪 Starting Correct Algorithm Backtest`);
       console.log(`   Symbol: ${symbol}`);
       console.log(`   Backtest Date: ${backtestDate}`);
       console.log(`   Open Strategy: ${openMethod}`);
       console.log(`   Cover Strategy: ${coverMethod}`);
-      
+
+      const calculateDelta = (previous, current) => {
+        if (
+          previous === null || previous === undefined ||
+          current === null || current === undefined
+        ) {
+          return null;
+        }
+        return current - previous;
+      };
+
       const seedData = await this.fetchSeedData(symbol, backtestDate);
       
       console.log(`\n📊 Seed Data Summary:`);
@@ -365,6 +382,13 @@ class BacktestController {
         '5m': [],
         '15m': [],
         '60m': []
+      };
+
+      const previousBBScores = {
+        '1m': null,
+        '5m': null,
+        '15m': null,
+        '60m': null
       };
       
       // Get all backtest day 1m candles sorted newest first
@@ -657,11 +681,29 @@ class BacktestController {
           let covered = false;
           
           // Build analysis object for strategy methods
+          const bbScoreDelta1m = calculateDelta(previousBBScores['1m'], bbScore1m);
+          const bbScoreDelta5m = calculateDelta(previousBBScores['5m'], bbScore5m);
+          const bbScoreDelta15m = calculateDelta(previousBBScores['15m'], bbScore15m);
+          const bbScoreDelta60m = calculateDelta(previousBBScores['60m'], bbScore60m);
+
+          if (bbScore1m !== null && bbScore1m !== undefined) {
+            previousBBScores['1m'] = bbScore1m;
+          }
+          if (bbScore5m !== null && bbScore5m !== undefined) {
+            previousBBScores['5m'] = bbScore5m;
+          }
+          if (bbScore15m !== null && bbScore15m !== undefined) {
+            previousBBScores['15m'] = bbScore15m;
+          }
+          if (bbScore60m !== null && bbScore60m !== undefined) {
+            previousBBScores['60m'] = bbScore60m;
+          }
+
           const analysisForStrategy = {
-            '1m': { bbScore: bbScore1m },
-            '5m': { bbScore: bbScore5m },
-            '15m': { bbScore: bbScore15m },
-            '60m': { bbScore: bbScore60m }
+            '1m': { close: currentCandle.close, bbScore: bbScore1m, bbScoreDelta: bbScoreDelta1m, trendScore: trendScore1m },
+            '5m': { close: candle5m.close, bbScore: bbScore5m, bbScoreDelta: bbScoreDelta5m, trendScore: trendScore5m },
+            '15m': { close: candle15m.close, bbScore: bbScore15m, bbScoreDelta: bbScoreDelta15m, trendScore: trendScore15m },
+            '60m': { close: candle60m.close, bbScore: bbScore60m, bbScoreDelta: bbScoreDelta60m, trendScore: trendScore60m }
           };
           
           if (!this.openPosition) {
@@ -685,6 +727,10 @@ class BacktestController {
                 action: 'open_bull',
                 strategyMethod,
                 closePrice: currentCandle.close,
+                bbScore1m: bbScore1m,
+                bbScore5m: bbScore5m,
+                bbScore15m: bbScore15m,
+                bbScore60m: bbScore60m,
                 position: { ...this.openPosition }
               });
             } else if (openResult.action === 'open_bear') {
@@ -702,6 +748,10 @@ class BacktestController {
                 action: 'open_bear',
                 strategyMethod,
                 closePrice: currentCandle.close,
+                bbScore1m: bbScore1m,
+                bbScore5m: bbScore5m,
+                bbScore15m: bbScore15m,
+                bbScore60m: bbScore60m,
                 position: { ...this.openPosition }
               });
             }
@@ -732,6 +782,50 @@ class BacktestController {
               
               this.openPosition = null;
               covered = true;
+              
+              // Immediately try to open a new position on the same minute
+              const openStrategyFnReopen = require(strategyLogicPath)[openMethod];
+              const reopenResult = openStrategyFnReopen(analysisForStrategy);
+              
+              if (reopenResult.action === 'open_bull') {
+                this.openPosition = {
+                  type: 'bull',
+                  openedAt: timestamp,
+                  bbScore5m: reopenResult.bbScore5m
+                };
+                opened = true;
+                this.strategyActions.push({
+                  timestamp,
+                  datetime: currentCandle.datetime,
+                  action: 'open_bull',
+                  strategyMethod: openMethod,
+                  closePrice: currentCandle.close,
+                  bbScore1m: bbScore1m,
+                  bbScore5m: bbScore5m,
+                  bbScore15m: bbScore15m,
+                  bbScore60m: bbScore60m,
+                  position: { ...this.openPosition }
+                });
+              } else if (reopenResult.action === 'open_bear') {
+                this.openPosition = {
+                  type: 'bear',
+                  openedAt: timestamp,
+                  bbScore5m: reopenResult.bbScore5m
+                };
+                opened = true;
+                this.strategyActions.push({
+                  timestamp,
+                  datetime: currentCandle.datetime,
+                  action: 'open_bear',
+                  strategyMethod: openMethod,
+                  closePrice: currentCandle.close,
+                  bbScore1m: bbScore1m,
+                  bbScore5m: bbScore5m,
+                  bbScore15m: bbScore15m,
+                  bbScore60m: bbScore60m,
+                  position: { ...this.openPosition }
+                });
+              }
             }
           }
           
@@ -756,6 +850,7 @@ class BacktestController {
                 sma: sma1m ? sma1m[0] : null,
                 ema: ema1m,
                 bbScore: bbScore1m,
+                bbScoreDelta: bbScoreDelta1m,
                 trendScore: trendScore1m
               },
               '5m': {
@@ -770,6 +865,7 @@ class BacktestController {
                 sma: sma5m ? sma5m[0] : null,
                 ema: ema5m,
                 bbScore: bbScore5m,
+                bbScoreDelta: bbScoreDelta5m,
                 trendScore: trendScore5m
               },
               '15m': {
@@ -784,6 +880,7 @@ class BacktestController {
                 sma: sma15m ? sma15m[0] : null,
                 ema: ema15m,
                 bbScore: bbScore15m,
+                bbScoreDelta: bbScoreDelta15m,
                 trendScore: trendScore15m
               },
               '60m': {
@@ -798,6 +895,7 @@ class BacktestController {
                 sma: sma60m ? sma60m[0] : null,
                 ema: ema60m,
                 bbScore: bbScore60m,
+                bbScoreDelta: bbScoreDelta60m,
                 trendScore: trendScore60m
               }
             }
@@ -875,6 +973,7 @@ class BacktestController {
           backtestDate,
           openStrategy: openMethod,
           coverStrategy: coverMethod,
+          runTimestamp,
           totalActions: this.strategyActions.length,
           totalProfitLoss: parseFloat(totalProfitLoss.toFixed(4))
         },

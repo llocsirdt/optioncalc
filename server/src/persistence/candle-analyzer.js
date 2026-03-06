@@ -582,9 +582,20 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const bollinger20_2 = calculateBollingerBands(candles, 20, 2);
     const perCandleTrendScores = calculatePerCandleTrendScores(candles);
     const perCandleBBScores = calculatePerCandleBBScores(candles, bollinger20_2);
-    
+    const perCandleBBSScoreDeltas = perCandleBBScores.map((score, index) => {
+      const previousScore = perCandleBBScores[index + 1];
+      if (
+        score === null || score === undefined ||
+        previousScore === null || previousScore === undefined
+      ) {
+        return null;
+      }
+      return score - previousScore;
+    });
+
     const trendScore = perCandleTrendScores[0] || 0;
     const bbScore = perCandleBBScores[0] || 0;
+    const bbScoreDelta = perCandleBBSScoreDeltas[0] ?? null;
     
     const enhancedCandles = candles.map((candle, index) => ({
       ...candle,
@@ -600,7 +611,8 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
         }
       },
       trendScore: perCandleTrendScores[index],
-      bbScore: perCandleBBScores[index]
+      bbScore: perCandleBBScores[index],
+      bbScoreDelta: perCandleBBSScoreDeltas[index]
     }));
     
     enhancedData[timeframe] = {
@@ -614,6 +626,7 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
       },
       trendScore: trendScore,
       bbScore: bbScore,
+      bbScoreDelta: bbScoreDelta,
       enhancedAt: new Date().toISOString()
     };
     
