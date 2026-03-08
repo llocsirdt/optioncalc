@@ -36,7 +36,7 @@ function calculateBBScore(currentClose, upperBand, middleBand, lowerBand) {
  * Requires both timeframes to agree on direction
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore15m, bbScore60m}
  */
-function checkSimple15and60mBBScoreOpen(analysis) {
+function strategySimple15and60mBBScoreOpen(analysis) {
   const bbScore15m = analysis['15m'].bbScore;
   const bbScore60m = analysis['60m'].bbScore;
   
@@ -60,7 +60,7 @@ function checkSimple15and60mBBScoreOpen(analysis) {
  * Check if we should open a position based on 5m BB score
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore5m: value}
  */
-function checkSimple5mBBScoreOpen(analysis) {
+function strategySimple5mBBScoreOpen(analysis) {
   const bbScore5m = analysis['5m'].bbScore;
   
   if (bbScore5m === null || bbScore5m === undefined) {
@@ -80,7 +80,7 @@ function checkSimple5mBBScoreOpen(analysis) {
  * Check if we should open a position based on 15m BB score
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore15m: value}
  */
-function checkSimple15mBBScoreOpen(analysis) {
+function strategySimple15mBBScoreOpen(analysis) {
   const bbScore15m = analysis['15m'].bbScore;
   
   if (bbScore15m === null || bbScore15m === undefined) {
@@ -103,7 +103,7 @@ function checkSimple15mBBScoreOpen(analysis) {
  * - Bear position: cover when BB score > 1 (price moved below middle, exit)
  * Returns: {action: 'cover'|'hold', bbScore5m: value}
  */
-function checkSimple5mBBScoreCover(position, analysis) {
+function strategySimple5mBBScoreCover(position, analysis) {
   const bbScore5m = analysis['5m'].bbScore;
   
   if (bbScore5m === null || bbScore5m === undefined) {
@@ -132,7 +132,7 @@ function checkSimple5mBBScoreCover(position, analysis) {
  * - Bear position: cover when BB score > 1 (price moved below middle, exit)
  * Returns: {action: 'cover'|'hold', bbScore15m: value}
  */
-function checkSimple15mBBScoreCover(position, analysis) {
+function strategySimple15mBBScoreCover(position, analysis) {
   const bbScore15m = analysis['15m'].bbScore;
   
   if (bbScore15m === null || bbScore15m === undefined) {
@@ -158,7 +158,7 @@ function checkSimple15mBBScoreCover(position, analysis) {
  * Check if we should cover based on both 15m and 60m BB scores
  * Returns: {action: 'cover'|'hold', bbScore15m, bbScore60m}
  */
-function checkSimple15and60mBBScoreCover(position, analysis) {
+function strategySimple15and60mBBScoreCover(position, analysis) {
   const bbScore15m = analysis['15m'].bbScore;
   const bbScore60m = analysis['60m'].bbScore;
   
@@ -186,7 +186,7 @@ function checkSimple15and60mBBScoreCover(position, analysis) {
  * Check if we should open a position based on 1m, 5m, and 15m signals
  * Uses both BB score and trend score for each timeframe
  */
-function check1m5m15mOpen(analysis) {
+function strategy1m5m15mOpen(analysis) {
   const timeframes = ['1m', '5m', '15m', '60m'];
   const data = timeframes.map(tf => analysis[tf] || {});
 
@@ -236,7 +236,7 @@ function check1m5m15mOpen(analysis) {
 /**
  * Check if we should cover an existing position based on 1m, 5m, and 15m signals
  */
-function check1m5m15mCover(position, analysis) {
+function strategy1m5m15mCover(position, analysis) {
   const timeframes = ['1m', '5m', '15m', '60m'];
   const data = timeframes.map(tf => analysis[tf] || {});
 
@@ -300,7 +300,7 @@ function resetPriceTrailState() {
  * After a cover: switches to opposite direction of the covered position.
  * Requires analysis['1m'].close to be present.
  */
-function checkPriceTrailOpen(analysis, hasExistingPositions = false) {
+function strategyPriceTrailOpen(analysis, hasExistingPositions = false) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
 
   if (close1m === null || close1m === undefined) {
@@ -354,7 +354,7 @@ function checkPriceTrailOpen(analysis, hasExistingPositions = false) {
  * Tracks peak/trough close and elapsed minutes on the position object.
  * Minimum cooldown of 5 minutes between actions.
  */
-function checkPriceTrailCover(position, analysis) {
+function strategyPriceTrailCover(position, analysis, priorState = {}) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bbScore1m = analysis['1m'] ? analysis['1m'].bbScore : null;
 
@@ -364,9 +364,13 @@ function checkPriceTrailCover(position, analysis) {
 
   // Initialize tracking fields on position if not present
   if (position._peakClose === undefined) {
-    position._peakClose = close1m;
-    position._troughClose = close1m;
-    position._elapsed = 0;
+    position._peakClose = priorState._peakClose !== undefined ? priorState._peakClose : close1m;
+  }
+  if (position._troughClose === undefined) {
+    position._troughClose = priorState._troughClose !== undefined ? priorState._troughClose : close1m;
+  }
+  if (position._elapsed === undefined) {
+    position._elapsed = priorState._elapsed !== undefined ? priorState._elapsed : 0;
   }
 
   position._elapsed++;
@@ -375,11 +379,6 @@ function checkPriceTrailCover(position, analysis) {
 
   const SOFT_THRESHOLD = 20;
   const HARD_THRESHOLD = 40;
-  const COOLDOWN = 5;
-
-  if (position._elapsed < COOLDOWN) {
-    return { action: 'hold' };
-  }
 
   if (position.type === 'bull') {
     const drop = position._peakClose - close1m;
@@ -431,7 +430,7 @@ function resetPriceTrailv2State() {
  * Bull setup: 5m bbScore > 0.8 (price near/below lower band) AND 1m bbScoreDelta < 0 (bouncing up)
  * Bear setup: 5m bbScore < -0.8 (price near/above upper band) AND 1m bbScoreDelta > 0 (falling back)
  */
-function checkPriceTrailv2Open(analysis) {
+function strategyPriceTrailv2Open(analysis) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bb5m = analysis['5m'] ? analysis['5m'].bbScore : null;
   const bbDelta1m = analysis['1m'] ? analysis['1m'].bbScoreDelta : null;
@@ -466,7 +465,7 @@ function checkPriceTrailv2Open(analysis) {
  * Primary exit: 5m bbScore crosses zero (price reached middle BB / 20 SMA)
  * Safety: trailing stop hard (40 pts) and soft (20 pts + 1m bb confirmation)
  */
-function checkPriceTrailv2Cover(position, analysis) {
+function strategyPriceTrailv2Cover(position, analysis) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bbScore1m = analysis['1m'] ? analysis['1m'].bbScore : null;
   const bbScore5m = analysis['5m'] ? analysis['5m'].bbScore : null;
@@ -593,7 +592,7 @@ function detectRegime() {
  *   - Choppy: conservative band-edge entries with 1m reversal confirmation (v2 style)
  *   - Trending: auto-flip after cover to stay in the market (v1 style)
  */
-function checkPriceTrailv3Open(analysis) {
+function strategyPriceTrailv3Open(analysis) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bb5m = analysis['5m'] ? analysis['5m'].bbScore : null;
   const bbDelta1m = analysis['1m'] ? analysis['1m'].bbScoreDelta : null;
@@ -640,7 +639,7 @@ function checkPriceTrailv3Open(analysis) {
  *   - Choppy: cover at BB middle crossing (5m bbScore crosses zero) + trailing stop safety
  *   - Trending: trailing stop only (soft + hard), skip BB-crossing exit to ride the trend
  */
-function checkPriceTrailv3Cover(position, analysis) {
+function strategyPriceTrailv3Cover(position, analysis) {
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bbScore1m = analysis['1m'] ? analysis['1m'].bbScore : null;
   const bbScore5m = analysis['5m'] ? analysis['5m'].bbScore : null;
@@ -723,21 +722,21 @@ function checkPriceTrailv3Cover(position, analysis) {
 
 module.exports = {
   calculateBBScore,
-  checkSimple5mBBScoreOpen,
-  checkSimple15mBBScoreOpen,
-  checkSimple5mBBScoreCover,
-  checkSimple15mBBScoreCover,
-  checkSimple15and60mBBScoreOpen,
-  checkSimple15and60mBBScoreCover,
-  check1m5m15mOpen,
-  check1m5m15mCover,
-  checkPriceTrailOpen,
-  checkPriceTrailCover,
+  strategySimple5mBBScoreOpen,
+  strategySimple15mBBScoreOpen,
+  strategySimple5mBBScoreCover,
+  strategySimple15mBBScoreCover,
+  strategySimple15and60mBBScoreOpen,
+  strategySimple15and60mBBScoreCover,
+  strategy1m5m15mOpen,
+  strategy1m5m15mCover,
+  strategyPriceTrailOpen,
+  strategyPriceTrailCover,
   resetPriceTrailState,
-  checkPriceTrailv2Open,
-  checkPriceTrailv2Cover,
+  strategyPriceTrailv2Open,
+  strategyPriceTrailv2Cover,
   resetPriceTrailv2State,
-  checkPriceTrailv3Open,
-  checkPriceTrailv3Cover,
+  strategyPriceTrailv3Open,
+  strategyPriceTrailv3Cover,
   resetPriceTrailv3State
 };

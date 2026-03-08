@@ -27,13 +27,51 @@ const {
 
 // Import production strategy logic functions
 const strategyLogicPath = path.resolve(__dirname, '../../server/src/persistence/strategy-logic.js');
+const strategyLogicModule = require(strategyLogicPath);
 const {
   calculateBBScore,
-  checkSimple5mBBScoreOpen,
-  checkSimple15mBBScoreOpen,
-  checkSimple5mBBScoreCover,
-  checkSimple15mBBScoreCover
-} = require(strategyLogicPath);
+  resetPriceTrailState,
+  resetPriceTrailv2State,
+  resetPriceTrailv3State
+} = strategyLogicModule;
+
+// Backward-compatibility aliases for legacy check* names
+const LEGACY_STRATEGY_ALIASES = {
+  checkSimple5mBBScoreOpen: 'strategySimple5mBBScoreOpen',
+  checkSimple5mBBScoreCover: 'strategySimple5mBBScoreCover',
+  checkSimple15mBBScoreOpen: 'strategySimple15mBBScoreOpen',
+  checkSimple15mBBScoreCover: 'strategySimple15mBBScoreCover',
+  checkSimple15and60mBBScoreOpen: 'strategySimple15and60mBBScoreOpen',
+  checkSimple15and60mBBScoreCover: 'strategySimple15and60mBBScoreCover',
+  check1m5m15mOpen: 'strategy1m5m15mOpen',
+  check1m5m15mCover: 'strategy1m5m15mCover',
+  checkPriceTrailOpen: 'strategyPriceTrailOpen',
+  checkPriceTrailCover: 'strategyPriceTrailCover',
+  checkPriceTrailv2Open: 'strategyPriceTrailv2Open',
+  checkPriceTrailv2Cover: 'strategyPriceTrailv2Cover',
+  checkPriceTrailv3Open: 'strategyPriceTrailv3Open',
+  checkPriceTrailv3Cover: 'strategyPriceTrailv3Cover'
+};
+
+function getStrategyHandler(methodName) {
+  const resolvedName = strategyLogicModule[methodName]
+    ? methodName
+    : LEGACY_STRATEGY_ALIASES[methodName];
+
+  if (!resolvedName || !strategyLogicModule[resolvedName]) {
+    throw new Error(`Strategy function "${methodName}" not found in strategy-logic.js`);
+  }
+
+  return {
+    name: resolvedName,
+    fn: strategyLogicModule[resolvedName]
+  };
+}
+
+function simplifyStrategyName(method) {
+  if (!method) return 'unknown';
+  return method.replace(/^strategy/, '').replace(/(Open|Cover)$/i, '');
+}
 
 class BacktestController {
   constructor() {
@@ -42,7 +80,7 @@ class BacktestController {
     this.openPosition = null; // Track current open position {type: 'bull'|'bear', openedAt: timestamp, bbScore15m: value}
   }
 
-  // NOTE: Strategy functions (checkSimple...Open/Cover) now use production functions
+  // NOTE: Strategy functions (strategy...Open/Cover) now use production functions
   // imported from strategy-logic.js to ensure backtest uses exact production strategy logic
 
   /**
@@ -299,20 +337,20 @@ class BacktestController {
   /**
    * Run backtest
    */
-  async runBacktest(symbol, backtestDate, openMethod = 'checkSimple5mBBScoreOpen', coverMethod = 'checkSimple5mBBScoreCover') {
+  async runBacktest(symbol, backtestDate, openMethod = 'strategySimple5mBBScoreOpen', coverMethod = 'strategySimple5mBBScoreCover') {
     try {
       // Reset strategy state for new day
-      const { resetPriceTrailState, resetPriceTrailv2State, resetPriceTrailv3State } = require(strategyLogicPath);
-      if (resetPriceTrailState) resetPriceTrailState();
-      if (resetPriceTrailv2State) resetPriceTrailv2State();
-      if (resetPriceTrailv3State) resetPriceTrailv3State();
+      const { name: openStrategyName, fn: openStrategyFn } = getStrategyHandler(openMethod);
+      const { name: coverStrategyName, fn: coverStrategyFn } = getStrategyHandler(coverMethod);
 
       const runTimestamp = new Date().toISOString();
       console.log(`🧪 Starting Correct Algorithm Backtest`);
       console.log(`   Symbol: ${symbol}`);
       console.log(`   Backtest Date: ${backtestDate}`);
-      console.log(`   Open Strategy: ${openMethod}`);
-      console.log(`   Cover Strategy: ${coverMethod}`);
+      const openLabel = openStrategyName === openMethod ? openStrategyName : `${openMethod} → ${openStrategyName}`;
+      const coverLabel = coverStrategyName === coverMethod ? coverStrategyName : `${coverMethod} → ${coverStrategyName}`;
+      console.log(`   Open Strategy: ${openLabel}`);
+      console.log(`   Cover Strategy: ${coverLabel}`);
 
       const calculateDelta = (previous, current) => {
         if (
@@ -708,8 +746,7 @@ class BacktestController {
           
           if (!this.openPosition) {
             // No open position - check if we should open one
-            strategyMethod = openMethod;
-            const openStrategyFn = require(strategyLogicPath)[openMethod];
+            strategyMethod = openStrategyName;
             const openResult = openStrategyFn(analysisForStrategy);
             
             if (openResult.action === 'open_bull') {
@@ -757,8 +794,7 @@ class BacktestController {
             }
           } else {
             // Have open position - check if we should cover it
-            strategyMethod = coverMethod;
-            const coverStrategyFn = require(strategyLogicPath)[coverMethod];
+            strategyMethod = coverStrategyName;
             const coverResult = coverStrategyFn(this.openPosition, analysisForStrategy);
             
             if (coverResult.action === 'cover') {
@@ -784,8 +820,7 @@ class BacktestController {
               covered = true;
               
               // Immediately try to open a new position on the same minute
-              const openStrategyFnReopen = require(strategyLogicPath)[openMethod];
-              const reopenResult = openStrategyFnReopen(analysisForStrategy);
+              const reopenResult = openStrategyFn(analysisForStrategy);
               
               if (reopenResult.action === 'open_bull') {
                 this.openPosition = {
@@ -798,7 +833,7 @@ class BacktestController {
                   timestamp,
                   datetime: currentCandle.datetime,
                   action: 'open_bull',
-                  strategyMethod: openMethod,
+                  strategyMethod: openStrategyName,
                   closePrice: currentCandle.close,
                   bbScore1m: bbScore1m,
                   bbScore5m: bbScore5m,
@@ -817,7 +852,7 @@ class BacktestController {
                   timestamp,
                   datetime: currentCandle.datetime,
                   action: 'open_bear',
-                  strategyMethod: openMethod,
+                  strategyMethod: openStrategyName,
                   closePrice: currentCandle.close,
                   bbScore1m: bbScore1m,
                   bbScore5m: bbScore5m,
@@ -981,8 +1016,8 @@ class BacktestController {
       };
       
       // Create filename with strategy method names (simplified)
-      const openMethodShort = openMethod.replace('checkSimple', '').replace('Open', '');
-      const coverMethodShort = coverMethod.replace('checkSimple', '').replace('Cover', '');
+      const openMethodShort = simplifyStrategyName(openStrategyName);
+      const coverMethodShort = simplifyStrategyName(coverStrategyName);
       const actionsDir = path.join(__dirname, 'backtest-actions');
       await fs.mkdir(actionsDir, { recursive: true });
       const actionsPath = path.join(actionsDir, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}.json`);
@@ -1010,8 +1045,8 @@ class BacktestController {
 if (require.main === module) {
   const symbol = process.argv[2] || 'NDX';
   const backtestDate = process.argv[3] || '2026-02-27';
-  const openMethod = process.argv[4] || 'checkSimple5mBBScoreOpen';
-  const coverMethod = process.argv[5] || 'checkSimple5mBBScoreCover';
+  const openMethod = process.argv[4] || 'strategySimple5mBBScoreOpen';
+  const coverMethod = process.argv[5] || 'strategySimple5mBBScoreCover';
   
   const backtest = new BacktestController();
   backtest.runBacktest(symbol, backtestDate, openMethod, coverMethod);

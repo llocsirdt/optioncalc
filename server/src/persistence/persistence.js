@@ -401,6 +401,34 @@ class PersistenceManager {
   }
 
   /**
+   * Persist entire positions map to disk using PositionManager formatter
+   */
+  async saveAllPositions(positions) {
+    if (!positions || typeof positions !== 'object') {
+      console.warn('⚠️  saveAllPositions called with invalid positions payload');
+      return;
+    }
+
+    try {
+      const formatted = this.positionManager.formatPositionsJson(positions);
+      await fs.writeFile(POSITIONS_FILE, formatted, 'utf8');
+
+      const positionCount = Object.values(positions).reduce((count, arr) => {
+        if (!Array.isArray(arr)) return count;
+        return count + arr.length;
+      }, 0);
+
+      this.state.positions.lastUpdated = new Date().toISOString();
+      this.state.positions.positionCount = positionCount;
+
+      console.log(`💾 Saved ${positionCount} positions to ${POSITIONS_FILE}`);
+    } catch (error) {
+      console.error('❌ Failed to save positions:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get cached option chain data from file
    */
   async getCachedChainData(symbol, expiration) {

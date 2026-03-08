@@ -20,6 +20,119 @@ function hasBaseCache(symbol) {
   return baseCandleCache.has(`${symbol}_v${CACHE_VERSION}`);
 }
 
+function getCandleStats(candle) {
+  if (!candle) {
+    return null;
+  }
+  const body = Math.abs(candle.close - candle.open);
+  const upperWick = candle.high - Math.max(candle.open, candle.close);
+  const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+  const range = candle.high - candle.low;
+  return { body, upperWick, lowerWick, range };
+}
+
+function isBullishEngulfing(prev, curr) {
+  if (!prev || !curr) return false;
+  const prevBear = prev.close < prev.open;
+  const currBull = curr.close > curr.open;
+  return prevBear && currBull && curr.open <= prev.close && curr.close >= prev.open;
+}
+
+function isBearishEngulfing(prev, curr) {
+  if (!prev || !curr) return false;
+  const prevBull = prev.close > prev.open;
+  const currBear = curr.close < curr.open;
+  return prevBull && currBear && curr.open >= prev.close && curr.close <= prev.open;
+}
+
+function isHammer(candle) {
+  const stats = getCandleStats(candle);
+  if (!stats || stats.range === 0) return false;
+  const bodyRatio = stats.body / stats.range;
+  return bodyRatio <= 0.3 && stats.lowerWick >= stats.body * 2 && stats.upperWick <= stats.body * 0.4;
+}
+
+function isShootingStar(candle) {
+  const stats = getCandleStats(candle);
+  if (!stats || stats.range === 0) return false;
+  const bodyRatio = stats.body / stats.range;
+  return bodyRatio <= 0.3 && stats.upperWick >= stats.body * 2 && stats.lowerWick <= stats.body * 0.4;
+}
+
+function isMorningStar(c1, c2, c3) {
+  if (!c1 || !c2 || !c3) return false;
+  const firstBear = c1.close < c1.open;
+  const thirdBull = c3.close > c3.open;
+  const gapDown = Math.max(c2.open, c2.close) < c1.close;
+  const recovery = c3.close >= c1.open - (Math.abs(c1.open - c1.close) / 2);
+  return firstBear && thirdBull && gapDown && recovery;
+}
+
+function isEveningStar(c1, c2, c3) {
+  if (!c1 || !c2 || !c3) return false;
+  const firstBull = c1.close > c1.open;
+  const thirdBear = c3.close < c3.open;
+  const gapUp = Math.min(c2.open, c2.close) > c1.close;
+  const retrace = c3.close <= c1.open + (Math.abs(c1.close - c1.open) / 2);
+  return firstBull && thirdBear && gapUp && retrace;
+}
+
+function analyzeCandlePatterns(candles = []) {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return { timestamp: null, bullish: [], bearish: [], detected: [] };
+  }
+
+  const ordered = [...candles].sort((a, b) => a.datetime - b.datetime);
+  const latest = ordered[ordered.length - 1];
+  const detected = [];
+
+  const addPattern = (name, direction, confidence, involved) => {
+    detected.push({
+      name,
+      direction,
+      confidence,
+      candles: involved.map(c => c.datetime)
+    });
+  };
+
+  if (ordered.length >= 1) {
+    if (isHammer(latest)) {
+      addPattern('hammer', 'bullish', 'moderate', [latest]);
+    }
+    if (isShootingStar(latest)) {
+      addPattern('shooting_star', 'bearish', 'moderate', [latest]);
+    }
+  }
+
+  if (ordered.length >= 2) {
+    const prev = ordered[ordered.length - 2];
+    if (isBullishEngulfing(prev, latest)) {
+      addPattern('bullish_engulfing', 'bullish', 'strong', [prev, latest]);
+    }
+    if (isBearishEngulfing(prev, latest)) {
+      addPattern('bearish_engulfing', 'bearish', 'strong', [prev, latest]);
+    }
+  }
+
+  if (ordered.length >= 3) {
+    const c1 = ordered[ordered.length - 3];
+    const c2 = ordered[ordered.length - 2];
+    if (isMorningStar(c1, c2, latest)) {
+      addPattern('morning_star', 'bullish', 'strong', [c1, c2, latest]);
+    }
+    if (isEveningStar(c1, c2, latest)) {
+      addPattern('evening_star', 'bearish', 'strong', [c1, c2, latest]);
+    }
+  }
+
+  return {
+    timestamp: latest.datetime,
+    bullish: detected.filter(p => p.direction === 'bullish').map(p => p.name),
+    bearish: detected.filter(p => p.direction === 'bearish').map(p => p.name),
+    detected
+  };
+}
+
 /**
  * Populate base cache ONCE per symbol with historical data from Schwab API
  * Fetches 1m, 5m, 15m, 30m timeframes
@@ -512,41 +625,50 @@ function calculatePerCandleBBScores(candles, bollingerBands) {
  * Calculate trend scores for each candle
  */
 function calculatePerCandleTrendScores(candles) {
+  if (!candles || candles.length === 0) {
+    return [];
+  }
+
+  const MAX_WINDOW = 10; // compare at most the next 10 candles so scores stay reactive
   const scores = [];
-  
+
   for (let i = 0; i < candles.length; i++) {
-    let score = 0;
-    
-    for (let j = i; j < candles.length - 1; j++) {
+    let rawScore = 0;
+    let comparisons = 0;
+
+    const windowEnd = Math.min(candles.length - 1, i + MAX_WINDOW);
+    for (let j = i; j < windowEnd; j++) {
       const current = candles[j];
       const previous = candles[j + 1];
-      
-      let candleScoreChange = 0;
-      
-      if (current.high > previous.high) candleScoreChange += 1;
-      else if (current.high < previous.high) candleScoreChange -= 1;
-      
-      if (current.low > previous.low) candleScoreChange += 1;
-      else if (current.low < previous.low) candleScoreChange -= 1;
-      
-      if (current.close > current.open) {
-        if (current.close > previous.close) candleScoreChange += 1;
-        else if (current.close < previous.close) candleScoreChange -= 1;
-      } else {
-        if (current.close > previous.close) candleScoreChange += 1;
-        else if (current.close < previous.close) candleScoreChange -= 1;
-      }
-      
-      score += candleScoreChange;
-      
-      if ((score > 0 && candleScoreChange <= -3) || (score < 0 && candleScoreChange >= 3)) {
+      if (!current || !previous) {
         break;
       }
+
+      // Reward higher highs/lows and closes, penalize lower ones
+      if (current.high > previous.high) rawScore += 1;
+      else if (current.high < previous.high) rawScore -= 1;
+
+      if (current.low > previous.low) rawScore += 1;
+      else if (current.low < previous.low) rawScore -= 1;
+
+      if (current.close > previous.close) rawScore += 2;
+      else if (current.close < previous.close) rawScore -= 2;
+
+      comparisons += 1;
     }
-    
-    scores.push(score);
+
+    if (comparisons === 0) {
+      scores.push(0);
+      continue;
+    }
+
+    //const averageScore = rawScore / comparisons; // expose raw average so we can study the natural range
+
+    // keep two decimal places so downstream logs remain readable
+    //scores.push(Number(averageScore.toFixed(2)));
+    scores.push(Number(rawScore));
   }
-  
+
   return scores;
 }
 
@@ -780,8 +902,11 @@ module.exports = {
   createWorkingData,
   populateBaseCache,
   hasBaseCache,
-  getCachedSymbols,
+  analyzeCandlePatterns,
   enhanceCandleDataWithIndicators,
+  limitCandleData,
+  filterTimeframe,
+  getCachedSymbols,
   calculateSMA,
   calculateEMA,
   calculateBollingerBands,
