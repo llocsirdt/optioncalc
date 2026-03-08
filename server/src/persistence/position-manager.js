@@ -165,7 +165,6 @@ class PositionManager {
         result += '    {\n';
         
         // Add core metadata with fallbacks (supports placeholder working positions)
-        const state = positionArray.state ? positionArray.state : 'new';
         const bias = positionArray.bias ? positionArray.bias : 'neutral';
         const covered = typeof positionArray.covered === 'boolean' ? positionArray.covered : false;
         const strategy = positionArray.strategy ? positionArray.strategy : 'unknown';
@@ -174,6 +173,10 @@ class PositionManager {
         const spreadWidth = Number.isFinite(positionArray.spreadWidth) ? positionArray.spreadWidth : 0;
         const maxValue = Number.isFinite(positionArray.maxValue) ? positionArray.maxValue : 0;
         const legs = Array.isArray(positionArray.legs) ? positionArray.legs : [];
+        let state = positionArray.state || 'new';
+        if (legs.length > 0 && !covered && state !== 'open') {
+          state = 'open';
+        }
 
         result += `      "state": ${JSON.stringify(state)}, "bias": ${JSON.stringify(bias)}, "covered": ${covered}, "strategy": ${JSON.stringify(strategy)}, "cost": ${cost}, "offsetBudget": ${offsetBudget}, "spreadWidth": ${spreadWidth}, "maxValue": ${maxValue}, \n`;
         result += '      "legs": [\n';
