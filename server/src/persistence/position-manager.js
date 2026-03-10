@@ -323,8 +323,11 @@ class PositionManager {
       return null;
     }
     for (let i = positionArray.length - 1; i >= 0; i--) {
-      if (!positionArray[i].covered) {
-        return positionArray[i];
+      const entry = positionArray[i];
+      const legs = Array.isArray(entry?.legs) ? entry.legs : [];
+      const hasInitialLeg = legs.some(leg => leg.action === 'initial');
+      if (!entry.covered && hasInitialLeg) {
+        return entry;
       }
     }
     return null;
@@ -393,31 +396,44 @@ class PositionManager {
    * Sell lower strike call, buy upper strike call
    * Adds cover legs to existing position in positions.json
    */
-  async tryCoverBullPosition(symbolExpiration, position, underlyingPrice) {
+  async tryCoverBullPosition(symbolExpiration, position, underlyingPrice, options = {}) {
+    const source = options.source || 'unknown';
+    const contextLabel = options.context ? ` context=${JSON.stringify(options.context)}` : '';
+    const legsCount = Array.isArray(position?.legs) ? position.legs.length : 0;
+    console.log(
+      `🐂 [cover:${source}] ${symbolExpiration}: requested cover (state=${position?.state || 'unknown'}, ` +
+      `legs=${legsCount}, underlying=${underlyingPrice ?? 'n/a'})${contextLabel}`
+    );
+
+    if (underlyingPrice == null) {
+      console.log(`🐂 [cover:${source}] ${symbolExpiration}: missing underlying price, skipping`);
+      return false;
+    }
+
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
-    console.log(`🐂 Covering bull with bear call credit spread: -1c${lower}/1c${upper} (underlying=${underlyingPrice.toFixed(2)})`);
-    
+
     try {
       let positions = {};
       try {
         const data = await fs.readFile(POSITIONS_FILE, 'utf8');
         positions = JSON.parse(data);
       } catch (error) {
-        console.error(`🐂 ❌ Failed to read positions file: ${error.message}`);
-        return;
+        console.error(`🐂 [cover:${source}] ❌ Failed to read positions file: ${error.message}`);
+        return false;
       }
       
       const posArray = positions[symbolExpiration];
       if (!posArray || posArray.length === 0) {
-        console.error(`🐂 ❌ No position found for ${symbolExpiration}`);
-        return;
+        console.error(`🐂 [cover:${source}] ❌ No position found for ${symbolExpiration}`);
+        return false;
       }
       
       const entry = this.getLatestUncoveredEntry(posArray);
       if (!entry) {
-        console.error(`🐂 ❌ No open bull position to cover for ${symbolExpiration}`);
-        return;
+        console.warn(`🐂 [cover:${source}] ⚠️ No open bull position with initial legs for ${symbolExpiration}, skipping cover`);
+        return false;
       }
+      const priorLegCount = Array.isArray(entry.legs) ? entry.legs.length : 0;
       
       const timestamp = new Date().toISOString();
       entry.legs.push(
@@ -427,9 +443,15 @@ class PositionManager {
       entry.covered = true;
       
       await fs.writeFile(POSITIONS_FILE, this.formatPositionsJson(positions), 'utf8');
-      console.log(`🐂 ✅ Bull position covered for ${symbolExpiration}`);
+      const newLegCount = entry.legs.length;
+      console.log(
+        `🐂 [cover:${source}] ✅ Bull position covered for ${symbolExpiration} (legs ${priorLegCount}→${newLegCount}, ` +
+        `strikes ${lower}/${upper})`
+      );
+      return true;
     } catch (error) {
-      console.error(`🐂 ❌ Failed to cover bull position: ${error.message}`);
+      console.error(`🐂 [cover:${source}] ❌ Failed to cover bull position: ${error.message}`);
+      return false;
     }
   }
 
@@ -438,31 +460,44 @@ class PositionManager {
    * Sell upper strike put, buy lower strike put
    * Adds cover legs to existing position in positions.json
    */
-  async tryCoverBearPosition(symbolExpiration, position, underlyingPrice) {
+  async tryCoverBearPosition(symbolExpiration, position, underlyingPrice, options = {}) {
+    const source = options.source || 'unknown';
+    const contextLabel = options.context ? ` context=${JSON.stringify(options.context)}` : '';
+    const legsCount = Array.isArray(position?.legs) ? position.legs.length : 0;
+    console.log(
+      `🐻 [cover:${source}] ${symbolExpiration}: requested cover (state=${position?.state || 'unknown'}, ` +
+      `legs=${legsCount}, underlying=${underlyingPrice ?? 'n/a'})${contextLabel}`
+    );
+
+    if (underlyingPrice == null) {
+      console.log(`🐻 [cover:${source}] ${symbolExpiration}: missing underlying price, skipping`);
+      return false;
+    }
+
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
-    console.log(`🐻 Covering bear with bull put credit spread: -1p${upper}/1p${lower} (underlying=${underlyingPrice.toFixed(2)})`);
-    
+
     try {
       let positions = {};
       try {
         const data = await fs.readFile(POSITIONS_FILE, 'utf8');
         positions = JSON.parse(data);
       } catch (error) {
-        console.error(`🐻 ❌ Failed to read positions file: ${error.message}`);
-        return;
+        console.error(`🐻 [cover:${source}] ❌ Failed to read positions file: ${error.message}`);
+        return false;
       }
       
       const posArray = positions[symbolExpiration];
       if (!posArray || posArray.length === 0) {
-        console.error(`🐻 ❌ No position found for ${symbolExpiration}`);
-        return;
+        console.error(`🐻 [cover:${source}] ❌ No position found for ${symbolExpiration}`);
+        return false;
       }
       
       const entry = this.getLatestUncoveredEntry(posArray);
       if (!entry) {
-        console.error(`🐻 ❌ No open bear position to cover for ${symbolExpiration}`);
-        return;
+        console.warn(`🐻 [cover:${source}] ⚠️ No open bear position with initial legs for ${symbolExpiration}, skipping cover`);
+        return false;
       }
+      const priorLegCount = Array.isArray(entry.legs) ? entry.legs.length : 0;
       
       const timestamp = new Date().toISOString();
       entry.legs.push(
@@ -472,9 +507,15 @@ class PositionManager {
       entry.covered = true;
       
       await fs.writeFile(POSITIONS_FILE, this.formatPositionsJson(positions), 'utf8');
-      console.log(`🐻 ✅ Bear position covered for ${symbolExpiration}`);
+      const newLegCount = entry.legs.length;
+      console.log(
+        `🐻 [cover:${source}] ✅ Bear position covered for ${symbolExpiration} (legs ${priorLegCount}→${newLegCount}, ` +
+        `strikes ${upper}/${lower})`
+      );
+      return true;
     } catch (error) {
-      console.error(`🐻 ❌ Failed to cover bear position: ${error.message}`);
+      console.error(`🐻 [cover:${source}] ❌ Failed to cover bear position: ${error.message}`);
+      return false;
     }
   }
 
@@ -501,20 +542,29 @@ class PositionManager {
     
     // Try to determine from legs
     if (position.legs && Array.isArray(position.legs)) {
+      if (position.legs.length === 0) {
+        return 'unknown';
+      }
       // For single leg positions
       if (position.legs.length === 1) {
         const leg = position.legs[0];
-        if (leg.type === 'call' && leg.quantity > 0) return 'bull';
-        if (leg.type === 'put' && leg.quantity > 0) return 'bear';
+        const legType = leg.type?.toUpperCase?.() || leg.type;
+        if (legType === 'C' && leg.quantity > 0) return 'bull';
+        if (legType === 'P' && leg.quantity > 0) return 'bear';
       }
       
       // For multi-leg positions (spreads), look at the overall position
       // This is simplified - in reality we'd need to analyze the spread structure
       const netDelta = position.legs.reduce((sum, leg) => {
-        const multiplier = leg.type === 'call' ? 1 : -1;
+        const legType = leg.type?.toUpperCase?.() || leg.type;
+        const multiplier = legType === 'C' ? 1 : -1;
         return sum + (leg.quantity * multiplier);
       }, 0);
       
+      if (netDelta === 0) {
+        return 'unknown';
+      }
+
       return netDelta > 0 ? 'bull' : 'bear';
     }
     
@@ -810,6 +860,31 @@ class PositionManager {
         }
       }
 
+      // Normalize existing position states to match reality
+      for (const [symbolExpiration, positionArray] of Object.entries(positions)) {
+        if (!Array.isArray(positionArray)) continue;
+
+        positionArray.forEach((position, index) => {
+          if (!position || typeof position !== 'object') return;
+
+          const legs = Array.isArray(position.legs) ? position.legs : [];
+          const covered = Boolean(position.covered);
+
+          let expectedState = 'new';
+          if (covered) {
+            expectedState = 'covered';
+          } else if (legs.length > 0) {
+            expectedState = 'open';
+          }
+
+          if (position.state !== expectedState) {
+            position.state = expectedState;
+            positionsModified = true;
+            console.log(`  ${symbolExpiration}[${index}]: Normalized state -> ${expectedState}`);
+          }
+        });
+      }
+
       // Persist any newly initialized working positions
       if (positionsModified) {
         await persistenceManager.saveAllPositions(positions);
@@ -886,57 +961,119 @@ class PositionManager {
         }
       }
       
-      // Process uncovered positions using PT v1 strategy
-      if (summary.uncoveredPositions.length > 0) {
-        console.log('🔄 Processing uncovered positions with PT v1 strategy...');
-        
-        for (const symbolExpiration of summary.uncoveredPositions) {
-          // Get the position data
-          const positionArray = positions[symbolExpiration];
-          if (Array.isArray(positionArray) && positionArray.length > 0) {
-            const position = this.getLatestPositionEntry(positionArray);
-            const [symbol] = symbolExpiration.split('_');
-            const candleAnalysis = candleAnalysisResults[symbol];
-            
-            // Use PT v1 strategy to cover position
-            const coverResult = await this.checkPriceTrailCover(symbolExpiration, position, candleAnalysis, persistenceManager);
-            console.log(`🔄 PT v1 cover result for ${symbolExpiration}: ${coverResult}`);
+      // Run state-driven strategy across working positions
+      const pendingStateUpdates = new Map();
+      const queueStateUpdate = (symbolExpiration, index, updates) => {
+        const key = `${symbolExpiration}__${index}`;
+        const existing = pendingStateUpdates.get(key) || {};
+        pendingStateUpdates.set(key, { ...existing, ...updates });
+      };
+
+      for (const symbolExpiration of summary.symbolExpirations) {
+        const positionArray = positions[symbolExpiration];
+        if (!Array.isArray(positionArray) || positionArray.length === 0) {
+          continue;
+        }
+
+        const [symbol, expiration] = symbolExpiration.split('_');
+        const candleAnalysis = candleAnalysisResults[symbol];
+        if (!candleAnalysis || !candleAnalysis.success) {
+          console.log(`  ${symbol}: Missing candle analysis, skipping state strategy`);
+          continue;
+        }
+
+        const workingIndex = positionArray.length - 1;
+        const workingPosition = positionArray[workingIndex];
+        if (!workingPosition || typeof workingPosition !== 'object') {
+          continue;
+        }
+
+        const legs = Array.isArray(workingPosition.legs) ? workingPosition.legs : [];
+        const covered = Boolean(workingPosition.covered);
+        const hasOpenLegs = legs.length > 0 && !covered;
+
+        let currentState = workingPosition.state;
+        if (!currentState) {
+          currentState = covered ? 'covered' : (hasOpenLegs ? 'open' : 'new');
+        }
+
+        const shouldCheckOpen = !covered && (currentState === 'new' || currentState.startsWith('ready_open') || legs.length === 0);
+        if (shouldCheckOpen) {
+          const openResult = await strategyChecks.checkStateOpen.call(this, symbol, expiration, workingPosition, candleAnalysis, persistenceManager);
+          const openAction = openResult?.action;
+          const executedOpen = Boolean(openResult?.executed);
+
+          if ((openAction === 'open_bull' || openAction === 'open_bear') && !executedOpen) {
+            const fallbackState = openAction === 'open_bull' ? 'ready_open_bull' : 'ready_open_bear';
+            const fallbackBias = openAction === 'open_bull' ? 'bullish' : 'bearish';
+            if (workingPosition.state !== fallbackState) {
+              workingPosition.state = fallbackState;
+              queueStateUpdate(symbolExpiration, workingIndex, { state: fallbackState });
+            }
+            if (workingPosition.bias !== fallbackBias) {
+              workingPosition.bias = fallbackBias;
+              queueStateUpdate(symbolExpiration, workingIndex, { bias: fallbackBias });
+            }
+            continue;
+          }
+
+          if (openResult?.nextState && openResult.nextState !== workingPosition.state) {
+            workingPosition.state = openResult.nextState;
+            queueStateUpdate(symbolExpiration, workingIndex, { state: openResult.nextState });
+          }
+
+          if (openResult?.nextBias && openResult.nextBias !== workingPosition.bias) {
+            workingPosition.bias = openResult.nextBias;
+            queueStateUpdate(symbolExpiration, workingIndex, { bias: openResult.nextBias });
+          }
+
+          continue;
+        }
+
+        if (!covered && currentState === 'open') {
+          if (!hasOpenLegs) {
+            console.log(`  ${symbol}: State marked open but no legs recorded for ${expiration}, skipping cover`);
+            continue;
+          }
+
+          const coverResult = await strategyChecks.checkStateCover.call(this, symbolExpiration, workingPosition, candleAnalysis);
+
+          if (coverResult?.nextState && coverResult.executed && coverResult.nextState !== workingPosition.state) {
+            workingPosition.state = coverResult.nextState;
+            queueStateUpdate(symbolExpiration, workingIndex, { state: coverResult.nextState });
+          }
+
+          if (coverResult.executed && !workingPosition.covered) {
+            workingPosition.covered = true;
+            queueStateUpdate(symbolExpiration, workingIndex, { covered: true });
           }
         }
       }
-      
-      // Try to open new positions using PT v1 strategy
-      console.log('🔄 Checking for opportunities to open new positions with PT v1 strategy...');
-      
-      // Check all symbol/expiration combinations (both covered and empty) for opening opportunities
-      // Skip uncovered positions since those are being processed for covering above
-      for (const symbolExpiration of summary.symbolExpirations) {
-        if (summary.uncoveredPositions.includes(symbolExpiration)) {
-          continue;
+
+      if (pendingStateUpdates.size > 0) {
+        const latestPositions = await persistenceManager.getAllPositions();
+        let appliedUpdates = 0;
+
+        for (const [key, updates] of pendingStateUpdates.entries()) {
+          const [symbolExpiration, indexStr] = key.split('__');
+          const index = parseInt(indexStr, 10);
+          if (!Number.isInteger(index)) {
+            continue;
+          }
+
+          const entryList = latestPositions[symbolExpiration];
+          if (!Array.isArray(entryList) || !entryList[index]) {
+            continue;
+          }
+
+          entryList[index] = { ...entryList[index], ...updates };
+          appliedUpdates++;
         }
-        
-        // Get candle analysis for this symbol
-        const [symbol, expiration] = symbolExpiration.split('_');
-        const candleAnalysis = candleAnalysisResults[symbol];
-        
-        if (!candleAnalysis || !candleAnalysis.success) {
-          console.log(`  ${symbol}: No candle analysis available, skipping position opening`);
-          continue;
+
+        if (appliedUpdates > 0) {
+          await persistenceManager.saveAllPositions(latestPositions);
+          console.log(`💾 Saved ${appliedUpdates} state update(s)`);
         }
-        
-        // Determine if this symbol/date has existing positions
-        const positionArray = positions[symbolExpiration];
-        const hasExistingPositions = Array.isArray(positionArray) && positionArray.length > 0;
-        const latestPosition = hasExistingPositions ? positionArray[positionArray.length - 1] : null;
-        if (latestPosition && !latestPosition.covered) {
-          console.log(`  ${symbol}: Skipping PT v1 open for ${expiration} - latest position still uncovered`);
-          continue;
-        }
-        
-        console.log(`  ${symbol}: Checking PT v1 for ${expiration} (hasExistingPositions=${hasExistingPositions})`);
-        
-        const openResult = await this.checkPriceTrailOpen(symbol, expiration, candleAnalysis, persistenceManager, hasExistingPositions);
-        console.log(`  ${symbol}: PT v1 open strategy result: ${openResult}`);
       }
       
       // Log summary

@@ -671,9 +671,34 @@ class PersistenceManager {
         positions[key] = [];
       }
       
-      // Add the new position in API response format
+      // Add or update the working position entry in API response format
       const positionForStorage = this.positionManager.toResponseFormat(positionObj);
-      positions[key].push(positionForStorage);
+
+      // Determine if we have a working placeholder (no legs yet) to replace
+      let workingIndex = -1;
+      for (let i = positions[key].length - 1; i >= 0; i--) {
+        const entry = positions[key][i];
+        const legs = Array.isArray(entry?.legs) ? entry.legs : [];
+        if (legs.length === 0 && !entry.covered) {
+          workingIndex = i;
+          break;
+        }
+      }
+
+      const workingEntry = workingIndex >= 0 ? positions[key][workingIndex] : {};
+      const storedEntry = {
+        ...workingEntry,
+        ...positionForStorage,
+        bias: workingEntry.bias || positionForStorage.bias || 'neutral',
+        state: 'open',
+        covered: false
+      };
+
+      if (workingIndex >= 0) {
+        positions[key][workingIndex] = storedEntry;
+      } else {
+        positions[key].push(storedEntry);
+      }
       
       // Update metadata in main state
       this.state.positions.lastUpdated = new Date().toISOString();

@@ -2262,14 +2262,62 @@ function updateOptionsChain(options) {
             
             // Update the UI with combined results
             const col4Element = document.getElementById('container-col4');
-            if (col4Element && combinedHtml) {
+            if (col4Element) {
               // Preserve the selected-offset-analysis element
               const selectedOffsetAnalysis = document.getElementById('selected-offset-analysis');
-              col4Element.innerHTML = combinedHtml;
-              if (selectedOffsetAnalysis) {
-                col4Element.insertBefore(selectedOffsetAnalysis, col4Element.firstChild);
+              
+              // Always insert server results if they exist
+              if (serverResult && serverResult.html) {
+                col4Element.innerHTML = serverResult.html;
+                if (selectedOffsetAnalysis) {
+                  col4Element.insertBefore(selectedOffsetAnalysis, col4Element.firstChild);
+                }
+                console.log('✅ Server offsetting trades updated in container-col4');
               }
-              console.log('✅ Combined offsetting trades (server + client) updated in container-col4');
+              
+              // Append client-side results if available
+              if (offsettingResult && offsettingResult.trades && offsettingResult.trades.length > 0) {
+                let clientHtml = '<div class="offsetting-trades client-based">';
+                
+                // Format strategy name
+                const strategyName = offsettingResult.position.strategy.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                clientHtml += `<h4>🎯 Risk Offsetting Opportunities (Client) - ${strategyName}</h4>`;
+                
+                // Add position summary
+                clientHtml += formatPositionSummary(offsettingResult.position);
+                
+                offsettingResult.trades.forEach((trade, index) => {
+                  const profitClass = trade.totalProfitPotential > 0 ? 'profit-positive' : 'profit-neutral';
+                  const tenPercentOfCost = Math.abs(trade.cost) * 0.1;
+                  const lowLockedClass = (trade.cost > 0 && trade.lockedProfit < tenPercentOfCost) ? 'low-locked-profit' : '';
+                  const costLessThanLockedClass = Math.abs(trade.cost) < trade.lockedProfit ? 'cost-less-than-locked' : '';
+                  const costLessThanLockedTooltip = costLessThanLockedClass ? ' (Cost less than locked value - great deal!)' : '';
+                  
+                  clientHtml += `
+                    <div class="offset-trade ${trade.type} ${lowLockedClass} ${costLessThanLockedClass} clickable-offset-trade" 
+                         data-description="${trade.description.replace(/"/g, '&quot;')}" 
+                         data-action="${trade.action.replace(/"/g, '&quot;')}"
+                         data-index="${index}"
+                         title="Click to select these options in the table${costLessThanLockedTooltip}">
+                      <div class="trade-description">
+                        <strong>${trade.description}</strong>
+                        <div class="trade-action">${trade.action}</div>
+                        <div class="trade-cost">Cost: $${trade.cost.toFixed(2)}</div>
+                      </div>
+                      <div class="trade-metrics">
+                        <div class="trade-potential">Potential: $${trade.potentialProfit ? trade.potentialProfit.toFixed(2) : trade.potentialValue.toFixed(2)}</div>
+                        <div class="trade-locked-profit">Locked: $${trade.lockedProfit.toFixed(2)}</div>
+                        <div class="trade-score ${profitClass}">Score: ${(trade.profitPotentialScore * 100).toFixed(1)}%</div>
+                      </div>
+                    </div>
+                  `;
+                });
+                
+                clientHtml += '</div>';
+                col4Element.innerHTML += clientHtml;
+              }
+              
+              console.log('✅ Offsetting trades (server + client) updated in container-col4');
               
               // Set up click handlers for ALL offsetting trade elements (both server and client-side)
               const offsettingTradeElements = col4Element.querySelectorAll('.clickable-offset-trade');

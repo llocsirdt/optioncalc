@@ -117,6 +117,24 @@ function formatBBScore(score) {
   return `<span style="color: ${color}; font-weight: bold;">${score.toFixed(2)}${label}</span>`;
 }
 
+function formatBBScoreDelta(delta) {
+  if (delta === null || delta === undefined) {
+    return '<span>--</span>';
+  }
+
+  const directionArrow = delta > 0 ? '↑' : (delta < 0 ? '↓' : '→');
+  let color = '#555';
+
+  if (delta > 0) {
+    color = '#008800';
+  } else if (delta < 0) {
+    color = '#aa0000';
+  }
+
+  const formatted = `${delta > 0 ? '+' : ''}${delta.toFixed(2)}`;
+  return `<span style="color: ${color}; font-weight: bold;">${formatted} ${directionArrow}</span>`;
+}
+
 /**
  * Calculate background color based on trend score
  * @param {number} trendScore - Trend score (positive = bullish, negative = bearish)
@@ -209,6 +227,7 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
   const latestCandle = candles[0]; // Server returns newest first
   const trendScore = candleData.trendScore || 0;
   const bbScore = candleData.bbScore || 0;
+  const bbScoreDelta = candleData.bbScoreDelta ?? null;
   
   // Get EST time
   const timeEST = latestCandle.timeEST || '--';
@@ -226,12 +245,16 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
     const bb = indicators.bollinger20_2 || {};
     const trendScore = candle.trendScore !== undefined ? candle.trendScore : '--';
     const bbScore = candle.bbScore !== undefined ? candle.bbScore.toFixed(2) : '--';
+    const bbDelta = candle.bbScoreDelta !== undefined && candle.bbScoreDelta !== null
+      ? formatBBScoreDelta(candle.bbScoreDelta)
+      : '<span>--</span>';
     
     tableRows += `
       <tr>
         <td>${candleTime}</td>
         <td>${trendScore}</td>
         <td>${bbScore}</td>
+        <td>${bbDelta}</td>
         <td>${formatPrice(indicators.sma20)}</td>
         <td>${formatPrice(indicators.ema9)}</td>
         <td>${formatPrice(bb.upper)}</td>
@@ -269,6 +292,7 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
           <span class="time-est">${timeEST}</span>
           <span class="score-label">Trend:</span><span class="score-value">${formatTrendScore(trendScore)}</span>
           <span class="score-label">BB:</span><span class="score-value">${formatBBScore(bbScore)}</span>
+          <span class="score-label">Δ:</span><span class="score-value">${formatBBScoreDelta(bbScoreDelta)}</span>
         </div>
         <div class="candle-ohlc-row">
           <span class="ohlc-label">O:</span><span class="ohlc-value">${formatPrice(latestCandle.open)}</span>
@@ -284,6 +308,7 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
               <th>Time</th>
               <th>Trend</th>
               <th>BB Score</th>
+              <th>BB Δ</th>
               <th>SMA20</th>
               <th>EMA9</th>
               <th>BB Upper</th>

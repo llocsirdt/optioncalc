@@ -281,6 +281,104 @@ function strategy1m5m15mCover(position, analysis) {
   return { action: 'hold', analysis: data };
 }
 
+function strategyStateOpen(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+
+  const currentState = position.state || 'new';
+  const currentBias = position.bias || 'neutral';
+  let nextState = currentState;
+  let nextBias = currentBias;
+
+  const higherTimeframes = ['5m', '15m', '60m'];
+  const hasBullSignal = higherTimeframes.some(tf => (analysis[tf]?.bbScore ?? null) > 1);
+  const hasBearSignal = higherTimeframes.some(tf => (analysis[tf]?.bbScore ?? null) < -1);
+
+  if (currentState === 'new') {
+    if (hasBullSignal) {
+      nextState = 'ready_open_bull';
+      nextBias = 'bullish';
+      return { action: 'hold', nextState, nextBias, reason: 'high_tf_bull_signal' };
+    }
+    if (hasBearSignal) {
+      nextState = 'ready_open_bear';
+      nextBias = 'bearish';
+      return { action: 'hold', nextState, nextBias, reason: 'high_tf_bear_signal' };
+    }
+  }
+
+  if (currentState === 'ready_open_bull') {
+    const delta1m = analysis['1m']?.bbScoreDelta;
+    const delta5m = analysis['5m']?.bbScoreDelta;
+    if (delta1m !== undefined && delta5m !== undefined && delta1m < 0 && delta5m < 0) {
+      return {
+        action: 'open_bull',
+        nextState: 'open',
+        nextBias: 'bullish',
+        reason: 'short_tf_confirmation'
+      };
+    }
+  }
+
+  if (currentState === 'ready_open_bear') {
+    const delta1m = analysis['1m']?.bbScoreDelta;
+    const delta5m = analysis['5m']?.bbScoreDelta;
+    if (delta1m !== undefined && delta5m !== undefined && delta1m > 0 && delta5m > 0) {
+      return {
+        action: 'open_bear',
+        nextState: 'open',
+        nextBias: 'bearish',
+        reason: 'short_tf_confirmation'
+      };
+    }
+  }
+
+  return { action: 'hold', nextState, nextBias };
+}
+
+function strategyStateCover(position = {}, analysis = {}, context = {}) {
+  const positionType = context.positionType || position.type || inferPositionTypeFromBias(position.bias);
+  const currentState = position.state || 'open';
+  const bb1m = analysis['1m']?.bbScore;
+  const bb5m = analysis['5m']?.bbScore;
+  const delta1m = analysis['1m']?.bbScoreDelta;
+  const delta5m = analysis['5m']?.bbScoreDelta;
+
+  if (positionType === 'bull') {
+    const thresholdHit = (typeof bb5m === 'number' && bb5m <= -0.1) || (typeof bb1m === 'number' && bb1m <= -0.8);
+    const deltasConfirm = typeof delta1m === 'number' && typeof delta5m === 'number' && delta1m > 0 && delta5m > 0;
+    if (thresholdHit && deltasConfirm) {
+      const reason = typeof bb1m === 'number' && bb1m <= -0.8 ? '1m_threshold' : '5m_threshold';
+      return { action: 'cover', nextState: 'covered', reason };
+    }
+  } else if (positionType === 'bear') {
+    const thresholdHit = (typeof bb5m === 'number' && bb5m >= 0.1) || (typeof bb1m === 'number' && bb1m >= 0.8);
+    const deltasConfirm = typeof delta1m === 'number' && typeof delta5m === 'number' && delta1m < 0 && delta5m < 0;
+    if (thresholdHit && deltasConfirm) {
+      const reason = typeof bb1m === 'number' && bb1m >= 0.8 ? '1m_threshold' : '5m_threshold';
+      return { action: 'cover', nextState: 'covered', reason };
+    }
+  }
+
+  return { action: 'hold', nextState: currentState };
+}
+
+function inferPositionTypeFromBias(bias) {
+  if (bias === 'bullish') return 'bull';
+  if (bias === 'bearish') return 'bear';
+  return 'unknown';
+}
+
 /**
  * Module-level state for price trail strategy direction tracking.
  * Tracks the last covered position type so the open function knows which direction to go.
@@ -738,5 +836,7 @@ module.exports = {
   resetPriceTrailv2State,
   strategyPriceTrailv3Open,
   strategyPriceTrailv3Cover,
-  resetPriceTrailv3State
+  resetPriceTrailv3State,
+  strategyStateOpen,
+  strategyStateCover
 };

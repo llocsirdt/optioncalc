@@ -78,6 +78,13 @@ class BacktestController {
     this.results = [];
     this.strategyActions = []; // Track only position changes (opens/covers)
     this.openPosition = null; // Track current open position {type: 'bull'|'bear', openedAt: timestamp, bbScore15m: value}
+    this.positionState = {
+      state: 'new',
+      bias: 'neutral',
+      covered: true,
+      type: null,
+      openedAt: null
+    };
   }
 
   // NOTE: Strategy functions (strategy...Open/Cover) now use production functions
@@ -743,135 +750,104 @@ class BacktestController {
             '15m': { close: candle15m.close, bbScore: bbScore15m, bbScoreDelta: bbScoreDelta15m, trendScore: trendScore15m },
             '60m': { close: candle60m.close, bbScore: bbScore60m, bbScoreDelta: bbScoreDelta60m, trendScore: trendScore60m }
           };
-          
-          if (!this.openPosition) {
-            // No open position - check if we should open one
+
+          const applyStateUpdates = (next = {}) => {
+            if (next.nextState) {
+              this.positionState.state = next.nextState;
+            }
+            if (next.nextBias) {
+              this.positionState.bias = next.nextBias;
+            }
+          };
+
+          const isOpenState = this.positionState.state === 'open' && !this.positionState.covered;
+
+          if (!isOpenState) {
             strategyMethod = openStrategyName;
-            const openResult = openStrategyFn(analysisForStrategy);
-            
-            if (openResult.action === 'open_bull') {
-              this.openPosition = {
-                type: 'bull',
-                openedAt: timestamp,
-                bbScore5m: openResult.bbScore5m
+            const openResult = openStrategyFn(this.positionState, analysisForStrategy) || {};
+            applyStateUpdates(openResult);
+
+            if (openResult.action === 'open_bull' || openResult.action === 'open_bear') {
+              const positionType = openResult.action === 'open_bull' ? 'bull' : 'bear';
+              const bias = openResult.action === 'open_bull' ? 'bullish' : 'bearish';
+
+              this.positionState = {
+                state: 'open',
+                bias,
+                covered: false,
+                type: positionType,
+                openedAt: timestamp
               };
+
+              this.openPosition = {
+                type: positionType,
+                openedAt: timestamp,
+                bbScore5m,
+                bbScore15m
+              };
+
               opened = true;
-              
-              // Track strategy action
+
               this.strategyActions.push({
                 timestamp,
                 datetime: currentCandle.datetime,
-                action: 'open_bull',
+                action: openResult.action,
                 strategyMethod,
                 closePrice: currentCandle.close,
-                bbScore1m: bbScore1m,
-                bbScore5m: bbScore5m,
-                bbScore15m: bbScore15m,
-                bbScore60m: bbScore60m,
-                position: { ...this.openPosition }
-              });
-            } else if (openResult.action === 'open_bear') {
-              this.openPosition = {
-                type: 'bear',
-                openedAt: timestamp,
-                bbScore5m: openResult.bbScore5m
-              };
-              opened = true;
-              
-              // Track strategy action
-              this.strategyActions.push({
-                timestamp,
-                datetime: currentCandle.datetime,
-                action: 'open_bear',
-                strategyMethod,
-                closePrice: currentCandle.close,
-                bbScore1m: bbScore1m,
-                bbScore5m: bbScore5m,
-                bbScore15m: bbScore15m,
-                bbScore60m: bbScore60m,
+                bbScore1m,
+                bbScore5m,
+                bbScore15m,
+                bbScore60m,
+                state: this.positionState.state,
+                bias: this.positionState.bias,
                 position: { ...this.openPosition }
               });
             }
           } else {
-            // Have open position - check if we should cover it
             strategyMethod = coverStrategyName;
-            const coverResult = coverStrategyFn(this.openPosition, analysisForStrategy);
-            
+            const coverResult = coverStrategyFn(this.positionState, analysisForStrategy, { positionType: this.positionState.type }) || {};
+            applyStateUpdates(coverResult);
+
             if (coverResult.action === 'cover') {
-              // Track strategy action with current candle data at time of cover
+              covered = true;
+
               this.strategyActions.push({
                 timestamp,
                 datetime: currentCandle.datetime,
                 action: 'cover',
                 strategyMethod,
                 closePrice: currentCandle.close,
-                bbScore1m: bbScore1m,
-                bbScore5m: bbScore5m,
-                bbScore15m: bbScore15m,
-                bbScore60m: bbScore60m,
+                bbScore1m,
+                bbScore5m,
+                bbScore15m,
+                bbScore60m,
                 openedPosition: {
-                  type: this.openPosition.type,
-                  openedAt: this.openPosition.openedAt,
-                  openBBScore: this.openPosition.bbScore5m || this.openPosition.bbScore15m
-                }
+                  type: this.positionState.type,
+                  openedAt: this.positionState.openedAt
+                },
+                state: coverResult.nextState || 'covered',
+                bias: this.positionState.bias
               });
-              
+
               this.openPosition = null;
-              covered = true;
-              
-              // Immediately try to open a new position on the same minute
-              const reopenResult = openStrategyFn(analysisForStrategy);
-              
-              if (reopenResult.action === 'open_bull') {
-                this.openPosition = {
-                  type: 'bull',
-                  openedAt: timestamp,
-                  bbScore5m: reopenResult.bbScore5m
-                };
-                opened = true;
-                this.strategyActions.push({
-                  timestamp,
-                  datetime: currentCandle.datetime,
-                  action: 'open_bull',
-                  strategyMethod: openStrategyName,
-                  closePrice: currentCandle.close,
-                  bbScore1m: bbScore1m,
-                  bbScore5m: bbScore5m,
-                  bbScore15m: bbScore15m,
-                  bbScore60m: bbScore60m,
-                  position: { ...this.openPosition }
-                });
-              } else if (reopenResult.action === 'open_bear') {
-                this.openPosition = {
-                  type: 'bear',
-                  openedAt: timestamp,
-                  bbScore5m: reopenResult.bbScore5m
-                };
-                opened = true;
-                this.strategyActions.push({
-                  timestamp,
-                  datetime: currentCandle.datetime,
-                  action: 'open_bear',
-                  strategyMethod: openStrategyName,
-                  closePrice: currentCandle.close,
-                  bbScore1m: bbScore1m,
-                  bbScore5m: bbScore5m,
-                  bbScore15m: bbScore15m,
-                  bbScore60m: bbScore60m,
-                  position: { ...this.openPosition }
-                });
-              }
+              this.positionState = {
+                state: 'new',
+                bias: 'neutral',
+                covered: false,
+                type: null,
+                openedAt: null
+              };
             }
           }
-          
-          // Create result
+
           const result = {
             timestamp,
             datetime: currentCandle.datetime,
             strategyMethod,
             opened,
             covered,
-            hasOpenPosition: this.openPosition !== null,
+            hasOpenPosition: this.positionState.state === 'open' && !this.positionState.covered,
+            positionState: { ...this.positionState },
             analysis: {
               '1m': {
                 open: currentCandle.open,
@@ -935,7 +911,7 @@ class BacktestController {
               }
             }
           };
-          
+
           this.results.push(result);
           
           // Log progress at boundaries
@@ -1033,10 +1009,19 @@ class BacktestController {
           console.log(`   ${ts}: 1m=${result.analysis['1m'].bbScore?.toFixed(3)}, 5m=${result.analysis['5m'].bbScore?.toFixed(3)}, 15m=${result.analysis['15m'].bbScore?.toFixed(3)}, 60m=${result.analysis['60m'].bbScore?.toFixed(3)}`);
         }
       });
+
+      return {
+        totalProfitLoss,
+        strategyActions: [...this.strategyActions],
+        results: [...this.results],
+        actionsPath,
+        dataPath: outputPath
+      };
       
     } catch (error) {
       console.error('❌ Error:', error.message);
       console.error(error.stack);
+      throw error;
     }
   }
 }
