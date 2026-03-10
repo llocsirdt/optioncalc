@@ -840,6 +840,9 @@ class PositionManager {
       }
 
       // Initialize working position objects for each symbol_date
+      // STATE CHANGE: Creates new working positions with 'new' state when:
+      // 1) Position array is empty (first time seeing this symbol/expiration)
+      // 2) Latest position is covered (previous cycle completed)
       let positionsModified = false;
       for (const [symbolExpiration, positionArray] of Object.entries(positions)) {
         if (!Array.isArray(positionArray)) continue;
@@ -861,6 +864,8 @@ class PositionManager {
       }
 
       // Normalize existing position states to match reality
+      // STATE CHANGE: Corrects mismatched states based on actual position data
+      // Criteria: covered=true -> state='covered', legs>0 -> state='open', otherwise -> state='new'
       for (const [symbolExpiration, positionArray] of Object.entries(positions)) {
         if (!Array.isArray(positionArray)) continue;
 
@@ -878,6 +883,7 @@ class PositionManager {
           }
 
           if (position.state !== expectedState) {
+            console.log(`🔄 STATE CHANGE [${symbolExpiration}[${index}]]: Normalizing state '${position.state}' -> '${expectedState}' (covered=${covered}, legs=${legs.length})`);
             position.state = expectedState;
             positionsModified = true;
             console.log(`  ${symbolExpiration}[${index}]: Normalized state -> ${expectedState}`);
@@ -962,6 +968,7 @@ class PositionManager {
       }
       
       // Run state-driven strategy across working positions
+      // STATE CHANGES: All state updates below are queued and applied atomically at the end
       const pendingStateUpdates = new Map();
       const queueStateUpdate = (symbolExpiration, index, updates) => {
         const key = `${symbolExpiration}__${index}`;
@@ -992,37 +999,52 @@ class PositionManager {
         const covered = Boolean(workingPosition.covered);
         const hasOpenLegs = legs.length > 0 && !covered;
 
+        // Determine current state if not set
         let currentState = workingPosition.state;
         if (!currentState) {
           currentState = covered ? 'covered' : (hasOpenLegs ? 'open' : 'new');
         }
 
+        // OPEN STATE LOGIC: Check if we should try to open new positions
+        // STATE CHANGE: Sets 'ready_open_bull'/'ready_open_bear' when strategy suggests opening but execution fails
+        // STATE CHANGE: Updates to strategy's nextState when strategy provides explicit next state
+        // Criteria: !covered AND (state='new' OR state starts with 'ready_open' OR no legs exist)
         const shouldCheckOpen = !covered && (currentState === 'new' || currentState.startsWith('ready_open') || legs.length === 0);
         if (shouldCheckOpen) {
           const openResult = await strategyChecks.checkStateOpen.call(this, symbol, expiration, workingPosition, candleAnalysis, persistenceManager);
           const openAction = openResult?.action;
           const executedOpen = Boolean(openResult?.executed);
 
+          // STATE CHANGE: Fallback to ready state when strategy wants to open but doesn't execute
+          // Criteria: action='open_bull'/'open_bear' AND executed=false
           if ((openAction === 'open_bull' || openAction === 'open_bear') && !executedOpen) {
             const fallbackState = openAction === 'open_bull' ? 'ready_open_bull' : 'ready_open_bear';
             const fallbackBias = openAction === 'open_bull' ? 'bullish' : 'bearish';
             if (workingPosition.state !== fallbackState) {
+              console.log(`🔄 STATE CHANGE [${symbolExpiration}[${workingIndex}]]: Fallback to ready state '${workingPosition.state}' -> '${fallbackState}' (action=${openAction}, executed=false)`);
               workingPosition.state = fallbackState;
               queueStateUpdate(symbolExpiration, workingIndex, { state: fallbackState });
             }
             if (workingPosition.bias !== fallbackBias) {
+              console.log(`🔄 BIAS CHANGE [${symbolExpiration}[${workingIndex}]]: '${workingPosition.bias}' -> '${fallbackBias}' (fallback for ${openAction})`);
               workingPosition.bias = fallbackBias;
               queueStateUpdate(symbolExpiration, workingIndex, { bias: fallbackBias });
             }
             continue;
           }
 
+          // STATE CHANGE: Follow strategy's explicit next state recommendation
+          // Criteria: strategy provides nextState AND it differs from current state
           if (openResult?.nextState && openResult.nextState !== workingPosition.state) {
+            console.log(`🔄 STATE CHANGE [${symbolExpiration}[${workingIndex}]]: Strategy next state '${workingPosition.state}' -> '${openResult.nextState}' (open strategy)`);
             workingPosition.state = openResult.nextState;
             queueStateUpdate(symbolExpiration, workingIndex, { state: openResult.nextState });
           }
 
+          // STATE CHANGE: Update bias based on strategy recommendation
+          // Criteria: strategy provides nextBias AND it differs from current bias
           if (openResult?.nextBias && openResult.nextBias !== workingPosition.bias) {
+            console.log(`🔄 BIAS CHANGE [${symbolExpiration}[${workingIndex}]]: '${workingPosition.bias}' -> '${openResult.nextBias}' (strategy recommendation)`);
             workingPosition.bias = openResult.nextBias;
             queueStateUpdate(symbolExpiration, workingIndex, { bias: openResult.nextBias });
           }
@@ -1030,6 +1052,10 @@ class PositionManager {
           continue;
         }
 
+        // COVER STATE LOGIC: Check if we should cover existing open positions
+        // STATE CHANGE: Updates to strategy's nextState when cover is executed
+        // STATE CHANGE: Sets covered=true when cover execution succeeds
+        // Criteria: !covered AND state='open' AND has legs
         if (!covered && currentState === 'open') {
           if (!hasOpenLegs) {
             console.log(`  ${symbol}: State marked open but no legs recorded for ${expiration}, skipping cover`);
@@ -1038,18 +1064,27 @@ class PositionManager {
 
           const coverResult = await strategyChecks.checkStateCover.call(this, symbolExpiration, workingPosition, candleAnalysis);
 
+          // STATE CHANGE: Follow strategy's next state when cover was executed
+          // Criteria: cover executed AND strategy provides nextState AND it differs from current state
           if (coverResult?.nextState && coverResult.executed && coverResult.nextState !== workingPosition.state) {
+            console.log(`🔄 STATE CHANGE [${symbolExpiration}[${workingIndex}]]: Cover executed, state '${workingPosition.state}' -> '${coverResult.nextState}' (cover strategy)`);
             workingPosition.state = coverResult.nextState;
             queueStateUpdate(symbolExpiration, workingIndex, { state: coverResult.nextState });
           }
 
+          // STATE CHANGE: Mark position as covered when cover execution succeeds
+          // Criteria: cover executed AND position not already marked as covered
           if (coverResult.executed && !workingPosition.covered) {
+            console.log(`🔄 COVERED CHANGE [${symbolExpiration}[${workingIndex}]]: false -> true (cover executed)`);
             workingPosition.covered = true;
             queueStateUpdate(symbolExpiration, workingIndex, { covered: true });
           }
         }
       }
 
+      // Apply all queued state updates atomically
+      // STATE CHANGES: This is where all queued state changes are actually applied to the persistent storage
+      // The queue prevents race conditions and ensures all changes for a cycle are applied together
       if (pendingStateUpdates.size > 0) {
         const latestPositions = await persistenceManager.getAllPositions();
         let appliedUpdates = 0;
@@ -1066,7 +1101,12 @@ class PositionManager {
             continue;
           }
 
+          // STATE CHANGE: Apply all queued updates (state, bias, covered) to the position
+          const oldState = entryList[index].state || 'undefined';
+          const oldBias = entryList[index].bias || 'undefined';
+          const oldCovered = entryList[index].covered;
           entryList[index] = { ...entryList[index], ...updates };
+          console.log(`💾 APPLYING STATE [${symbolExpiration}[${index}]]: state: '${oldState}' -> '${entryList[index].state}', bias: '${oldBias}' -> '${entryList[index].bias}', covered: ${oldCovered} -> ${entryList[index].covered}`);
           appliedUpdates++;
         }
 
