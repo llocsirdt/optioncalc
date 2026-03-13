@@ -564,7 +564,7 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
         const labelX = xScale(d.closingPrice);
         //const labelY = yScale(d.totalIntrinsicValue) - 10;
-        const labelY = yScale(0) - 250;
+        const labelY = yScale(0) + 60;
         
         // Add background rectangle first
         const textElement = interactionGroup.append("text")

@@ -13,6 +13,7 @@ const POSITIONS_FILE = path.join(__dirname, 'positions.json');
 
 const { resetPriceTrailState: strategyResetPriceTrailState } = require('./strategy-logic');
 const strategyChecks = require('./strategy-check');
+const analysisLogger = require('./analysis-logger');
 
 class PositionManager {
   constructor() {
@@ -1233,6 +1234,37 @@ class PositionManager {
             } catch (_) {}
           }
 
+          // Log analysis data for debugging/comparison with backtests
+          try {
+            const ts1mCandle = candleAnalysis?.candleData?.['1m']?.candles?.[0];
+            if (ts1mCandle?.datetime) {
+              const dt = new Date(ts1mCandle.datetime);
+              const timestamp = dt.toLocaleTimeString('en-US', { 
+                timeZone: 'America/New_York', 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+              const dateStr = dt.toISOString().split('T')[0];
+              
+              const analysisEntry = analysisLogger.buildAnalysisEntry({
+                timestamp,
+                datetime: ts1mCandle.datetime,
+                strategyMethod: 'strategyStateOpen',
+                opened: executedOpen && (openAction === 'open_bull' || openAction === 'open_bear'),
+                covered: false,
+                hasOpenPosition: hasOpenLegs,
+                positionState: workingPosition,
+                analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis)
+              });
+              
+              analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
+            }
+          } catch (logError) {
+            // Don't let logging errors break the position check
+            console.error(`⚠️ Failed to log analysis data: ${logError.message}`);
+          }
+
           // STATE CHANGE: Fallback to ready state when strategy wants to open but doesn't execute
           // Criteria: action='open_bull'/'open_bear' AND executed=false
           if ((openAction === 'open_bull' || openAction === 'open_bear') && !executedOpen) {
@@ -1379,6 +1411,28 @@ class PositionManager {
       console.log(`  Covered Positions: ${summary.coveredPositions.length > 0 ? summary.coveredPositions.join(', ') : 'None'}`);
       console.log(`  Uncovered Positions: ${summary.uncoveredPositions.length > 0 ? summary.uncoveredPositions.join(', ') : 'None'}`);
 
+      // Save analysis data periodically (every 10 minutes or at market close)
+      try {
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        
+        // Save at market close (4:00 PM ET = 16:00) or every 10 minutes
+        const isMarketClose = currentHour === 16 && currentMinute === 0;
+        if (!this.lastAnalysisSaveTime) {
+          this.lastAnalysisSaveTime = 0;
+        }
+        
+        const timeSinceLastSave = now.getTime() - this.lastAnalysisSaveTime;
+        const shouldSave = isMarketClose || timeSinceLastSave > 600000; // 10 minutes
+        
+        if (shouldSave) {
+          await analysisLogger.saveAllAnalysisData();
+          this.lastAnalysisSaveTime = now.getTime();
+        }
+      } catch (saveError) {
+        console.error('⚠️ Failed to save analysis data:', saveError.message);
+      }
       
     } catch (error) {
       console.error('❌ Error checking positions:', error.message);
