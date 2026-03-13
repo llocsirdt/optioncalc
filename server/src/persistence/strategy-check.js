@@ -305,6 +305,51 @@ async function checkSimple15and60mBBScoreCover(symbolExpiration, position, candl
 }
 
 async function checkSimpleCover(symbolExpiration, position) {
+  console.log(`🔍 Simple cover analysis for ${symbolExpiration} (strategy: ${position.strategy || 'unknown'})`);
+  
+  // Call the new analyzeOffsettingPositions method
+  const analysis = await this.analyzeOffsettingPositions(symbolExpiration, position);
+  
+  // For now, just log the analysis and return false (no actual covering)
+  if (analysis.totalAvailable > 0) {
+    console.log(`✅ Found ${analysis.totalAvailable} potential offsetting positions for ${symbolExpiration}`);
+    
+    // Use the positions already fetched by analyzeOffsettingPositions
+    const offsettingPositions = analysis.positions || [];
+    
+    if (offsettingPositions.length > 0) {
+      // Filter positions with scores between 0.2 and 0.3
+      const candidates = offsettingPositions.filter(pos => {
+        const score = pos.score ?? 0;
+        return score >= 0.2 && score <= 0.3;
+      });
+      
+      if (candidates.length > 0) {
+        // Select the position with score closest to 0.25
+        const bestPosition = candidates.reduce((best, current) => {
+          const bestDistance = Math.abs((best.score ?? 0) - 0.25);
+          const currentDistance = Math.abs((current.score ?? 0) - 0.25);
+          return currentDistance < bestDistance ? current : best;
+        });
+        
+        console.log(`🎯 Selected offsetting position with score ${bestPosition.score} (closest to 0.25)`);
+        const success = await this.tryOpenOffsettingCover(symbolExpiration, bestPosition, {
+          source: 'simple-strategy',
+          persistenceManager: this.persistenceManager
+        });
+        
+        if (success) {
+          return true;
+        }
+      } else {
+        console.log(`ℹ️ No offsetting positions found with score between 0.2 and 0.3`);
+      }
+    }
+  } else {
+    console.log(`ℹ️ No offsetting positions available for ${symbolExpiration}`);
+  }
+  
+  // Original covering logic (fallback)
   const strategy = position.strategy || 'unknown';
 
   if (strategy.includes('bull')) {

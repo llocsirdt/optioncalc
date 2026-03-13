@@ -1073,23 +1073,39 @@ async function startServer() {
         console.log(`🔒 Trading endpoints disabled in production mode`);
       }
       
-      // Start position check loop
+      // Start position check loop aligned to minute boundaries
       console.log(``);
-      console.log(`🔄 Starting position check loop (every 60 seconds)...`);
+      console.log(`🔄 Starting position check loop (aligned to minute boundaries)...`);
       let positionCheckInterval = null;
       
-      // Only start one interval
-      if (!positionCheckInterval) {
-        positionCheckInterval = setInterval(async () => {
+      // Calculate delay to next minute boundary
+      const now = new Date();
+      const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+      
+      // Wait until next minute boundary, then start interval
+      setTimeout(() => {
+        // Run immediately at the minute boundary
+        (async () => {
           try {
             await persistence.positionManager.checkPositions(persistence);
           } catch (error) {
             console.error('❌ Error in position check loop:', error.message);
           }
-        }, 60000); // 1 minute, was 10 seconds but debating if this is part of reality not matching backtests
+        })();
         
-        console.log(`✅ Position check loop started`);
-      }
+        // Then run every minute at :00 seconds
+        if (!positionCheckInterval) {
+          positionCheckInterval = setInterval(async () => {
+            try {
+              await persistence.positionManager.checkPositions(persistence);
+            } catch (error) {
+              console.error('❌ Error in position check loop:', error.message);
+            }
+          }, 60000);
+          
+          console.log(`✅ Position check loop started (aligned to minute boundaries)`);
+        }
+      }, msToNextMinute);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);

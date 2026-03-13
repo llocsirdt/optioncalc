@@ -763,6 +763,8 @@ function calculatePerCandleTrendScores(candles) {
  */
 function enhanceCandleDataWithIndicators(symbol, candleData) {
   const enhancedData = {};
+  const timeframes = Object.keys(candleData);
+  console.log(`🕯️ Calculating indicators for ${timeframes.length} timeframes: ${timeframes.join(', ')}`);
   
   for (const [timeframe, data] of Object.entries(candleData)) {
     
@@ -774,15 +776,12 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
     const candles = data.candles;
     
     if (!candles || candles.length === 0) {
-      console.log(`🕯️ Skipping ${timeframe}: No candles available`);
       enhancedData[timeframe] = {
         ...data,
         indicators: { message: 'No candles available for indicators' }
       };
       continue;
     }
-    
-    console.log(`🕯️ Calculating indicators for ${timeframe} (${candles.length} candles)`);
     
     const sma20 = calculateSMA(candles, 20);
     const sma50 = calculateSMA(candles, 50);
@@ -837,9 +836,9 @@ function enhanceCandleDataWithIndicators(symbol, candleData) {
       bbScoreDelta: bbScoreDelta,
       enhancedAt: new Date().toISOString()
     };
-    
-    console.log(`🕯️ ✅ Enhanced ${timeframe} with indicators`);
   }
+  
+  console.log(`🕯️ ✅ Enhanced ${timeframes.length} timeframes with indicators`);
   
   return enhancedData;
 }

@@ -632,6 +632,83 @@ class PersistenceManager {
 
 
   /**
+   * Store covering legs on an existing position
+   * @param {string} symbolExpiration - Symbol and expiration (e.g., "NDX_2026-03-31")
+   * @param {Object} coveringLegs - Array of covering legs to add
+   * @param {Object} options - Options including which position entry to update
+   * @returns {Object} - Updated position entry
+   */
+  async storeCoveringLegs(symbolExpiration, coveringLegs, options = {}) {
+    const { entryIndex = -1 } = options; // -1 means latest uncovered entry
+    
+    try {
+      // Load existing positions
+      let positions = {};
+      try {
+        const data = await fs.readFile(POSITIONS_FILE, 'utf8');
+        positions = JSON.parse(data);
+      } catch (error) {
+        throw new Error(`Failed to read positions file: ${error.message}`);
+      }
+      
+      const posArray = positions[symbolExpiration];
+      if (!posArray || posArray.length === 0) {
+        throw new Error(`No positions found for ${symbolExpiration}`);
+      }
+      
+      // Find the target entry
+      let targetIndex = entryIndex;
+      if (entryIndex === -1) {
+        // Find the latest uncovered entry
+        for (let i = posArray.length - 1; i >= 0; i--) {
+          const entry = posArray[i];
+          if (!entry.covered && Array.isArray(entry.legs) && entry.legs.length > 0) {
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      
+      if (targetIndex === -1) {
+        throw new Error(`No uncovered position found for ${symbolExpiration}`);
+      }
+      
+      const entry = posArray[targetIndex];
+      const priorLegCount = Array.isArray(entry.legs) ? entry.legs.length : 0;
+      
+      // Add covering legs with metadata
+      const timestamp = new Date().toISOString();
+      const enrichedCoveringLegs = coveringLegs.map(leg => ({
+        ...leg,
+        action: 'cover',
+        timestamp,
+        symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0],
+        expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1]
+      }));
+      
+      // Update the entry
+      entry.legs.push(...enrichedCoveringLegs);
+      entry.covered = true;
+      entry.state = 'covered';
+      
+      // Save positions to file
+      await fs.writeFile(POSITIONS_FILE, this.positionManager.formatPositionsJson(positions), 'utf8');
+      
+      // Update metadata
+      this.state.positions.lastUpdated = new Date().toISOString();
+      this.state.positions.positionCount = Object.keys(positions).reduce((count, key) => count + positions[key].length, 0);
+      
+      console.log(`✅ Stored ${enrichedCoveringLegs.length} covering legs for ${symbolExpiration} (legs ${priorLegCount}→${entry.legs.length})`);
+      
+      return entry;
+      
+    } catch (error) {
+      console.error(`❌ Failed to store covering legs for ${symbolExpiration}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Store position in positions.json file
    */
   async storePosition(symbol, expiration, positionString) {

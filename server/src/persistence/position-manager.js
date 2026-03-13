@@ -17,6 +17,8 @@ const strategyChecks = require('./strategy-check');
 class PositionManager {
   constructor() {
     this.priceTrailState = new Map(); // Tracks PT v1 per symbolExpiration
+    this.positionsCache = null; // In-memory positions cache
+    this.cacheInitialized = false;
   }
 
   /**
@@ -178,7 +180,25 @@ class PositionManager {
           state = 'open';
         }
 
-        result += `      "state": ${JSON.stringify(state)}, "bias": ${JSON.stringify(bias)}, "covered": ${covered}, "strategy": ${JSON.stringify(strategy)}, "cost": ${cost}, "offsetBudget": ${offsetBudget}, "spreadWidth": ${spreadWidth}, "maxValue": ${maxValue}, \n`;
+        // Include strategy state tracking fields if present
+        const confirmBull = typeof positionArray._confirmBull === 'number' ? positionArray._confirmBull : undefined;
+        const confirmBear = typeof positionArray._confirmBear === 'number' ? positionArray._confirmBear : undefined;
+        const elapsedOpen = typeof positionArray._elapsedOpen === 'number' ? positionArray._elapsedOpen : undefined;
+        
+        result += `      "state": ${JSON.stringify(state)}, "bias": ${JSON.stringify(bias)}, "covered": ${covered}, "strategy": ${JSON.stringify(strategy)}, "cost": ${cost}, "offsetBudget": ${offsetBudget}, "spreadWidth": ${spreadWidth}, "maxValue": ${maxValue}`;
+        
+        // Add strategy tracking fields if they exist
+        if (confirmBull !== undefined) {
+          result += `, "_confirmBull": ${confirmBull}`;
+        }
+        if (confirmBear !== undefined) {
+          result += `, "_confirmBear": ${confirmBear}`;
+        }
+        if (elapsedOpen !== undefined) {
+          result += `, "_elapsedOpen": ${elapsedOpen}`;
+        }
+        
+        result += ', \n';
         result += '      "legs": [\n';
         
         // Add each leg on a single line
@@ -611,6 +631,109 @@ class PositionManager {
   }
 
   /**
+   * Open a specific offsetting position as a cover
+   * @param {string} symbolExpiration - Symbol and expiration (e.g., "NDX_2026-03-31")
+   * @param {Object} offsettingPosition - The offsetting position to open as cover
+   * @param {Object} options - Options including persistence manager
+   * @returns {boolean} - True if successful, false otherwise
+   */
+  async tryOpenOffsettingCover(symbolExpiration, offsettingPosition, options = {}) {
+    const source = options.source || 'offsetting-analysis';
+    const persistenceManager = options.persistenceManager;
+    
+    console.log(`🔄 [cover:${source}] ${symbolExpiration}: Opening offsetting position as cover`);
+    
+    if (!offsettingPosition || !offsettingPosition.legs || !Array.isArray(offsettingPosition.legs)) {
+      console.error(`🔄 [cover:${source}] ❌ Invalid offsetting position provided`);
+      return false;
+    }
+    
+    if (!persistenceManager) {
+      console.error(`🔄 [cover:${source}] ❌ No persistence manager provided`);
+      return false;
+    }
+    
+    try {
+      // Store the covering legs using the new method
+      const updatedEntry = await persistenceManager.storeCoveringLegs(
+        symbolExpiration,
+        offsettingPosition.legs,
+        { entryIndex: -1 } // Use latest uncovered entry
+      );
+      
+      console.log(
+        `🔄 [cover:${source}] ✅ Offsetting position stored as cover for ${symbolExpiration} ` +
+        `(total legs: ${updatedEntry.legs.length})`
+      );
+      
+      return true;
+      
+    } catch (error) {
+      console.error(`🔄 [cover:${source}] ❌ Failed to store offsetting cover: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Analyze offsetting positions for a given position and group by score buckets
+   * @param {string} symbolExpiration - The symbol_date combination
+   * @param {Object} position - The position object
+   * @returns {Object} - Analysis result with bucket counts, total available, and raw positions
+   */
+  async analyzeOffsettingPositions(symbolExpiration, position) {
+    try {
+      // Extract symbol from symbolExpiration (e.g., "NDX_2026-03-31" -> "NDX")
+      const symbol = symbolExpiration.split('_')[0];
+      
+      // Fetch offsetting positions from the server API
+      const offsetUrl = `http://localhost:3001/api/v1/positions/offsetting?symbol=${symbol}`;
+      const response = await fetch(offsetUrl);
+      
+      if (!response.ok) {
+        console.warn(`⚠️ Failed to fetch offsetting positions for ${symbol}: ${response.statusText}`);
+        return { totalAvailable: 0, buckets: {}, positions: [] };
+      }
+      
+      const data = await response.json();
+      const offsettingPositions = data.offsettingPositions || [];
+      
+      // Group by score buckets (0-0.1, 0.1-0.2, ..., 0.9-1.0)
+      const buckets = {};
+      let totalAvailable = 0;
+      
+      for (const pos of offsettingPositions) {
+        const score = pos.score ?? 0;
+        const bucketKey = Math.floor(score * 10) / 10; // Rounds down to nearest 0.1
+        const bucketLabel = `${bucketKey}-${bucketKey + 0.1}`;
+        
+        if (!buckets[bucketLabel]) {
+          buckets[bucketLabel] = 0;
+        }
+        buckets[bucketLabel]++;
+        totalAvailable++;
+      }
+      
+      // Log the results
+      console.log(`📊 Offset analysis for ${symbolExpiration}:`);
+      console.log(`  Total available offsetting positions: ${totalAvailable}`);
+      if (totalAvailable > 0) {
+        console.log(`  Score distribution:`);
+        Object.entries(buckets)
+          .sort(([a], [b]) => parseFloat(a) - parseFloat(b))
+          .forEach(([bucket, count]) => {
+            console.log(`    ${bucket}: ${count} positions`);
+          });
+      }
+      
+      return { totalAvailable, buckets, positions: offsettingPositions };
+      
+    } catch (error) {
+      console.error(`❌ Error analyzing offsetting positions for ${symbolExpiration}: ${error.message}`);
+      return { totalAvailable: 0, buckets: {}, positions: [] };
+    }
+  }
+
+  /**
    * Check if we should cover based on combined 1m/5m/15m analysis
    */
   async check1m5m15mCover(symbolExpiration, position, candleAnalysis) {
@@ -860,7 +983,49 @@ class PositionManager {
         return;
       }
       
-      const positions = await persistenceManager.getAllPositions();
+      // Initialize cache from disk on first run, otherwise use in-memory cache
+      let positions;
+      if (!this.cacheInitialized) {
+        positions = await persistenceManager.getAllPositions();
+        this.positionsCache = positions;
+        this.cacheInitialized = true;
+        console.log('📊 Initialized positions cache from disk');
+      } else {
+        // Use in-memory cache
+        positions = this.positionsCache;
+        
+        // Sync critical fields from disk (legs, covered status) in case of external changes
+        const diskPositions = await persistenceManager.getAllPositions();
+        for (const [symbolExpiration, diskArray] of Object.entries(diskPositions)) {
+          if (!positions[symbolExpiration]) {
+            // New position added externally
+            positions[symbolExpiration] = diskArray;
+            console.log(`📊 Added new position from disk: ${symbolExpiration}`);
+          } else {
+            // Sync legs and covered status for existing positions
+            const memArray = positions[symbolExpiration];
+            diskArray.forEach((diskPos, index) => {
+              if (memArray[index]) {
+                // Preserve in-memory state tracking fields, but sync execution results
+                const legs = diskPos.legs || [];
+                const covered = diskPos.covered || false;
+                if (JSON.stringify(memArray[index].legs) !== JSON.stringify(legs)) {
+                  memArray[index].legs = legs;
+                  console.log(`📊 Synced legs from disk for ${symbolExpiration}[${index}]`);
+                }
+                if (memArray[index].covered !== covered) {
+                  memArray[index].covered = covered;
+                  console.log(`📊 Synced covered status from disk for ${symbolExpiration}[${index}]`);
+                }
+              } else {
+                // Position added externally at this index
+                memArray[index] = diskPos;
+                console.log(`📊 Added position from disk: ${symbolExpiration}[${index}]`);
+              }
+            });
+          }
+        }
+      }
       
       if (!positions || Object.keys(positions).length === 0) {
         console.log('📊 Position Check: No positions available');
@@ -1155,14 +1320,27 @@ class PositionManager {
             workingPosition.covered = true;
             queueStateUpdate(symbolExpiration, workingIndex, { covered: true });
           }
+          
+          // FALLBACK: Try simple cover if state cover didn't execute
+          // Criteria: !covered AND state='open' AND checkStateCover didn't execute
+          if (!coverResult.executed && !workingPosition.covered && currentState === 'open') {
+            console.log(`  ${symbol}: State cover took no action, trying simple cover fallback`);
+            try {
+              const simpleResult = await strategyChecks.checkSimpleCover.call(this, symbolExpiration, workingPosition);
+              if (simpleResult) {
+                console.log(`  ${symbol}: Simple cover executed successfully`);
+              }
+            } catch (error) {
+              console.error(`  ${symbol}: Simple cover fallback failed - ${error.message}`);
+            }
+          }
         }
       }
 
       // Apply all queued state updates atomically
-      // STATE CHANGES: This is where all queued state changes are actually applied to the persistent storage
+      // STATE CHANGES: This is where all queued state changes are actually applied to the in-memory cache
       // The queue prevents race conditions and ensures all changes for a cycle are applied together
       if (pendingStateUpdates.size > 0) {
-        const latestPositions = await persistenceManager.getAllPositions();
         let appliedUpdates = 0;
 
         for (const [key, updates] of pendingStateUpdates.entries()) {
@@ -1172,12 +1350,12 @@ class PositionManager {
             continue;
           }
 
-          const entryList = latestPositions[symbolExpiration];
+          const entryList = positions[symbolExpiration];
           if (!Array.isArray(entryList) || !entryList[index]) {
             continue;
           }
 
-          // STATE CHANGE: Apply all queued updates (state, bias, covered) to the position
+          // STATE CHANGE: Apply all queued updates (state, bias, covered, confirmation counters) to the position
           const oldState = entryList[index].state || 'undefined';
           const oldBias = entryList[index].bias || 'undefined';
           const oldCovered = entryList[index].covered;
@@ -1187,7 +1365,8 @@ class PositionManager {
         }
 
         if (appliedUpdates > 0) {
-          await persistenceManager.saveAllPositions(latestPositions);
+          // Save in-memory cache to disk
+          await persistenceManager.saveAllPositions(positions);
           console.log(`💾 Saved ${appliedUpdates} state update(s)`);
         }
       }
