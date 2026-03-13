@@ -1075,7 +1075,7 @@ async function startServer() {
       
       // Start position check loop
       console.log(``);
-      console.log(`🔄 Starting position check loop (every 10 seconds)...`);
+      console.log(`🔄 Starting position check loop (every 60 seconds)...`);
       let positionCheckInterval = null;
       
       // Only start one interval
@@ -1086,7 +1086,7 @@ async function startServer() {
           } catch (error) {
             console.error('❌ Error in position check loop:', error.message);
           }
-        }, 10000); // 10 seconds
+        }, 60000); // 1 minute, was 10 seconds but debating if this is part of reality not matching backtests
         
         console.log(`✅ Position check loop started`);
       }

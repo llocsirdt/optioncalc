@@ -7,6 +7,7 @@
 
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 
 // Load environment variables
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
@@ -71,6 +72,18 @@ function getStrategyHandler(methodName) {
 function simplifyStrategyName(method) {
   if (!method) return 'unknown';
   return method.replace(/^strategy/, '').replace(/(Open|Cover)$/i, '');
+}
+
+function sortObjectKeys(obj) {
+  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+  if (obj && typeof obj === 'object') {
+    const sorted = {};
+    Object.keys(obj).sort().forEach(k => {
+      sorted[k] = sortObjectKeys(obj[k]);
+    });
+    return sorted;
+  }
+  return obj;
 }
 
 class BacktestController {
@@ -344,7 +357,7 @@ class BacktestController {
   /**
    * Run backtest
    */
-  async runBacktest(symbol, backtestDate, openMethod = 'strategySimple5mBBScoreOpen', coverMethod = 'strategySimple5mBBScoreCover') {
+  async runBacktest(symbol, backtestDate, openMethod = 'strategySimple5mBBScoreOpen', coverMethod = 'strategySimple5mBBScoreCover', runtimeOptions = {}) {
     try {
       // Reset strategy state for new day
       const { name: openStrategyName, fn: openStrategyFn } = getStrategyHandler(openMethod);
@@ -721,6 +734,7 @@ class BacktestController {
           }
           
           // === STRATEGY EXECUTION ===
+          this.runtimeOptions = runtimeOptions || {};
           let strategyMethod = null;
           let opened = false;
           let covered = false;
@@ -758,13 +772,17 @@ class BacktestController {
             if (next.nextBias) {
               this.positionState.bias = next.nextBias;
             }
+            const patches = next.positionStateUpdates || next.positionPatches;
+            if (patches && typeof patches === 'object') {
+              Object.assign(this.positionState, patches);
+            }
           };
 
           const isOpenState = this.positionState.state === 'open' && !this.positionState.covered;
 
           if (!isOpenState) {
             strategyMethod = openStrategyName;
-            const openResult = openStrategyFn(this.positionState, analysisForStrategy) || {};
+            const openResult = openStrategyFn(this.positionState, analysisForStrategy, this.runtimeOptions) || {};
             applyStateUpdates(openResult);
 
             if (openResult.action === 'open_bull' || openResult.action === 'open_bear') {
@@ -776,7 +794,8 @@ class BacktestController {
                 bias,
                 covered: false,
                 type: positionType,
-                openedAt: timestamp
+                openedAt: timestamp,
+                _elapsedOpen: 0
               };
 
               this.openPosition = {
@@ -805,7 +824,7 @@ class BacktestController {
             }
           } else {
             strategyMethod = coverStrategyName;
-            const coverResult = coverStrategyFn(this.positionState, analysisForStrategy, { positionType: this.positionState.type }) || {};
+            const coverResult = coverStrategyFn(this.positionState, analysisForStrategy, { positionType: this.positionState.type }, this.runtimeOptions) || {};
             applyStateUpdates(coverResult);
 
             if (coverResult.action === 'cover') {
@@ -977,6 +996,19 @@ class BacktestController {
       await fs.writeFile(outputPath, JSON.stringify(this.results, null, 2));
       console.log(`\n💾 Results saved to: ${outputPath}`);
       
+      // Compute optional labeling for this run to avoid overwriting files across different configs
+      const runLabel = this.runtimeOptions && this.runtimeOptions.runLabel ? String(this.runtimeOptions.runLabel) : null;
+      const configForHash = this.runtimeOptions && this.runtimeOptions.config ? this.runtimeOptions.config : null;
+      let configHash = null;
+      if (configForHash) {
+        try {
+          const normalized = JSON.stringify(sortObjectKeys(configForHash));
+          configHash = crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 8);
+        } catch (e) {
+          // noop - leave configHash null on serialization errors
+        }
+      }
+
       // Save strategy actions to separate file with metadata header
       const actionsOutput = {
         metadata: {
@@ -986,7 +1018,10 @@ class BacktestController {
           coverStrategy: coverMethod,
           runTimestamp,
           totalActions: this.strategyActions.length,
-          totalProfitLoss: parseFloat(totalProfitLoss.toFixed(4))
+          totalProfitLoss: parseFloat(totalProfitLoss.toFixed(4)),
+          runLabel: runLabel || null,
+          configHash: configHash || null,
+          config: configForHash || null
         },
         actions: this.strategyActions
       };
@@ -996,7 +1031,14 @@ class BacktestController {
       const coverMethodShort = simplifyStrategyName(coverStrategyName);
       const actionsDir = path.join(__dirname, 'backtest-actions');
       await fs.mkdir(actionsDir, { recursive: true });
-      const actionsPath = path.join(actionsDir, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}.json`);
+      let suffix = '';
+      if (runLabel) {
+        const safe = runLabel.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-.]/g, '');
+        if (safe) suffix = `-${safe}`;
+      } else if (configHash) {
+        suffix = `-cfg${configHash}`;
+      }
+      const actionsPath = path.join(actionsDir, `backtest-actions-${symbol}-${backtestDate}-${openMethodShort}-${coverMethodShort}${suffix}.json`);
       await fs.writeFile(actionsPath, JSON.stringify(actionsOutput, null, 2));
       console.log(`💾 Strategy actions saved to: ${actionsPath}`);
       

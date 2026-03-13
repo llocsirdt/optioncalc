@@ -306,9 +306,13 @@ class PositionManager {
    * Calculate spread strikes from underlying price
    * 40 points wide, centered at nearest $10
    */
-  calculateSpreadStrikes(underlyingPrice) {
+  calculateSpreadStrikes(underlyingPrice, spreadWidth = 40) {
+    if (underlyingPrice == null) {
+      throw new Error('underlyingPrice is required for calculateSpreadStrikes');
+    }
     const center = Math.round(underlyingPrice / 10) * 10;
-    return { lower: center - 20, upper: center + 20 };
+    const half = spreadWidth / 2;
+    return { lower: center - half, upper: center + half };
   }
 
   getLatestPositionEntry(positionArray) {
@@ -361,16 +365,25 @@ class PositionManager {
    * Try to open a new bull position (bull call debit spread)
    * Buy lower strike call, sell upper strike call
    */
-  async tryOpenBullPosition(symbol, expiration, underlyingPrice, persistenceManager) {
-    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
+  async tryOpenBullPosition(symbol, expiration, underlyingPrice, persistenceManager, options = {}) {
+    if (underlyingPrice == null) {
+      console.warn(`🐂 Cannot open bull position for ${symbol}_${expiration}: underlyingPrice missing`);
+      return;
+    }
+    const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : 40;
+    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
     const positionString = `1c${lower}@2000,-1c${upper}@0`;
     console.log(`🐂 Opening bull call spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
-    try {
-      await persistenceManager.storePosition(symbol, expiration, positionString);
-      console.log(`🐂 ✅ Bull call spread stored for ${symbol}_${expiration}`);
-    } catch (error) {
-      console.error(`🐂 ❌ Failed to store bull call spread: ${error.message}`);
+    if (persistenceManager) {
+      try {
+        await persistenceManager.storePosition(symbol, expiration, positionString);
+        console.log(`🐂 ✅ Bull call spread stored for ${symbol}_${expiration}`);
+      } catch (error) {
+        console.error(`🐂 ❌ Failed to store bull call spread: ${error.message}`);
+      }
+    } else {
+      console.warn(`🐂 No persistence manager provided; bull call spread not stored`);
     }
   }
 
@@ -378,16 +391,25 @@ class PositionManager {
    * Try to open a new bear position (bear put debit spread)
    * Buy upper strike put, sell lower strike put
    */
-  async tryOpenBearPosition(symbol, expiration, underlyingPrice, persistenceManager) {
-    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
+  async tryOpenBearPosition(symbol, expiration, underlyingPrice, persistenceManager, options = {}) {
+    if (underlyingPrice == null) {
+      console.warn(`🐻 Cannot open bear position for ${symbol}_${expiration}: underlyingPrice missing`);
+      return;
+    }
+    const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : 40;
+    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
     const positionString = `1p${upper}@2000,-1p${lower}@0`;
     console.log(`🐻 Opening bear put spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
-    try {
-      await persistenceManager.storePosition(symbol, expiration, positionString);
-      console.log(`🐻 ✅ Bear put spread stored for ${symbol}_${expiration}`);
-    } catch (error) {
-      console.error(`🐻 ❌ Failed to store bear put spread: ${error.message}`);
+    if (persistenceManager) {
+      try {
+        await persistenceManager.storePosition(symbol, expiration, positionString);
+        console.log(`🐻 ✅ Bear put spread stored for ${symbol}_${expiration}`);
+      } catch (error) {
+        console.error(`🐻 ❌ Failed to store bear put spread: ${error.message}`);
+      }
+    } else {
+      console.warn(`🐻 No persistence manager provided; bear put spread not stored`);
     }
   }
 
@@ -409,8 +431,6 @@ class PositionManager {
       console.log(`🐂 [cover:${source}] ${symbolExpiration}: missing underlying price, skipping`);
       return false;
     }
-
-    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
 
     try {
       let positions = {};
@@ -434,6 +454,11 @@ class PositionManager {
         return false;
       }
       const priorLegCount = Array.isArray(entry.legs) ? entry.legs.length : 0;
+      
+      const initialLegs = Array.isArray(entry.legs) ? entry.legs.filter(l => l.action === 'initial') : [];
+      const existingWidth = this.calculateSpreadWidth(initialLegs);
+      const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : (existingWidth || 40);
+      const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
       
       const timestamp = new Date().toISOString();
       entry.legs.push(
@@ -474,8 +499,6 @@ class PositionManager {
       return false;
     }
 
-    const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice);
-
     try {
       let positions = {};
       try {
@@ -498,6 +521,11 @@ class PositionManager {
         return false;
       }
       const priorLegCount = Array.isArray(entry.legs) ? entry.legs.length : 0;
+      
+      const initialLegs = Array.isArray(entry.legs) ? entry.legs.filter(l => l.action === 'initial') : [];
+      const existingWidth = this.calculateSpreadWidth(initialLegs);
+      const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : (existingWidth || 40);
+      const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
       
       const timestamp = new Date().toISOString();
       entry.legs.push(
@@ -880,6 +908,8 @@ class PositionManager {
             expectedState = 'covered';
           } else if (legs.length > 0) {
             expectedState = 'open';
+          } else if (position.state && position.state.startsWith('ready_open')) {
+            expectedState = position.state;
           }
 
           if (position.state !== expectedState) {
@@ -1011,9 +1041,32 @@ class PositionManager {
         // Criteria: !covered AND (state='new' OR state starts with 'ready_open' OR no legs exist)
         const shouldCheckOpen = !covered && (currentState === 'new' || currentState.startsWith('ready_open') || legs.length === 0);
         if (shouldCheckOpen) {
+          const ts1m = candleAnalysis?.candleData?.['1m']?.candles?.[0]?.datetime;
+          const withinMarket = this.isWithinOpeningWindow(ts1m);
+          if (!withinMarket) {
+            console.log(`⏰ ${symbol}: Outside market hours (${ts1m || 'n/a'}), skipping state open`);
+            continue;
+          }
           const openResult = await strategyChecks.checkStateOpen.call(this, symbol, expiration, workingPosition, candleAnalysis, persistenceManager);
           const openAction = openResult?.action;
           const executedOpen = Boolean(openResult?.executed);
+
+          try {
+            const dbgNextState = openResult?.nextState || workingPosition.state;
+            const dbgNextBias = openResult?.nextBias || workingPosition.bias;
+            console.log(`🧪 [diag/open] ${symbolExpiration}[${workingIndex}]: action=${openAction || 'hold'}, nextState=${dbgNextState}, nextBias=${dbgNextBias}, executed=${executedOpen}, reason=${openResult?.reason || 'n/a'}`);
+          } catch (_) {}
+
+          const stateUpdatesOpen = openResult?.positionStateUpdates || openResult?.positionPatches;
+          if (stateUpdatesOpen && typeof stateUpdatesOpen === 'object') {
+            try {
+              Object.assign(workingPosition, stateUpdatesOpen);
+              queueStateUpdate(symbolExpiration, workingIndex, stateUpdatesOpen);
+              const cBull = stateUpdatesOpen._confirmBull ?? workingPosition._confirmBull ?? 0;
+              const cBear = stateUpdatesOpen._confirmBear ?? workingPosition._confirmBear ?? 0;
+              console.log(`🧪 [diag/open] ${symbolExpiration}[${workingIndex}] patches: _confirmBull=${cBull}, _confirmBear=${cBear}`);
+            } catch (_) {}
+          }
 
           // STATE CHANGE: Fallback to ready state when strategy wants to open but doesn't execute
           // Criteria: action='open_bull'/'open_bear' AND executed=false
@@ -1062,7 +1115,30 @@ class PositionManager {
             continue;
           }
 
+          const ts1m = candleAnalysis?.candleData?.['1m']?.candles?.[0]?.datetime;
+          const withinMarket = this.isWithinOpeningWindow(ts1m);
+          if (!withinMarket) {
+            console.log(`⏰ ${symbol}: Outside market hours (${ts1m || 'n/a'}), skipping state cover`);
+            continue;
+          }
+
           const coverResult = await strategyChecks.checkStateCover.call(this, symbolExpiration, workingPosition, candleAnalysis);
+
+          try {
+            console.log(`🧪 [diag/cover] ${symbolExpiration}[${workingIndex}]: action=${coverResult?.action || 'hold'}, executed=${coverResult?.executed ? 'true' : 'false'}, reason=${coverResult?.reason || 'n/a'}`);
+          } catch (_) {}
+
+          const stateUpdatesCover = coverResult?.positionStateUpdates || coverResult?.positionPatches;
+          if (stateUpdatesCover && typeof stateUpdatesCover === 'object') {
+            try {
+              Object.assign(workingPosition, stateUpdatesCover);
+              queueStateUpdate(symbolExpiration, workingIndex, stateUpdatesCover);
+              const elapsed = stateUpdatesCover._elapsedOpen ?? workingPosition._elapsedOpen;
+              if (elapsed !== undefined) {
+                console.log(`🧪 [diag/cover] ${symbolExpiration}[${workingIndex}] patches: _elapsedOpen=${elapsed}`);
+              }
+            } catch (_) {}
+          }
 
           // STATE CHANGE: Follow strategy's next state when cover was executed
           // Criteria: cover executed AND strategy provides nextState AND it differs from current state

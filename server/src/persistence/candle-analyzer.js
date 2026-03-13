@@ -184,6 +184,35 @@ async function populateBaseCache(symbol) {
       // Sort newest first
       candles.sort((a, b) => b.datetime - a.datetime);
       
+      // TODO: Investigate Schwab API duplicate issue - surprising that API returns exact duplicates
+      // Each timestamp appears twice in the response. Need to verify if this is:
+      // 1. Temporary API issue specific to certain days/conditions
+      // 2. Change in API behavior 
+      // 3. Related to request parameters (periodType, frequency, etc.)
+      // Monitor this in future testing and remove deduplication if API is fixed
+      
+      // Check for duplicates in the raw data from Schwab
+      const timestamps = {};
+      candles.forEach(c => {
+        timestamps[c.timeEST || toESTTime(c.datetime)] = (timestamps[c.timeEST || toESTTime(c.datetime)] || 0) + 1;
+      });
+      const dupCount = Object.values(timestamps).filter(count => count > 1).length;
+      if (dupCount > 0) {
+        console.log(`🕯️ ⚠️ Found ${dupCount} duplicate timestamps in ${tf.name} data from Schwab API`);
+      }
+      
+      // Remove duplicates by keeping only the first occurrence
+      const seenTimestamps = new Set();
+      candles = candles.filter(candle => {
+        const timeEST = candle.timeEST || toESTTime(candle.datetime);
+        if (seenTimestamps.has(timeEST)) {
+          return false; // Skip duplicate
+        }
+        seenTimestamps.add(timeEST);
+        return true;
+      });
+      console.log(`🕯️   ${tf.name}: ${data.candles?.length || 0} candles from API, ${candles.length} after deduplication`);
+      
       baseCandleData[tf.name] = {
         candles: candles,
         count: candles.length
@@ -448,6 +477,24 @@ async function createWorkingData(symbol) {
   // For 5m, 15m, 30m - use base cache data (has more history) and update with new 1m candles
   // Only aggregate the NEW 1m candles and prepend to base cache data
   
+  // Always build 1h from 30m data (whether we have new candles or not)
+  workingData['1h'] = {
+    timeframe: '1h',
+    candles: aggregate30mTo60m(workingData['30m'].candles),
+    count: 0,
+    raw: true
+  };
+  
+  // Add 60m alias for strategy compatibility
+  workingData['60m'] = {
+    ...workingData['1h'],
+    timeframe: '60m'
+  };
+  
+  // Update 1h count after initialization
+  workingData['1h'].count = workingData['1h'].candles.length;
+  workingData['60m'].count = workingData['60m'].candles.length;
+  
   if (new1mCandles.length > 0) {
     console.log(`🕯️   Updating higher timeframes with ${new1mCandles.length} new 1m candles`);
     
@@ -457,30 +504,69 @@ async function createWorkingData(symbol) {
     const new30m = aggregateToTimeframe(new1mCandles, 30);
     const new1h = aggregateToTimeframe(new1mCandles, 60);
     
-    // Prepend new aggregated candles to base cache data
-    workingData['5m'].candles = [...new5m, ...workingData['5m'].candles];
-    workingData['15m'].candles = [...new15m, ...workingData['15m'].candles];
-    workingData['30m'].candles = [...new30m, ...workingData['30m'].candles];
+    // Debug: Check for duplicates in base cache before processing
+    console.log(`🕯️   Base cache 5m candles: ${workingData['5m'].candles.length}`);
+    console.log(`🕯️   Base cache 15m candles: ${workingData['15m'].candles.length}`);
+    
+    // Remove overlapping candles from base cache before prepending new ones
+    // This prevents duplicates when aggregation boundaries overlap
+    const removeOverlappingCandles = (existingCandles, newCandles) => {
+      if (!newCandles || newCandles.length === 0) return existingCandles;
+      
+      // Get the oldest timestamp from new candles
+      const oldestNewTimestamp = newCandles[newCandles.length - 1].datetime;
+      
+      // Filter out existing candles that are newer than or equal to the oldest new candle
+      const filtered = existingCandles.filter(candle => candle.datetime < oldestNewTimestamp);
+      console.log(`🕯️   Removed ${existingCandles.length - filtered.length} overlapping candles`);
+      return filtered;
+    };
+    
+    // Apply overlap removal and prepend new aggregated candles
+    workingData['5m'].candles = [...new5m, ...removeOverlappingCandles(workingData['5m'].candles, new5m)];
+    workingData['15m'].candles = [...new15m, ...removeOverlappingCandles(workingData['15m'].candles, new15m)];
+    workingData['30m'].candles = [...new30m, ...removeOverlappingCandles(workingData['30m'].candles, new30m)];
+    workingData['1h'].candles = [...new1h, ...removeOverlappingCandles(workingData['1h'].candles, new1h)];
+    
+    // Update 60m alias to match 1h
+    workingData['60m'].candles = [...workingData['1h'].candles];
+    workingData['60m'].count = workingData['1h'].candles.length;
+    
+    // Debug: Check for duplicates after processing
+    const checkDuplicates = (candles, name) => {
+      const timestamps = {};
+      candles.forEach(c => {
+        timestamps[c.timeEST] = (timestamps[c.timeEST] || 0) + 1;
+      });
+      const dupCount = Object.values(timestamps).filter(count => count > 1).length;
+      console.log(`🕯️   ${name} duplicates after processing: ${dupCount}`);
+    };
+    
+    checkDuplicates(workingData['5m'].candles, '5m');
+    checkDuplicates(workingData['15m'].candles, '15m');
+    checkDuplicates(workingData['30m'].candles, '30m');
+    checkDuplicates(workingData['1h'].candles, '1h');
+    
+    // Update counts
+    workingData['5m'].count = workingData['5m'].candles.length;
+    workingData['15m'].count = workingData['15m'].candles.length;
+    workingData['30m'].count = workingData['30m'].candles.length;
+    workingData['1h'].count = workingData['1h'].candles.length;
+    workingData['60m'].count = workingData['60m'].candles.length;
   }
+  workingData['15m'].timeframe = '15m';
+  workingData['15m'].raw = true;
+  workingData['15m'].count = workingData['15m'].candles.length;
   
-  // Always build 1h from 30m data (whether we have new candles or not)
-  workingData['1h'] = {
-    timeframe: '1h',
-    candles: aggregate30mTo60m(workingData['30m'].candles),
-    count: 0,
-    raw: true
-  };
+  workingData['30m'].timeframe = '30m';
+  workingData['30m'].raw = true;
+  workingData['30m'].count = workingData['30m'].candles.length;
   
   // Update counts and add metadata
   workingData['5m'].timeframe = '5m';
   workingData['5m'].raw = true;
   workingData['5m'].count = workingData['5m'].candles.length;
   
-  workingData['15m'].timeframe = '15m';
-  workingData['15m'].raw = true;
-  workingData['15m'].count = workingData['15m'].candles.length;
-  
-  workingData['30m'].timeframe = '30m';
   workingData['30m'].raw = true;
   workingData['30m'].count = workingData['30m'].candles.length;
   

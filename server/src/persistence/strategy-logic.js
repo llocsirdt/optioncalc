@@ -36,9 +36,22 @@ function calculateBBScore(currentClose, upperBand, middleBand, lowerBand) {
  * Requires both timeframes to agree on direction
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore15m, bbScore60m}
  */
-function strategySimple15and60mBBScoreOpen(analysis) {
-  const bbScore15m = analysis['15m'].bbScore;
-  const bbScore60m = analysis['60m'].bbScore;
+function strategySimple15and60mBBScoreOpen(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['15m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
+  const bbScore15m = analysis['15m']?.bbScore;
+  const bbScore60m = analysis['60m']?.bbScore;
   
   if (
     bbScore15m === null || bbScore15m === undefined ||
@@ -60,8 +73,21 @@ function strategySimple15and60mBBScoreOpen(analysis) {
  * Check if we should open a position based on 5m BB score
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore5m: value}
  */
-function strategySimple5mBBScoreOpen(analysis) {
-  const bbScore5m = analysis['5m'].bbScore;
+function strategySimple5mBBScoreOpen(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['5m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
+  const bbScore5m = analysis['5m']?.bbScore;
   
   if (bbScore5m === null || bbScore5m === undefined) {
     return { action: 'none', bbScore5m: null };
@@ -80,8 +106,21 @@ function strategySimple5mBBScoreOpen(analysis) {
  * Check if we should open a position based on 15m BB score
  * Returns: {action: 'open_bull'|'open_bear'|'none', bbScore15m: value}
  */
-function strategySimple15mBBScoreOpen(analysis) {
-  const bbScore15m = analysis['15m'].bbScore;
+function strategySimple15mBBScoreOpen(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['15m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
+  const bbScore15m = analysis['15m']?.bbScore;
   
   if (bbScore15m === null || bbScore15m === undefined) {
     return { action: 'none', bbScore15m: null };
@@ -186,7 +225,20 @@ function strategySimple15and60mBBScoreCover(position, analysis) {
  * Check if we should open a position based on 1m, 5m, and 15m signals
  * Uses both BB score and trend score for each timeframe
  */
-function strategy1m5m15mOpen(analysis) {
+function strategy1m5m15mOpen(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
   const timeframes = ['1m', '5m', '15m', '60m'];
   const data = timeframes.map(tf => analysis[tf] || {});
 
@@ -281,7 +333,19 @@ function strategy1m5m15mCover(position, analysis) {
   return { action: 'hold', analysis: data };
 }
 
-function strategyStateOpen(position = {}, analysis = {}) {
+/**
+ * State strategy open logic with optional config-driven features.
+ *
+ * Features controlled by options.config (merged with DEFAULT_STATE_STRATEGY_CONFIG):
+ * - open.minConfirmations: consecutive minutes where 1m and 5m bbScoreDelta agree with the open direction
+ *   • Bull open requires delta1m < 0 and delta5m < 0 (price rising toward middle from below)
+ *   • Bear open requires delta1m > 0 and delta5m > 0 (price falling toward middle from above)
+ * - open.enableTrendGate: blocks counter-trend opens during strong 5m trends
+ *   • Uses 5m trendScore vs open.strongTrendThreshold; allows override if
+ *     open.allowCounterTrendIfExtreme && |bbScore5m| >= open.counterTrendExtremeBB5m
+ * - positionPatches: persists _confirmBull/_confirmBear counters across minutes
+ */
+function strategyStateOpen(position = {}, analysis = {}, options = {}) {
   // Support legacy callers (like backtests) that only pass analysis
   if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
     if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
@@ -299,6 +363,8 @@ function strategyStateOpen(position = {}, analysis = {}) {
   const currentBias = position.bias || 'neutral';
   let nextState = currentState;
   let nextBias = currentBias;
+
+  const cfg = { ...DEFAULT_STATE_STRATEGY_CONFIG, ...(options.config || {}) };
 
   const higherTimeframes = ['5m', '15m', '60m'];
   const hasBullSignal = higherTimeframes.some(tf => (analysis[tf]?.bbScore ?? null) > 1);
@@ -320,52 +386,131 @@ function strategyStateOpen(position = {}, analysis = {}) {
   if (currentState === 'ready_open_bull') {
     const delta1m = analysis['1m']?.bbScoreDelta;
     const delta5m = analysis['5m']?.bbScoreDelta;
-    if (delta1m !== undefined && delta5m !== undefined && delta1m < 0 && delta5m < 0) {
+    const ts5m = analysis['5m']?.trendScore;
+    const bb5m = analysis['5m']?.bbScore;
+
+    // Optional trend gate: block counter-trend bull entries in strong downtrend unless extreme BB context allows it
+    if (cfg.open.enableTrendGate && typeof ts5m === 'number') {
+      const strongCounterTrend = ts5m <= -Math.abs(cfg.open.strongTrendThreshold);
+      const extremeOK = cfg.open.allowCounterTrendIfExtreme && typeof bb5m === 'number' && Math.abs(bb5m) >= cfg.open.counterTrendExtremeBB5m;
+      if (strongCounterTrend && !extremeOK) {
+        const patches = { _confirmBull: 0 };
+        return { action: 'hold', nextState, nextBias, positionStateUpdates: patches, reason: 'trend_gate_block' };
+      }
+    }
+
+    // Track consecutive confirmation minutes for bull entries (both deltas negative)
+    let confirmBull = typeof position._confirmBull === 'number' ? position._confirmBull : 0;
+    const match = (delta1m !== undefined && delta5m !== undefined && delta1m < 0 && delta5m < 0);
+    confirmBull = match ? (confirmBull + 1) : 0;
+    const need = Math.max(1, cfg.open.minConfirmations || 1);
+    const patches = { _confirmBull: confirmBull };
+
+    if (match && confirmBull >= need) {
       return {
         action: 'open_bull',
         nextState: 'open',
         nextBias: 'bullish',
-        reason: 'short_tf_confirmation'
+        reason: 'short_tf_confirmation',
+        // Reset both counters on open
+        positionStateUpdates: { _confirmBull: 0, _confirmBear: 0 }
       };
     }
+    return { action: 'hold', nextState, nextBias, positionStateUpdates: patches };
   }
 
   if (currentState === 'ready_open_bear') {
     const delta1m = analysis['1m']?.bbScoreDelta;
     const delta5m = analysis['5m']?.bbScoreDelta;
-    if (delta1m !== undefined && delta5m !== undefined && delta1m > 0 && delta5m > 0) {
+    const ts5m = analysis['5m']?.trendScore;
+    const bb5m = analysis['5m']?.bbScore;
+
+    // Optional trend gate: block counter-trend bear entries in strong uptrend unless extreme BB context allows it
+    if (cfg.open.enableTrendGate && typeof ts5m === 'number') {
+      const strongCounterTrend = ts5m >= Math.abs(cfg.open.strongTrendThreshold);
+      const extremeOK = cfg.open.allowCounterTrendIfExtreme && typeof bb5m === 'number' && Math.abs(bb5m) >= cfg.open.counterTrendExtremeBB5m;
+      if (strongCounterTrend && !extremeOK) {
+        const patches = { _confirmBear: 0 };
+        return { action: 'hold', nextState, nextBias, positionStateUpdates: patches, reason: 'trend_gate_block' };
+      }
+    }
+
+    // Track consecutive confirmation minutes for bear entries (both deltas positive)
+    let confirmBear = typeof position._confirmBear === 'number' ? position._confirmBear : 0;
+    const match = (delta1m !== undefined && delta5m !== undefined && delta1m > 0 && delta5m > 0);
+    confirmBear = match ? (confirmBear + 1) : 0;
+    const need = Math.max(1, cfg.open.minConfirmations || 1);
+    const patches = { _confirmBear: confirmBear };
+
+    if (match && confirmBear >= need) {
       return {
         action: 'open_bear',
         nextState: 'open',
         nextBias: 'bearish',
-        reason: 'short_tf_confirmation'
+        reason: 'short_tf_confirmation',
+        positionStateUpdates: { _confirmBull: 0, _confirmBear: 0 }
       };
     }
+    return { action: 'hold', nextState, nextBias, positionStateUpdates: patches };
   }
 
   return { action: 'hold', nextState, nextBias };
 }
 
-function strategyStateCover(position = {}, analysis = {}, context = {}) {
+/**
+ * State strategy cover logic with optional strengthened 1m-threshold behavior.
+ *
+ * Features controlled by options.config (merged with DEFAULT_STATE_STRATEGY_CONFIG):
+ * - cover.strengthen1mThreshold: when cover is triggered only by 1m threshold,
+ *   require additional 5m context and a minimum hold time before allowing cover.
+ * - cover.minAbsBB5mFor1mThreshold: minimum |bbScore5m| needed when only 1m threshold fires.
+ * - cover.minHoldMinutesFor1mThreshold: minimum minutes the position must be open for the 1m-only cover.
+ * - Tracks _elapsedOpen minutes on the position via positionPatches while holding.
+ */
+function strategyStateCover(position = {}, analysis = {}, context = {}, options = {}) {
   const positionType = context.positionType || position.type || inferPositionTypeFromBias(position.bias);
   const currentState = position.state || 'open';
   const bb1m = analysis['1m']?.bbScore;
   const bb5m = analysis['5m']?.bbScore;
   const delta1m = analysis['1m']?.bbScoreDelta;
   const delta5m = analysis['5m']?.bbScoreDelta;
+  const cfg = { ...DEFAULT_STATE_STRATEGY_CONFIG, ...(options.config || {}) };
+
+  if (position._elapsedOpen === undefined) position._elapsedOpen = 0;
+  position._elapsedOpen++;
 
   if (positionType === 'bull') {
-    const thresholdHit = (typeof bb5m === 'number' && bb5m <= -0.1) || (typeof bb1m === 'number' && bb1m <= -0.8);
+    const th5 = typeof bb5m === 'number' && bb5m <= -0.1;
+    const th1 = typeof bb1m === 'number' && bb1m <= -0.8;
     const deltasConfirm = typeof delta1m === 'number' && typeof delta5m === 'number' && delta1m > 0 && delta5m > 0;
-    if (thresholdHit && deltasConfirm) {
-      const reason = typeof bb1m === 'number' && bb1m <= -0.8 ? '1m_threshold' : '5m_threshold';
+    if ((th5 || th1) && deltasConfirm) {
+      // Optional strengthening: if only the 1m threshold is firing, require 5m context and min hold
+      if (cfg.cover.strengthen1mThreshold && th1 && !th5) {
+        const absBB5 = Math.abs(bb5m ?? 0);
+        const ok5mContext = absBB5 >= (cfg.cover.minAbsBB5mFor1mThreshold || 0);
+        const okHold = position._elapsedOpen >= (cfg.cover.minHoldMinutesFor1mThreshold || 0);
+        if (!(ok5mContext && okHold)) {
+          return { action: 'hold', nextState: currentState, positionStateUpdates: { _elapsedOpen: position._elapsedOpen }, reason: 'strengthened_1m_threshold_hold' };
+        }
+      }
+      const reason = th1 ? '1m_threshold' : '5m_threshold';
       return { action: 'cover', nextState: 'covered', reason };
     }
   } else if (positionType === 'bear') {
-    const thresholdHit = (typeof bb5m === 'number' && bb5m >= 0.1) || (typeof bb1m === 'number' && bb1m >= 0.8);
+    const th5 = typeof bb5m === 'number' && bb5m >= 0.1;
+    const th1 = typeof bb1m === 'number' && bb1m >= 0.8;
     const deltasConfirm = typeof delta1m === 'number' && typeof delta5m === 'number' && delta1m < 0 && delta5m < 0;
-    if (thresholdHit && deltasConfirm) {
-      const reason = typeof bb1m === 'number' && bb1m >= 0.8 ? '1m_threshold' : '5m_threshold';
+    if ((th5 || th1) && deltasConfirm) {
+      // Optional strengthening: if only the 1m threshold is firing, require 5m context and min hold
+      if (cfg.cover.strengthen1mThreshold && th1 && !th5) {
+        const absBB5 = Math.abs(bb5m ?? 0);
+        const ok5mContext = absBB5 >= (cfg.cover.minAbsBB5mFor1mThreshold || 0);
+        const okHold = position._elapsedOpen >= (cfg.cover.minHoldMinutesFor1mThreshold || 0);
+        if (!(ok5mContext && okHold)) {
+          return { action: 'hold', nextState: currentState, positionStateUpdates: { _elapsedOpen: position._elapsedOpen }, reason: 'strengthened_1m_threshold_hold' };
+        }
+      }
+      const reason = th1 ? '1m_threshold' : '5m_threshold';
       return { action: 'cover', nextState: 'covered', reason };
     }
   }
@@ -378,6 +523,36 @@ function inferPositionTypeFromBias(bias) {
   if (bias === 'bearish') return 'bear';
   return 'unknown';
 }
+
+/**
+ * Default configuration for the State strategy. All keys are optional when
+ * provided via options.config and will be shallow-merged over these defaults.
+ *
+ * open:
+ *   - minConfirmations: number of consecutive minutes the 1m/5m deltas must agree
+ *   - enableTrendGate: enable/disable gating of counter-trend opens
+ *   - strongTrendThreshold: |trendScore5m| value to consider a trend "strong"
+ *   - allowCounterTrendIfExtreme: allow opens against strong trend if 5m BB is extreme
+ *   - counterTrendExtremeBB5m: |bbScore5m| threshold considered extreme
+ * cover:
+ *   - strengthen1mThreshold: if true, 1m-only covers require 5m context + min hold time
+ *   - minAbsBB5mFor1mThreshold: |bbScore5m| minimum when only 1m threshold fires
+ *   - minHoldMinutesFor1mThreshold: minimum minutes open before 1m-only cover is allowed
+ */
+const DEFAULT_STATE_STRATEGY_CONFIG = {
+  open: {
+    minConfirmations: 5,
+    enableTrendGate: false,
+    strongTrendThreshold: 4,
+    allowCounterTrendIfExtreme: false,
+    counterTrendExtremeBB5m: 1.2
+  },
+  cover: {
+    strengthen1mThreshold: false,
+    minAbsBB5mFor1mThreshold: 0.3,
+    minHoldMinutesFor1mThreshold: 0
+  }
+};
 
 /**
  * Module-level state for price trail strategy direction tracking.
@@ -398,7 +573,21 @@ function resetPriceTrailState() {
  * After a cover: switches to opposite direction of the covered position.
  * Requires analysis['1m'].close to be present.
  */
-function strategyPriceTrailOpen(analysis, hasExistingPositions = false) {
+function strategyPriceTrailOpen(position = {}, analysis = {}, hasExistingPositions = false) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+        // hasExistingPositions remains false for backtests
+      }
+    }
+  }
+  
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
 
   if (close1m === null || close1m === undefined) {
@@ -528,7 +717,20 @@ function resetPriceTrailv2State() {
  * Bull setup: 5m bbScore > 0.8 (price near/below lower band) AND 1m bbScoreDelta < 0 (bouncing up)
  * Bear setup: 5m bbScore < -0.8 (price near/above upper band) AND 1m bbScoreDelta > 0 (falling back)
  */
-function strategyPriceTrailv2Open(analysis) {
+function strategyPriceTrailv2Open(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bb5m = analysis['5m'] ? analysis['5m'].bbScore : null;
   const bbDelta1m = analysis['1m'] ? analysis['1m'].bbScoreDelta : null;
@@ -690,7 +892,20 @@ function detectRegime() {
  *   - Choppy: conservative band-edge entries with 1m reversal confirmation (v2 style)
  *   - Trending: auto-flip after cover to stay in the market (v1 style)
  */
-function strategyPriceTrailv3Open(analysis) {
+function strategyPriceTrailv3Open(position = {}, analysis = {}) {
+  // Support legacy callers (like backtests) that only pass analysis
+  if (!analysis || typeof analysis !== 'object' || Object.keys(analysis).length === 0 || analysis['1m'] || analysis['5m'] || analysis['15m'] || analysis['60m']) {
+    if (!analysis || typeof analysis !== 'object' || !analysis['1m']) {
+      // Heuristic: if first arg looks like analysis and second is empty, swap
+      const maybeAnalysis = position;
+      const hasTimeframeKeys = maybeAnalysis && (maybeAnalysis['1m'] || maybeAnalysis['5m'] || maybeAnalysis['15m'] || maybeAnalysis['60m']);
+      if (hasTimeframeKeys && (!analysis || Object.keys(analysis).length === 0)) {
+        analysis = maybeAnalysis;
+        position = {};
+      }
+    }
+  }
+  
   const close1m = analysis['1m'] ? analysis['1m'].close : null;
   const bb5m = analysis['5m'] ? analysis['5m'].bbScore : null;
   const bbDelta1m = analysis['1m'] ? analysis['1m'].bbScoreDelta : null;

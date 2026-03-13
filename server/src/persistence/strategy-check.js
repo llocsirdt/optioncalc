@@ -21,7 +21,8 @@ function buildStateOpenAnalysis(candleAnalysis) {
     { key: '1m', alias: '1m' },
     { key: '5m', alias: '5m' },
     { key: '15m', alias: '15m' },
-    { key: '1h', alias: '60m' }
+    { key: '60m', alias: '60m' }, // Changed from '1h' to '60m' to match backtest data
+    { key: '1h', alias: '60m' }  // Fallback for '1h' if present
   ];
 
   for (const { key, alias } of mappings) {
@@ -84,11 +85,11 @@ async function checkSimple5mBBScoreOpen(symbol, expiration, candleAnalysis) {
 
       if (result.action === 'open_bull') {
         console.log(`  ${symbol}: 5m BB score indicates bull signal (bb > 1), opening bull position`);
-        await this.tryOpenBullPosition(symbol, expiration);
+        await this.tryOpenBullPosition(symbol, expiration, null, null);
         return true;
       } else if (result.action === 'open_bear') {
         console.log(`  ${symbol}: 5m BB score indicates bear signal (bb < -1), opening bear position`);
-        await this.tryOpenBearPosition(symbol, expiration);
+        await this.tryOpenBearPosition(symbol, expiration, null, null);
         return true;
       } else {
         console.log(`  ${symbol}: 5m BB score neutral, skipping position opening`);
@@ -403,6 +404,13 @@ async function checkStateCover(symbolExpiration, position, candleAnalysis) {
   const positionType = this.determinePositionType ? this.determinePositionType(position) : position.type;
   const result = strategyStateCover(position, analysis, { positionType });
   const underlyingPrice = analysis['1m']?.close ?? analysis['5m']?.close ?? null;
+  
+  // Extract values for diagnostics
+  const bb1m = analysis['1m']?.bbScore;
+  const bb5m = analysis['5m']?.bbScore;
+  const delta1m = analysis['1m']?.bbScoreDelta;
+  const delta5m = analysis['5m']?.bbScoreDelta;
+  
   const diagnostics = {
     state: position?.state || 'unknown',
     bias: position?.bias || 'unknown',
