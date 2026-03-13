@@ -809,8 +809,9 @@ function updateChartWithSlider() {
   document.getElementById('optionCount').textContent = count;
   
   // Get a subset of the original options based on the slider value
-  const visibleOptions = fullOptionArray.slice(0, count);
-  
+  //const visibleOptions = fullOptionArray.slice(0, count);
+  const visibleOptions = fullOptionArray.slice(-count); // show positions from the end of the array
+
   // Create a map to combine the visible options for chart rendering
   const visibleCombinedMap = new Map();
   
