@@ -294,57 +294,6 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         .attr("stroke-width", 1.5)
         .attr("stroke-dasharray", "3, 3");
 
-    // Add vertical line for current underlying price if provided
-    if (underlyingPrice !== null && underlyingPrice !== undefined) {
-        // Check if underlying price is within the chart range
-        const minPrice = d3.min(data, d => d.closingPrice);
-        const maxPrice = d3.max(data, d => d.closingPrice);
-        
-        if (underlyingPrice >= minPrice && underlyingPrice <= maxPrice) {
-            svg.append("line")
-                .attr("x1", xScale(underlyingPrice))
-                .attr("y1", yScale(d3.min(data, d => d.totalIntrinsicValue)))
-                .attr("x2", xScale(underlyingPrice))
-                .attr("y2", yScale(d3.max(data, d => d.totalIntrinsicValue)))
-                .attr("stroke", "gray")
-                .attr("stroke-width", 1)  // Thinner line (was 2)
-                .attr("stroke-dasharray", "8, 4")
-                .style("opacity", 0.7);
-            
-            // Add label box below x-axis
-            const labelGroup = svg.append("g")
-                .attr("transform", `translate(${xScale(underlyingPrice)}, ${height + margin.bottom - 5})`);
-            
-            // Add background rectangle for label
-            const labelText = `$${underlyingPrice.toFixed(2)}`;
-            const textWidth = labelText.length * 7; // Approximate text width
-            const textHeight = 16;
-            
-            labelGroup.append("rect")
-                .attr("x", -textWidth/2 - 4)
-                .attr("y", -textHeight - 2)
-                .attr("width", textWidth + 8)
-                .attr("height", textHeight + 4)
-                .attr("fill", "white")
-                .attr("stroke", "lightgray")
-                .attr("stroke-width", 1)
-                .attr("rx", 3)  // Rounded corners
-                .style("opacity", 0.9);
-            
-            // Add text label
-            labelGroup.append("text")
-                .attr("text-anchor", "middle")
-                .attr("dy", "0")  // Center vertically in the box
-                .style("font-size", "11px")
-                .style("fill", "gray")
-                .style("font-weight", "bold")
-                .text(labelText);
-            
-            console.log(`📍 Added underlying price line at $${underlyingPrice.toFixed(2)} with label box`);
-        } else {
-            console.log(`⚠️ Underlying price $${underlyingPrice.toFixed(2)} is outside chart range ($${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)})`);
-        }
-    }
 
     // Add circles for each option in the optionArray
     if (optionArray && optionArray.length > 0) {
@@ -525,6 +474,58 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .text(d => `$${d.closingPrice.toFixed(0)}`);
     }
 
+        // Add vertical line for current underlying price if provided
+    if (underlyingPrice !== null && underlyingPrice !== undefined) {
+        // Check if underlying price is within the chart range
+        const minPrice = d3.min(data, d => d.closingPrice);
+        const maxPrice = d3.max(data, d => d.closingPrice);
+        
+        if (underlyingPrice >= minPrice && underlyingPrice <= maxPrice) {
+            svg.append("line")
+                .attr("x1", xScale(underlyingPrice))
+                .attr("y1", yScale(d3.min(data, d => d.totalIntrinsicValue)))
+                .attr("x2", xScale(underlyingPrice))
+                .attr("y2", yScale(d3.max(data, d => d.totalIntrinsicValue)))
+                .attr("stroke", "gray")
+                .attr("stroke-width", 1)  // Thinner line (was 2)
+                .attr("stroke-dasharray", "8, 4")
+                .style("opacity", 0.7);
+            
+            // Add label box below x-axis
+            const labelGroup = svg.append("g")
+                .attr("transform", `translate(${xScale(underlyingPrice)}, ${height - 5})`);
+            
+            // Add background rectangle for label
+            const labelText = `$${underlyingPrice.toFixed(2)}`;
+            const textWidth = labelText.length * 7; // Approximate text width
+            const textHeight = 16;
+            
+            labelGroup.append("rect")
+                .attr("x", -textWidth/2 - 4)
+                .attr("y", -textHeight - 2)
+                .attr("width", textWidth + 8)
+                .attr("height", textHeight + 4)
+                .attr("fill", "white")
+                .attr("stroke", "lightgray")
+                .attr("stroke-width", 1)
+                .attr("rx", 3)  // Rounded corners
+                .style("opacity", 0.9);
+            
+            // Add text label
+            labelGroup.append("text")
+                .attr("text-anchor", "middle")
+                .attr("dy", -5)  // Center vertically in the box
+                .style("font-size", "11px")
+                .style("fill", "gray")
+                .style("font-weight", "bold")
+                .text(labelText);
+            
+            console.log(`📍 Added underlying price line at $${underlyingPrice.toFixed(2)} with label box`);
+        } else {
+            console.log(`⚠️ Underlying price $${underlyingPrice.toFixed(2)} is outside chart range ($${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)})`);
+        }
+    }
+
     // Add a group for the interactive elements (drawn last to appear on top)
     const interactionGroup = svg.append("g");
 
@@ -564,7 +565,7 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
         const labelX = xScale(d.closingPrice);
         //const labelY = yScale(d.totalIntrinsicValue) - 10;
-        const labelY = yScale(0) + 60;
+        const labelY = 345;
         
         // Add background rectangle first
         const textElement = interactionGroup.append("text")
