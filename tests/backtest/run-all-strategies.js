@@ -1,4 +1,4 @@
-const { BacktestController } = require('./tests/backtest/backtest-controller');
+const { BacktestController } = require('./backtest-controller');
 
 // Helper function to match BacktestController's filename generation
 function simplifyStrategyName(method) {

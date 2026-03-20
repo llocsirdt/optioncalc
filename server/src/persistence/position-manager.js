@@ -686,6 +686,7 @@ class PositionManager {
       // Extract symbol from symbolExpiration (e.g., "NDX_2026-03-31" -> "NDX")
       const symbol = symbolExpiration.split('_')[0];
       
+      //*** TODO this should NOT call the API from localhost, it should use the internal implementation for offsetting position data */
       // Fetch offsetting positions from the server API
       const offsetUrl = `http://localhost:3001/api/v1/positions/offsetting?symbol=${symbol}`;
       const response = await fetch(offsetUrl);
@@ -1163,6 +1164,84 @@ class PositionManager {
         }
       }
       
+      // Log analysis data for ALL symbols every minute (matching backtest behavior)
+      // This captures real candle data as it changes, not just when positions are active
+      for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
+        if (!result.success || !result.candleData) continue;
+        
+        try {
+          const ts1mCandle = result.candleData?.['1m']?.candles?.[0];
+          if (ts1mCandle?.datetime) {
+            const dt = new Date(ts1mCandle.datetime);
+            const timestamp = dt.toLocaleTimeString('en-US', { 
+              timeZone: 'America/New_York', 
+              hour12: false, 
+              hour: '2-digit', 
+              minute: '2-digit' 
+            });
+            const dateStr = dt.toISOString().split('T')[0];
+            
+            // Find position for this symbol to get current running state
+            const symbolExpiration = summary.symbolExpirations.find(se => se.startsWith(`${symbol}_`));
+            let positionState = { state: 'new', bias: 'neutral', covered: false, type: null, openedAt: null };
+            let hasOpenPosition = false;
+            let opened = false;
+            let covered = false;
+            
+            if (symbolExpiration) {
+              const positionArray = positions[symbolExpiration];
+              if (Array.isArray(positionArray) && positionArray.length > 0) {
+                const workingPosition = positionArray[positionArray.length - 1];
+                if (workingPosition && typeof workingPosition === 'object') {
+                  positionState = {
+                    state: workingPosition.state || 'new',
+                    bias: workingPosition.bias || 'neutral',
+                    covered: Boolean(workingPosition.covered),
+                    type: workingPosition.type || null,
+                    openedAt: workingPosition.openedAt || null
+                  };
+                  
+                  // Copy confirmation counters if present
+                  if (typeof workingPosition._confirmBull === 'number') {
+                    positionState._confirmBull = workingPosition._confirmBull;
+                  }
+                  if (typeof workingPosition._confirmBear === 'number') {
+                    positionState._confirmBear = workingPosition._confirmBear;
+                  }
+                  if (typeof workingPosition._elapsedOpen === 'number') {
+                    positionState._elapsedOpen = workingPosition._elapsedOpen;
+                  }
+                  
+                  const legs = Array.isArray(workingPosition.legs) ? workingPosition.legs : [];
+                  hasOpenPosition = legs.length > 0 && !workingPosition.covered;
+                  
+                  // Determine running opened/covered state based on position state
+                  // opened=true means position has been opened (state is 'open' or has legs)
+                  // covered=true means position has been closed (covered flag is true)
+                  opened = hasOpenPosition || (workingPosition.state === 'open');
+                  covered = Boolean(workingPosition.covered);
+                }
+              }
+            }
+            
+            const analysisEntry = analysisLogger.buildAnalysisEntry({
+              timestamp,
+              datetime: ts1mCandle.datetime,
+              strategyMethod: 'strategyStateOpen',
+              opened,
+              covered,
+              hasOpenPosition,
+              positionState,
+              analysis: analysisLogger.extractAnalysisFromCandles(result)
+            });
+            
+            analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
+          }
+        } catch (logError) {
+          console.error(`⚠️ Failed to log analysis data for ${symbol}: ${logError.message}`);
+        }
+      }
+      
       // Run state-driven strategy across working positions
       // STATE CHANGES: All state updates below are queued and applied atomically at the end
       const pendingStateUpdates = new Map();
@@ -1234,7 +1313,7 @@ class PositionManager {
             } catch (_) {}
           }
 
-          // Log analysis data for debugging/comparison with backtests
+          // Update analysis entry with strategy action results
           try {
             const ts1mCandle = candleAnalysis?.candleData?.['1m']?.candles?.[0];
             if (ts1mCandle?.datetime) {
@@ -1253,16 +1332,18 @@ class PositionManager {
                 strategyMethod: 'strategyStateOpen',
                 opened: executedOpen && (openAction === 'open_bull' || openAction === 'open_bear'),
                 covered: false,
-                hasOpenPosition: hasOpenLegs,
+                hasOpenPosition: hasOpenLegs || executedOpen,
                 positionState: workingPosition,
-                analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis)
+                analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis),
+                strategyAction: openAction || 'hold',
+                strategyReason: openResult?.reason || 'n/a',
+                strategyExecuted: executedOpen
               });
               
               analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
             }
           } catch (logError) {
-            // Don't let logging errors break the position check
-            console.error(`⚠️ Failed to log analysis data: ${logError.message}`);
+            console.error(`⚠️ Failed to update analysis data for open action: ${logError.message}`);
           }
 
           // STATE CHANGE: Fallback to ready state when strategy wants to open but doesn't execute
@@ -1337,6 +1418,39 @@ class PositionManager {
             } catch (_) {}
           }
 
+          // Update analysis entry with cover action results
+          try {
+            const ts1mCandle = candleAnalysis?.candleData?.['1m']?.candles?.[0];
+            if (ts1mCandle?.datetime) {
+              const dt = new Date(ts1mCandle.datetime);
+              const timestamp = dt.toLocaleTimeString('en-US', { 
+                timeZone: 'America/New_York', 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+              const dateStr = dt.toISOString().split('T')[0];
+              
+              const analysisEntry = analysisLogger.buildAnalysisEntry({
+                timestamp,
+                datetime: ts1mCandle.datetime,
+                strategyMethod: 'strategyStateCover',
+                opened: false,
+                covered: Boolean(coverResult?.executed && (coverResult?.action === 'cover')),
+                hasOpenPosition: hasOpenLegs && !Boolean(coverResult?.executed),
+                positionState: workingPosition,
+                analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis),
+                strategyAction: coverResult?.action || 'hold',
+                strategyReason: coverResult?.reason || 'n/a',
+                strategyExecuted: Boolean(coverResult?.executed)
+              });
+              
+              analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
+            }
+          } catch (logError) {
+            console.error(`⚠️ Failed to update analysis data for cover action: ${logError.message}`);
+          }
+
           // STATE CHANGE: Follow strategy's next state when cover was executed
           // Criteria: cover executed AND strategy provides nextState AND it differs from current state
           if (coverResult?.nextState && coverResult.executed && coverResult.nextState !== workingPosition.state) {
@@ -1361,6 +1475,39 @@ class PositionManager {
               const simpleResult = await strategyChecks.checkSimpleCover.call(this, symbolExpiration, workingPosition);
               if (simpleResult) {
                 console.log(`  ${symbol}: Simple cover executed successfully`);
+                
+                // Log the simple cover fallback action
+                try {
+                  const ts1mCandle = candleAnalysis?.candleData?.['1m']?.candles?.[0];
+                  if (ts1mCandle?.datetime) {
+                    const dt = new Date(ts1mCandle.datetime);
+                    const timestamp = dt.toLocaleTimeString('en-US', { 
+                      timeZone: 'America/New_York', 
+                      hour12: false, 
+                      hour: '2-digit', 
+                      minute: '2-digit' 
+                    });
+                    const dateStr = dt.toISOString().split('T')[0];
+                    
+                    const analysisEntry = analysisLogger.buildAnalysisEntry({
+                      timestamp,
+                      datetime: ts1mCandle.datetime,
+                      strategyMethod: 'checkSimpleCover',
+                      opened: false,
+                      covered: true,
+                      hasOpenPosition: false,
+                      positionState: workingPosition,
+                      analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis),
+                      strategyAction: 'cover',
+                      strategyReason: 'simple_cover_fallback',
+                      strategyExecuted: true
+                    });
+                    
+                    analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
+                  }
+                } catch (logError) {
+                  console.error(`⚠️ Failed to log simple cover fallback: ${logError.message}`);
+                }
               }
             } catch (error) {
               console.error(`  ${symbol}: Simple cover fallback failed - ${error.message}`);
