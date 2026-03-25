@@ -287,9 +287,20 @@
       return null;
     }
     
+    // CRITICAL: Validate bid/ask prices are non-zero
+    // Options with 0 bid or 0 ask are illiquid or have invalid market data
+    // Using them creates invalid spread costs (credits when should be debits)
+    const bid = marketData.bid || 0;
+    const ask = marketData.ask || 0;
+    
+    if (bid <= 0 || ask <= 0) {
+      // console.log(`⚠️ Skipping strike ${strike}: invalid bid/ask (bid=${bid}, ask=${ask})`);
+      return null;
+    }
+    
     return {
       data: marketData,
-      cost: (marketData.bid + marketData.ask) / 2,
+      cost: (bid + ask) / 2,
       index: strikesArray.indexOf(strike)
     };
   }

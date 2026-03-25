@@ -40,7 +40,7 @@ class PositionManager {
    * Example: "1p100@2.50" = 1 put at $100 strike, $2.50 cost
    * Example: "1p25350@10000,-1p25250@-6000" = spread position
    */
-  parsePositionString(positionString) {
+  parsePositionString(positionString, trigger = null) {
     // Split by comma for multiple legs
     const legs = positionString.split(',').map(leg => leg.trim());
     const parsedLegs = [];
@@ -54,14 +54,21 @@ class PositionManager {
       
       const [, qty, type, strike, cost] = match;
       
-      parsedLegs.push({
+      const legData = {
         action: "initial",
         quantity: parseInt(qty),
         type: type.toUpperCase(), // 'P' or 'C'
         strike: parseFloat(strike),
         cost: parseFloat(cost),
         originalString: leg
-      });
+      };
+      
+      // Add trigger if provided
+      if (trigger) {
+        legData.trigger = trigger;
+      }
+      
+      parsedLegs.push(legData);
     }
     
     // Return single object for single leg, or array for multiple legs
@@ -383,6 +390,28 @@ class PositionManager {
   }
 
   /**
+   * Get option price from chain data for a specific strike and type
+   * @param {Object} chainData - Chain data with call and put maps
+   * @param {number} strike - Strike price
+   * @param {string} type - 'C' for call or 'P' for put
+   * @param {string} expiration - Expiration date
+   * @returns {number|null} - Option price in cents (e.g., 2000 = $20.00) or null if not found
+   */
+  getOptionPriceFromChain(chainData, strike, type, expiration) {
+    if (!chainData) return null;
+    
+    const optionMap = type === 'C' ? chainData.call : chainData.put;
+    if (!optionMap || !optionMap[expiration]) return null;
+    
+    const strikeData = optionMap[expiration].find(opt => opt.strikePrice === strike);
+    if (!strikeData || !strikeData[0]) return null;
+    
+    // Return mark price in cents (multiply by 100)
+    const mark = strikeData[0].mark;
+    return mark != null ? Math.round(mark * 100) : null;
+  }
+
+  /**
    * Try to open a new bull position (bull call debit spread)
    * Buy lower strike call, sell upper strike call
    */
@@ -393,13 +422,43 @@ class PositionManager {
     }
     const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : 40;
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
-    const positionString = `1c${lower}@2000,-1c${upper}@0`;
+    
+    // Fetch real option prices from chain data
+    let lowerCost = 2000; // Default fallback
+    let upperCost = 0; // Default fallback
+    
+    if (persistenceManager) {
+      try {
+        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
+        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
+        
+        if (lowerPrice != null) lowerCost = lowerPrice;
+        if (upperPrice != null) upperCost = -upperPrice; // Negative because we're selling
+        
+        console.log(`🐂 Real option prices: ${lower} call = $${(lowerCost/100).toFixed(2)}, ${upper} call = $${(Math.abs(upperCost)/100).toFixed(2)}`);
+      } catch (error) {
+        console.warn(`🐂 Failed to fetch option prices, using defaults: ${error.message}`);
+      }
+    }
+    
+    const positionString = `1c${lower}@${lowerCost},-1c${upper}@${upperCost}`;
     console.log(`🐂 Opening bull call spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
     if (persistenceManager) {
       try {
-        await persistenceManager.storePosition(symbol, expiration, positionString);
+        await persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBullPosition' });
         console.log(`🐂 ✅ Bull call spread stored for ${symbol}_${expiration}`);
+        
+        // CRITICAL: Update in-memory cache with the newly opened position
+        if (this.cacheInitialized && this.positionsCache) {
+          const symbolExpiration = `${symbol}_${expiration}`;
+          const diskPositions = await persistenceManager.getAllPositions();
+          if (diskPositions[symbolExpiration]) {
+            this.positionsCache[symbolExpiration] = diskPositions[symbolExpiration];
+            console.log(`🐂 ✅ Updated in-memory cache for ${symbolExpiration}`);
+          }
+        }
       } catch (error) {
         console.error(`🐂 ❌ Failed to store bull call spread: ${error.message}`);
       }
@@ -419,13 +478,43 @@ class PositionManager {
     }
     const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : 40;
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
-    const positionString = `1p${upper}@2000,-1p${lower}@0`;
+    
+    // Fetch real option prices from chain data
+    let upperCost = 2000; // Default fallback
+    let lowerCost = 0; // Default fallback
+    
+    if (persistenceManager) {
+      try {
+        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
+        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
+        
+        if (upperPrice != null) upperCost = upperPrice;
+        if (lowerPrice != null) lowerCost = -lowerPrice; // Negative because we're selling
+        
+        console.log(`🐻 Real option prices: ${upper} put = $${(upperCost/100).toFixed(2)}, ${lower} put = $${(Math.abs(lowerCost)/100).toFixed(2)}`);
+      } catch (error) {
+        console.warn(`🐻 Failed to fetch option prices, using defaults: ${error.message}`);
+      }
+    }
+    
+    const positionString = `1p${upper}@${upperCost},-1p${lower}@${lowerCost}`;
     console.log(`🐻 Opening bear put spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
     if (persistenceManager) {
       try {
-        await persistenceManager.storePosition(symbol, expiration, positionString);
+        await persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBearPosition' });
         console.log(`🐻 ✅ Bear put spread stored for ${symbol}_${expiration}`);
+        
+        // CRITICAL: Update in-memory cache with the newly opened position
+        if (this.cacheInitialized && this.positionsCache) {
+          const symbolExpiration = `${symbol}_${expiration}`;
+          const diskPositions = await persistenceManager.getAllPositions();
+          if (diskPositions[symbolExpiration]) {
+            this.positionsCache[symbolExpiration] = diskPositions[symbolExpiration];
+            console.log(`🐻 ✅ Updated in-memory cache for ${symbolExpiration}`);
+          }
+        }
       } catch (error) {
         console.error(`🐻 ❌ Failed to store bear put spread: ${error.message}`);
       }
@@ -481,10 +570,29 @@ class PositionManager {
       const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : (existingWidth || 40);
       const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
       
+      // Fetch real option prices from chain data
+      const [symbol, expiration] = symbolExpiration.split('_');
+      let lowerCost = -2000; // Default fallback (negative because we're selling)
+      let upperCost = 0; // Default fallback
+      
+      try {
+        const { persistenceManager } = require('./persistence');
+        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
+        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
+        
+        if (lowerPrice != null) lowerCost = -lowerPrice; // Negative because we're selling
+        if (upperPrice != null) upperCost = upperPrice;
+        
+        console.log(`🐂 [cover:${source}] Real option prices: ${lower} call = $${(Math.abs(lowerCost)/100).toFixed(2)}, ${upper} call = $${(upperCost/100).toFixed(2)}`);
+      } catch (error) {
+        console.warn(`🐂 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+      }
+      
       const timestamp = new Date().toISOString();
       entry.legs.push(
-        { action: "cover", quantity: -1, type: "C", strike: lower, cost: -2000, originalString: `-1c${lower}@-2000`, timestamp, symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0], expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1] },
-        { action: "cover", quantity: 1, type: "C", strike: upper, cost: 0, originalString: `1c${upper}@0`, timestamp, symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0], expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1] }
+        { action: "cover", quantity: -1, type: "C", strike: lower, cost: lowerCost, originalString: `-1c${lower}@${lowerCost}`, timestamp, symbol: entry.legs[0]?.symbol || symbol, expiration: entry.legs[0]?.expiration || expiration, trigger: 'tryCoverBullPosition' },
+        { action: "cover", quantity: 1, type: "C", strike: upper, cost: upperCost, originalString: `1c${upper}@${upperCost}`, timestamp, symbol: entry.legs[0]?.symbol || symbol, expiration: entry.legs[0]?.expiration || expiration, trigger: 'tryCoverBullPosition' }
       );
       entry.covered = true;
       
@@ -494,6 +602,13 @@ class PositionManager {
         `🐂 [cover:${source}] ✅ Bull position covered for ${symbolExpiration} (legs ${priorLegCount}→${newLegCount}, ` +
         `strikes ${lower}/${upper})`
       );
+      
+      // CRITICAL: Update in-memory cache with the covered position
+      if (this.cacheInitialized && this.positionsCache) {
+        this.positionsCache[symbolExpiration] = positions[symbolExpiration];
+        console.log(`🐂 [cover:${source}] ✅ Updated in-memory cache for ${symbolExpiration}`);
+      }
+      
       return true;
     } catch (error) {
       console.error(`🐂 [cover:${source}] ❌ Failed to cover bull position: ${error.message}`);
@@ -548,10 +663,29 @@ class PositionManager {
       const width = Number.isFinite(options.spreadWidth) ? options.spreadWidth : (existingWidth || 40);
       const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
       
+      // Fetch real option prices from chain data
+      const [symbol, expiration] = symbolExpiration.split('_');
+      let upperCost = -2000; // Default fallback (negative because we're selling)
+      let lowerCost = 0; // Default fallback
+      
+      try {
+        const { persistenceManager } = require('./persistence');
+        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
+        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
+        
+        if (upperPrice != null) upperCost = -upperPrice; // Negative because we're selling
+        if (lowerPrice != null) lowerCost = lowerPrice;
+        
+        console.log(`🐻 [cover:${source}] Real option prices: ${upper} put = $${(Math.abs(upperCost)/100).toFixed(2)}, ${lower} put = $${(lowerCost/100).toFixed(2)}`);
+      } catch (error) {
+        console.warn(`🐻 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+      }
+      
       const timestamp = new Date().toISOString();
       entry.legs.push(
-        { action: "cover", quantity: -1, type: "P", strike: upper, cost: -2000, originalString: `-1p${upper}@-2000`, timestamp, symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0], expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1] },
-        { action: "cover", quantity: 1, type: "P", strike: lower, cost: 0, originalString: `1p${lower}@0`, timestamp, symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0], expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1] }
+        { action: "cover", quantity: -1, type: "P", strike: upper, cost: upperCost, originalString: `-1p${upper}@${upperCost}`, timestamp, symbol: entry.legs[0]?.symbol || symbol, expiration: entry.legs[0]?.expiration || expiration, trigger: 'tryCoverBearPosition' },
+        { action: "cover", quantity: 1, type: "P", strike: lower, cost: lowerCost, originalString: `1p${lower}@${lowerCost}`, timestamp, symbol: entry.legs[0]?.symbol || symbol, expiration: entry.legs[0]?.expiration || expiration, trigger: 'tryCoverBearPosition' }
       );
       entry.covered = true;
       
@@ -561,6 +695,13 @@ class PositionManager {
         `🐻 [cover:${source}] ✅ Bear position covered for ${symbolExpiration} (legs ${priorLegCount}→${newLegCount}, ` +
         `strikes ${upper}/${lower})`
       );
+      
+      // CRITICAL: Update in-memory cache with the covered position
+      if (this.cacheInitialized && this.positionsCache) {
+        this.positionsCache[symbolExpiration] = positions[symbolExpiration];
+        console.log(`🐻 [cover:${source}] ✅ Updated in-memory cache for ${symbolExpiration}`);
+      }
+      
       return true;
     } catch (error) {
       console.error(`🐻 [cover:${source}] ❌ Failed to cover bear position: ${error.message}`);
@@ -1166,81 +1307,111 @@ class PositionManager {
       
       // Log analysis data for ALL symbols every minute (matching backtest behavior)
       // This captures real candle data as it changes, not just when positions are active
+      console.log('📊 Base logging: Processing candle analysis results...');
       for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
-        if (!result.success || !result.candleData) continue;
+        if (!result.success) {
+          console.log(`📊 Base logging: Skipping ${symbol} - candle analysis failed: ${result.error}`);
+          continue;
+        }
+        
+        if (!result.candleData) {
+          console.log(`📊 Base logging: Skipping ${symbol} - no candleData in result`);
+          continue;
+        }
         
         try {
           const ts1mCandle = result.candleData?.['1m']?.candles?.[0];
-          if (ts1mCandle?.datetime) {
-            const dt = new Date(ts1mCandle.datetime);
-            const timestamp = dt.toLocaleTimeString('en-US', { 
-              timeZone: 'America/New_York', 
-              hour12: false, 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            });
-            const dateStr = dt.toISOString().split('T')[0];
-            
-            // Find position for this symbol to get current running state
-            const symbolExpiration = summary.symbolExpirations.find(se => se.startsWith(`${symbol}_`));
-            let positionState = { state: 'new', bias: 'neutral', covered: false, type: null, openedAt: null };
-            let hasOpenPosition = false;
-            let opened = false;
-            let covered = false;
-            
-            if (symbolExpiration) {
-              const positionArray = positions[symbolExpiration];
-              if (Array.isArray(positionArray) && positionArray.length > 0) {
-                const workingPosition = positionArray[positionArray.length - 1];
-                if (workingPosition && typeof workingPosition === 'object') {
-                  positionState = {
-                    state: workingPosition.state || 'new',
-                    bias: workingPosition.bias || 'neutral',
-                    covered: Boolean(workingPosition.covered),
-                    type: workingPosition.type || null,
-                    openedAt: workingPosition.openedAt || null
-                  };
-                  
-                  // Copy confirmation counters if present
-                  if (typeof workingPosition._confirmBull === 'number') {
-                    positionState._confirmBull = workingPosition._confirmBull;
-                  }
-                  if (typeof workingPosition._confirmBear === 'number') {
-                    positionState._confirmBear = workingPosition._confirmBear;
-                  }
-                  if (typeof workingPosition._elapsedOpen === 'number') {
-                    positionState._elapsedOpen = workingPosition._elapsedOpen;
-                  }
-                  
-                  const legs = Array.isArray(workingPosition.legs) ? workingPosition.legs : [];
-                  hasOpenPosition = legs.length > 0 && !workingPosition.covered;
-                  
-                  // Determine running opened/covered state based on position state
-                  // opened=true means position has been opened (state is 'open' or has legs)
-                  // covered=true means position has been closed (covered flag is true)
-                  opened = hasOpenPosition || (workingPosition.state === 'open');
-                  covered = Boolean(workingPosition.covered);
+          if (!ts1mCandle) {
+            console.log(`📊 Base logging: Skipping ${symbol} - no 1m candle data`);
+            continue;
+          }
+          
+          if (!ts1mCandle.datetime) {
+            console.log(`📊 Base logging: Skipping ${symbol} - 1m candle missing datetime`);
+            continue;
+          }
+          
+          const dt = new Date(ts1mCandle.datetime);
+          const timestamp = dt.toLocaleTimeString('en-US', { 
+            timeZone: 'America/New_York', 
+            hour12: false, 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          });
+          const dateStr = dt.toISOString().split('T')[0];
+          
+          // Find position for this symbol to get current running state
+          const symbolExpiration = summary.symbolExpirations.find(se => se.startsWith(`${symbol}_`));
+          let positionState = { state: 'new', bias: 'neutral', covered: false, type: null, openedAt: null };
+          let hasOpenPosition = false;
+          let opened = false;
+          let covered = false;
+          
+          if (symbolExpiration) {
+            const positionArray = positions[symbolExpiration];
+            if (Array.isArray(positionArray) && positionArray.length > 0) {
+              const workingPosition = positionArray[positionArray.length - 1];
+              if (workingPosition && typeof workingPosition === 'object') {
+                positionState = {
+                  state: workingPosition.state || 'new',
+                  bias: workingPosition.bias || 'neutral',
+                  covered: Boolean(workingPosition.covered),
+                  type: workingPosition.type || null,
+                  openedAt: workingPosition.openedAt || null
+                };
+                
+                // Copy confirmation counters if present
+                if (typeof workingPosition._confirmBull === 'number') {
+                  positionState._confirmBull = workingPosition._confirmBull;
                 }
+                if (typeof workingPosition._confirmBear === 'number') {
+                  positionState._confirmBear = workingPosition._confirmBear;
+                }
+                if (typeof workingPosition._elapsedOpen === 'number') {
+                  positionState._elapsedOpen = workingPosition._elapsedOpen;
+                }
+                
+                const legs = Array.isArray(workingPosition.legs) ? workingPosition.legs : [];
+                hasOpenPosition = legs.length > 0 && !workingPosition.covered;
+                
+                // Determine running opened/covered state based on position state
+                // opened=true means position has been opened (state is 'open' or has legs)
+                // covered=true means position has been closed (covered flag is true)
+                opened = hasOpenPosition || (workingPosition.state === 'open');
+                covered = Boolean(workingPosition.covered);
               }
             }
-            
-            const analysisEntry = analysisLogger.buildAnalysisEntry({
-              timestamp,
-              datetime: ts1mCandle.datetime,
-              strategyMethod: 'strategyStateOpen',
-              opened,
-              covered,
-              hasOpenPosition,
-              positionState,
-              analysis: analysisLogger.extractAnalysisFromCandles(result)
-            });
-            
-            analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
           }
+          
+          const analysisEntry = analysisLogger.buildAnalysisEntry({
+            timestamp,
+            datetime: ts1mCandle.datetime,
+            strategyMethod: 'strategyStateOpen',
+            opened,
+            covered,
+            hasOpenPosition,
+            positionState,
+            analysis: analysisLogger.extractAnalysisFromCandles(result)
+          });
+          
+          // DIAGNOSTIC: Log the actual candle time vs current time
+          const currentTime = new Date();
+          const currentTimeStr = currentTime.toLocaleTimeString('en-US', { 
+            timeZone: 'America/New_York', 
+            hour12: false, 
+            hour: '2-digit', 
+            minute: '2-digit',
+            second: '2-digit'
+          });
+          const candleAge = Math.floor((currentTime - new Date(ts1mCandle.datetime)) / 60000);
+          
+          analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
+          console.log(`📊 Base logging: ✅ Logged analysis entry for ${symbol} at ${timestamp} (candle age: ${candleAge} min, current: ${currentTimeStr})`);
         } catch (logError) {
           console.error(`⚠️ Failed to log analysis data for ${symbol}: ${logError.message}`);
         }
       }
+      console.log('📊 Base logging: Complete');
       
       // Run state-driven strategy across working positions
       // STATE CHANGES: All state updates below are queued and applied atomically at the end
@@ -1476,7 +1647,11 @@ class PositionManager {
               if (simpleResult) {
                 console.log(`  ${symbol}: Simple cover executed successfully`);
                 
-                // Log the simple cover fallback action
+                // CRITICAL: Reload position from cache to get updated legs and covered state
+                const updatedPositionArray = this.positionsCache?.[symbolExpiration];
+                const updatedPosition = updatedPositionArray?.[workingIndex];
+                
+                // Log the simple cover fallback action with updated position data
                 try {
                   const ts1mCandle = candleAnalysis?.candleData?.['1m']?.candles?.[0];
                   if (ts1mCandle?.datetime) {
@@ -1489,6 +1664,9 @@ class PositionManager {
                     });
                     const dateStr = dt.toISOString().split('T')[0];
                     
+                    // Use updated position if available, otherwise fall back to working position
+                    const positionForLogging = updatedPosition || workingPosition;
+                    
                     const analysisEntry = analysisLogger.buildAnalysisEntry({
                       timestamp,
                       datetime: ts1mCandle.datetime,
@@ -1496,7 +1674,7 @@ class PositionManager {
                       opened: false,
                       covered: true,
                       hasOpenPosition: false,
-                      positionState: workingPosition,
+                      positionState: positionForLogging,
                       analysis: analysisLogger.extractAnalysisFromCandles(candleAnalysis),
                       strategyAction: 'cover',
                       strategyReason: 'simple_cover_fallback',
@@ -1507,6 +1685,13 @@ class PositionManager {
                   }
                 } catch (logError) {
                   console.error(`⚠️ Failed to log simple cover fallback: ${logError.message}`);
+                }
+                
+                // Update working position reference to reflect covered state
+                if (updatedPosition) {
+                  workingPosition.covered = updatedPosition.covered;
+                  workingPosition.legs = updatedPosition.legs;
+                  workingPosition.state = updatedPosition.state;
                 }
               }
             } catch (error) {

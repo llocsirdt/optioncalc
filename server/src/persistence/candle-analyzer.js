@@ -243,12 +243,13 @@ async function getLatest1mCandles(symbol, sinceTime) {
   const indexSymbols = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
   const apiSymbol = symbol.startsWith('$') ? symbol : (indexSymbols.includes(symbol) ? `$${symbol}` : symbol);
   
+  const fetchTime = Date.now();
   const options = {
     periodType: 'day',
     period: 2,
     frequencyType: 'minute',
     frequency: 1,
-    endDate: Date.now()
+    endDate: fetchTime
   };
   
   const data = await marketClient.priceHistory(apiSymbol, options);
@@ -265,6 +266,29 @@ async function getLatest1mCandles(symbol, sinceTime) {
   
   // Sort newest first
   candles.sort((a, b) => b.datetime - a.datetime);
+  
+  // DIAGNOSTIC: Log candle freshness to identify API delay issues
+  const now = new Date(fetchTime);
+  const currentMinute = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0, 0);
+  
+  if (candles.length > 0) {
+    const latestCandle = candles[0];
+    const candleTime = new Date(latestCandle.datetime);
+    const candleMinute = new Date(candleTime.getFullYear(), candleTime.getMonth(), candleTime.getDate(), candleTime.getHours(), candleTime.getMinutes(), 0, 0);
+    const minutesDiff = Math.floor((currentMinute - candleMinute) / 60000);
+    
+    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const candleTimeStr = candleTime.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+    
+    if (minutesDiff > 0) {
+      console.log(`⚠️ [CANDLE DELAY] ${symbol} at ${timeStr}: Latest candle is ${candleTimeStr} (${minutesDiff} min old) - API data is stale`);
+    } else if (minutesDiff === 0) {
+      console.log(`✅ [CANDLE FRESH] ${symbol} at ${timeStr}: Latest candle is ${candleTimeStr} (current minute) - API data is fresh`);
+    }
+  } else {
+    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    console.log(`❌ [NO NEW CANDLES] ${symbol} at ${timeStr}: No new candles since ${new Date(sinceTime).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false })}`);
+  }
   
   return candles;
 }

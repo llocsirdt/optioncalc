@@ -179,7 +179,39 @@ class AnalysisLogger {
   }
 
   /**
+   * Load existing analysis data from disk for a symbol-date
+   * Called on startup to preserve data across server restarts
+   * 
+   * @param {string} symbol - Symbol (e.g., 'NDX', 'SPX')
+   * @param {string} date - Date in YYYY-MM-DD format
+   */
+  async loadAnalysisData(symbol, date) {
+    const key = `${symbol}_${date}`;
+    const filename = `positions-analysis-data-${symbol}-${date}.json`;
+    const filepath = path.join(ANALYSIS_DATA_DIR, filename);
+
+    try {
+      const fileContent = await fs.readFile(filepath, 'utf8');
+      const existingData = JSON.parse(fileContent);
+      
+      if (Array.isArray(existingData) && existingData.length > 0) {
+        this.analysisData.set(key, existingData);
+        console.log(`📊 Loaded ${existingData.length} existing analysis entries from ${filename}`);
+        return existingData.length;
+      }
+    } catch (error) {
+      // File doesn't exist or is invalid - this is fine for new dates
+      if (error.code !== 'ENOENT') {
+        console.error(`⚠️ Failed to load analysis data for ${key}:`, error.message);
+      }
+    }
+    
+    return 0;
+  }
+
+  /**
    * Save analysis data to file
+   * Merges with existing data on disk to preserve entries across restarts
    * 
    * @param {string} symbol - Symbol (e.g., 'NDX', 'SPX')
    * @param {string} date - Date in YYYY-MM-DD format
@@ -196,8 +228,46 @@ class AnalysisLogger {
     const filepath = path.join(ANALYSIS_DATA_DIR, filename);
 
     try {
-      await fs.writeFile(filepath, JSON.stringify(data, null, 2), 'utf8');
-      console.log(`📊 Saved ${data.length} analysis entries to ${filename}`);
+      // Load existing data from disk if not already in memory
+      let existingData = [];
+      try {
+        const fileContent = await fs.readFile(filepath, 'utf8');
+        existingData = JSON.parse(fileContent);
+        if (!Array.isArray(existingData)) {
+          existingData = [];
+        }
+      } catch (error) {
+        // File doesn't exist yet - this is fine
+        if (error.code !== 'ENOENT') {
+          console.error(`⚠️ Failed to read existing analysis data: ${error.message}`);
+        }
+      }
+
+      // Merge existing data with new data, avoiding duplicates by timestamp
+      const mergedData = [...existingData];
+      const existingTimestamps = new Set(existingData.map(e => e.timestamp));
+      
+      for (const entry of data) {
+        if (!existingTimestamps.has(entry.timestamp)) {
+          mergedData.push(entry);
+        } else {
+          // Update existing entry
+          const index = mergedData.findIndex(e => e.timestamp === entry.timestamp);
+          if (index >= 0) {
+            mergedData[index] = entry;
+          }
+        }
+      }
+
+      // Sort by timestamp to maintain chronological order
+      mergedData.sort((a, b) => {
+        const timeA = new Date(`2026-01-01 ${a.timestamp}:00`).getTime();
+        const timeB = new Date(`2026-01-01 ${b.timestamp}:00`).getTime();
+        return timeA - timeB;
+      });
+
+      await fs.writeFile(filepath, JSON.stringify(mergedData, null, 2), 'utf8');
+      console.log(`📊 Saved ${mergedData.length} analysis entries to ${filename} (${data.length} new, ${existingData.length} existing)`);
     } catch (error) {
       console.error(`❌ Failed to save analysis data for ${key}:`, error.message);
     }

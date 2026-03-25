@@ -318,17 +318,17 @@ async function checkSimpleCover(symbolExpiration, position) {
     const offsettingPositions = analysis.positions || [];
     
     if (offsettingPositions.length > 0) {
-      // Filter positions with scores between 0.2 and 0.3
+      // Filter positions with scores between 0.05 and 0.25
       const candidates = offsettingPositions.filter(pos => {
         const score = pos.score ?? 0;
-        return score >= 0.2 && score <= 0.3;
+        return score >= 0.05 && score <= 0.25;
       });
       
       if (candidates.length > 0) {
-        // Select the position with score closest to 0.25
+        // Select the position with score closest to 0.15
         const bestPosition = candidates.reduce((best, current) => {
-          const bestDistance = Math.abs((best.score ?? 0) - 0.25);
-          const currentDistance = Math.abs((current.score ?? 0) - 0.25);
+          const bestDistance = Math.abs((best.score ?? 0) - 0.15);
+          const currentDistance = Math.abs((current.score ?? 0) - 0.15);
           return currentDistance < bestDistance ? current : best;
         });
         

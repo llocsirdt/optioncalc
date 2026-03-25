@@ -683,7 +683,8 @@ class PersistenceManager {
         action: 'cover',
         timestamp,
         symbol: entry.legs[0]?.symbol || symbolExpiration.split('_')[0],
-        expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1]
+        expiration: entry.legs[0]?.expiration || symbolExpiration.split('_')[1],
+        trigger: 'tryOpenOffsettingCover'
       }));
       
       // Update the entry
@@ -711,12 +712,13 @@ class PersistenceManager {
   /**
    * Store position in positions.json file
    */
-  async storePosition(symbol, expiration, positionString) {
+  async storePosition(symbol, expiration, positionString, options = {}) {
     const key = `${symbol}_${expiration}`;
+    const trigger = options.trigger || null;
     
     try {
       // Parse the position string
-      const positionObj = this.positionManager.parsePositionString(positionString);
+      const positionObj = this.positionManager.parsePositionString(positionString, trigger);
       
       // Add metadata consistently for both single legs and multi-leg positions
       if (Array.isArray(positionObj)) {

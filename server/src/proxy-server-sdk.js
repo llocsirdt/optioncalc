@@ -1073,18 +1073,46 @@ async function startServer() {
         console.log(`🔒 Trading endpoints disabled in production mode`);
       }
       
-      // Start position check loop aligned to minute boundaries
+      // Load existing analysis data for today to preserve data across server restarts
       console.log(``);
-      console.log(`🔄 Starting position check loop (aligned to minute boundaries)...`);
+      console.log(`📊 Loading existing analysis data for today...`);
+      (async () => {
+        try {
+          const analysisLogger = require('./persistence/analysis-logger');
+          const today = new Date().toISOString().split('T')[0];
+          
+          // Load analysis data for tracked symbols (NDX, SPX)
+          const symbols = ['NDX', 'SPX'];
+          for (const symbol of symbols) {
+            await analysisLogger.loadAnalysisData(symbol, today);
+          }
+        } catch (error) {
+          console.error('⚠️ Failed to load existing analysis data:', error.message);
+        }
+      })();
+      
+      // Start position check loop at :30 seconds each minute
+      console.log(``);
+      console.log(`🔄 Starting position check loop (runs at :30 seconds each minute)...`);
       let positionCheckInterval = null;
       
-      // Calculate delay to next minute boundary
+      // Calculate delay to next :30 second mark
       const now = new Date();
-      const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+      const currentSeconds = now.getSeconds();
+      let msToNext30Seconds;
       
-      // Wait until next minute boundary, then start interval
+      if (currentSeconds < 30) {
+        // Wait until :30 of current minute
+        msToNext30Seconds = (30 - currentSeconds) * 1000 - now.getMilliseconds();
+      } else {
+        // Wait until :30 of next minute
+        msToNext30Seconds = (90 - currentSeconds) * 1000 - now.getMilliseconds();
+      }
+      
+      // Wait until :30 seconds, then start interval
+      // Running at :30 ensures the previous minute's candle is always available from the API
       setTimeout(() => {
-        // Run immediately at the minute boundary
+        // Run immediately at :30 seconds
         (async () => {
           try {
             await persistence.positionManager.checkPositions(persistence);
@@ -1093,7 +1121,7 @@ async function startServer() {
           }
         })();
         
-        // Then run every minute at :00 seconds
+        // Then run every minute at :30 seconds
         if (!positionCheckInterval) {
           positionCheckInterval = setInterval(async () => {
             try {
@@ -1103,9 +1131,9 @@ async function startServer() {
             }
           }, 60000);
           
-          console.log(`✅ Position check loop started (aligned to minute boundaries)`);
+          console.log(`✅ Position check loop started (runs at :30 seconds each minute for reliable candle data)`);
         }
-      }, msToNextMinute);
+      }, msToNext30Seconds);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);
