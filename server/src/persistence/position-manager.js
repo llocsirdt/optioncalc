@@ -20,6 +20,7 @@ class PositionManager {
     this.priceTrailState = new Map(); // Tracks PT v1 per symbolExpiration
     this.positionsCache = null; // In-memory positions cache
     this.cacheInitialized = false;
+    this.persistenceManager = null; // Reference to persistence manager for fetching chain data
   }
 
   /**
@@ -415,7 +416,7 @@ class PositionManager {
    * Try to open a new bull position (bull call debit spread)
    * Buy lower strike call, sell upper strike call
    */
-  async tryOpenBullPosition(symbol, expiration, underlyingPrice, persistenceManager, options = {}) {
+  async tryOpenBullPosition(symbol, expiration, underlyingPrice, options = {}) {
     if (underlyingPrice == null) {
       console.warn(`🐂 Cannot open bull position for ${symbol}_${expiration}: underlyingPrice missing`);
       return;
@@ -424,12 +425,15 @@ class PositionManager {
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
     
     // Fetch real option prices from chain data
-    let lowerCost = 2000; // Default fallback
+    // Default fallback: half of max spread value (width * 100)
+    const maxValue = width * 100;
+    const defaultCost = maxValue / 2;
+    let lowerCost = defaultCost; // Default fallback
     let upperCost = 0; // Default fallback
     
-    if (persistenceManager) {
+    if (this.persistenceManager) {
       try {
-        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
         const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
         const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
         
@@ -440,20 +444,22 @@ class PositionManager {
       } catch (error) {
         console.warn(`🐂 Failed to fetch option prices, using defaults: ${error.message}`);
       }
+    } else {
+      console.warn(`🐂 No persistenceManager available, using default prices`);
     }
     
     const positionString = `1c${lower}@${lowerCost},-1c${upper}@${upperCost}`;
     console.log(`🐂 Opening bull call spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
-    if (persistenceManager) {
+    if (this.persistenceManager) {
       try {
-        await persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBullPosition' });
+        await this.persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBullPosition' });
         console.log(`🐂 ✅ Bull call spread stored for ${symbol}_${expiration}`);
         
         // CRITICAL: Update in-memory cache with the newly opened position
         if (this.cacheInitialized && this.positionsCache) {
           const symbolExpiration = `${symbol}_${expiration}`;
-          const diskPositions = await persistenceManager.getAllPositions();
+          const diskPositions = await this.persistenceManager.getAllPositions();
           if (diskPositions[symbolExpiration]) {
             this.positionsCache[symbolExpiration] = diskPositions[symbolExpiration];
             console.log(`🐂 ✅ Updated in-memory cache for ${symbolExpiration}`);
@@ -471,7 +477,7 @@ class PositionManager {
    * Try to open a new bear position (bear put debit spread)
    * Buy upper strike put, sell lower strike put
    */
-  async tryOpenBearPosition(symbol, expiration, underlyingPrice, persistenceManager, options = {}) {
+  async tryOpenBearPosition(symbol, expiration, underlyingPrice, options = {}) {
     if (underlyingPrice == null) {
       console.warn(`🐻 Cannot open bear position for ${symbol}_${expiration}: underlyingPrice missing`);
       return;
@@ -480,12 +486,15 @@ class PositionManager {
     const { lower, upper } = this.calculateSpreadStrikes(underlyingPrice, width);
     
     // Fetch real option prices from chain data
-    let upperCost = 2000; // Default fallback
+    // Default fallback: half of max spread value (width * 100)
+    const maxValue = width * 100;
+    const defaultCost = maxValue / 2;
+    let upperCost = defaultCost; // Default fallback
     let lowerCost = 0; // Default fallback
     
-    if (persistenceManager) {
+    if (this.persistenceManager) {
       try {
-        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
+        const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
         const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
         const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
         
@@ -496,20 +505,22 @@ class PositionManager {
       } catch (error) {
         console.warn(`🐻 Failed to fetch option prices, using defaults: ${error.message}`);
       }
+    } else {
+      console.warn(`🐻 No persistenceManager available, using default prices`);
     }
     
     const positionString = `1p${upper}@${upperCost},-1p${lower}@${lowerCost}`;
     console.log(`🐻 Opening bear put spread: ${positionString} (underlying=${underlyingPrice.toFixed(2)})`);
     
-    if (persistenceManager) {
+    if (this.persistenceManager) {
       try {
-        await persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBearPosition' });
+        await this.persistenceManager.storePosition(symbol, expiration, positionString, { trigger: 'tryOpenBearPosition' });
         console.log(`🐻 ✅ Bear put spread stored for ${symbol}_${expiration}`);
         
         // CRITICAL: Update in-memory cache with the newly opened position
         if (this.cacheInitialized && this.positionsCache) {
           const symbolExpiration = `${symbol}_${expiration}`;
-          const diskPositions = await persistenceManager.getAllPositions();
+          const diskPositions = await this.persistenceManager.getAllPositions();
           if (diskPositions[symbolExpiration]) {
             this.positionsCache[symbolExpiration] = diskPositions[symbolExpiration];
             console.log(`🐻 ✅ Updated in-memory cache for ${symbolExpiration}`);
@@ -572,21 +583,27 @@ class PositionManager {
       
       // Fetch real option prices from chain data
       const [symbol, expiration] = symbolExpiration.split('_');
-      let lowerCost = -2000; // Default fallback (negative because we're selling)
+      // Default fallback: half of max spread value (width * 100), negative because we're selling
+      const maxValue = width * 100;
+      const defaultCost = maxValue / 2;
+      let lowerCost = -defaultCost; // Default fallback (negative because we're selling)
       let upperCost = 0; // Default fallback
       
-      try {
-        const { persistenceManager } = require('./persistence');
-        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
-        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
-        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
-        
-        if (lowerPrice != null) lowerCost = -lowerPrice; // Negative because we're selling
-        if (upperPrice != null) upperCost = upperPrice;
-        
-        console.log(`🐂 [cover:${source}] Real option prices: ${lower} call = $${(Math.abs(lowerCost)/100).toFixed(2)}, ${upper} call = $${(upperCost/100).toFixed(2)}`);
-      } catch (error) {
-        console.warn(`🐂 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+      if (this.persistenceManager) {
+        try {
+          const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
+          const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
+          const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
+          
+          if (lowerPrice != null) lowerCost = -lowerPrice; // Negative because we're selling
+          if (upperPrice != null) upperCost = upperPrice;
+          
+          console.log(`🐂 [cover:${source}] Real option prices: ${lower} call = $${(Math.abs(lowerCost)/100).toFixed(2)}, ${upper} call = $${(upperCost/100).toFixed(2)}`);
+        } catch (error) {
+          console.warn(`🐂 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+        }
+      } else {
+        console.warn(`🐂 [cover:${source}] No persistenceManager available, using default prices`);
       }
       
       const timestamp = new Date().toISOString();
@@ -665,21 +682,27 @@ class PositionManager {
       
       // Fetch real option prices from chain data
       const [symbol, expiration] = symbolExpiration.split('_');
-      let upperCost = -2000; // Default fallback (negative because we're selling)
+      // Default fallback: half of max spread value (width * 100), negative because we're selling
+      const maxValue = width * 100;
+      const defaultCost = maxValue / 2;
+      let upperCost = -defaultCost; // Default fallback (negative because we're selling)
       let lowerCost = 0; // Default fallback
       
-      try {
-        const { persistenceManager } = require('./persistence');
-        const chainData = await persistenceManager.getOrFetchChainData(symbol, expiration);
-        const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
-        const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
-        
-        if (upperPrice != null) upperCost = -upperPrice; // Negative because we're selling
-        if (lowerPrice != null) lowerCost = lowerPrice;
-        
-        console.log(`🐻 [cover:${source}] Real option prices: ${upper} put = $${(Math.abs(upperCost)/100).toFixed(2)}, ${lower} put = $${(lowerCost/100).toFixed(2)}`);
-      } catch (error) {
-        console.warn(`🐻 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+      if (this.persistenceManager) {
+        try {
+          const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
+          const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
+          const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
+          
+          if (upperPrice != null) upperCost = -upperPrice; // Negative because we're selling
+          if (lowerPrice != null) lowerCost = lowerPrice;
+          
+          console.log(`🐻 [cover:${source}] Real option prices: ${upper} put = $${(Math.abs(upperCost)/100).toFixed(2)}, ${lower} put = $${(lowerCost/100).toFixed(2)}`);
+        } catch (error) {
+          console.warn(`🐻 [cover:${source}] Failed to fetch option prices, using defaults: ${error.message}`);
+        }
+      } else {
+        console.warn(`🐻 [cover:${source}] No persistenceManager available, using default prices`);
       }
       
       const timestamp = new Date().toISOString();
@@ -1116,6 +1139,17 @@ class PositionManager {
   }
 
   async checkPositions(persistenceManager) {
+    const startTime = Date.now();
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-US', { 
+      timeZone: 'America/New_York', 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    console.log(`\n🔄 ========== checkPositions START at ${timeStr} ==========`);
+    
     try {
       // Import candle analyzer
       const { analyzeCandles } = require('./candle-analyzer');
@@ -1126,7 +1160,11 @@ class PositionManager {
         return;
       }
       
+      // Store persistenceManager reference for use in other methods (e.g., cover functions)
+      this.persistenceManager = persistenceManager;
+      
       // Initialize cache from disk on first run, otherwise use in-memory cache
+      const loadPositionsStartTime = Date.now();
       let positions;
       if (!this.cacheInitialized) {
         positions = await persistenceManager.getAllPositions();
@@ -1170,12 +1208,16 @@ class PositionManager {
         }
       }
       
+      const loadPositionsElapsed = Date.now() - loadPositionsStartTime;
+      console.log(`⏱️ [TIMING] Load/sync positions: ${loadPositionsElapsed}ms`);
+      
       if (!positions || Object.keys(positions).length === 0) {
         console.log('📊 Position Check: No positions available');
         return;
       }
 
       // Initialize working position objects for each symbol_date
+      const initPositionsStartTime = Date.now();
       // STATE CHANGE: Creates new working positions with 'new' state when:
       // 1) Position array is empty (first time seeing this symbol/expiration)
       // 2) Latest position is covered (previous cycle completed)
@@ -1235,7 +1277,11 @@ class PositionManager {
         console.log('💾 Saved initialized working positions');
       }
       
+      const initPositionsElapsed = Date.now() - initPositionsStartTime;
+      console.log(`⏱️ [TIMING] Initialize/normalize positions: ${initPositionsElapsed}ms`);
+      
       // Generate summary and track covered/uncovered positions
+      const summaryStartTime = Date.now();
       const summary = {
         totalPositions: Object.keys(positions).length,
         symbolExpirations: Object.keys(positions),
@@ -1270,30 +1316,54 @@ class PositionManager {
         }
       }
       
-      // Get candle analysis for each position symbol
+      const summaryElapsed = Date.now() - summaryStartTime;
+      console.log(`⏱️ [TIMING] Generate position summary: ${summaryElapsed}ms`);
+      
+      // Get candle analysis for each UNIQUE symbol (deduplicate to avoid redundant API calls)
+      const candleAnalysisStartTime = Date.now();
       console.log('🕯️ Getting candle analysis for position symbols...');
       const candleAnalysisResults = {};
       
-      for (const symbolExpiration of summary.symbolExpirations) {
-        const [symbol] = symbolExpiration.split('_');
+      // Extract unique symbols from symbolExpirations to avoid duplicate API calls
+      const uniqueSymbols = [...new Set(summary.symbolExpirations.map(se => se.split('_')[0]))];
+      console.log(`🕯️ Unique symbols to analyze: ${uniqueSymbols.join(', ')} (${uniqueSymbols.length} symbols from ${summary.symbolExpirations.length} positions)`);
+      
+      // Process symbols in PARALLEL for faster execution
+      const symbolPromises = uniqueSymbols.map(async (symbol) => {
+        const symbolStartTime = Date.now();
         try {
-          console.log(`  🕯️ Analyzing ${symbol}...`);
+          console.log(`  🕯️ [${symbol}] Starting analysis...`);
           const candleAnalysis = await analyzeCandles(`$${symbol}`); // No timeframe filter - get all timeframes
-          candleAnalysisResults[symbol] = {
+          const symbolElapsed = Date.now() - symbolStartTime;
+          console.log(`  ✅ [${symbol}] Analysis complete in ${symbolElapsed}ms`);
+          return {
+            symbol,
             success: true,
             availableTimeframes: candleAnalysis.candleData ? Object.keys(candleAnalysis.candleData) : [],
             lastUpdate: candleAnalysis.timestamp,
-            candleData: candleAnalysis.candleData // Store full candle data for BB score analysis
+            candleData: candleAnalysis.candleData
           };
-          console.log(`    ✅ ${symbol} analysis complete`);
         } catch (error) {
-          console.error(`    ❌ Error analyzing ${symbol}:`, error.message);
-          candleAnalysisResults[symbol] = {
+          const symbolElapsed = Date.now() - symbolStartTime;
+          console.error(`  ❌ [${symbol}] Error after ${symbolElapsed}ms:`, error.message);
+          return {
+            symbol,
             success: false,
             error: error.message
           };
         }
+      });
+      
+      // Wait for all symbol analyses to complete
+      const symbolResults = await Promise.all(symbolPromises);
+      
+      // Store results in candleAnalysisResults object
+      for (const result of symbolResults) {
+        candleAnalysisResults[result.symbol] = result;
       }
+      
+      const candleAnalysisElapsed = Date.now() - candleAnalysisStartTime;
+      console.log(`⏱️ [TIMING] Candle analysis (parallel) completed in ${candleAnalysisElapsed}ms`);
 
       // Log candle analysis results
       console.log('🕯️ Candle Analysis Results:');
@@ -1307,6 +1377,7 @@ class PositionManager {
       
       // Log analysis data for ALL symbols every minute (matching backtest behavior)
       // This captures real candle data as it changes, not just when positions are active
+      const baseLoggingStartTime = Date.now();
       console.log('📊 Base logging: Processing candle analysis results...');
       for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
         if (!result.success) {
@@ -1411,7 +1482,13 @@ class PositionManager {
           console.error(`⚠️ Failed to log analysis data for ${symbol}: ${logError.message}`);
         }
       }
-      console.log('📊 Base logging: Complete');
+      const baseLoggingElapsed = Date.now() - baseLoggingStartTime;
+      console.log(`📊 Base logging: Complete`);
+      console.log(`⏱️ [TIMING] Base logging completed in ${baseLoggingElapsed}ms`);
+      
+      const elapsed = Date.now() - startTime;
+      console.log(`⏱️ [TIMING] Total checkPositions execution: ${elapsed}ms`);
+      console.log(`🔄 ========== checkPositions COMPLETE in ${elapsed}ms ==========\n`);
       
       // Run state-driven strategy across working positions
       // STATE CHANGES: All state updates below are queued and applied atomically at the end

@@ -170,19 +170,33 @@ async function populateBaseCache(symbol) {
         endDate: tf.endDate
       };
       
-      console.log(`🕯️ Fetching ${tf.name} for base cache...`);
+      console.log(`🕯️ Fetching ${tf.name} for base cache (period: ${tf.period} days)...`);
       const data = await marketClient.priceHistory(apiSymbol, options);
       
       let candles = data.candles || [];
+      const rawCount = candles.length;
       
       // Filter out zero-value candles
       candles = candles.filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+      const afterZeroFilter = candles.length;
       
       // Filter to market hours only (9:30 AM - 4:00 PM ET)
+      // This removes invalid extended hours data that sometimes appears in API responses
       candles = filterMarketHours(candles);
+      const afterMarketHoursFilter = candles.length;
       
       // Sort newest first
       candles.sort((a, b) => b.datetime - a.datetime);
+      
+      // Log date range of candles
+      if (candles.length > 0) {
+        const oldestDate = new Date(candles[candles.length - 1].datetime).toISOString().split('T')[0];
+        const newestDate = new Date(candles[0].datetime).toISOString().split('T')[0];
+        console.log(`🕯️   ${tf.name}: ${rawCount} raw → ${afterZeroFilter} after zero-filter → ${afterMarketHoursFilter} after market-hours-filter`);
+        console.log(`🕯️   ${tf.name}: Date range: ${oldestDate} to ${newestDate}`);
+      } else {
+        console.log(`🕯️   ${tf.name}: ${rawCount} raw → ${afterZeroFilter} after zero-filter → ${afterMarketHoursFilter} after market-hours-filter (NO CANDLES)`);
+      }
       
       // TODO: Investigate Schwab API duplicate issue - surprising that API returns exact duplicates
       // Each timestamp appears twice in the response. Need to verify if this is:
@@ -600,18 +614,22 @@ async function createWorkingData(symbol) {
 }
 
 /**
- * Convert epoch milliseconds to EST time string (H:M:S)
+ * Convert epoch milliseconds to EST datetime string (YYYY-MM-DD HH:MM:SS)
+ * Used for duplicate detection - must include date to avoid treating same time on different days as duplicates
  */
 function toESTTime(datetime) {
   const date = new Date(datetime);
-  const estTime = date.toLocaleTimeString('en-US', { 
+  const estDateTime = date.toLocaleString('en-US', { 
     timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
   });
-  return estTime;
+  return estDateTime;
 }
 
 /**

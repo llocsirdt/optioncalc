@@ -1096,6 +1096,13 @@ async function startServer() {
       console.log(`🔄 Starting position check loop (runs at :30 seconds each minute)...`);
       let positionCheckInterval = null;
       
+      // Execution state tracking for diagnostics
+      let isCheckingPositions = false;
+      let lastCheckStartTime = null;
+      let lastCheckEndTime = null;
+      let checkCount = 0;
+      let overlapCount = 0;
+      
       // Calculate delay to next :30 second mark
       const now = new Date();
       const currentSeconds = now.getSeconds();
@@ -1114,20 +1121,98 @@ async function startServer() {
       setTimeout(() => {
         // Run immediately at :30 seconds
         (async () => {
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString('en-US', { 
+            timeZone: 'America/New_York', 
+            hour12: false, 
+            hour: '2-digit', 
+            minute: '2-digit',
+            second: '2-digit'
+          });
+          
+          checkCount++;
+          
+          if (isCheckingPositions) {
+            overlapCount++;
+            const elapsedSinceStart = lastCheckStartTime ? Date.now() - lastCheckStartTime : 0;
+            console.warn(`⚠️ [OVERLAP #${overlapCount}] checkPositions already running at ${timeStr} (started ${(elapsedSinceStart/1000).toFixed(1)}s ago, check #${checkCount})`);
+            return; // Don't start another execution
+          }
+          
+          isCheckingPositions = true;
+          lastCheckStartTime = Date.now();
+          console.log(`🔄 [CHECK #${checkCount}] Starting checkPositions at ${timeStr}`);
+          
           try {
             await persistence.positionManager.checkPositions(persistence);
+            
+            const elapsed = Date.now() - lastCheckStartTime;
+            lastCheckEndTime = Date.now();
+            const endTimeStr = new Date().toLocaleTimeString('en-US', { 
+              timeZone: 'America/New_York', 
+              hour12: false, 
+              hour: '2-digit', 
+              minute: '2-digit',
+              second: '2-digit'
+            });
+            console.log(`✅ [CHECK #${checkCount}] Completed checkPositions at ${endTimeStr} (took ${(elapsed/1000).toFixed(2)}s)`);
+            
+            if (elapsed > 60000) {
+              console.warn(`⚠️ [SLOW EXECUTION] checkPositions took ${(elapsed/1000).toFixed(2)}s (>60s threshold)`);
+            }
           } catch (error) {
-            console.error('❌ Error in position check loop:', error.message);
+            console.error(`❌ [CHECK #${checkCount}] Error in position check loop:`, error.message);
+          } finally {
+            isCheckingPositions = false;
           }
         })();
         
         // Then run every minute at :30 seconds
         if (!positionCheckInterval) {
           positionCheckInterval = setInterval(async () => {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { 
+              timeZone: 'America/New_York', 
+              hour12: false, 
+              hour: '2-digit', 
+              minute: '2-digit',
+              second: '2-digit'
+            });
+            
+            checkCount++;
+            
+            if (isCheckingPositions) {
+              overlapCount++;
+              const elapsedSinceStart = lastCheckStartTime ? Date.now() - lastCheckStartTime : 0;
+              console.warn(`⚠️ [OVERLAP #${overlapCount}] checkPositions already running at ${timeStr} (started ${(elapsedSinceStart/1000).toFixed(1)}s ago, check #${checkCount})`);
+              return; // Don't start another execution
+            }
+            
+            isCheckingPositions = true;
+            lastCheckStartTime = Date.now();
+            console.log(`🔄 [CHECK #${checkCount}] Starting checkPositions at ${timeStr}`);
+            
             try {
               await persistence.positionManager.checkPositions(persistence);
+              
+              const elapsed = Date.now() - lastCheckStartTime;
+              lastCheckEndTime = Date.now();
+              const endTimeStr = new Date().toLocaleTimeString('en-US', { 
+                timeZone: 'America/New_York', 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+              });
+              console.log(`✅ [CHECK #${checkCount}] Completed checkPositions at ${endTimeStr} (took ${(elapsed/1000).toFixed(2)}s)`);
+              
+              if (elapsed > 60000) {
+                console.warn(`⚠️ [SLOW EXECUTION] checkPositions took ${(elapsed/1000).toFixed(2)}s (>60s threshold)`);
+              }
             } catch (error) {
-              console.error('❌ Error in position check loop:', error.message);
+              console.error(`❌ [CHECK #${checkCount}] Error in position check loop:`, error.message);
+            } finally {
+              isCheckingPositions = false;
             }
           }, 60000);
           
