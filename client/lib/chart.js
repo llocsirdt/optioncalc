@@ -177,14 +177,15 @@ function findKeyPointsOnCurve(valueCurve, cost) {
 }
 
 /**
- * Draw the portfolio value chart using D3.js
- * @param {Array} data - The portfolio value data
- * @param {number} cost - The cost basis
- * @param {Array} optionArray - Array of option positions for labeling
+ * Draw the chart with portfolio value data
+ * @param {Array} data - Main portfolio data
+ * @param {number} cost - Cost of the portfolio
+ * @param {Array} optionArray - Array of options to display as circles
  * @param {Array} tempData - Optional temporary data for comparison
  * @param {number} underlyingPrice - Current underlying price for vertical line
+ * @param {number} combinedCost - Optional combined cost (main + temp positions)
  */
-function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice = null) {
+function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice = null, combinedCost = null) {
     // Clear previous chart
     d3.select("#chart").selectAll("*").remove();
     
@@ -284,7 +285,7 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .attr("d", tempLine);
     }
 
-    // Add a horizontal line for the cost
+    // Add a horizontal line for the main cost
     svg.append("line")
         .attr("x1", xScale(d3.min(data, d => d.closingPrice)))
         .attr("y1", yScale(cost))
@@ -293,6 +294,18 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         .attr("stroke", "red")
         .attr("stroke-width", 1.5)
         .attr("stroke-dasharray", "3, 3");
+
+    // Add a second horizontal line for the combined cost (if temp positions exist)
+    if (combinedCost !== null && combinedCost !== cost) {
+        svg.append("line")
+            .attr("x1", xScale(d3.min(data, d => d.closingPrice)))
+            .attr("y1", yScale(combinedCost))
+            .attr("x2", xScale(d3.max(data, d => d.closingPrice)))
+            .attr("y2", yScale(combinedCost))
+            .attr("stroke", "green")
+            .attr("stroke-width", 1.5)
+            .attr("stroke-dasharray", "5, 5");
+    }
 
 
     // Add circles for each option in the optionArray

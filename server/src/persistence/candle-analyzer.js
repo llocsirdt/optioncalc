@@ -4,6 +4,7 @@
  */
 
 const { marketClient } = require('./market-client');
+const { streamingCandleSource } = require('./streaming-candle-source');
 
 // IMMUTABLE base cache - populated ONCE per symbol, NEVER overwritten
 const baseCandleCache = new Map();
@@ -252,11 +253,34 @@ async function populateBaseCache(symbol) {
 
 /**
  * Get latest 1m candles since a given time
+ * Tries streaming API first for real-time data, falls back to REST API
  */
 async function getLatest1mCandles(symbol, sinceTime) {
   const indexSymbols = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
   const apiSymbol = symbol.startsWith('$') ? symbol : (indexSymbols.includes(symbol) ? `$${symbol}` : symbol);
   
+  // Try to get latest candle from streaming API first
+  let streamCandle = null;
+  if (streamingCandleSource.isConnected && streamingCandleSource.hasLatestCandle(symbol)) {
+    streamCandle = streamingCandleSource.getLatestCandle(symbol);
+    
+    // Only use streaming candle if it's newer than sinceTime
+    if (streamCandle && streamCandle.datetime > sinceTime) {
+      const timeStr = new Date(streamCandle.datetime).toLocaleTimeString('en-US', {
+        timeZone: 'America/New_York',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      console.log(`🌊 Using streaming candle for ${symbol} at ${timeStr}`);
+      
+      // Return streaming candle as single-element array
+      return [streamCandle];
+    }
+  }
+  
+  // Fall back to REST API
   const fetchTime = Date.now();
   const options = {
     periodType: 'day',
@@ -1040,6 +1064,7 @@ module.exports = {
   calculatePerCandleBBScores,
   calculatePerCandleTrendScores,
   aggregate30mTo60m,
+  streamingCandleSource,
   clearBaseCache: (symbol) => {
     const cacheKey = `${symbol}_v${CACHE_VERSION}`;
     baseCandleCache.delete(cacheKey);

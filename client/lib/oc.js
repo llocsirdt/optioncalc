@@ -829,6 +829,14 @@ function updateChartWithSlider() {
   
   const visibleCombinedOptions = Array.from(visibleCombinedMap.values());
   
+  // Calculate the cost for only the visible positions
+  let visibleCost = 0;
+  visibleOptions.forEach(option => {
+    if (option.costAdjustment) {
+      visibleCost += option.costAdjustment;
+    }
+  });
+  
   // Calculate portfolio values with the filtered and combined options
   const data = ChartModule.calculatePortfolioValueAtExpiration(
     visibleCombinedOptions,
@@ -845,8 +853,8 @@ function updateChartWithSlider() {
     underlyingPrice = parseFloat(priceText.replace('$', '')) || 0;
   }
   
-  // Draw the chart with the filtered data but show all original positions in the labels
-  ChartModule.drawChart(data, fullCost, visibleOptions, null, underlyingPrice);
+  // Draw the chart with the filtered data and visible cost
+  ChartModule.drawChart(data, visibleCost, visibleOptions, null, underlyingPrice);
 }
 
 // Function to show all options
@@ -3067,6 +3075,8 @@ function processInput() {
     
     // Calculate the combined portfolio values (optionArray + tempOptionArray)
     let combinedData = [];
+    let combinedCost = fullCost;
+    
     if (tempOptionArray.length > 0) {
       // Create a map of all options (from both arrays)
       const allOptionsMap = new Map();
@@ -3089,6 +3099,14 @@ function processInput() {
       
       const allOptions = Array.from(allOptionsMap.values());
       
+      // Calculate combined cost (fullCost + temp position costs)
+      combinedCost = fullCost;
+      tempOptionArray.forEach(option => {
+        if (option.costAdjustment) {
+          combinedCost += option.costAdjustment;
+        }
+      });
+      
       // Calculate portfolio values for the combined options
       combinedData = ChartModule.calculatePortfolioValueAtExpiration(
         allOptions,
@@ -3109,7 +3127,7 @@ function processInput() {
     
     // Draw the chart with both datasets if there's combined data, otherwise just the main data
     if (combinedData.length > 0) {
-      ChartModule.drawChart(data, fullCost, fullOptionArray, combinedData, underlyingPrice);
+      ChartModule.drawChart(data, fullCost, fullOptionArray, combinedData, underlyingPrice, combinedCost);
     } else {
       ChartModule.drawChart(data, fullCost, fullOptionArray, null, underlyingPrice);
     }
@@ -3129,10 +3147,51 @@ function processInput() {
       .map(p => `${p.description}: $${p.closingPrice.toFixed(2)} (Value: $${p.totalIntrinsicValue.toFixed(2)})`)
       .join('\n');
 
+    // Format positions list: strike (+/- qty), sorted by strike low to high, calls before puts
+    const formatPositionsList = (options) => {
+      // Group by strike
+      const strikeGroups = new Map();
+      options.forEach(opt => {
+        if (!strikeGroups.has(opt.strike)) {
+          strikeGroups.set(opt.strike, { calls: [], puts: [] });
+        }
+        if (opt.type === 'c') {
+          strikeGroups.get(opt.strike).calls.push(opt);
+        } else {
+          strikeGroups.get(opt.strike).puts.push(opt);
+        }
+      });
+      
+      // Sort strikes low to high
+      const sortedStrikes = Array.from(strikeGroups.keys()).sort((a, b) => a - b);
+      
+      // Build formatted list
+      const lines = [];
+      sortedStrikes.forEach(strike => {
+        const group = strikeGroups.get(strike);
+        
+        // Calls first
+        group.calls.forEach(opt => {
+          const sign = opt.qty >= 0 ? '+' : '';
+          lines.push(`${strike} (${sign}${opt.qty} Call)`);
+        });
+        
+        // Then puts
+        group.puts.forEach(opt => {
+          const sign = opt.qty >= 0 ? '+' : '';
+          lines.push(`${strike} (${sign}${opt.qty} Put)`);
+        });
+      });
+      
+      return lines.join('<br>');
+    };
+
     let outputStr = `
       <strong>Processed Output:</strong><br>
       <strong>Position Count:</strong> ${fullOptionArray.length}<br>
       <strong>Total Cost:</strong> $${fullCost.toFixed(2)}<br><br>
+      <strong>Positions:</strong><br>
+      ${formatPositionsList(fullOptionArray)}<br><br>
       <strong>Value Curve:</strong><br><br>
     `;
 

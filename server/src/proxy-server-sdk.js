@@ -9,7 +9,7 @@ const PersistenceManager = require('./persistence/persistence');
 // Import shared handlers and market client
 const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
-const { analyzeCandles } = require('./persistence/candle-analyzer');
+const { analyzeCandles, streamingCandleSource } = require('./persistence/candle-analyzer');
 const { marketClient } = require('./persistence/market-client');
 
 const app = express();
@@ -66,6 +66,24 @@ async function initializePersistence() {
     await persistence.cleanup();
     
     console.log('✅ Persistence system ready');
+    
+    // Initialize streaming connection for real-time candle data
+    console.log('🌊 Initializing streaming API connection...');
+    const streamingInitialized = await streamingCandleSource.initialize();
+    
+    if (streamingInitialized) {
+      // Wait a moment for authentication to complete, then subscribe
+      setTimeout(() => {
+        const symbols = ['NDX', 'SPX'];
+        for (const symbol of symbols) {
+          streamingCandleSource.subscribeSymbol(symbol);
+        }
+        console.log('✅ Streaming API symbols subscribed');
+      }, 2000);
+      console.log('✅ Streaming API ready');
+    } else {
+      console.warn('⚠️ Streaming API not available - will use REST API only');
+    }
   } catch (error) {
     console.error('❌ Failed to initialize persistence:', error.message);
   }
@@ -1225,6 +1243,28 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Graceful shutdown handler
+const gracefulShutdown = async (signal) => {
+  console.log(`\n🛑 Received ${signal}, shutting down server...`);
+  
+  // Disconnect streaming
+  if (streamingCandleSource.isConnected) {
+    console.log('🌊 Disconnecting streaming API...');
+    await streamingCandleSource.disconnect();
+  }
+  
+  // Save persistence state
+  console.log('💾 Saving persistence state...');
+  await persistence.saveState();
+  
+  console.log('✅ Shutdown complete');
+  process.exit(0);
+};
+
+// Handle both SIGINT (Ctrl+C) and SIGTERM (AWS EB, Docker, etc.)
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Start the server
 startServer();

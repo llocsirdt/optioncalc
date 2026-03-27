@@ -12,12 +12,19 @@
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "schwab-client-js": "^1.0.0"
+    "schwab-client-js": "^1.0.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "keywords": ["schwab", "api", "proxy", "trading", "options"],
+  "keywords": [
+    "schwab",
+    "api",
+    "proxy",
+    "trading",
+    "options"
+  ],
   "author": "",
   "license": "MIT"
 }

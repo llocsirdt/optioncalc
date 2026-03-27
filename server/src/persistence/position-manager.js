@@ -401,11 +401,25 @@ class PositionManager {
   getOptionPriceFromChain(chainData, strike, type, expiration) {
     if (!chainData) return null;
     
-    const optionMap = type === 'C' ? chainData.call : chainData.put;
-    if (!optionMap || !optionMap[expiration]) return null;
+    // Handle both direct format and cached format with 'data' wrapper
+    const dataObj = chainData.data || chainData;
+    const optionMap = type === 'C' ? dataObj.call : dataObj.put;
+    if (!optionMap) return null;
     
-    const strikeData = optionMap[expiration].find(opt => opt.strikePrice === strike);
-    if (!strikeData || !strikeData[0]) return null;
+    // Find the expiration key (could be "2026-03-31:4" format or just "2026-03-31")
+    const expirationKeys = Object.keys(optionMap).filter(key => key.startsWith(expiration));
+    if (expirationKeys.length === 0) return null;
+    
+    const expirationKey = expirationKeys[0];
+    const strikeMap = optionMap[expirationKey];
+    if (!strikeMap) return null;
+    
+    // Strike could be stored as string "23040.0" or number
+    const strikeKey = Object.keys(strikeMap).find(k => parseFloat(k) === strike);
+    if (!strikeKey) return null;
+    
+    const strikeData = strikeMap[strikeKey];
+    if (!Array.isArray(strikeData) || strikeData.length === 0) return null;
     
     // Return mark price in cents (multiply by 100)
     const mark = strikeData[0].mark;
@@ -433,9 +447,18 @@ class PositionManager {
     
     if (this.persistenceManager) {
       try {
+        console.log(`🐂 [DEBUG] Fetching chain data for ${symbol} ${expiration}`);
         const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
+        console.log(`🐂 [DEBUG] Chain data received:`, chainData ? 'YES' : 'NO');
+        if (chainData) {
+          console.log(`🐂 [DEBUG] Chain structure - calls:`, Object.keys(chainData.call || {}), 'puts:', Object.keys(chainData.put || {}));
+        }
+        
         const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'C', expiration);
         const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'C', expiration);
+        
+        console.log(`🐂 [DEBUG] Lower strike ${lower} price from chain:`, lowerPrice);
+        console.log(`🐂 [DEBUG] Upper strike ${upper} price from chain:`, upperPrice);
         
         if (lowerPrice != null) lowerCost = lowerPrice;
         if (upperPrice != null) upperCost = -upperPrice; // Negative because we're selling
@@ -443,6 +466,7 @@ class PositionManager {
         console.log(`🐂 Real option prices: ${lower} call = $${(lowerCost/100).toFixed(2)}, ${upper} call = $${(Math.abs(upperCost)/100).toFixed(2)}`);
       } catch (error) {
         console.warn(`🐂 Failed to fetch option prices, using defaults: ${error.message}`);
+        console.error(`🐂 Error stack:`, error.stack);
       }
     } else {
       console.warn(`🐂 No persistenceManager available, using default prices`);
@@ -494,9 +518,18 @@ class PositionManager {
     
     if (this.persistenceManager) {
       try {
+        console.log(`🐻 [DEBUG] Fetching chain data for ${symbol} ${expiration}`);
         const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
+        console.log(`🐻 [DEBUG] Chain data received:`, chainData ? 'YES' : 'NO');
+        if (chainData) {
+          console.log(`🐻 [DEBUG] Chain structure - calls:`, Object.keys(chainData.call || {}), 'puts:', Object.keys(chainData.put || {}));
+        }
+        
         const upperPrice = this.getOptionPriceFromChain(chainData, upper, 'P', expiration);
         const lowerPrice = this.getOptionPriceFromChain(chainData, lower, 'P', expiration);
+        
+        console.log(`🐻 [DEBUG] Upper strike ${upper} price from chain:`, upperPrice);
+        console.log(`🐻 [DEBUG] Lower strike ${lower} price from chain:`, lowerPrice);
         
         if (upperPrice != null) upperCost = upperPrice;
         if (lowerPrice != null) lowerCost = -lowerPrice; // Negative because we're selling
@@ -504,6 +537,7 @@ class PositionManager {
         console.log(`🐻 Real option prices: ${upper} put = $${(upperCost/100).toFixed(2)}, ${lower} put = $${(Math.abs(lowerCost)/100).toFixed(2)}`);
       } catch (error) {
         console.warn(`🐻 Failed to fetch option prices, using defaults: ${error.message}`);
+        console.error(`🐻 Error stack:`, error.stack);
       }
     } else {
       console.warn(`🐻 No persistenceManager available, using default prices`);
@@ -1402,14 +1436,19 @@ class PositionManager {
             continue;
           }
           
-          const dt = new Date(ts1mCandle.datetime);
-          const timestamp = dt.toLocaleTimeString('en-US', { 
+          // Use current wall-clock time for timestamp to ensure we log every minute
+          // even when Schwab API provides stale candles
+          const currentTime = new Date();
+          const timestamp = currentTime.toLocaleTimeString('en-US', { 
             timeZone: 'America/New_York', 
             hour12: false, 
             hour: '2-digit', 
             minute: '2-digit' 
           });
-          const dateStr = dt.toISOString().split('T')[0];
+          const dateStr = currentTime.toISOString().split('T')[0];
+          
+          // Calculate candle age to track data freshness
+          const candleAge = Math.floor((currentTime - new Date(ts1mCandle.datetime)) / 60000);
           
           // Find position for this symbol to get current running state
           const symbolExpiration = summary.symbolExpirations.find(se => se.startsWith(`${symbol}_`));
@@ -1465,8 +1504,7 @@ class PositionManager {
             analysis: analysisLogger.extractAnalysisFromCandles(result)
           });
           
-          // DIAGNOSTIC: Log the actual candle time vs current time
-          const currentTime = new Date();
+          // Log diagnostic info showing candle freshness
           const currentTimeStr = currentTime.toLocaleTimeString('en-US', { 
             timeZone: 'America/New_York', 
             hour12: false, 
@@ -1474,7 +1512,6 @@ class PositionManager {
             minute: '2-digit',
             second: '2-digit'
           });
-          const candleAge = Math.floor((currentTime - new Date(ts1mCandle.datetime)) / 60000);
           
           analysisLogger.logAnalysis(symbol, dateStr, analysisEntry);
           console.log(`📊 Base logging: ✅ Logged analysis entry for ${symbol} at ${timestamp} (candle age: ${candleAge} min, current: ${currentTimeStr})`);
