@@ -991,6 +991,80 @@ function filterTimeframe(candleData, timeframe) {
 }
 
 /**
+ * Create aggregated analysis combining 1m candles with 5m and 15m scores
+ * Each 1m candle gets the BB score and trend score from its corresponding 5m and 15m candles
+ */
+function createAggregatedAnalysis(candleData) {
+  const candles1m = candleData['1m']?.candles;
+  const candles5m = candleData['5m']?.candles;
+  const candles15m = candleData['15m']?.candles;
+  
+  if (!candles1m || candles1m.length === 0) {
+    return {
+      candles: [],
+      message: 'No 1m candles available for aggregation'
+    };
+  }
+  
+  console.log(`🔄 Creating aggregated analysis from ${candles1m.length} 1m candles`);
+  
+  const aggregatedCandles = candles1m.map(candle1m => {
+    const timestamp1m = candle1m.datetime;
+    
+    // Find the 5m candle that contains this 1m timestamp
+    let bbScore5m = null;
+    let trendScore5m = null;
+    if (candles5m) {
+      const candle5m = candles5m.find(c => {
+        const candleStart = c.datetime;
+        const candleEnd = candleStart + (5 * 60 * 1000); // 5 minutes in ms
+        return timestamp1m >= candleStart && timestamp1m < candleEnd;
+      });
+      if (candle5m) {
+        bbScore5m = candle5m.bbScore;
+        trendScore5m = candle5m.trendScore;
+      }
+    }
+    
+    // Find the 15m candle that contains this 1m timestamp
+    let bbScore15m = null;
+    let trendScore15m = null;
+    if (candles15m) {
+      const candle15m = candles15m.find(c => {
+        const candleStart = c.datetime;
+        const candleEnd = candleStart + (15 * 60 * 1000); // 15 minutes in ms
+        return timestamp1m >= candleStart && timestamp1m < candleEnd;
+      });
+      if (candle15m) {
+        bbScore15m = candle15m.bbScore;
+        trendScore15m = candle15m.trendScore;
+      }
+    }
+    
+    // Calculate sums of trend and BB scores across timeframes
+    const trendSum = (candle1m.trendScore || 0) + (trendScore5m || 0) + (trendScore15m || 0);
+    const bbSum = (candle1m.bbScore || 0) + (bbScore5m || 0) + (bbScore15m || 0);
+    
+    return {
+      ...candle1m,
+      bbScore5m,
+      trendScore5m,
+      bbScore15m,
+      trendScore15m,
+      trendSum,
+      bbSum
+    };
+  });
+  
+  console.log(`🔄 ✅ Created aggregated analysis with ${aggregatedCandles.length} candles`);
+  
+  return {
+    candles: aggregatedCandles,
+    message: `Aggregated ${aggregatedCandles.length} 1m candles with 5m and 15m scores`
+  };
+}
+
+/**
  * Analyze candles for a given symbol
  */
 async function analyzeCandles(symbol, options = {}) {
@@ -1002,6 +1076,9 @@ async function analyzeCandles(symbol, options = {}) {
     let enhancedCandleData = enhanceCandleDataWithIndicators(symbol, candleData);
     enhancedCandleData = limitCandleData(enhancedCandleData, CANDLE_LIMIT);
     
+    // Create aggregated analysis combining 1m with 5m and 15m scores
+    const aggregatedAnalysis = createAggregatedAnalysis(enhancedCandleData);
+    
     if (options.timeframe) {
       enhancedCandleData = filterTimeframe(enhancedCandleData, options.timeframe);
     }
@@ -1011,6 +1088,7 @@ async function analyzeCandles(symbol, options = {}) {
       timestamp: new Date().toISOString(),
       status: 'analysis_complete',
       candleData: enhancedCandleData,
+      aggregatedAnalysis: aggregatedAnalysis,
       message: options.timeframe 
         ? `Candle analysis completed for ${options.timeframe} timeframe (limited to ${CANDLE_LIMIT} candles)`
         : `Candle analysis completed with technical indicators (limited to ${CANDLE_LIMIT} candles per timeframe)`

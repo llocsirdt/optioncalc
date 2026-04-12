@@ -136,6 +136,59 @@ function formatBBScoreDelta(delta) {
 }
 
 /**
+ * Calculate background color based on BB score for table rows
+ * @param {number} bbScore - BB score (negative = oversold/red, positive = overbought/green)
+ * @returns {string} Background color with appropriate opacity for text legibility
+ */
+function getBBRowBackgroundColor(bbScore) {
+  if (bbScore <= -0.8) {
+    // Red zone: -0.8 to -1.5 (oversold)
+    // Map -0.8 to light red, -1.5 to darker red
+    const normalizedScore = Math.min(Math.abs(bbScore + 0.8) / 0.7, 1); // 0 at -0.8, 1 at -1.5
+    const opacity = 0.15 + (normalizedScore * 0.25); // Range: 0.15 to 0.4 for legibility
+    return `rgba(220, 53, 69, ${opacity})`; // Bootstrap danger red
+  } else if (bbScore >= 0.8) {
+    // Green zone: 0.8 to 1.5 (overbought)
+    // Map 0.8 to light green, 1.5 to darker green
+    const normalizedScore = Math.min((bbScore - 0.8) / 0.7, 1); // 0 at 0.8, 1 at 1.5
+    const opacity = 0.15 + (normalizedScore * 0.25); // Range: 0.15 to 0.4 for legibility
+    return `rgba(40, 167, 69, ${opacity})`; // Bootstrap success green
+  }
+  // No background for scores between -0.8 and 0.8
+  return 'transparent';
+}
+
+/**
+ * Calculate background color based on BB sum for aggregated analysis table rows
+ * @param {number} bbSum - BB sum (range -5 to 5, negative = oversold/red, positive = overbought/green)
+ * @returns {string} Background color with appropriate opacity for text legibility
+ */
+function getBBSumRowBackgroundColor(bbSum) {
+  if (bbSum <= -2) {
+    // Red zone: -2 to -5 (oversold)
+    // Map -2 to light red, -5 to darker red
+    const normalizedScore = Math.min(Math.abs(bbSum + 2) / 3, 1); // 0 at -2, 1 at -5
+    const opacity = 0.15 + (normalizedScore * 0.25); // Range: 0.15 to 0.4 for legibility
+    return `rgba(220, 53, 69, ${opacity})`; // Bootstrap danger red
+  } else if (bbSum >= 2) {
+    // Green zone: 2 to 5 (overbought)
+    // Map 2 to light green, 5 to darker green
+    const normalizedScore = Math.min((bbSum - 2) / 3, 1); // 0 at 2, 1 at 5
+    const opacity = 0.15 + (normalizedScore * 0.25); // Range: 0.15 to 0.4 for legibility
+    return `rgba(40, 167, 69, ${opacity})`; // Bootstrap success green
+  } else if (bbSum >= -0.5 && bbSum <= 0.5) {
+    // Blue zone: -0.5 to 0.5 (neutral/choppy)
+    // Map distance from 0 to opacity - darkest at 0, lighter at edges
+    const distanceFromZero = Math.abs(bbSum);
+    const normalizedScore = 1 - (distanceFromZero / 0.5); // 1 at 0, 0 at ±0.5
+    const opacity = 0.15 + (normalizedScore * 0.25); // Range: 0.15 to 0.4 for legibility
+    return `rgba(13, 110, 253, ${opacity})`; // Bootstrap primary blue
+  }
+  // No background for scores between 0.5-2 and -0.5 to -2
+  return 'transparent';
+}
+
+/**
  * Calculate background color based on trend score
  * @param {number} trendScore - Trend score (positive = bullish, negative = bearish)
  * @returns {string} Background color
@@ -249,8 +302,13 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
       ? formatBBScoreDelta(candle.bbScoreDelta)
       : '<span>--</span>';
     
+    // Calculate background color based on BB score
+    const bbScoreNum = candle.bbScore !== undefined ? candle.bbScore : 0;
+    const rowBgColor = getBBRowBackgroundColor(bbScoreNum);
+    const rowStyle = rowBgColor !== 'transparent' ? `style="background-color: ${rowBgColor};"` : '';
+    
     tableRows += `
-      <tr>
+      <tr ${rowStyle}>
         <td>${candleTime}</td>
         <td>${trendScore}</td>
         <td>${bbScore}</td>
@@ -332,6 +390,98 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
 }
 
 /**
+ * Display aggregated analysis table
+ * @param {string} divId - The div ID to update
+ * @param {Object} aggregatedData - Aggregated analysis data
+ */
+function displayAggregatedAnalysis(divId, aggregatedData) {
+  const div = document.getElementById(divId);
+  if (!div) {
+    console.error(`Div ${divId} not found`);
+    return;
+  }
+  
+  if (!aggregatedData || !aggregatedData.candles || aggregatedData.candles.length === 0) {
+    div.innerHTML = `<div class="candle-analysis-error">No aggregated data available</div>`;
+    return;
+  }
+  
+  const candles = aggregatedData.candles;
+  const recentCandles = candles.slice(0, 500); // Show most recent 500
+  
+  // Build table rows
+  let tableRows = '';
+  for (let i = 0; i < recentCandles.length; i++) {
+    const candle = recentCandles[i];
+    const candleTime = candle.timeEST || '--';
+    
+    // Get scores
+    const bbScore1m = candle.bbScore !== undefined ? candle.bbScore : null;
+    const trendScore1m = candle.trendScore !== undefined ? candle.trendScore : null;
+    const bbScore5m = candle.bbScore5m !== undefined ? candle.bbScore5m : null;
+    const trendScore5m = candle.trendScore5m !== undefined ? candle.trendScore5m : null;
+    const bbScore15m = candle.bbScore15m !== undefined ? candle.bbScore15m : null;
+    const trendScore15m = candle.trendScore15m !== undefined ? candle.trendScore15m : null;
+    const trendSum = candle.trendSum !== undefined ? candle.trendSum : null;
+    const bbSum = candle.bbSum !== undefined ? candle.bbSum : null;
+    
+    // Calculate background color based on BB sum (range -5 to 5)
+    const rowBgColor = getBBSumRowBackgroundColor(bbSum || 0);
+    const rowStyle = rowBgColor !== 'transparent' ? `style="background-color: ${rowBgColor};"` : '';
+    
+    tableRows += `
+      <tr ${rowStyle}>
+        <td>${candleTime}</td>
+        <td>${formatPrice(candle.close)}</td>
+        <td style="font-weight: bold;">${trendSum !== null ? trendSum : '--'}</td>
+        <td style="font-weight: bold;">${bbSum !== null ? bbSum.toFixed(2) : '--'}</td>
+        <td>${trendScore1m !== null ? trendScore1m : '--'}</td>
+        <td>${bbScore1m !== null ? bbScore1m.toFixed(2) : '--'}</td>
+        <td>${trendScore5m !== null ? trendScore5m : '--'}</td>
+        <td>${bbScore5m !== null ? bbScore5m.toFixed(2) : '--'}</td>
+        <td>${trendScore15m !== null ? trendScore15m : '--'}</td>
+        <td>${bbScore15m !== null ? bbScore15m.toFixed(2) : '--'}</td>
+      </tr>
+    `;
+  }
+  
+  const html = `
+    <div class="candle-analysis-container">
+      <div class="candle-analysis-compact" style="background-color: #f5f5f5; border: 2px solid #999;">
+        <div class="candle-header-row">
+          <button id="${divId}-toggle" class="collapse-toggle" onclick="toggleCandleAnalysis('${divId}')" title="Toggle details">▼</button>
+          <span class="timeframe-label" style="font-weight: bold;">Aggregated Analysis (1m + 5m + 15m)</span>
+          <span style="font-size: 10px; color: #666;">${recentCandles.length} candles</span>
+        </div>
+      </div>
+      <div id="${divId}-details" class="candle-details" style="display: none;">
+        <table class="candle-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Close</th>
+              <th>Trend Sum</th>
+              <th>BB Sum</th>
+              <th>1m Trend</th>
+              <th>1m BB</th>
+              <th>5m Trend</th>
+              <th>5m BB</th>
+              <th>15m Trend</th>
+              <th>15m BB</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  
+  div.innerHTML = html;
+}
+
+/**
  * Update all candle analysis displays
  * @param {string} symbol - The symbol to analyze
  */
@@ -351,28 +501,16 @@ async function updateAllCandleAnalysis(symbol) {
     }
     
     const candleData = analysis.candleData;
+    const aggregatedAnalysis = analysis.aggregatedAnalysis;
     
     // Debug: Log what we received
     console.log('Candle data received:', {
       '1m': candleData['1m'] ? `${candleData['1m'].candles?.length} candles` : 'missing',
       '5m': candleData['5m'] ? `${candleData['5m'].candles?.length} candles` : 'missing',
       '15m': candleData['15m'] ? `${candleData['15m'].candles?.length} candles` : 'missing',
-      '1h': candleData['1h'] ? `${candleData['1h'].candles?.length} candles` : 'missing'
+      '1h': candleData['1h'] ? `${candleData['1h'].candles?.length} candles` : 'missing',
+      'aggregated': aggregatedAnalysis ? `${aggregatedAnalysis.candles?.length} candles` : 'missing'
     });
-    
-    // Debug: Log latest candle for each timeframe
-    if (candleData['1m']?.candles?.length > 0) {
-      console.log('1m latest:', candleData['1m'].candles[candleData['1m'].candles.length - 1]);
-    }
-    if (candleData['5m']?.candles?.length > 0) {
-      console.log('5m latest:', candleData['5m'].candles[candleData['5m'].candles.length - 1]);
-    }
-    if (candleData['15m']?.candles?.length > 0) {
-      console.log('15m latest:', candleData['15m'].candles[candleData['15m'].candles.length - 1]);
-    }
-    if (candleData['1h']?.candles?.length > 0) {
-      console.log('1h latest:', candleData['1h'].candles[candleData['1h'].candles.length - 1]);
-    }
     
     // Update each timeframe display
     if (candleData['1m']) {
@@ -388,12 +526,12 @@ async function updateAllCandleAnalysis(symbol) {
       displayCandleAnalysis('candle-analysis-60m', candleData['1h'], '60m');
     }
     
-    console.log('✅ Candle analysis updated successfully - scores:', {
-  '1m': candleData['1m']?.candles?.[candleData['1m'].candles.length - 1]?.trendScore,
-  '5m': candleData['5m']?.candles?.[candleData['5m'].candles.length - 1]?.trendScore,
-  '15m': candleData['15m']?.candles?.[candleData['15m'].candles.length - 1]?.trendScore,
-  '60m': candleData['1h']?.candles?.[candleData['1h'].candles.length - 1]?.trendScore
-});
+    // Update aggregated analysis display
+    if (aggregatedAnalysis) {
+      displayAggregatedAnalysis('candle-analysis-aggregated', aggregatedAnalysis);
+    }
+    
+    console.log('✅ Candle analysis updated successfully');
   } catch (error) {
     console.error('Failed to update candle analysis:', error);
   }
