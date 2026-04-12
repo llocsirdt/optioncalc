@@ -19,6 +19,7 @@ const { marketClient } = require(marketClientPath);
 // Import production indicator calculation functions
 const candleAnalyzerPath = path.resolve(__dirname, '../../server/src/persistence/candle-analyzer.js');
 const { 
+  analyzeCandles,
   calculateSMA, 
   calculateEMA, 
   calculateBollingerBands,
@@ -98,6 +99,7 @@ class BacktestController {
       type: null,
       openedAt: null
     };
+    this.aggregatedAnalysis = null; // Store aggregated analysis with trendSum/bbSum for strategies
   }
 
   // NOTE: Strategy functions (strategy...Open/Cover) now use production functions
@@ -382,48 +384,35 @@ class BacktestController {
         return current - previous;
       };
 
-      const seedData = await this.fetchSeedData(symbol, backtestDate);
+      // Use analyzeCandles with historical date to get candles + indicators + aggregated analysis
+      console.log(`\n�️ Fetching historical candle analysis for ${backtestDate}...`);
+      const analysis = await analyzeCandles(symbol, { date: backtestDate });
       
-      console.log(`\n📊 Seed Data Summary:`);
-      console.log(`   5m candles: ${seedData['5m'].length}`);
-      console.log(`   15m candles: ${seedData['15m'].length}`);
-      console.log(`   30m candles: ${seedData['30m'].length}`);
-      console.log(`   1m candles: ${seedData['1m'].length}`);
-      
-      // Aggregate 30m to 60m
-      console.log(`\n🔄 Aggregating 30m candles to 60m...`);
-      const aggregated60m = aggregate30mTo60m(seedData['30m']);
-      console.log(`   ✅ Created ${aggregated60m.length} 60m candles`);
-      
-      // Display 60m candles to verify
-      console.log(`\n📊 60m Candles (newest first):`);
-      for (let i = 0; i < Math.min(10, aggregated60m.length); i++) {
-        const c = aggregated60m[i];
-        const time = new Date(c.datetime);
-        const timeStr = time.toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit', 
-          hour12: false,
-          timeZone: 'America/New_York'
-        });
-        const dateStr = time.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-        console.log(`   [${i}] ${dateStr} ${timeStr}: O=${c.open.toFixed(2)} H=${c.high.toFixed(2)} L=${c.low.toFixed(2)} C=${c.close.toFixed(2)}`);
+      if (analysis.status === 'error') {
+        throw new Error(`Candle analysis failed: ${analysis.error}`);
       }
       
-      // Check for 9:00 AM candle specifically
-      const candle9am = aggregated60m.find(c => {
-        const time = new Date(c.datetime);
-        return time.getHours() === 9 && time.getMinutes() === 0;
-      });
-      if (candle9am) {
-        console.log(`\n✅ Special 9:00 AM candle found (from single 9:30 AM 30m candle)`);
-        console.log(`   Datetime: ${new Date(candle9am.datetime).toISOString()}`);
-        console.log(`   Close: ${candle9am.close.toFixed(2)}`);
-      }
+      const candleData = analysis.candleData;
+      this.aggregatedAnalysis = analysis.aggregatedAnalysis;
       
-      seedData['60m'] = aggregated60m;
+      console.log(`\n📊 Candle Data Summary:`);
+      console.log(`   1m candles: ${candleData['1m']?.candles?.length || 0}`);
+      console.log(`   5m candles: ${candleData['5m']?.candles?.length || 0}`);
+      console.log(`   15m candles: ${candleData['15m']?.candles?.length || 0}`);
+      console.log(`   30m candles: ${candleData['30m']?.candles?.length || 0}`);
+      console.log(`   60m candles: ${candleData['60m']?.candles?.length || 0}`);
+      console.log(`   Aggregated analysis: ${this.aggregatedAnalysis?.candles?.length || 0} candles with trendSum/bbSum`);
       
-      console.log(`\n✅ Seed data fetched, verified, and 60m candles aggregated!`);
+      // Extract candle arrays for backward compatibility with existing code
+      const seedData = {
+        '1m': candleData['1m']?.candles || [],
+        '5m': candleData['5m']?.candles || [],
+        '15m': candleData['15m']?.candles || [],
+        '30m': candleData['30m']?.candles || [],
+        '60m': candleData['60m']?.candles || []
+      };
+      
+      console.log(`\n✅ Historical candle analysis complete with indicators and aggregated data!`);
       
       // Sort 1m candles newest first for analysis
       const candles1m = [...seedData['1m']].sort((a, b) => b.datetime - a.datetime);
