@@ -21,6 +21,7 @@ class PositionManager {
     this.positionsCache = null; // In-memory positions cache
     this.cacheInitialized = false;
     this.persistenceManager = null; // Reference to persistence manager for fetching chain data
+    this.lastLoggedCandleDatetime = new Map(); // Tracks last candle datetime logged per symbol to detect stale data
   }
 
   /**
@@ -881,42 +882,32 @@ class PositionManager {
    */
   async analyzeOffsettingPositions(symbolExpiration, position) {
     try {
-      // Extract symbol from symbolExpiration (e.g., "NDX_2026-03-31" -> "NDX")
-      const symbol = symbolExpiration.split('_')[0];
-      
-      //*** TODO this should NOT call the API from localhost, it should use the internal implementation for offsetting position data */
-      // Fetch offsetting positions from the server API
-      const offsetUrl = `http://localhost:3001/api/v1/positions/offsetting?symbol=${symbol}`;
-      const response = await fetch(offsetUrl);
-      
-      if (!response.ok) {
-        console.warn(`⚠️ Failed to fetch offsetting positions for ${symbol}: ${response.statusText}`);
+      if (!this.persistenceManager) {
+        console.warn(`⚠️ No persistence manager available for offsetting analysis on ${symbolExpiration}`);
         return { totalAvailable: 0, buckets: {}, positions: [] };
       }
-      
-      const data = await response.json();
-      const offsettingPositions = data.offsettingPositions || [];
-      
+
+      // Extract symbol/expiration from symbolExpiration (e.g., "NDX_2026-03-31")
+      const [symbol, expiration] = symbolExpiration.split('_');
+
+      const chainData = await this.persistenceManager.getOrFetchChainData(symbol, expiration);
+      const { possibleOffsets } = this.persistenceManager.offsetManager.findOffsettingForPosition(position, chainData);
+
       // Group by score buckets (0-0.1, 0.1-0.2, ..., 0.9-1.0)
       const buckets = {};
-      let totalAvailable = 0;
-      
-      for (const pos of offsettingPositions) {
-        const score = pos.score ?? 0;
+
+      for (const candidate of possibleOffsets) {
+        const score = candidate.profitPotentialScore ?? 0;
         const bucketKey = Math.floor(score * 10) / 10; // Rounds down to nearest 0.1
         const bucketLabel = `${bucketKey}-${bucketKey + 0.1}`;
-        
-        if (!buckets[bucketLabel]) {
-          buckets[bucketLabel] = 0;
-        }
-        buckets[bucketLabel]++;
-        totalAvailable++;
+
+        buckets[bucketLabel] = (buckets[bucketLabel] || 0) + 1;
       }
-      
+
       // Log the results
       console.log(`📊 Offset analysis for ${symbolExpiration}:`);
-      console.log(`  Total available offsetting positions: ${totalAvailable}`);
-      if (totalAvailable > 0) {
+      console.log(`  Total available offsetting positions: ${possibleOffsets.length}`);
+      if (possibleOffsets.length > 0) {
         console.log(`  Score distribution:`);
         Object.entries(buckets)
           .sort(([a], [b]) => parseFloat(a) - parseFloat(b))
@@ -924,9 +915,9 @@ class PositionManager {
             console.log(`    ${bucket}: ${count} positions`);
           });
       }
-      
-      return { totalAvailable, buckets, positions: offsettingPositions };
-      
+
+      return { totalAvailable: possibleOffsets.length, buckets, positions: possibleOffsets };
+
     } catch (error) {
       console.error(`❌ Error analyzing offsetting positions for ${symbolExpiration}: ${error.message}`);
       return { totalAvailable: 0, buckets: {}, positions: [] };
@@ -1247,6 +1238,12 @@ class PositionManager {
       
       if (!positions || Object.keys(positions).length === 0) {
         console.log('📊 Position Check: No positions available');
+        const _t = new Date();
+        const _ts = _t.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+        const _d = _t.toISOString().split('T')[0];
+        for (const sym of ['NDX', 'SPX']) {
+          try { analysisLogger.logAnalysis(sym, _d, { timestamp: _ts, noData: true, reason: 'no positions' }); } catch (_) {}
+        }
         return;
       }
 
@@ -1367,7 +1364,10 @@ class PositionManager {
         const symbolStartTime = Date.now();
         try {
           console.log(`  🕯️ [${symbol}] Starting analysis...`);
-          const candleAnalysis = await analyzeCandles(`$${symbol}`); // No timeframe filter - get all timeframes
+          const candleAnalysis = await Promise.race([
+            analyzeCandles(`$${symbol}`), // No timeframe filter - get all timeframes
+            new Promise((_, reject) => setTimeout(() => reject(new Error('analyzeCandles timed out after 25s')), 25000))
+          ]);
           const symbolElapsed = Date.now() - symbolStartTime;
           console.log(`  ✅ [${symbol}] Analysis complete in ${symbolElapsed}ms`);
           return {
@@ -1396,6 +1396,13 @@ class PositionManager {
         candleAnalysisResults[result.symbol] = result;
       }
       
+      // Ensure tracked symbols always have an entry so base logging always runs
+      for (const sym of ['NDX', 'SPX']) {
+        if (!candleAnalysisResults[sym]) {
+          candleAnalysisResults[sym] = { symbol: sym, success: false, error: 'symbol not in positions' };
+        }
+      }
+      
       const candleAnalysisElapsed = Date.now() - candleAnalysisStartTime;
       console.log(`⏱️ [TIMING] Candle analysis (parallel) completed in ${candleAnalysisElapsed}ms`);
 
@@ -1409,30 +1416,55 @@ class PositionManager {
         }
       }
       
-      // Log analysis data for ALL symbols every minute (matching backtest behavior)
-      // This captures real candle data as it changes, not just when positions are active
+      // Log analysis data for ALL symbols every minute during market hours only
+      // Data does not change outside market hours, so no need to write entries then
       const baseLoggingStartTime = Date.now();
+      const _etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const _etDay = _etNow.getDay();
+      const _etMinutes = _etNow.getHours() * 60 + _etNow.getMinutes();
+      const _isMarketHours = _etDay >= 1 && _etDay <= 5 && _etMinutes >= 570 && _etMinutes < 960; // 9:30 AM - 4:00 PM ET
+      if (!_isMarketHours) {
+        console.log(`📊 Base logging: Outside market hours (${_etNow.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false })} ET), skipping analysis entries`);
+      } else {
       console.log('📊 Base logging: Processing candle analysis results...');
+      
+      // Helper: write a no-data entry for a symbol using current wall-clock time
+      const logNoDataEntry = (symbol, reason) => {
+        try {
+          const currentTime = new Date();
+          const timestamp = currentTime.toLocaleTimeString('en-US', {
+            timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit'
+          });
+          const dateStr = currentTime.toISOString().split('T')[0];
+          analysisLogger.logAnalysis(symbol, dateStr, { timestamp, noData: true, reason });
+          console.log(`📊 Base logging: ⚠️ No data entry for ${symbol} at ${timestamp} - ${reason}`);
+        } catch (_) {}
+      };
+
       for (const [symbol, result] of Object.entries(candleAnalysisResults)) {
         if (!result.success) {
-          console.log(`📊 Base logging: Skipping ${symbol} - candle analysis failed: ${result.error}`);
+          console.log(`📊 Base logging: Candle analysis failed for ${symbol}: ${result.error}`);
+          logNoDataEntry(symbol, `candle analysis failed: ${result.error}`);
           continue;
         }
         
         if (!result.candleData) {
-          console.log(`📊 Base logging: Skipping ${symbol} - no candleData in result`);
+          console.log(`📊 Base logging: No candleData for ${symbol}`);
+          logNoDataEntry(symbol, 'no candleData returned');
           continue;
         }
         
         try {
           const ts1mCandle = result.candleData?.['1m']?.candles?.[0];
           if (!ts1mCandle) {
-            console.log(`📊 Base logging: Skipping ${symbol} - no 1m candle data`);
+            console.log(`📊 Base logging: No 1m candle for ${symbol}`);
+            logNoDataEntry(symbol, 'no 1m candle data');
             continue;
           }
           
           if (!ts1mCandle.datetime) {
-            console.log(`📊 Base logging: Skipping ${symbol} - 1m candle missing datetime`);
+            console.log(`📊 Base logging: 1m candle missing datetime for ${symbol}`);
+            logNoDataEntry(symbol, '1m candle missing datetime');
             continue;
           }
           
@@ -1449,6 +1481,20 @@ class PositionManager {
           
           // Calculate candle age to track data freshness
           const candleAge = Math.floor((currentTime - new Date(ts1mCandle.datetime)) / 60000);
+          
+          // Detect stale data: same candle datetime as last logged AND age > 2 minutes
+          const lastDatetime = this.lastLoggedCandleDatetime.get(symbol);
+          const isStale = candleAge > 2 && lastDatetime === ts1mCandle.datetime;
+          
+          if (isStale) {
+            const staleEntry = { timestamp, datetime: ts1mCandle.datetime, staleData: true, staleMinutes: candleAge };
+            analysisLogger.logAnalysis(symbol, dateStr, staleEntry);
+            console.log(`📊 Base logging: ⚠️ STALE DATA for ${symbol} at ${timestamp} - candle is ${candleAge} min old, skipping analysis`);
+            continue;
+          }
+          
+          // Update tracker with current candle datetime
+          this.lastLoggedCandleDatetime.set(symbol, ts1mCandle.datetime);
           
           // Find position for this symbol to get current running state
           const symbolExpiration = summary.symbolExpirations.find(se => se.startsWith(`${symbol}_`));
@@ -1522,11 +1568,8 @@ class PositionManager {
       const baseLoggingElapsed = Date.now() - baseLoggingStartTime;
       console.log(`📊 Base logging: Complete`);
       console.log(`⏱️ [TIMING] Base logging completed in ${baseLoggingElapsed}ms`);
-      
-      const elapsed = Date.now() - startTime;
-      console.log(`⏱️ [TIMING] Total checkPositions execution: ${elapsed}ms`);
-      console.log(`🔄 ========== checkPositions COMPLETE in ${elapsed}ms ==========\n`);
-      
+      } // end _isMarketHours
+
       // Run state-driven strategy across working positions
       // STATE CHANGES: All state updates below are queued and applied atomically at the end
       const pendingStateUpdates = new Map();
@@ -1857,31 +1900,31 @@ class PositionManager {
       console.log(`  Covered Positions: ${summary.coveredPositions.length > 0 ? summary.coveredPositions.join(', ') : 'None'}`);
       console.log(`  Uncovered Positions: ${summary.uncoveredPositions.length > 0 ? summary.uncoveredPositions.join(', ') : 'None'}`);
 
-      // Save analysis data periodically (every 10 minutes or at market close)
+      // Save analysis data every minute to minimize data loss on crash
       try {
-        const now = new Date();
-        const currentHour = now.getHours();
-        const currentMinute = now.getMinutes();
-        
-        // Save at market close (4:00 PM ET = 16:00) or every 10 minutes
-        const isMarketClose = currentHour === 16 && currentMinute === 0;
+        const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const isMarketClose = etNow.getHours() === 16 && etNow.getMinutes() === 0;
         if (!this.lastAnalysisSaveTime) {
           this.lastAnalysisSaveTime = 0;
         }
-        
-        const timeSinceLastSave = now.getTime() - this.lastAnalysisSaveTime;
-        const shouldSave = isMarketClose || timeSinceLastSave > 600000; // 10 minutes
-        
+        const timeSinceLastSave = Date.now() - this.lastAnalysisSaveTime;
+        const shouldSave = isMarketClose || timeSinceLastSave > 60000; // every 1 minute
         if (shouldSave) {
           await analysisLogger.saveAllAnalysisData();
-          this.lastAnalysisSaveTime = now.getTime();
+          this.lastAnalysisSaveTime = Date.now();
         }
       } catch (saveError) {
         console.error('⚠️ Failed to save analysis data:', saveError.message);
       }
+
+      const totalElapsed = Date.now() - startTime;
+      console.log(`⏱️ [TIMING] Total checkPositions execution: ${totalElapsed}ms`);
+      console.log(`🔄 ========== checkPositions COMPLETE in ${totalElapsed}ms ==========\n`);
       
     } catch (error) {
       console.error('❌ Error checking positions:', error.message);
+    } finally {
+      try { await analysisLogger.saveAllAnalysisData(); } catch (_) {}
     }
   }
 }

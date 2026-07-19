@@ -129,8 +129,10 @@
    * Returns true if strike is valid and has market data, false otherwise
    */
   function isValidShortPutStrike(shortPutStrike, referenceStrike, expirationStrikes) {
-    // Check strike range - only consider short put strikes BELOW the reference strike
-    if (shortPutStrike >= referenceStrike) {
+    // Check strike range - only consider short put strikes AT or BELOW the reference strike
+    // (findOffsettingBullPutSpread's design comment specifies "<=", but this excluded the
+    // boundary case where shortPutStrike === referenceStrike)
+    if (shortPutStrike > referenceStrike) {
       return false;
     }
     
@@ -149,12 +151,11 @@
    * Helper function to validate short put strike for bear put spread
    * Returns true if strike is valid and has market data, false otherwise
    */
-  function isValidShortPutStrikeForBear(shortPutStrike, referenceStrike, expirationStrikes) {
-    // Check strike range - only consider short put strikes AT or ABOVE the reference strike
-    if (shortPutStrike < referenceStrike) {
-      return false;
-    }
-    
+  function isValidShortPutStrikeForBear(shortPutStrike, expirationStrikes) {
+    // No strike-range constraint on the short leg here — per the bear put spread
+    // search design, only the LONG leg must satisfy the reference-strike boundary
+    // (enforced in isValidLongPutForBearSpread). The short leg just needs market data.
+
     // Check if market data exists for this strike
     for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
       const shortStrikeKey = shortPutStrike.toString() + '.0';
@@ -246,16 +247,23 @@
    * Helper function to validate long put strike for bear put spread creation
    * Returns true if strike is valid for spread creation, false otherwise
    */
-  function isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes) {
+  function isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, referenceStrike, spreadKey, addedSpreads, expirationStrikes) {
+    // Long leg must be at or above the reference strike (see findOffsettingBearPutSpread's
+    // "OFFSET GENERATION LOGIC" comments — this was previously enforced on the short leg
+    // instead, in isValidShortPutStrikeForBear, silently pruning valid candidates).
+    if (longPutStrike < referenceStrike) {
+      return false;
+    }
+
     // Skip if narrower than original spread width
     if (currentSpreadWidth < spreadWidth) {
       return false;
     }
-    
+
     if (addedSpreads.has(spreadKey)) {
       return false;
     }
-    
+
     // Check if market data exists for this strike
     for (const [expiration, strikes] of Object.entries(expirationStrikes)) {
       const longStrikeKey = longPutStrike.toString() + '.0';
@@ -263,7 +271,7 @@
         return true; // Found valid market data
       }
     }
-    
+
     return false; // No valid market data found
   }
 
@@ -801,7 +809,10 @@
       // Check if spreads overlap
       // Bull put: short at bullPutShortStrike, long at bullPutLongStrike (bullPutLongStrike < bullPutShortStrike)
       // Bear put: long at bearPutLongStrike, short at bearPutShortStrike (bearPutLongStrike < bearPutShortStrike)
-      const spreadsOverlap = bearPutLongStrike >= bullPutLongStrike && bearPutLongStrike <= bullPutShortStrike;
+      // Same overlap test as calculateBullPutProfitMetrics's mirror scenario (line ~624) —
+      // this used to only check bearPutLongStrike against the bull put's range and ignored
+      // bearPutShortStrike entirely, misclassifying genuinely-overlapping spreads as non-overlapping.
+      const spreadsOverlap = bullPutShortStrike > bearPutShortStrike && bullPutLongStrike < bearPutLongStrike;
       
       if (spreadsOverlap) {
         // SCENARIO 2A: SAME SIDE - OVERLAPPING
@@ -1876,10 +1887,10 @@
       // console.log(`🔍 BEAR PUT: Testing shortPutStrike ${shortPutStrike} vs referenceStrike ${referenceStrike}`);
       
       // Use helper function to validate strike and check market data availability
-      if (!isValidShortPutStrikeForBear(shortPutStrike, referenceStrike, expirationStrikes)) {
+      if (!isValidShortPutStrikeForBear(shortPutStrike, expirationStrikes)) {
         continue;
       }
-      
+
       // Get short put data using helper function
       const shortPutStrikeData = getStrikeData(shortPutStrike, putStrikes, expirationStrikes);
       if (!shortPutStrikeData) {
@@ -1897,16 +1908,16 @@
         const spreadKey = `${longPutStrike}-${shortPutStrike}`;
         
         // Use helper function to validate spread creation
-        if (!isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, spreadKey, addedSpreads, expirationStrikes)) {
+        if (!isValidLongPutForBearSpread(shortPutStrike, longPutStrike, currentSpreadWidth, spreadWidth, referenceStrike, spreadKey, addedSpreads, expirationStrikes)) {
           continue;
         }
-        
+
         // Get long put data using helper function
         const longPutStrikeData = getStrikeData(longPutStrike, putStrikes, expirationStrikes);
         if (!longPutStrikeData) {
           continue; // Should not happen since validation already passed
         }
-        
+
         const longPutData = longPutStrikeData.data;
         const longPutCost = longPutStrikeData.cost;
         const spreadCost = (longPutCost - shortPutCost) * 100;

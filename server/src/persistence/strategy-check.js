@@ -10,7 +10,9 @@ const {
   strategyPriceTrailOpen,
   strategyPriceTrailCover,
   strategyStateOpen,
-  strategyStateCover
+  strategyStateCover,
+  strategyAggregateScoresOpen,
+  strategyAggregateScoresCover
 } = require('./strategy-logic');
 
 function buildStateOpenAnalysis(candleAnalysis) {
@@ -314,35 +316,37 @@ async function checkSimpleCover(symbolExpiration, position) {
   if (analysis.totalAvailable > 0) {
     console.log(`✅ Found ${analysis.totalAvailable} potential offsetting positions for ${symbolExpiration}`);
     
-    // Use the positions already fetched by analyzeOffsettingPositions
-    const offsettingPositions = analysis.positions || [];
-    
-    if (offsettingPositions.length > 0) {
-      // Filter positions with scores between 0.05 and 0.25
-      const candidates = offsettingPositions.filter(pos => {
-        const score = pos.score ?? 0;
+    // Use the candidate offsets already fetched by analyzeOffsettingPositions
+    const candidateOffsets = analysis.positions || [];
+
+    if (candidateOffsets.length > 0) {
+      // Filter candidates with scores between 0.05 and 0.25 — a partial hedge,
+      // deliberately avoiding the fully-locked (score ~= 1) candidates so the
+      // position keeps room to move toward fully locked-in.
+      const candidates = candidateOffsets.filter(candidate => {
+        const score = candidate.profitPotentialScore ?? 0;
         return score >= 0.05 && score <= 0.25;
       });
-      
+
       if (candidates.length > 0) {
-        // Select the position with score closest to 0.15
+        // Select the candidate with score closest to 0.15
         const bestPosition = candidates.reduce((best, current) => {
-          const bestDistance = Math.abs((best.score ?? 0) - 0.15);
-          const currentDistance = Math.abs((current.score ?? 0) - 0.15);
+          const bestDistance = Math.abs((best.profitPotentialScore ?? 0) - 0.15);
+          const currentDistance = Math.abs((current.profitPotentialScore ?? 0) - 0.15);
           return currentDistance < bestDistance ? current : best;
         });
-        
-        console.log(`🎯 Selected offsetting position with score ${bestPosition.score} (closest to 0.25)`);
+
+        console.log(`🎯 Selected offsetting position with score ${bestPosition.profitPotentialScore} (closest to 0.15)`);
         const success = await this.tryOpenOffsettingCover(symbolExpiration, bestPosition, {
           source: 'simple-strategy',
           persistenceManager: this.persistenceManager
         });
-        
+
         if (success) {
           return true;
         }
       } else {
-        console.log(`ℹ️ No offsetting positions found with score between 0.2 and 0.3`);
+        console.log(`ℹ️ No offsetting positions found with score between 0.05 and 0.25`);
       }
     }
   } else {
@@ -646,6 +650,38 @@ async function checkPriceTrailOpen(symbol, expiration, candleAnalysis, persisten
   return false;
 }
 
+/**
+ * Check aggregate scores strategy for opening positions
+ * Uses aggregated analysis data with bbSum
+ */
+function checkAggregateScoresOpen(position, candleAnalysis, context = {}, options = {}) {
+  if (!candleAnalysis || !candleAnalysis.aggregatedAnalysis) {
+    return { action: 'hold', nextState: position.state || 'new', reason: 'no_aggregated_analysis' };
+  }
+  
+  const analysis = {
+    aggregated: candleAnalysis.aggregatedAnalysis
+  };
+  
+  return strategyAggregateScoresOpen(position, analysis, context, options);
+}
+
+/**
+ * Check aggregate scores strategy for covering positions
+ * Uses aggregated analysis data with bbSum
+ */
+function checkAggregateScoresCover(position, candleAnalysis, context = {}, options = {}) {
+  if (!candleAnalysis || !candleAnalysis.aggregatedAnalysis) {
+    return { action: 'hold', nextState: position.state || 'open', reason: 'no_aggregated_analysis' };
+  }
+  
+  const analysis = {
+    aggregated: candleAnalysis.aggregatedAnalysis
+  };
+  
+  return strategyAggregateScoresCover(position, analysis, context, options);
+}
+
 module.exports = {
   checkSimple5mBBScoreOpen,
   checkSimple15mBBScoreOpen,
@@ -659,5 +695,7 @@ module.exports = {
   checkPriceTrailCover,
   checkPriceTrailOpen,
   checkStateOpen,
-  checkStateCover
+  checkStateCover,
+  checkAggregateScoresOpen,
+  checkAggregateScoresCover
 };
