@@ -1037,4 +1037,51 @@ pre {
   background-color: #c8e6c9 !important;
 }
 
+#broker-import-toggle {
+  margin-top: 10px;
+}
+
+#broker-import-container {
+  background-color: #f9f9f9;
+  border-radius: 4px;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+#broker-import-container h4 {
+  margin: 0 0 8px 0;
+}
+
+#broker-csv-paste {
+  width: 100%;
+  height: 100px;
+  box-sizing: border-box;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+}
+
+.broker-import-group {
+  background-color: #ffffff;
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.broker-import-code {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  margin: 6px 0;
+}
+
+.broker-import-source {
+  font-size: 12px;
+  color: #555;
+  margin: 0 0 4px 0;
+}
+
+.broker-import-error {
+  color: #c62828;
+}
+
 

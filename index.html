@@ -17,6 +17,8 @@
   <script src="client/lib/oc.js"></script>
   <script src="client/lib/expiration-dropdown.js"></script>
   <script src="client/lib/candle-analysis.js"></script>
+  <script src="client/lib/broker-import.js"></script>
+  <script src="client/lib/broker-parsers/fidelity.js"></script>
 
 
 </head>
@@ -40,6 +42,25 @@
 
   <div id="container-col1">
     <textarea id="textInput" placeholder="Enter option positions"></textarea><br>
+
+    <button id="broker-import-toggle" onclick="toggleBrokerImportPanel()">Show Import</button>
+
+    <div id="broker-import-container" style="display: none;">
+      <h4>Import Brokerage CSV</h4>
+      <label for="broker-source-select">Source:</label>
+      <select id="broker-source-select">
+        <option value="auto">Auto-detect</option>
+        <option value="fidelity">Fidelity</option>
+        <option value="etrade" disabled>E*TRADE (coming soon)</option>
+        <option value="schwab" disabled>Schwab (coming soon)</option>
+        <option value="robinhood" disabled>Robinhood (coming soon)</option>
+      </select><br>
+      <input type="file" id="broker-csv-file" accept=".csv">
+      <textarea id="broker-csv-paste" placeholder="...or paste raw CSV here"></textarea><br>
+      <button onclick="importBrokerCsv()">Convert CSV</button>
+      <div id="broker-import-results"></div>
+    </div>
+
     <div id="chart"><div id="chart-container"></div></div>
     <div id="output">
 <pre>
