@@ -36,8 +36,28 @@ async function fetchCurrentChainData() {
 
   const chainsSymbol = typeof mapSymbolForAPI === 'function' ? mapSymbolForAPI(symbol, 'chains') : symbol;
   const rawChainData = await getOptionsChainFromSchwab(chainsSymbol, expiration, { strike_count: 75 });
-  if (!rawChainData) {
-    throw new Error('Failed to fetch option chain data.');
+
+  // getOptionsChainFromSchwab returns null on a hard failure (not connected, fetch
+  // error, non-2xx response), but a "successful" call can still come back without
+  // usable data (e.g. malformed/empty payload) — treat that as a failure too,
+  // rather than silently searching against an empty {call:{}, put:{}} chain and
+  // reporting "no candidates found" as if the positions were already hedged.
+  const hasCallData = rawChainData?.callExpDateMap && Object.keys(rawChainData.callExpDateMap).length > 0;
+  const hasPutData = rawChainData?.putExpDateMap && Object.keys(rawChainData.putExpDateMap).length > 0;
+  if (!hasCallData && !hasPutData) {
+    throw new Error(`No live option chain data available for ${chainsSymbol} ${expiration} — check that Schwab is connected.`);
+  }
+
+  // The Symbol field is trusted as the correct symbol for the loaded positions
+  // (positions are even saved to localStorage keyed by it) — but that doesn't
+  // guarantee the chain we just fetched is actually for that symbol. Schwab
+  // echoes back the resolved symbol (e.g. "$NDX" for a request of "%24NDX"),
+  // so cross-check it rather than blindly trusting whatever came back.
+  const normalizeSymbol = (raw) => decodeURIComponent(raw || '').replace(/^\$/, '').replace(/\.X$/i, '').trim().toUpperCase();
+  const responseSymbol = normalizeSymbol(rawChainData.symbol);
+  const requestedSymbol = normalizeSymbol(symbol);
+  if (responseSymbol && requestedSymbol && responseSymbol !== requestedSymbol) {
+    throw new Error(`Option chain response symbol "${rawChainData.symbol}" does not match the requested symbol "${symbol}" — refusing to analyze against mismatched chain data.`);
   }
 
   return {
