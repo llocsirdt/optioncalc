@@ -1,56 +1,9 @@
 // Chart Module - Contains all charting functionality
 
-/**
- * Calculate the intrinsic value of an options portfolio at expiration across a range of prices.
- * @param {Array<Object>} optionsPositions - Array of option positions with qty, type, and strike.
- * @param {number} minPrice - The minimum underlying price to calculate.
- * @param {number} maxPrice - The maximum underlying price to calculate.
- * @param {number} priceStep - The increment for each price point in the range.
- * @returns {Array<object>} An array of objects, each with 'closingPrice' and 'totalIntrinsicValue'.
- */
-function calculatePortfolioValueAtExpiration(optionsPositions, minPrice, maxPrice, priceStep) {
-    if (!Array.isArray(optionsPositions) || optionsPositions.length === 0) {
-        throw new Error("optionsPositions must be a non-empty array of option configurations.");
-    }
-
-    const valueCurve = [];
-    
-    // Ensure we have valid range parameters
-    if (minPrice >= maxPrice) {
-        throw new Error("minPrice must be less than maxPrice");
-    }
-    
-    if (priceStep <= 0) {
-        throw new Error("priceStep must be greater than 0");
-    }
-
-    // Generate price points from minPrice to maxPrice with the given step
-    for (let closingPrice = minPrice; closingPrice <= maxPrice; closingPrice += priceStep) {
-        let portfolioTotalIntrinsicValue = 0;
-
-        // Calculate intrinsic value for each option position
-        for (const position of optionsPositions) {
-            const { qty, type, strike } = position;
-            
-            if (type === 'c') { // Call option
-                // Call is worth the difference between underlying price and strike, if positive
-                const callIntrinsicValue = Math.max(0, closingPrice - strike);
-                portfolioTotalIntrinsicValue += callIntrinsicValue * qty * 100; // Multiply by 100 for contract multiplier
-            } else if (type === 'p') { // Put option
-                // Put is worth the difference between strike and underlying price, if positive
-                const putIntrinsicValue = Math.max(0, strike - closingPrice);
-                portfolioTotalIntrinsicValue += putIntrinsicValue * qty * 100; // Multiply by 100 for contract multiplier
-            }
-        }
-
-        valueCurve.push({
-            closingPrice: parseFloat(closingPrice.toFixed(2)),
-            totalIntrinsicValue: parseFloat(portfolioTotalIntrinsicValue.toFixed(2))
-        });
-    }
-  
-    return valueCurve;
-}
+// calculatePortfolioValueAtExpiration now lives in shared/portfolio-risk.js so
+// server-side code can reuse the identical math for aggregate risk analysis —
+// see PortfolioRisk.analyzePortfolioRisk / findPortfolioHedgeCandidates.
+const calculatePortfolioValueAtExpiration = PortfolioRisk.calculatePortfolioValueAtExpiration;
 
 /**
  * Find key points on the value curve: local lows, highs, and break-even points.

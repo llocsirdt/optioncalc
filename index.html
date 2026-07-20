@@ -10,6 +10,7 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <script src="shared/offset-calculations.js"></script>
+  <script src="shared/portfolio-risk.js"></script>
   <script src="client/lib/chart.js"></script>
   <script src="client/lib/schwab-api.js"></script>
   <script src="client/lib/option-utils.js"></script>
@@ -19,6 +20,7 @@
   <script src="client/lib/candle-analysis.js"></script>
   <script src="client/lib/broker-import.js"></script>
   <script src="client/lib/broker-parsers/fidelity.js"></script>
+  <script src="client/lib/portfolio-risk-analyzer.js"></script>
 
 
 </head>
@@ -59,6 +61,15 @@
       <textarea id="broker-csv-paste" placeholder="...or paste raw CSV here"></textarea><br>
       <button onclick="importBrokerCsv()">Convert CSV</button>
       <div id="broker-import-results"></div>
+    </div>
+
+    <button id="portfolio-risk-toggle" onclick="togglePortfolioRiskPanel()">Show Portfolio Risk</button>
+
+    <div id="portfolio-risk-container" style="display: none;">
+      <h4>Analyze Portfolio Risk</h4>
+      <p>Finds the combined worst/best case across every position currently loaded above, and searches the live chain for trades that improve it.</p>
+      <button onclick="analyzePortfolioRiskUI()">Analyze Portfolio Risk</button>
+      <div id="portfolio-risk-results"></div>
     </div>
 
     <div id="chart"><div id="chart-container"></div></div>
