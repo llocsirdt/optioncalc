@@ -11,6 +11,12 @@ let currentSymbol = '';
 let liveDataEnabled = false;
 let liveDataIntervalDuration = 3000;
 
+// The raw chain data currently backing the "Live Options Chain" UI table —
+// stashed here so other features (e.g. portfolio risk analysis) can reuse the
+// exact same data instead of making their own independent fetch. Cleared
+// whenever live data is disabled or a chain fetch fails.
+let lastLiveChainData = null;
+
 // Fetch offsetting analysis for symbol and expiration
 async function fetchOffsettingAnalysis(symbol, expiration) {
   if (!symbol || !expiration) {
@@ -933,12 +939,20 @@ async function updateCalculatorWithLiveData(symbol) {
     console.log('⛓️ Chain data (limited to 50 strikes):', chainData);
       
       if (chainData) {
+        lastLiveChainData = {
+          symbol: chainsSymbol,
+          expiration: targetExpiration.expirationDate,
+          raw: chainData,
+          fetchedAt: Date.now()
+        };
+
         const options = parseSchwabOptionsData(chainData, targetExpiration.expirationDate);
         console.log('📈 Parsed options:', options);
         console.log('🔄 Calling updateOptionsChain with', options.length, 'options');
         updateOptionsChain(options);
       } else {
         // Handle case where chains API fails (common for index options like NDX)
+        lastLiveChainData = null;
         console.log('⚠️ Options chain data not available - this is common for index options');
         const chainElement = document.getElementById('options-chain');
         if (chainElement) {

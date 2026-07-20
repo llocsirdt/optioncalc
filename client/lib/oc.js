@@ -2666,11 +2666,15 @@ function stopLiveDataUpdates() {
     clearInterval(liveDataInterval);
     liveDataInterval = null;
   }
-  
+
   // Stop candle analysis updates
   if (typeof stopCandleAnalysisUpdates === 'function') {
     stopCandleAnalysisUpdates();
   }
+
+  // Don't let stale chain data be reused (e.g. by portfolio risk analysis)
+  // once live data is turned off.
+  lastLiveChainData = null;
 }
 
 // Initialize slider event listeners

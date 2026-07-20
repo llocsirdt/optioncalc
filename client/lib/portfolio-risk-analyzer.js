@@ -27,37 +27,44 @@ function getCurrentPortfolioLegs() {
     }));
 }
 
-async function fetchCurrentChainData() {
-  const symbol = document.getElementById('symbol-input')?.value.trim();
-  const expiration = document.getElementById('expiration-dropdown')?.value;
-  if (!symbol || !expiration) {
-    throw new Error('Select a symbol and expiration in the Live Options Chain panel first.');
+function getCurrentChainData() {
+  // Reuses whatever chain data is already backing the "Live Options Chain" UI
+  // table (stashed in schwab-api.js's lastLiveChainData whenever live data
+  // polling refreshes it) instead of making an independent fetch — so this
+  // only ever analyzes against the exact same data the user can see on screen,
+  // and only while live data is actually enabled.
+  if (typeof liveDataEnabled === 'undefined' || !liveDataEnabled) {
+    throw new Error('Enable "Start Live Data" first — portfolio risk analysis only runs against the live chain data shown on screen.');
   }
 
-  const chainsSymbol = typeof mapSymbolForAPI === 'function' ? mapSymbolForAPI(symbol, 'chains') : symbol;
-  const rawChainData = await getOptionsChainFromSchwab(chainsSymbol, expiration, { strike_count: 75 });
+  if (!lastLiveChainData) {
+    throw new Error('No live chain data received yet — wait for the next live data update.');
+  }
 
-  // getOptionsChainFromSchwab returns null on a hard failure (not connected, fetch
-  // error, non-2xx response), but a "successful" call can still come back without
-  // usable data (e.g. malformed/empty payload) — treat that as a failure too,
-  // rather than silently searching against an empty {call:{}, put:{}} chain and
-  // reporting "no candidates found" as if the positions were already hedged.
+  const rawChainData = lastLiveChainData.raw;
   const hasCallData = rawChainData?.callExpDateMap && Object.keys(rawChainData.callExpDateMap).length > 0;
   const hasPutData = rawChainData?.putExpDateMap && Object.keys(rawChainData.putExpDateMap).length > 0;
   if (!hasCallData && !hasPutData) {
-    throw new Error(`No live option chain data available for ${chainsSymbol} ${expiration} — check that Schwab is connected.`);
+    throw new Error(`No usable chain data for ${lastLiveChainData.symbol} ${lastLiveChainData.expiration} — check that Schwab is connected.`);
+  }
+
+  const expiration = document.getElementById('expiration-dropdown')?.value;
+  if (expiration && lastLiveChainData.expiration !== expiration) {
+    throw new Error(`Live chain data is for expiration ${lastLiveChainData.expiration}, but ${expiration} is currently selected — wait for the next live data update.`);
   }
 
   // The Symbol field is trusted as the correct symbol for the loaded positions
   // (positions are even saved to localStorage keyed by it) — but that doesn't
-  // guarantee the chain we just fetched is actually for that symbol. Schwab
-  // echoes back the resolved symbol (e.g. "$NDX" for a request of "%24NDX"),
-  // so cross-check it rather than blindly trusting whatever came back.
+  // guarantee the live chain data actually matches it right now (e.g. the field
+  // was edited after the last live data tick). Schwab echoes back the resolved
+  // symbol (e.g. "$NDX" for a request of "%24NDX"), so cross-check it rather
+  // than blindly trusting whatever's cached.
+  const symbol = document.getElementById('symbol-input')?.value.trim();
   const normalizeSymbol = (raw) => decodeURIComponent(raw || '').replace(/^\$/, '').replace(/\.X$/i, '').trim().toUpperCase();
   const responseSymbol = normalizeSymbol(rawChainData.symbol);
   const requestedSymbol = normalizeSymbol(symbol);
   if (responseSymbol && requestedSymbol && responseSymbol !== requestedSymbol) {
-    throw new Error(`Option chain response symbol "${rawChainData.symbol}" does not match the requested symbol "${symbol}" — refusing to analyze against mismatched chain data.`);
+    throw new Error(`Live chain data symbol "${rawChainData.symbol}" does not match the Symbol field "${symbol}" — refusing to analyze against mismatched chain data.`);
   }
 
   return {
@@ -117,7 +124,7 @@ async function analyzePortfolioRiskUI() {
       throw new Error('No option positions loaded — enter or import positions first.');
     }
 
-    const chainData = await fetchCurrentChainData();
+    const chainData = getCurrentChainData();
     const analysis = PortfolioRisk.findPortfolioHedgeCandidates(legs, chainData);
     portfolioRiskHedgeCandidates = analysis.candidates;
     renderPortfolioRiskResults(analysis);
