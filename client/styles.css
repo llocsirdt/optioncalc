@@ -1038,7 +1038,8 @@ pre {
 }
 
 #broker-import-toggle {
-  margin-top: 10px;
+  display: block;
+  margin-left: auto;
 }
 
 #broker-import-container {
@@ -1085,7 +1086,9 @@ pre {
 }
 
 #portfolio-risk-toggle {
+  display: block;
   margin-top: 10px;
+  margin-left: auto;
 }
 
 #portfolio-risk-container {
