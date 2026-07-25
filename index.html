@@ -11,6 +11,7 @@
 
   <script src="shared/offset-calculations.js"></script>
   <script src="shared/portfolio-risk.js"></script>
+  <script src="shared/spread-hedge-strategy.js"></script>
   <script src="client/lib/chart.js"></script>
   <script src="client/lib/schwab-api.js"></script>
   <script src="client/lib/option-utils.js"></script>
@@ -21,6 +22,7 @@
   <script src="client/lib/broker-import.js"></script>
   <script src="client/lib/broker-parsers/fidelity.js"></script>
   <script src="client/lib/portfolio-risk-analyzer.js"></script>
+  <script src="client/lib/hedge-strategy-ui.js"></script>
 
 
 </head>
@@ -49,6 +51,8 @@
 
     <div id="broker-import-container" style="display: none;">
       <h4>Import Brokerage CSV</h4>
+      <input type="file" id="broker-csv-file" accept=".csv">
+      <textarea id="broker-csv-paste" placeholder="...or paste raw CSV here"></textarea><br>
       <label for="broker-source-select">Source:</label>
       <select id="broker-source-select">
         <option value="auto">Auto-detect</option>
@@ -56,9 +60,7 @@
         <option value="etrade" disabled>E*TRADE (coming soon)</option>
         <option value="schwab" disabled>Schwab (coming soon)</option>
         <option value="robinhood" disabled>Robinhood (coming soon)</option>
-      </select><br>
-      <input type="file" id="broker-csv-file" accept=".csv">
-      <textarea id="broker-csv-paste" placeholder="...or paste raw CSV here"></textarea><br>
+      </select>
       <button onclick="importBrokerCsv()">Convert CSV</button>
       <div id="broker-import-results"></div>
     </div>

@@ -663,6 +663,12 @@ pre {
   border-left: 4px solid #2196F3;
 }
 
+/* Credit-generating hedge candidates (same-side family) get a green bar
+   instead of blue, so they stand out from the debit ("spread") offsets. */
+.offset-trade.credit {
+  border-left: 4px solid #4CAF50;
+}
+
 /* Server-based offsetting trades - darker, bolder borders */
 .offset-trade.server-offset {
   border: 3px solid #333;
@@ -1124,6 +1130,46 @@ pre {
 
 .portfolio-risk-error {
   color: #c62828;
+}
+
+/* Volume cell color-coding in the options chain table */
+.volume-light {
+  background-color: #ffcdd2;
+}
+
+.volume-medium {
+  background-color: #e57373;
+}
+
+.volume-deep {
+  background-color: #e53935;
+  color: #ffffff;
+}
+
+.volume-darkest {
+  background-color: #b71c1c;
+  color: #ffffff;
+}
+
+/* .itm-cell's background is !important, so combined selectors are needed to
+   let volume coloring still show through on ITM rows (same pattern already
+   used above for .itm-cell.selected-bid/.selected-ask). */
+.itm-cell.volume-light {
+  background-color: #ffcdd2 !important;
+}
+
+.itm-cell.volume-medium {
+  background-color: #e57373 !important;
+}
+
+.itm-cell.volume-deep {
+  background-color: #e53935 !important;
+  color: #ffffff !important;
+}
+
+.itm-cell.volume-darkest {
+  background-color: #b71c1c !important;
+  color: #ffffff !important;
 }
 
 
