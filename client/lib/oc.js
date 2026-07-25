@@ -2047,6 +2047,12 @@ function findParetoOptimal(trades) {
   });
 }
 
+// Formats a bid/ask price for display: 1 decimal place once the price is
+// $10 or more (extra precision isn't meaningful there), otherwise 2.
+function formatOptionPrice(value) {
+  return value >= 10 ? value.toFixed(1) : value.toFixed(2);
+}
+
 // Returns a CSS class for color-coding a volume cell by liquidity: light red
 // above 500, progressively darker at 1000/1500/2000.
 function getVolumeColorClass(volume) {
@@ -2171,8 +2177,8 @@ function updateOptionsChain(options) {
           const callClass = callITM ? 'itm-cell' : '';
           html += `<td class="${callClass}">${call.openInterest || 0}</td>`;
           html += `<td class="${callClass} ${getVolumeColorClass(call.volume || 0)}">${call.volume || 0}</td>`;
-          html += `<td class="${callClass} bid-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.bid.toFixed(2)}">${call.bid.toFixed(2)}</td>`;
-          html += `<td class="${callClass} ask-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.ask.toFixed(2)}">${call.ask.toFixed(2)}</td>`;
+          html += `<td class="${callClass} bid-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.bid.toFixed(2)}">${formatOptionPrice(call.bid)}</td>`;
+          html += `<td class="${callClass} ask-cell clickable" data-strike="${strike}" data-type="c" data-price="${call.ask.toFixed(2)}">${formatOptionPrice(call.ask)}</td>`;
         } else {
           html += '<td>-</td><td>-</td><td>-</td><td>-</td>';
         }
@@ -2188,8 +2194,8 @@ function updateOptionsChain(options) {
         // Put side (right)
         if (put) {
           const putClass = putITM ? 'itm-cell' : '';
-          html += `<td class="${putClass} bid-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.bid.toFixed(2)}">${put.bid.toFixed(2)}</td>`;
-          html += `<td class="${putClass} ask-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.ask.toFixed(2)}">${put.ask.toFixed(2)}</td>`;
+          html += `<td class="${putClass} bid-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.bid.toFixed(2)}">${formatOptionPrice(put.bid)}</td>`;
+          html += `<td class="${putClass} ask-cell clickable" data-strike="${strike}" data-type="p" data-price="${put.ask.toFixed(2)}">${formatOptionPrice(put.ask)}</td>`;
           html += `<td class="${putClass} ${getVolumeColorClass(put.volume || 0)}">${put.volume || 0}</td>`;
           html += `<td class="${putClass}">${put.openInterest || 0}</td>`;
         } else {

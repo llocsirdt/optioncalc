@@ -41,7 +41,9 @@ function renderHedgeCandidatesHtml(candidates) {
     const legsSummary = c.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
 
     return `
-      <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}">
+      <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}"
+           onclick="selectHedgeCandidateInTable(${index})"
+           title="Click to select these options in the table">
         <div class="trade-description">
           <strong>${c.label}</strong>
           <div class="trade-action">${legsSummary}</div>
@@ -52,7 +54,7 @@ function renderHedgeCandidatesHtml(candidates) {
           <div class="trade-locked-profit">Locked: ${formatHedgeMoney(c.lockedInProfit)}</div>
           <div class="trade-score ${profitClass}">Score: ${(c.rankScore * 100).toFixed(1)}%</div>
         </div>
-        <button onclick="loadHedgeCandidateIntoCalculator(${index})">Add to calculator</button>
+        <button onclick="event.stopPropagation(); loadHedgeCandidateIntoCalculator(${index})">Add to calculator</button>
       </div>
     `;
   }).join('');
@@ -108,4 +110,20 @@ function loadHedgeCandidateIntoCalculator(index) {
 
   textInput.value = JSON.stringify({ optionArray: combinedTokens.join(',') }, null, 2);
   processInput();
+}
+
+// Clicking a candidate card selects its legs' bid/ask cells in the options
+// chain table (via the same findAndClickOptionCell primitive the old
+// exhaustive UI used), rather than adding the candidate to the calculator.
+function selectHedgeCandidateInTable(index) {
+  const candidate = hedgeCandidatesForUI[index];
+  if (!candidate || typeof findAndClickOptionCell !== 'function') return;
+
+  const clickedPositions = candidate.legs
+    .map(leg => findAndClickOptionCell(leg.type.toLowerCase(), leg.strike, leg.qty > 0 ? 'ask' : 'bid'))
+    .filter(Boolean);
+
+  if (clickedPositions.length > 0 && typeof updateSelectedPositionsDisplay === 'function' && typeof currentOptionsData !== 'undefined') {
+    updateSelectedPositionsDisplay(currentOptionsData);
+  }
 }
