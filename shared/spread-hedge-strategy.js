@@ -132,10 +132,32 @@
     ];
   }
 
-  function evaluateCandidate(label, family, positionLegs, candidateLegs, meta) {
+  // Weight given to "upside beyond the locked floor" vs. the locked floor
+  // itself in rankCandidateScore below. 0.5 treats guaranteed and uncertain
+  // profit as equally valuable — revisit this once there's a feel for how it
+  // ranks real candidates in practice (e.g. weighting locked-in profit more
+  // heavily, since it's guaranteed vs. merely possible).
+  const UPSIDE_WEIGHT = 0.5;
+
+  // Ranks a candidate by how much of the combined position's theoretical max
+  // value (both spreads' widths) is locked in, plus a weighted share of
+  // whatever additional upside exists beyond that floor. Deliberately NOT
+  // lockedInProfit/profitPotential (that ratio rewards a small potential just
+  // for being easy to be 100% of — see git history) and NOT a raw sum of the
+  // two (potential already contains locked as its floor, so summing double-
+  // counts it) — subtracting locked out of the upside term avoids that.
+  function rankCandidateScore(lockedInProfit, profitPotential, combinedMaxValue) {
+    if (!combinedMaxValue) return 0;
+    const lockedFraction = lockedInProfit / combinedMaxValue;
+    const upsideFraction = (profitPotential - lockedInProfit) / combinedMaxValue;
+    return lockedFraction + upsideFraction * UPSIDE_WEIGHT;
+  }
+
+  function evaluateCandidate(label, family, positionLegs, candidateLegs, positionWidth, candidateWidth, meta) {
     const combinedLegs = positionLegs.concat(candidateLegs);
     const analysis = PortfolioRisk.analyzePortfolioRisk(combinedLegs);
     const cost = candidateLegs.reduce((sum, leg) => sum + leg.cost, 0);
+    const combinedMaxValue = positionWidth * 100 + candidateWidth * 100;
 
     return {
       label,
@@ -145,6 +167,7 @@
       lockedInProfit: analysis.lockedInProfit,
       profitPotential: analysis.profitPotential,
       profitPotentialScore: analysis.profitPotentialScore,
+      rankScore: rankCandidateScore(analysis.lockedInProfit, analysis.profitPotential, combinedMaxValue),
       meta
     };
   }
@@ -187,7 +210,7 @@
 
       const candidate = evaluateCandidate(
         shiftLabels[shiftMultiplier] || (shiftMultiplier === 1.5 ? 'First extended offset' : 'Further extended offset'),
-        'shift', legs, candidateLegs, { S, shiftMultiplier }
+        'shift', legs, candidateLegs, width, width, { S, shiftMultiplier }
       );
 
       // The first three tiers (box / balanced / straddle) are always shown
@@ -209,7 +232,7 @@
       const candidateLegs = buildCandidateLegs(oppType, offsetShortStrike, offsetLongStrike, oppChainSide);
       if (!candidateLegs) continue;
 
-      const candidate = evaluateCandidate('Wider offset', 'width', legs, candidateLegs, { widthMultiplier });
+      const candidate = evaluateCandidate('Wider offset', 'width', legs, candidateLegs, width, candidateWidth, { widthMultiplier });
       if (candidate.lockedInProfit < minLockedInProfit) break;
 
       candidates.push(candidate);
@@ -235,14 +258,14 @@
       if (!candidateLegs) continue; // strike not actually listed — skip, don't count against labeling
 
       const label = validSameSideCount === 0 ? 'Credit offset' : 'Extended credit offset';
-      const candidate = evaluateCandidate(label, 'same-side', legs, candidateLegs, { offset });
+      const candidate = evaluateCandidate(label, 'same-side', legs, candidateLegs, width, width, { offset });
       if (validSameSideCount > 0 && candidate.lockedInProfit < minLockedInProfit) break;
 
       candidates.push(candidate);
       validSameSideCount++;
     }
 
-    return candidates;
+    return candidates.sort((a, b) => b.rankScore - a.rankScore);
   }
 
   const SpreadHedgeStrategy = {

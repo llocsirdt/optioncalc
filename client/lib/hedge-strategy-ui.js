@@ -28,14 +28,16 @@ function renderHedgeCandidatesHtml(candidates) {
     return '<div class="offsetting-trades"><h4>🎯 Risk Offsetting Opportunities</h4><p>No viable hedge candidates found in the current chain.</p></div>';
   }
 
-  const LOW_SCORE_THRESHOLD = 0.1; // below 10% locked-in-vs-potential is a weak lock, dim it like a negative one
-
+  // Candidates already arrive sorted best-to-worst by rankScore (see
+  // shared/spread-hedge-strategy.js). Dimming is based on lockedInProfit alone
+  // for now — rankScore's "low" cutoff isn't calibrated yet since its scale
+  // differs from the old locked/potential ratio (see rankCandidateScore's
+  // comment for what it actually measures).
   const rows = candidates.map((c, index) => {
     const costLessThanLockedClass = Math.abs(c.cost) < c.lockedInProfit ? 'cost-less-than-locked' : '';
     const profitClass = c.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
     const familyClass = c.family === 'same-side' ? 'credit' : 'spread'; // credit offsets get a green bar, debit offsets stay blue
-    const isWeak = c.lockedInProfit < 0 || c.profitPotentialScore < LOW_SCORE_THRESHOLD;
-    const weakClass = isWeak ? 'low-locked-profit' : '';
+    const weakClass = c.lockedInProfit < 0 ? 'low-locked-profit' : '';
     const legsSummary = c.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
 
     return `
@@ -48,7 +50,7 @@ function renderHedgeCandidatesHtml(candidates) {
         <div class="trade-metrics">
           <div class="trade-potential">Potential: ${formatHedgeMoney(c.profitPotential)}</div>
           <div class="trade-locked-profit">Locked: ${formatHedgeMoney(c.lockedInProfit)}</div>
-          <div class="trade-score ${profitClass}">Score: ${(c.profitPotentialScore * 100).toFixed(1)}%</div>
+          <div class="trade-score ${profitClass}">Score: ${(c.rankScore * 100).toFixed(1)}%</div>
         </div>
         <button onclick="loadHedgeCandidateIntoCalculator(${index})">Add to calculator</button>
       </div>

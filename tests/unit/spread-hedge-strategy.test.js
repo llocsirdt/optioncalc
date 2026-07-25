@@ -138,6 +138,35 @@ test('bear put spread: shift family has the right strikes for each labeled tier'
   assert.ok(straddle.profitPotential > exact.profitPotential, 'straddle should have more profit potential than the box');
 });
 
+test('rankScore does not just crown the exact-offset box, and results come back sorted by it', () => {
+  // Regression for the original locked/potential ratio: it scored a box at a
+  // perfect 100% just for having zero upside, even when other candidates had
+  // both more locked-in profit AND far more potential. rankScore instead
+  // rewards width-normalized locked-in profit plus a weighted share of
+  // whatever upside exists beyond that floor.
+  const position = { legs: [
+    { qty: 1, type: 'p', strike: 28130, cost: 5461 },
+    { qty: -1, type: 'p', strike: 28090, cost: -3709 }
+  ] };
+  const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, WIDE_CHAIN);
+
+  // Sorted descending by rankScore.
+  for (let i = 1; i < candidates.length; i++) {
+    assert.ok(candidates[i - 1].rankScore >= candidates[i].rankScore, 'candidates should be sorted best-to-worst by rankScore');
+  }
+
+  const exact = findByLabel(candidates, 'Exact offset')[0];
+  const best = candidates[0];
+  assert.notStrictEqual(best.label, 'Exact offset', 'the box should not automatically be the top-ranked candidate');
+  assert.ok(best.rankScore > exact.rankScore, 'the top candidate should outrank the box');
+
+  // A perfect box (locked === potential) no longer implies the highest score —
+  // under the old ratio it always would have, regardless of the actual dollars.
+  const oldRatioScore = exact.lockedInProfit / exact.profitPotential;
+  assert.strictEqual(oldRatioScore, 1, 'sanity check: the box is still a perfect 1.0 under the old ratio');
+  assert.ok(exact.rankScore < oldRatioScore, 'rankScore should rate the box lower than the old ratio did');
+});
+
 test('bear put spread: "Wider offset" is anchored at the straddle point with a wider width', () => {
   const position = { legs: [
     { qty: 1, type: 'p', strike: 28130, cost: 5461 },
