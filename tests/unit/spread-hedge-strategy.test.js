@@ -373,6 +373,83 @@ test('bear call (credit) spread: "Exact offset" box is negative (-width*100), bu
   approx(c.profitPotentialScore, 1.0, 0.01, 'profit potential score (perfect box, still profitable)');
 });
 
+// ============================================================
+// strikeGapWidth / gapRealizationFactor: the space between the position's
+// short strike and the candidate's short strike is where the upside beyond
+// the locked floor actually gets realized — a wider gap means more of the
+// underlying's possible closing prices land there. A zero gap (the
+// straddle-anchored candidates, whose short strike always coincides with the
+// position's) means that upside is only reached at one exact knife-edge
+// price, so it should get zero credit in rankScore even when profitPotential
+// is well above lockedInProfit.
+// ============================================================
+test('shift family: strikeGapWidth matches distance from the straddle anchor at each tier', () => {
+  const position = { legs: [
+    { qty: 1, type: 'p', strike: 28130, cost: 5461 },
+    { qty: -1, type: 'p', strike: 28090, cost: -3709 }
+  ] };
+  const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, WIDE_CHAIN);
+
+  const expectedGapByLabel = {
+    'Exact offset': 40,        // S=0: candidate short strike sits at the position's LONG strike (40 away)
+    'Balanced offset': 20,     // S=0.5W
+    'Same-strike offset': 0,   // S=W: candidate short strike == position short strike exactly
+    'First extended offset': 20, // S=1.5W: same distance as Balanced, symmetric around the straddle point
+  };
+  Object.entries(expectedGapByLabel).forEach(([label, expectedGap]) => {
+    const c = findByLabel(candidates, label)[0];
+    approx(c.strikeGapWidth, expectedGap, 0.01, `${label} strikeGapWidth`);
+  });
+});
+
+test('"Same-strike offset" gets zero credit for its upside since strikeGapWidth is 0', () => {
+  const position = { legs: [
+    { qty: 1, type: 'p', strike: 28130, cost: 5461 },
+    { qty: -1, type: 'p', strike: 28090, cost: -3709 }
+  ] };
+  const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, WIDE_CHAIN);
+  const straddle = findByLabel(candidates, 'Same-strike offset')[0];
+
+  assert.ok(straddle.profitPotential > straddle.lockedInProfit, 'straddle should have real upside beyond its locked floor');
+  assert.strictEqual(straddle.strikeGapWidth, 0, 'straddle candidate short strike coincides with the position short strike');
+
+  // With a zero gap, rankScore collapses to just the locked fraction — the
+  // upside term (which would otherwise be nonzero here) contributes nothing.
+  const combinedMaxValue = 40 * 100 + 40 * 100; // both spreads are width 40
+  approx(straddle.rankScore, straddle.lockedInProfit / combinedMaxValue, 0.001, 'rankScore should equal lockedFraction alone');
+});
+
+test('"Wider offset" candidates always have a zero strikeGapWidth (straddle-anchored, single knife-edge peak)', () => {
+  const position = { legs: [
+    { qty: 1, type: 'p', strike: 28130, cost: 5461 },
+    { qty: -1, type: 'p', strike: 28090, cost: -3709 }
+  ] };
+  const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, WIDE_CHAIN);
+  const widerOffsets = findByLabel(candidates, 'Wider offset');
+  assert.ok(widerOffsets.length >= 1, 'expected at least one "Wider offset" candidate');
+  widerOffsets.forEach(c => {
+    assert.strictEqual(c.strikeGapWidth, 0, `Wider offset (widthMultiplier=${c.meta.widthMultiplier}) should have a zero gap`);
+  });
+});
+
+test('same-side family: a wider credit offset has a bigger strikeGapWidth than the tight first tier', () => {
+  // Under this linear-pricing fixture, every same-side tier locks in a loss
+  // (see the "stops sweeping" tests elsewhere), which normally halts the
+  // sweep after the first tier. That stopping behavior is covered separately
+  // — bypass it here (minLockedInProfit: -Infinity) since this test only
+  // cares about how strikeGapWidth scales with the offset distance.
+  const position = { legs: [
+    { qty: 1, type: 'p', strike: 28130, cost: 5461 },
+    { qty: -1, type: 'p', strike: 28090, cost: -3709 }
+  ] };
+  const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, WIDE_CHAIN, { minLockedInProfit: -Infinity });
+  const tight = findByLabel(candidates, 'Credit offset')[0];
+  const extended = findByLabel(candidates, 'Extended credit offset')[0];
+
+  approx(tight.strikeGapWidth, 10, 0.01, 'tight credit offset gap == its own offset (10)');
+  assert.ok(extended.strikeGapWidth > tight.strikeGapWidth, 'a further same-side offset should have a wider gap than the tight first tier');
+});
+
 test('identifySpread rejects malformed positions', () => {
   assert.throws(() => SpreadHedgeStrategy.identifySpread({ legs: [{ qty: 1, type: 'c', strike: 100 }] }));
   assert.throws(() => SpreadHedgeStrategy.identifySpread({ legs: [

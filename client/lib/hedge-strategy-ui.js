@@ -42,7 +42,7 @@ function renderHedgeCandidatesHtml(candidates) {
 
     return `
       <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}"
-           onclick="selectHedgeCandidateInTable(${index})"
+           onclick="selectHedgeCandidateInTable(${index}, this)"
            title="Click to select these options in the table">
         <div class="trade-description">
           <strong>${c.label}</strong>
@@ -52,6 +52,7 @@ function renderHedgeCandidatesHtml(candidates) {
         <div class="trade-metrics">
           <div class="trade-potential">Potential: ${formatHedgeMoney(c.profitPotential)}</div>
           <div class="trade-locked-profit">Locked: ${formatHedgeMoney(c.lockedInProfit)}</div>
+          <div class="trade-gap" title="Distance between the position's short strike and this candidate's short strike — the zone that has to be closed in to realize the upside above, not just the locked floor">Gap: ${c.strikeGapWidth} pts</div>
           <div class="trade-score ${profitClass}">Score: ${(c.rankScore * 100).toFixed(1)}%</div>
         </div>
         <button onclick="event.stopPropagation(); loadHedgeCandidateIntoCalculator(${index})">Add to calculator</button>
@@ -115,7 +116,10 @@ function loadHedgeCandidateIntoCalculator(index) {
 // Clicking a candidate card selects its legs' bid/ask cells in the options
 // chain table (via the same findAndClickOptionCell primitive the old
 // exhaustive UI used), rather than adding the candidate to the calculator.
-function selectHedgeCandidateInTable(index) {
+// findAndClickOptionCell dispatches a real click per leg, which toggles that
+// cell's entry in selectedTablePositions (oc.js) — so clicking the same card
+// twice selects then deselects, matching the table's own toggle behavior.
+function selectHedgeCandidateInTable(index, cardElement) {
   const candidate = hedgeCandidatesForUI[index];
   if (!candidate || typeof findAndClickOptionCell !== 'function') return;
 
@@ -125,5 +129,10 @@ function selectHedgeCandidateInTable(index) {
 
   if (clickedPositions.length > 0 && typeof updateSelectedPositionsDisplay === 'function' && typeof currentOptionsData !== 'undefined') {
     updateSelectedPositionsDisplay(currentOptionsData);
+  }
+
+  if (cardElement && typeof selectedTablePositions !== 'undefined') {
+    const allLegsSelected = candidate.legs.every(leg => selectedTablePositions.has(`${leg.type.toLowerCase()}${leg.strike}`));
+    cardElement.classList.toggle('selected-offset', allLegsSelected);
   }
 }

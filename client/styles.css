@@ -832,6 +832,12 @@ pre {
   white-space: nowrap;
 }
 
+.trade-gap {
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+}
+
 .trade-total-profit {
   font-size: 12px;
   font-weight: bold;
