@@ -14,6 +14,13 @@ function togglePortfolioRiskPanel() {
   const isHidden = container.style.display === 'none';
   container.style.display = isHidden ? '' : 'none';
   toggleButton.textContent = isHidden ? 'Hide Portfolio Risk' : 'Show Portfolio Risk';
+
+  // Opening the panel runs the analysis immediately — the separate "Analyze
+  // Portfolio Risk" button is only needed to retry after an error or to
+  // refresh after loading different positions/chain data.
+  if (isHidden) {
+    analyzePortfolioRiskUI();
+  }
 }
 
 function getCurrentPortfolioLegs() {
@@ -99,16 +106,10 @@ function renderPortfolioRiskResults(analysis) {
   if (candidates.length === 0) {
     html += '<p>No improving hedge candidates found in the current chain.</p>';
   } else {
-    html += candidates.slice(0, 10).map((candidate, index) => `
-      <div class="portfolio-risk-candidate">
-        <strong>${candidate.strategy.replace(/_/g, ' ')}</strong>
-        (${candidate.legs.map(leg => `${leg.qty > 0 ? '+' : ''}${leg.qty}${leg.type}${leg.strike}`).join(', ')})
-        — cost ${formatPnl(candidate.cost)}<br>
-        New worst case: ${formatPnl(candidate.lockedInProfit)} (improves by ${formatPnl(candidate.improvementOverBaseline)})<br>
-        New best case: ${formatPnl(candidate.profitPotential)}, score ${candidate.profitPotentialScore.toFixed(2)}
-        <button onclick="loadPortfolioHedgeCandidate(${index})">Add to calculator</button>
-      </div>
-    `).join('');
+    // Same card layout/scoring as the "Risk Offsetting Opportunities" panel
+    // (see offset-card-ui.js) so a candidate surfaced in both places is
+    // immediately recognizable as the same trade.
+    html += renderOffsetCandidateCards(candidates, 'selectPortfolioRiskCandidateInTable', 'loadPortfolioHedgeCandidate');
   }
 
   container.innerHTML = html;
@@ -147,4 +148,11 @@ function loadPortfolioHedgeCandidate(index) {
 
   textInput.value = JSON.stringify({ optionArray: combinedLegTokens.join(',') }, null, 2);
   processInput();
+}
+
+// Clicking a candidate card selects its legs' bid/ask cells in the options
+// chain table, rather than adding the candidate to the calculator (see
+// selectCandidateLegsInTable in offset-card-ui.js).
+function selectPortfolioRiskCandidateInTable(index, cardElement) {
+  selectCandidateLegsInTable(portfolioRiskHedgeCandidates[index], cardElement);
 }

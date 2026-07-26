@@ -132,58 +132,18 @@
     ];
   }
 
-  // Weight given to "upside beyond the locked floor" vs. the locked floor
-  // itself in rankCandidateScore below. 0.5 treats guaranteed and uncertain
-  // profit as equally valuable — revisit this once there's a feel for how it
-  // ranks real candidates in practice (e.g. weighting locked-in profit more
-  // heavily, since it's guaranteed vs. merely possible).
-  const UPSIDE_WEIGHT = 0.5;
-
-  function findShortStrike(legs) {
-    const shortLeg = legs.find(leg => leg.qty < 0);
-    return shortLeg ? shortLeg.strike : null;
-  }
-
-  // The upside beyond the locked floor is only realized if the underlying
-  // closes between the two spreads, at the position's short strike / the
-  // candidate's short strike — the wider that gap, the more of the possible
-  // closing prices actually land there rather than inside either spread's own
-  // linear transition zone (where you get some blend of locked and upside
-  // instead), so a bigger gap means that upside is more likely to actually be
-  // realized rather than just theoretically reachable. A gap of zero (e.g. the
-  // straddle-anchored "Same-strike offset"/"Wider offset" candidates, whose
-  // short strike always coincides with the position's) means the true peak is
-  // a single knife-edge price, not a zone. Normalized against the combined
-  // width of both spreads so a gap on that same order counts as "wide".
-  function gapRealizationFactor(strikeGapWidth, combinedWidth) {
-    if (!combinedWidth) return 0;
-    return Math.max(0, Math.min(1, strikeGapWidth / combinedWidth));
-  }
-
-  // Ranks a candidate by how much of the combined position's theoretical max
-  // value (both spreads' widths) is locked in, plus a weighted share of
-  // whatever additional upside exists beyond that floor, discounted by how
-  // likely that upside actually is to be realized (see gapRealizationFactor).
-  // Deliberately NOT lockedInProfit/profitPotential (that ratio rewards a
-  // small potential just for being easy to be 100% of — see git history) and
-  // NOT a raw sum of the two (potential already contains locked as its floor,
-  // so summing double-counts it) — subtracting locked out of the upside term
-  // avoids that.
-  function rankCandidateScore(lockedInProfit, profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth) {
-    if (!combinedMaxValue) return 0;
-    const lockedFraction = lockedInProfit / combinedMaxValue;
-    const upsideFraction = (profitPotential - lockedInProfit) / combinedMaxValue;
-    const gapFactor = gapRealizationFactor(strikeGapWidth, combinedWidth);
-    return lockedFraction + upsideFraction * UPSIDE_WEIGHT * gapFactor;
-  }
-
+  // rankCandidateScore/gapRealizationFactor/findShortStrike live in
+  // shared/portfolio-risk.js so findPortfolioHedgeCandidates (the aggregate
+  // N-leg search) scores and sorts candidates identically to this curated
+  // single-spread search — a candidate surfaced in both panels should rank
+  // (and look) the same way in both.
   function evaluateCandidate(label, family, positionLegs, candidateLegs, positionWidth, candidateWidth, meta) {
     const combinedLegs = positionLegs.concat(candidateLegs);
     const analysis = PortfolioRisk.analyzePortfolioRisk(combinedLegs);
     const cost = candidateLegs.reduce((sum, leg) => sum + leg.cost, 0);
     const combinedMaxValue = positionWidth * 100 + candidateWidth * 100;
     const combinedWidth = positionWidth + candidateWidth;
-    const strikeGapWidth = Math.abs(findShortStrike(positionLegs) - findShortStrike(candidateLegs));
+    const strikeGapWidth = Math.abs(PortfolioRisk.findShortStrike(positionLegs) - PortfolioRisk.findShortStrike(candidateLegs));
 
     return {
       label,
@@ -194,7 +154,7 @@
       profitPotential: analysis.profitPotential,
       profitPotentialScore: analysis.profitPotentialScore,
       strikeGapWidth,
-      rankScore: rankCandidateScore(analysis.lockedInProfit, analysis.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
+      rankScore: PortfolioRisk.rankCandidateScore(analysis.lockedInProfit, analysis.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
       meta
     };
   }

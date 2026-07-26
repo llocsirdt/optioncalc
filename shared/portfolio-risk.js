@@ -139,6 +139,53 @@
     };
   }
 
+  // Weight given to "upside beyond the locked floor" vs. the locked floor
+  // itself in rankCandidateScore below. 0.5 treats guaranteed and uncertain
+  // profit as equally valuable — revisit this once there's a feel for how it
+  // ranks real candidates in practice (e.g. weighting locked-in profit more
+  // heavily, since it's guaranteed vs. merely possible).
+  const UPSIDE_WEIGHT = 0.5;
+
+  function findShortStrike(legs) {
+    const shortLeg = (legs || []).find(leg => leg.qty < 0);
+    return shortLeg ? shortLeg.strike : null;
+  }
+
+  // The upside beyond the locked floor is only realized if the underlying
+  // closes between the existing position's strikes and the candidate's short
+  // strike — the wider that gap, the more of the underlying's possible
+  // closing prices actually land there rather than inside a linear transition
+  // zone (where you get some blend of locked and upside instead), so a bigger
+  // gap means that upside is more likely to actually be realized rather than
+  // just theoretically reachable. A gap of zero (the candidate's short strike
+  // exactly coincides with an existing strike) means the true peak is a
+  // single knife-edge price, not a zone. Normalized against the combined
+  // width of the position and the candidate so a gap on that same order
+  // counts as "wide".
+  function gapRealizationFactor(strikeGapWidth, combinedWidth) {
+    if (!combinedWidth) return 0;
+    return Math.max(0, Math.min(1, strikeGapWidth / combinedWidth));
+  }
+
+  // Ranks a candidate by how much of the combined position's theoretical max
+  // value is locked in, plus a weighted share of whatever additional upside
+  // exists beyond that floor, discounted by how likely that upside actually is
+  // to be realized (see gapRealizationFactor). Deliberately NOT
+  // lockedInProfit/profitPotential (that ratio rewards a small potential just
+  // for being easy to be 100% of) and NOT a raw sum of the two (potential
+  // already contains locked as its floor, so summing double-counts it) —
+  // subtracting locked out of the upside term avoids that. Shared between
+  // shared/spread-hedge-strategy.js (single 2-leg spread) and
+  // findPortfolioHedgeCandidates below (arbitrary N-leg aggregate) so a
+  // candidate that shows up in both places scores and sorts the same way.
+  function rankCandidateScore(lockedInProfit, profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth) {
+    if (!combinedMaxValue) return 0;
+    const lockedFraction = lockedInProfit / combinedMaxValue;
+    const upsideFraction = (profitPotential - lockedInProfit) / combinedMaxValue;
+    const gapFactor = gapRealizationFactor(strikeGapWidth, combinedWidth);
+    return lockedFraction + upsideFraction * UPSIDE_WEIGHT * gapFactor;
+  }
+
   function getStrikeMarketData(strike, expirationStrikes) {
     const key = strike.toString() + '.0';
     for (const strikes of Object.values(expirationStrikes)) {
@@ -214,18 +261,24 @@
 
   /**
    * Search the live option chain for 2-leg spread candidates that improve the
-   * aggregate portfolio's risk curve, ranked with OffsetCalculations.sortOffsettingPositions
-   * (same priority order the single-position engine already uses: fully-locked first,
-   * then highest profit potential, then balanced).
+   * aggregate portfolio's risk curve, ranked by the same rankCandidateScore
+   * used by shared/spread-hedge-strategy.js's curated single-spread search —
+   * so a candidate surfaced here that's also shown in that panel scores (and
+   * sorts) the same way in both places, instead of the old fully-locked/
+   * highest-potential/balanced tiebreak order that had no relationship to it.
    */
   function findPortfolioHedgeCandidates(legs, chainData, options = {}) {
     const maxWidthStrikes = options.maxWidthStrikes ?? 6;
     const budget = options.budget ?? Infinity;
-    const OffsetCalculations = (typeof require === 'function' && typeof module !== 'undefined')
-      ? require('./offset-calculations')
-      : global.OffsetCalculations;
+    // Beyond just improving on the baseline, a candidate whose worst case is
+    // still a loss is only viable if that loss is small relative to what it's
+    // risking for — a locked-in loss more than this fraction of the candidate's
+    // own profit potential isn't a real hedge, it's a bet with bad odds.
+    const maxLockedLossFraction = options.maxLockedLossFraction ?? 0.10;
 
     const baseline = analyzePortfolioRisk(legs, options);
+    const baselineStrikes = legs.map(leg => leg.strike);
+    const baselineWidth = Math.max(...baselineStrikes) - Math.min(...baselineStrikes);
     const candidates = [];
 
     function tryCandidate(strategy, lowerStrike, higherStrike, lowerMid, higherMid, optionTypeUpper) {
@@ -239,14 +292,23 @@
         ? result.lockedInProfit - baseline.lockedInProfit
         : (Number.isFinite(result.lockedInProfit) ? Infinity : -Infinity);
 
+      const spreadWidth = higherStrike - lowerStrike;
+      const combinedWidth = baselineWidth + spreadWidth;
+      const combinedMaxValue = combinedWidth * 100;
+      const candidateShortStrike = findShortStrike(candidateLegs);
+      const strikeGapWidth = Math.min(...baselineStrikes.map(strike => Math.abs(strike - candidateShortStrike)));
+
       candidates.push({
         strategy,
+        label: strategy.replace(/_/g, ' '),
         legs: candidateLegs,
         cost,
-        spreadWidth: higherStrike - lowerStrike,
+        spreadWidth,
         lockedInProfit: result.lockedInProfit,
         profitPotential: result.profitPotential,
         profitPotentialScore: result.profitPotentialScore,
+        strikeGapWidth,
+        rankScore: rankCandidateScore(result.lockedInProfit, result.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
         improvementOverBaseline
       });
     }
@@ -281,8 +343,14 @@
       }
     }
 
-    const improvingCandidates = candidates.filter(candidate => candidate.improvementOverBaseline > 0);
-    const sortedCandidates = OffsetCalculations.sortOffsettingPositions(improvingCandidates);
+    const viableCandidates = candidates.filter(candidate => {
+      if (candidate.improvementOverBaseline <= 0) return false;
+      if (candidate.lockedInProfit >= 0) return true;
+      // A locked-in loss with no positive potential to justify it is never viable.
+      if (candidate.profitPotential <= 0) return false;
+      return Math.abs(candidate.lockedInProfit) <= maxLockedLossFraction * candidate.profitPotential;
+    });
+    const sortedCandidates = viableCandidates.sort((a, b) => b.rankScore - a.rankScore);
 
     return { baseline, candidates: sortedCandidates };
   }
@@ -290,7 +358,10 @@
   const PortfolioRisk = {
     calculatePortfolioValueAtExpiration,
     analyzePortfolioRisk,
-    findPortfolioHedgeCandidates
+    findPortfolioHedgeCandidates,
+    findShortStrike,
+    gapRealizationFactor,
+    rankCandidateScore
   };
 
   // Node.js / CommonJS

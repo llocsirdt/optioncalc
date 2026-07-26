@@ -15,14 +15,6 @@ function getSingleSpreadPosition() {
   return { legs };
 }
 
-function formatHedgeMoney(value) {
-  if (value === Infinity) return 'Unbounded gain';
-  if (value === -Infinity) return 'Unbounded loss';
-  if (!Number.isFinite(value)) return '—';
-  const sign = value < 0 ? '-' : '';
-  return `${sign}$${Math.abs(value).toFixed(2)}`;
-}
-
 function renderHedgeCandidatesHtml(candidates) {
   if (candidates.length === 0) {
     return '<div class="offsetting-trades"><h4>🎯 Risk Offsetting Opportunities</h4><p>No viable hedge candidates found in the current chain.</p></div>';
@@ -33,33 +25,7 @@ function renderHedgeCandidatesHtml(candidates) {
   // for now — rankScore's "low" cutoff isn't calibrated yet since its scale
   // differs from the old locked/potential ratio (see rankCandidateScore's
   // comment for what it actually measures).
-  const rows = candidates.map((c, index) => {
-    const costLessThanLockedClass = Math.abs(c.cost) < c.lockedInProfit ? 'cost-less-than-locked' : '';
-    const profitClass = c.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
-    const familyClass = c.family === 'same-side' ? 'credit' : 'spread'; // credit offsets get a green bar, debit offsets stay blue
-    const weakClass = c.lockedInProfit < 0 ? 'low-locked-profit' : '';
-    const legsSummary = c.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
-
-    return `
-      <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}"
-           onclick="selectHedgeCandidateInTable(${index}, this)"
-           title="Click to select these options in the table">
-        <div class="trade-description">
-          <strong>${c.label}</strong>
-          <div class="trade-action">${legsSummary}</div>
-          <div class="trade-cost">Cost: ${formatHedgeMoney(c.cost)}</div>
-        </div>
-        <div class="trade-metrics">
-          <div class="trade-potential">Potential: ${formatHedgeMoney(c.profitPotential)}</div>
-          <div class="trade-locked-profit">Locked: ${formatHedgeMoney(c.lockedInProfit)}</div>
-          <div class="trade-gap" title="Distance between the position's short strike and this candidate's short strike — the zone that has to be closed in to realize the upside above, not just the locked floor">Gap: ${c.strikeGapWidth} pts</div>
-          <div class="trade-score ${profitClass}">Score: ${(c.rankScore * 100).toFixed(1)}%</div>
-        </div>
-        <button onclick="event.stopPropagation(); loadHedgeCandidateIntoCalculator(${index})">Add to calculator</button>
-      </div>
-    `;
-  }).join('');
-
+  const rows = renderOffsetCandidateCards(candidates, 'selectHedgeCandidateInTable', 'loadHedgeCandidateIntoCalculator');
   return `<div class="offsetting-trades"><h4>🎯 Risk Offsetting Opportunities</h4>${rows}</div>`;
 }
 
@@ -114,25 +80,8 @@ function loadHedgeCandidateIntoCalculator(index) {
 }
 
 // Clicking a candidate card selects its legs' bid/ask cells in the options
-// chain table (via the same findAndClickOptionCell primitive the old
-// exhaustive UI used), rather than adding the candidate to the calculator.
-// findAndClickOptionCell dispatches a real click per leg, which toggles that
-// cell's entry in selectedTablePositions (oc.js) — so clicking the same card
-// twice selects then deselects, matching the table's own toggle behavior.
+// chain table, rather than adding the candidate to the calculator (see
+// selectCandidateLegsInTable in offset-card-ui.js).
 function selectHedgeCandidateInTable(index, cardElement) {
-  const candidate = hedgeCandidatesForUI[index];
-  if (!candidate || typeof findAndClickOptionCell !== 'function') return;
-
-  const clickedPositions = candidate.legs
-    .map(leg => findAndClickOptionCell(leg.type.toLowerCase(), leg.strike, leg.qty > 0 ? 'ask' : 'bid'))
-    .filter(Boolean);
-
-  if (clickedPositions.length > 0 && typeof updateSelectedPositionsDisplay === 'function' && typeof currentOptionsData !== 'undefined') {
-    updateSelectedPositionsDisplay(currentOptionsData);
-  }
-
-  if (cardElement && typeof selectedTablePositions !== 'undefined') {
-    const allLegsSelected = candidate.legs.every(leg => selectedTablePositions.has(`${leg.type.toLowerCase()}${leg.strike}`));
-    cardElement.classList.toggle('selected-offset', allLegsSelected);
-  }
+  selectCandidateLegsInTable(hedgeCandidatesForUI[index], cardElement);
 }
