@@ -545,11 +545,155 @@
     return { baseline, candidates: candidates.sort(compareCandidatesByTier) };
   }
 
+  /**
+   * Finds a butterfly (long 1x below, short 2x at center, long 1x above, all
+   * the same option type) centered near the worst point, for positions whose
+   * worst case is a LOCAL DIP somewhere in the middle of the curve rather
+   * than at either far tail (that's findTailRiskHedgeCandidates' job — this
+   * one explicitly bails out if the dip is actually at an edge). A butterfly
+   * (long 1x / short 2x / long 1x, one strike apiece) adds a bounded,
+   * triangular bump of value centered at K; a condor (long / short / short /
+   * long, two strikes for the short pair) adds a flatter, wider plateau
+   * around K at somewhat higher cost — same idea, different tradeoff between
+   * how wide the "sweet spot" is and how much it costs.
+   *
+   * Search strategy: try candidate centers K at every listed strike within a
+   * neighborhood of the worst price, and wing widths by chain-index steps out
+   * from K (so wing spacing follows the chain's own strike spacing rather
+   * than an assumed fixed width), for both calls and puts — verifying each
+   * one directly against the full curve via analyzePortfolioRisk (the search
+   * space here is linear/quadratic in strikes × widths, not the pairwise
+   * searches' full product, so there's no need for a cheap pre-filter stage).
+   */
+  function findLocalDipHedgeCandidates(legs, chainData, options = {}) {
+    const maxWidthStrikes = options.maxWidthStrikes ?? 8;
+    const maxLockedLossFraction = options.maxLockedLossFraction ?? 0.05;
+
+    const baseline = analyzePortfolioRisk(legs, options);
+    if (baseline.unboundedUpsideRisk || baseline.unboundedDownsideRisk) {
+      return { baseline, candidates: [] };
+    }
+    if (baseline.lockedInProfit >= 0 || baseline.worstCasePrice === null) {
+      return { baseline, candidates: [] };
+    }
+
+    const baselineStrikes = legs.map(leg => leg.strike);
+    const minStrike = Math.min(...baselineStrikes);
+    const maxStrike = Math.max(...baselineStrikes);
+    const baselineWidth = maxStrike - minStrike;
+    const padding = options.padding ?? Math.max(50, baselineWidth * 0.25);
+    const lowExtreme = Math.max(0.01, minStrike - padding);
+    const highExtreme = maxStrike + padding;
+
+    // Only worth running when the worst point sits comfortably inside the
+    // sampled range — a dip right at either edge is the tail case, already
+    // covered by findTailRiskHedgeCandidates.
+    const dipPrice = baseline.worstCasePrice;
+    const edgeBuffer = Math.max(20, baselineWidth * 0.1);
+    if (dipPrice <= lowExtreme + edgeBuffer || dipPrice >= highExtreme - edgeBuffer) {
+      return { baseline, candidates: [] };
+    }
+
+    const searchRadius = options.searchRadius ?? Math.max(50, baselineWidth * 0.5);
+    const centerLow = dipPrice - searchRadius;
+    const centerHigh = dipPrice + searchRadius;
+    const results = [];
+
+    function evaluateCandidate(strategy, label, candidateLegs, center, wingWidth) {
+      const cost = candidateLegs.reduce((sum, leg) => sum + leg.cost, 0);
+      const combined = legs.concat(candidateLegs);
+      const result = analyzePortfolioRisk(combined, options);
+      const improvementOverBaseline = (Number.isFinite(result.lockedInProfit) && Number.isFinite(baseline.lockedInProfit))
+        ? result.lockedInProfit - baseline.lockedInProfit
+        : (Number.isFinite(result.lockedInProfit) ? Infinity : -Infinity);
+      if (improvementOverBaseline <= 0) return;
+      if (result.lockedInProfit < 0) {
+        if (result.profitPotential <= 0) return;
+        if (Math.abs(result.lockedInProfit) > maxLockedLossFraction * result.profitPotential) return;
+      }
+
+      const combinedWidth = baselineWidth + wingWidth;
+      const combinedMaxValue = combinedWidth * 100;
+      const strikeGapWidth = Math.min(...baselineStrikes.map(strike => Math.abs(strike - center)));
+
+      results.push({
+        strategy,
+        label,
+        family: 'local-dip',
+        legs: candidateLegs,
+        cost,
+        spreadWidth: wingWidth,
+        lockedInProfit: result.lockedInProfit,
+        profitPotential: result.profitPotential,
+        profitPotentialScore: result.profitPotentialScore,
+        strikeGapWidth,
+        lockedFraction: combinedMaxValue ? result.lockedInProfit / combinedMaxValue : 0,
+        rankScore: rankCandidateScore(result.lockedInProfit, result.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
+        improvementOverBaseline
+      });
+    }
+
+    function search(optionTypeUpper, chainSide) {
+      if (!chainSide) return;
+      const allStrikes = collectSortedStrikes(chainSide);
+      allStrikes.forEach((K, centerIndex) => {
+        if (K < centerLow || K > centerHigh) return;
+        const midData = getStrikeMarketData(K, chainSide);
+        if (!midData) return;
+
+        for (let step = 1; step <= maxWidthStrikes; step++) {
+          const loIndex = centerIndex - step;
+          const hiIndex = centerIndex + step;
+          if (loIndex < 0 || hiIndex >= allStrikes.length) continue;
+          const lo = allStrikes[loIndex];
+          const hi = allStrikes[hiIndex];
+          const loData = getStrikeMarketData(lo, chainSide);
+          const hiData = getStrikeMarketData(hi, chainSide);
+          if (!loData || !hiData) continue;
+
+          evaluateCandidate('local_dip_butterfly', 'Local-dip butterfly hedge', [
+            { qty: 1, type: optionTypeUpper, strike: lo, cost: loData.mid * 100 },
+            { qty: -2, type: optionTypeUpper, strike: K, cost: -midData.mid * 200 },
+            { qty: 1, type: optionTypeUpper, strike: hi, cost: hiData.mid * 100 }
+          ], K, hi - lo);
+
+          // Condor: widen the same inner (lo, hi) pair — reused here as the
+          // SHORT strikes instead of the butterfly's wings — outward by an
+          // extra step to a further long pair, trading the butterfly's single
+          // peak for a flatter, wider plateau at somewhat higher cost.
+          for (let outerDelta = 1; outerDelta <= maxWidthStrikes; outerDelta++) {
+            const longLoIndex = loIndex - outerDelta;
+            const longHiIndex = hiIndex + outerDelta;
+            if (longLoIndex < 0 || longHiIndex >= allStrikes.length) continue;
+            const longLo = allStrikes[longLoIndex];
+            const longHi = allStrikes[longHiIndex];
+            const longLoData = getStrikeMarketData(longLo, chainSide);
+            const longHiData = getStrikeMarketData(longHi, chainSide);
+            if (!longLoData || !longHiData) continue;
+
+            evaluateCandidate('local_dip_condor', 'Local-dip condor hedge', [
+              { qty: 1, type: optionTypeUpper, strike: longLo, cost: longLoData.mid * 100 },
+              { qty: -1, type: optionTypeUpper, strike: lo, cost: -loData.mid * 100 },
+              { qty: -1, type: optionTypeUpper, strike: hi, cost: -hiData.mid * 100 },
+              { qty: 1, type: optionTypeUpper, strike: longHi, cost: longHiData.mid * 100 }
+            ], K, longHi - longLo);
+          }
+        }
+      });
+    }
+
+    search('C', chainData.call);
+    search('P', chainData.put);
+
+    return { baseline, candidates: results.sort(compareCandidatesByTier) };
+  }
+
   const PortfolioRisk = {
     calculatePortfolioValueAtExpiration,
     analyzePortfolioRisk,
     findPortfolioHedgeCandidates,
     findTailRiskHedgeCandidates,
+    findLocalDipHedgeCandidates,
     findShortStrike,
     gapRealizationFactor,
     rankCandidateScore,

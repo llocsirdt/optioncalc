@@ -688,6 +688,11 @@ pre {
   border-left: 4px solid #9C27B0;
 }
 
+/* Local-dip butterfly hedge (centered near an interior worst-case notch). */
+.offset-trade.local-dip {
+  border-left: 4px solid #FF9800;
+}
+
 /* Server-based offsetting trades - darker, bolder borders */
 .offset-trade.server-offset {
   border: 3px solid #333;

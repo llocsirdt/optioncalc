@@ -116,7 +116,15 @@ async function analyzePortfolioRiskUI() {
     // added together, sometimes can. Merged into the same list/ranking so it
     // reads as one set of options rather than a separate section.
     const tailRisk = PortfolioRisk.findTailRiskHedgeCandidates(legs, chainData);
-    const candidates = analysis.candidates.concat(tailRisk.candidates).sort(PortfolioRisk.compareCandidatesByTier);
+    // Only searches (and only does anything) when the worst case is a LOCAL
+    // DIP somewhere in the middle of the curve — both tails already fine,
+    // just an interior notch — which a butterfly centered near the dip can
+    // fill without disturbing the rest of the curve.
+    const localDip = PortfolioRisk.findLocalDipHedgeCandidates(legs, chainData);
+    const merged = analysis.candidates.concat(tailRisk.candidates, localDip.candidates).sort(PortfolioRisk.compareCandidatesByTier);
+    // Anything that opposes an existing position leg sinks to the bottom —
+    // still shown, just deprioritized rather than reordered by score.
+    const candidates = sortWithConflictsLast(merged, legs);
     portfolioRiskHedgeCandidates = candidates;
     renderPortfolioRiskResults({ baseline: analysis.baseline, candidates }, legs);
   } catch (err) {

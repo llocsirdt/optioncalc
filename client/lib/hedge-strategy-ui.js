@@ -48,7 +48,9 @@ function updateHedgeCandidatesUI() {
   } else {
     try {
       const chainData = getCurrentChainData();
-      const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, chainData);
+      // Anything that opposes an existing position leg sinks to the bottom —
+      // still shown, just deprioritized rather than reordered by score.
+      const candidates = sortWithConflictsLast(SpreadHedgeStrategy.findHedgeCandidates(position, chainData), position.legs);
       hedgeCandidatesForUI = candidates;
       html = renderHedgeCandidatesHtml(candidates, position.legs);
     } catch (err) {

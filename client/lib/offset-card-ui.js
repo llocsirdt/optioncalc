@@ -28,6 +28,18 @@ function candidateHasOppositeLeg(candidateLegs, positionLegs) {
   );
 }
 
+// Moves any candidate that opposes an existing position leg to the bottom of
+// the list, without disturbing the existing tier/rankScore order otherwise —
+// Array.sort is stable, so returning 0 for a same-conflict-status pair just
+// keeps whatever relative order they already arrived in.
+function sortWithConflictsLast(candidates, positionLegs) {
+  return candidates.slice().sort((a, b) => {
+    const aConflict = candidateHasOppositeLeg(a.legs, positionLegs) ? 1 : 0;
+    const bConflict = candidateHasOppositeLeg(b.legs, positionLegs) ? 1 : 0;
+    return aConflict - bConflict;
+  });
+}
+
 function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs) {
   const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.lockedInProfit ? 'cost-less-than-locked' : '';
   const profitClass = candidate.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
@@ -35,14 +47,14 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
   // "family" (shift/width/same-side) only exists on the curated single-spread
   // candidates — the aggregate search has no such family, so fall back to
   // classifying by the trade's own cost sign (net credit vs. net debit).
-  // tail-risk (a call spread + put spread added together) gets its own color
-  // regardless of cost sign, since it's a structurally different kind of
-  // trade. A leg that opposes an existing position leg overrides any of
-  // these with red.
+  // tail-risk (a call spread + put spread added together) and local-dip (a
+  // butterfly) each get their own color regardless of cost sign, since
+  // they're structurally different kinds of trades. A leg that opposes an
+  // existing position leg overrides any of these with red.
   const familyClass = hasOppositeLeg
     ? 'conflict'
-    : candidate.family === 'tail-risk'
-      ? 'tail-risk'
+    : (candidate.family === 'tail-risk' || candidate.family === 'local-dip')
+      ? candidate.family
       : (candidate.family
         ? (candidate.family === 'same-side' ? 'credit' : 'spread')
         : (candidate.cost < 0 ? 'credit' : 'spread'));

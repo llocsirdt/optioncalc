@@ -193,5 +193,78 @@ test('findTailRiskHedgeCandidates: finds nothing for genuinely unbounded (naked)
   assert.strictEqual(candidates.length, 0, 'a bounded 2-leg-per-side hedge cannot fix truly unbounded naked exposure');
 });
 
+// ============================================================
+// findLocalDipHedgeCandidates: a butterfly (long 1x / short 2x / long 1x, one
+// option type) centered near the worst point, for positions whose worst case
+// is a LOCAL DIP somewhere in the middle of the curve — both tails are fine,
+// only an interior notch is bad, which neither the single-spread search nor
+// the dual-wing tail-risk search is built to fix.
+// ============================================================
+
+// Short call butterfly: sell 1x @90, buy 2x @100, sell 1x @110 for a $400 net
+// credit. Flat +$400 on BOTH tails (net qty is 0, so it's constant beyond the
+// wings on either side), but dips to -$600 exactly at the center (100).
+const LOCAL_DIP_LEGS = [
+  { qty: -1, type: 'c', strike: 90, cost: -1200 },
+  { qty: 2, type: 'c', strike: 100, cost: 1000 },
+  { qty: -1, type: 'c', strike: 110, cost: -200 }
+];
+const BUTTERFLY_CHAIN = buildLinearChain(20, 200, 5, 250, -50);
+
+test('findLocalDipHedgeCandidates: finds butterfly AND condor candidates for a local dip, all improving on the baseline', () => {
+  const baseline = PortfolioRisk.analyzePortfolioRisk(LOCAL_DIP_LEGS);
+  assert.ok(baseline.lockedInProfit < 0, 'sanity check: baseline should be underwater at its worst case');
+  approx(baseline.worstCasePrice, 100, 1, 'the dip should be at the center strike, not near either tail');
+
+  const { candidates } = PortfolioRisk.findLocalDipHedgeCandidates(LOCAL_DIP_LEGS, BUTTERFLY_CHAIN);
+  assert.ok(candidates.length > 0, 'expected at least one dual-shape candidate for a local-dip position');
+
+  const butterflies = candidates.filter(c => c.strategy === 'local_dip_butterfly');
+  const condors = candidates.filter(c => c.strategy === 'local_dip_condor');
+  assert.ok(butterflies.length > 0, 'expected at least one butterfly candidate');
+  assert.ok(condors.length > 0, 'expected at least one condor candidate');
+
+  candidates.forEach(c => {
+    assert.strictEqual(c.family, 'local-dip');
+    assert.ok(c.lockedInProfit > baseline.lockedInProfit, 'every candidate should improve on the baseline worst case');
+    if (c.strategy === 'local_dip_butterfly') {
+      assert.strictEqual(c.legs.length, 3, 'a butterfly candidate should have exactly 3 legs');
+      assert.strictEqual(Math.abs(c.legs.find(l => l.qty < 0).qty), 2, 'the center leg should be the 2x short');
+    } else {
+      assert.strictEqual(c.legs.length, 4, 'a condor candidate should have exactly 4 legs');
+      assert.strictEqual(c.legs.filter(l => l.qty < 0).length, 2, 'a condor should have two distinct short legs');
+      assert.ok(c.legs.every(l => Math.abs(l.qty) === 1), 'a condor has no 2x leg, unlike a butterfly');
+    }
+  });
+});
+
+test('findLocalDipHedgeCandidates: the exact inverse butterfly fully cancels the dip back to the flat tail value', () => {
+  // +1C90,-2C100,+1C110 is the exact opposite of LOCAL_DIP_LEGS — under this
+  // linear pricing model it should cost ~0 and flatten the curve completely,
+  // so locked-in profit should equal the original flat tail value (+400).
+  const { candidates } = PortfolioRisk.findLocalDipHedgeCandidates(LOCAL_DIP_LEGS, BUTTERFLY_CHAIN);
+  const inverse = candidates.find(c => c.legs.some(l => l.strike === 90 && l.qty === 1) && c.legs.some(l => l.strike === 110 && l.qty === 1));
+  assert.ok(inverse, 'expected to find the exact-inverse butterfly candidate');
+  approx(inverse.lockedInProfit, 400, 1, 'the inverse butterfly should fully flatten the dip back to the tail value');
+  approx(inverse.profitPotential, 400, 1, 'with the dip fully filled, best case should equal worst case (flat curve)');
+});
+
+test('findLocalDipHedgeCandidates: finds nothing when the worst case is at a tail, not an interior dip', () => {
+  // DOUBLE_TAILED_LEGS' worst case sits at the very edge of the sampled
+  // range (near price 30) — that's findTailRiskHedgeCandidates' job, not this one.
+  const { candidates } = PortfolioRisk.findLocalDipHedgeCandidates(DOUBLE_TAILED_LEGS, BUTTERFLY_CHAIN);
+  assert.strictEqual(candidates.length, 0, 'a tail-edge worst case should not trigger the local-dip search');
+});
+
+test('findLocalDipHedgeCandidates: finds nothing when there is no loss to fix', () => {
+  const profitableLegs = [
+    { qty: 1, type: 'c', strike: 90, cost: 1200 },
+    { qty: -2, type: 'c', strike: 100, cost: -1000 },
+    { qty: 1, type: 'c', strike: 110, cost: 200 }
+  ]; // the inverse of LOCAL_DIP_LEGS — already flat and profitable everywhere
+  const { candidates } = PortfolioRisk.findLocalDipHedgeCandidates(profitableLegs, BUTTERFLY_CHAIN);
+  assert.strictEqual(candidates.length, 0, 'nothing to fix when the worst case is already non-negative');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
