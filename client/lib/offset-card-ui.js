@@ -13,17 +13,44 @@ function formatOffsetMoney(value) {
   return `${sign}$${Math.abs(value).toFixed(2)}`;
 }
 
-function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName) {
+// True if any candidate leg is the same contract (type + strike) as an
+// existing position leg but in the opposite direction (long vs. short) — e.g.
+// the position already holds a long put at a strike and this candidate
+// includes a short put at that same strike. Not excluded from the list (yet)
+// — just flagged so it's visible how often it comes up.
+function candidateHasOppositeLeg(candidateLegs, positionLegs) {
+  return (positionLegs || []).some(posLeg =>
+    candidateLegs.some(leg =>
+      leg.type.toLowerCase() === posLeg.type.toLowerCase() &&
+      leg.strike === posLeg.strike &&
+      Math.sign(leg.qty) !== Math.sign(posLeg.qty)
+    )
+  );
+}
+
+function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs) {
   const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.lockedInProfit ? 'cost-less-than-locked' : '';
   const profitClass = candidate.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
+  const hasOppositeLeg = candidateHasOppositeLeg(candidate.legs, positionLegs);
   // "family" (shift/width/same-side) only exists on the curated single-spread
   // candidates — the aggregate search has no such family, so fall back to
   // classifying by the trade's own cost sign (net credit vs. net debit).
-  const familyClass = candidate.family
-    ? (candidate.family === 'same-side' ? 'credit' : 'spread')
-    : (candidate.cost < 0 ? 'credit' : 'spread');
+  // tail-risk (a call spread + put spread added together) gets its own color
+  // regardless of cost sign, since it's a structurally different kind of
+  // trade. A leg that opposes an existing position leg overrides any of
+  // these with red.
+  const familyClass = hasOppositeLeg
+    ? 'conflict'
+    : candidate.family === 'tail-risk'
+      ? 'tail-risk'
+      : (candidate.family
+        ? (candidate.family === 'same-side' ? 'credit' : 'spread')
+        : (candidate.cost < 0 ? 'credit' : 'spread'));
   const weakClass = candidate.lockedInProfit < 0 ? 'low-locked-profit' : '';
   const legsSummary = candidate.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
+  const conflictNote = hasOppositeLeg
+    ? '<div class="trade-conflict" title="One of this trade\'s legs is the opposite direction of the same strike/type already in your position">⚠ Opposes an existing leg</div>'
+    : '';
 
   return `
     <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}"
@@ -33,6 +60,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName) {
         <strong>${candidate.label}</strong>
         <div class="trade-action">${legsSummary}</div>
         <div class="trade-cost">Cost: ${formatOffsetMoney(candidate.cost)}</div>
+        ${conflictNote}
       </div>
       <div class="trade-metrics">
         <div class="trade-potential">Potential: ${formatOffsetMoney(candidate.profitPotential)}</div>
@@ -45,8 +73,8 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName) {
   `;
 }
 
-function renderOffsetCandidateCards(candidates, selectFnName, addFnName) {
-  return candidates.map((c, index) => renderOffsetCandidateCard(c, index, selectFnName, addFnName)).join('');
+function renderOffsetCandidateCards(candidates, selectFnName, addFnName, positionLegs) {
+  return candidates.map((c, index) => renderOffsetCandidateCard(c, index, selectFnName, addFnName, positionLegs)).join('');
 }
 
 // findAndClickOptionCell dispatches a real click per leg, which toggles that

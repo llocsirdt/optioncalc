@@ -154,6 +154,7 @@
       profitPotential: analysis.profitPotential,
       profitPotentialScore: analysis.profitPotentialScore,
       strikeGapWidth,
+      lockedFraction: combinedMaxValue ? analysis.lockedInProfit / combinedMaxValue : 0,
       rankScore: PortfolioRisk.rankCandidateScore(analysis.lockedInProfit, analysis.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
       meta
     };
@@ -252,7 +253,7 @@
       validSameSideCount++;
     }
 
-    return candidates.sort((a, b) => b.rankScore - a.rankScore);
+    return candidates.sort(PortfolioRisk.compareCandidatesByTier);
   }
 
   const SpreadHedgeStrategy = {

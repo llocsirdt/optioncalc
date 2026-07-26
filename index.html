@@ -66,22 +66,13 @@
       <div id="broker-import-results"></div>
     </div>
 
-    <button id="portfolio-risk-toggle" onclick="togglePortfolioRiskPanel()">Show Portfolio Risk</button>
-
-    <div id="portfolio-risk-container" style="display: none;">
-      <h4>Analyze Portfolio Risk</h4>
-      <p>Finds the combined worst/best case across every position currently loaded above, and searches the live chain for trades that improve it.</p>
-      <button onclick="analyzePortfolioRiskUI()">Analyze Portfolio Risk</button>
-      <div id="portfolio-risk-results"></div>
-    </div>
-
     <div id="chart"><div id="chart-container"></div></div>
     <div id="output">
 <pre>
 {
   "cost": 20000, *optional
   "range": "500-1000", *optional
-  "inc 10, *optional
+  "inc": 5, *optional
   "optionArray": "
     1c620,-1c820,@2000,
     1c620,-1c800,@-1000,
@@ -95,6 +86,13 @@
   "
 }
 </pre>
+    </div>
+
+    <div id="portfolio-risk-container">
+      <h4>Analyze Portfolio Risk</h4>
+      <p>Finds the combined worst/best case across every position currently loaded above, and searches the live chain for trades that improve it.</p>
+      <button onclick="analyzePortfolioRiskUI()">Analyze Portfolio Risk</button>
+      <div id="portfolio-risk-results"></div>
     </div>
 
   </div>

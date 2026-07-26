@@ -518,7 +518,7 @@ pre {
   border-collapse: collapse;
   margin-top: 10px;
   font-size: 12px;
-  margin-left: -30px;
+  margin-left: 0px;
 }
 
 .options-table th {
@@ -668,6 +668,24 @@ pre {
    instead of blue, so they stand out from the debit ("spread") offsets. */
 .offset-trade.credit {
   border-left: 4px solid #4CAF50;
+}
+
+/* A leg opposes an existing position leg at the same strike/type — flagged
+   in red regardless of credit/debit family, just to see how often it comes up. */
+.offset-trade.conflict {
+  border-left: 4px solid #f44336;
+}
+
+.trade-conflict {
+  font-size: 11px;
+  color: #c62828;
+  font-weight: bold;
+}
+
+/* Dual-wing tail-risk hedge (call spread above + put spread below, added
+   together) — structurally different from a single spread, gets its own color. */
+.offset-trade.tail-risk {
+  border-left: 4px solid #9C27B0;
 }
 
 /* Server-based offsetting trades - darker, bolder borders */
@@ -1043,11 +1061,11 @@ pre {
 }
 
 .itm-cell.selected-bid {
-  background-color: #ffcdd2 !important;
+  background-color: #ff94a4 !important;
 }
 
 .itm-cell.selected-ask {
-  background-color: #c8e6c9 !important;
+  background-color: #9bff9b !important;
 }
 
 #broker-import-toggle {
@@ -1096,12 +1114,6 @@ pre {
 
 .broker-import-error {
   color: #c62828;
-}
-
-#portfolio-risk-toggle {
-  display: block;
-  margin-top: 10px;
-  margin-left: auto;
 }
 
 #portfolio-risk-container {

@@ -2871,8 +2871,6 @@ function processInput() {
       <strong>Processed Output:</strong><br>
       <strong>Position Count:</strong> ${fullOptionArray.length}<br>
       <strong>Total Cost:</strong> $${fullCost.toFixed(2)}<br><br>
-      <strong>Positions:</strong><br>
-      ${formatPositionsList(fullOptionArray)}<br><br>
       <strong>Value Curve:</strong><br><br>
     `;
 
@@ -2903,8 +2901,19 @@ function processInput() {
       `;
     }
 
+    outputStr += `
+      <strong>Positions:</strong><br><br>
+      ${formatPositionsList(fullOptionArray)}<br>
+    `;
+
     outputDiv.innerHTML = outputStr;
-    
+
+    // Keep Portfolio Risk in sync with whatever position was just submitted,
+    // not just whatever was loaded when the panel was last opened.
+    if (typeof analyzePortfolioRiskUI === 'function') {
+      analyzePortfolioRiskUI();
+    }
+
   } catch (error) {
     console.error('Error processing input:', error);
     outputDiv.innerHTML = `

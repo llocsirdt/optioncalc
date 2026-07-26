@@ -6,23 +6,6 @@
 
 let portfolioRiskHedgeCandidates = [];
 
-function togglePortfolioRiskPanel() {
-  const container = document.getElementById('portfolio-risk-container');
-  const toggleButton = document.getElementById('portfolio-risk-toggle');
-  if (!container || !toggleButton) return;
-
-  const isHidden = container.style.display === 'none';
-  container.style.display = isHidden ? '' : 'none';
-  toggleButton.textContent = isHidden ? 'Hide Portfolio Risk' : 'Show Portfolio Risk';
-
-  // Opening the panel runs the analysis immediately — the separate "Analyze
-  // Portfolio Risk" button is only needed to retry after an error or to
-  // refresh after loading different positions/chain data.
-  if (isHidden) {
-    analyzePortfolioRiskUI();
-  }
-}
-
 function getCurrentPortfolioLegs() {
   return (typeof fullOptionArray !== 'undefined' ? fullOptionArray : [])
     .filter(opt => opt.qty !== 0 && opt.type && opt.strike !== null)
@@ -87,7 +70,7 @@ function formatPnl(value) {
   return `$${value.toFixed(2)}`;
 }
 
-function renderPortfolioRiskResults(analysis) {
+function renderPortfolioRiskResults(analysis, positionLegs) {
   const container = document.getElementById('portfolio-risk-results');
   if (!container) return;
 
@@ -109,7 +92,7 @@ function renderPortfolioRiskResults(analysis) {
     // Same card layout/scoring as the "Risk Offsetting Opportunities" panel
     // (see offset-card-ui.js) so a candidate surfaced in both places is
     // immediately recognizable as the same trade.
-    html += renderOffsetCandidateCards(candidates, 'selectPortfolioRiskCandidateInTable', 'loadPortfolioHedgeCandidate');
+    html += renderOffsetCandidateCards(candidates, 'selectPortfolioRiskCandidateInTable', 'loadPortfolioHedgeCandidate', positionLegs);
   }
 
   container.innerHTML = html;
@@ -127,8 +110,15 @@ async function analyzePortfolioRiskUI() {
 
     const chainData = getCurrentChainData();
     const analysis = PortfolioRisk.findPortfolioHedgeCandidates(legs, chainData);
-    portfolioRiskHedgeCandidates = analysis.candidates;
-    renderPortfolioRiskResults(analysis);
+    // Only searches (and only does anything) when both the far-low and
+    // far-high price extremes are already underwater — a single spread can't
+    // fix that, but a call spread above the money + put spread below it,
+    // added together, sometimes can. Merged into the same list/ranking so it
+    // reads as one set of options rather than a separate section.
+    const tailRisk = PortfolioRisk.findTailRiskHedgeCandidates(legs, chainData);
+    const candidates = analysis.candidates.concat(tailRisk.candidates).sort(PortfolioRisk.compareCandidatesByTier);
+    portfolioRiskHedgeCandidates = candidates;
+    renderPortfolioRiskResults({ baseline: analysis.baseline, candidates }, legs);
   } catch (err) {
     if (container) container.innerHTML = `<p class="portfolio-risk-error">${err.message}</p>`;
   }

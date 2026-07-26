@@ -15,7 +15,7 @@ function getSingleSpreadPosition() {
   return { legs };
 }
 
-function renderHedgeCandidatesHtml(candidates) {
+function renderHedgeCandidatesHtml(candidates, positionLegs) {
   if (candidates.length === 0) {
     return '<div class="offsetting-trades"><h4>🎯 Risk Offsetting Opportunities</h4><p>No viable hedge candidates found in the current chain.</p></div>';
   }
@@ -25,7 +25,7 @@ function renderHedgeCandidatesHtml(candidates) {
   // for now — rankScore's "low" cutoff isn't calibrated yet since its scale
   // differs from the old locked/potential ratio (see rankCandidateScore's
   // comment for what it actually measures).
-  const rows = renderOffsetCandidateCards(candidates, 'selectHedgeCandidateInTable', 'loadHedgeCandidateIntoCalculator');
+  const rows = renderOffsetCandidateCards(candidates, 'selectHedgeCandidateInTable', 'loadHedgeCandidateIntoCalculator', positionLegs);
   return `<div class="offsetting-trades"><h4>🎯 Risk Offsetting Opportunities</h4>${rows}</div>`;
 }
 
@@ -50,7 +50,7 @@ function updateHedgeCandidatesUI() {
       const chainData = getCurrentChainData();
       const candidates = SpreadHedgeStrategy.findHedgeCandidates(position, chainData);
       hedgeCandidatesForUI = candidates;
-      html = renderHedgeCandidatesHtml(candidates);
+      html = renderHedgeCandidatesHtml(candidates, position.legs);
     } catch (err) {
       hedgeCandidatesForUI = [];
       html = renderHedgeCandidatesMessage(err.message);
