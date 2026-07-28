@@ -1033,6 +1033,176 @@ function strategyPriceTrailv3Cover(position, analysis) {
   return { action: 'hold' };
 }
 
+/**
+ * Aggregate Scores Strategy - Open Logic
+ * 
+ * Uses aggregated BB score sum to determine entry points with peak tracking.
+ * 
+ * States:
+ * - 'new' -> 'ready_open_bull' when bbSum > 2.5
+ * - 'new' -> 'ready_open_bear' when bbSum < -2.5
+ * - 'ready_open_bull' -> 'open' when bbSum falls 20% from peak (e.g., peak 4.0 -> trigger at 3.2)
+ * - 'ready_open_bear' -> 'open' when bbSum rises 20% from trough (e.g., trough -4.0 -> trigger at -3.2)
+ * 
+ * Tracks:
+ * - _aggPeak: highest bbSum seen while in ready_open_bull
+ * - _aggTrough: lowest bbSum seen while in ready_open_bear
+ */
+function strategyAggregateScoresOpen(position = {}, analysis = {}, context = {}, options = {}) {
+  const currentState = position.state || 'new';
+  const aggregated = analysis.aggregated;
+  
+  if (!aggregated || !aggregated.candles || aggregated.candles.length === 0) {
+    return { action: 'hold', nextState: currentState, reason: 'no_aggregated_data' };
+  }
+  
+  const latestCandle = aggregated.candles[0]; // newest first
+  const bbSum = latestCandle?.bbSum;
+  
+  if (typeof bbSum !== 'number') {
+    return { action: 'hold', nextState: currentState, reason: 'no_bbSum' };
+  }
+  
+  const positionPatches = {};
+  
+  // State: new -> check for ready conditions
+  if (currentState === 'new') {
+    if (bbSum > 2.5) {
+      positionPatches._aggPeak = bbSum;
+      return { 
+        action: 'hold', 
+        nextState: 'ready_open_bull', 
+        positionStateUpdates: positionPatches,
+        reason: `bbSum=${bbSum.toFixed(2)} > 2.5, ready for bull entry` 
+      };
+    }
+    
+    if (bbSum < -2.5) {
+      positionPatches._aggTrough = bbSum;
+      return { 
+        action: 'hold', 
+        nextState: 'ready_open_bear', 
+        positionStateUpdates: positionPatches,
+        reason: `bbSum=${bbSum.toFixed(2)} < -2.5, ready for bear entry` 
+      };
+    }
+    
+    return { action: 'hold', nextState: 'new', reason: `bbSum=${bbSum.toFixed(2)} not ready` };
+  }
+  
+  // State: ready_open_bull -> track peak and check for 20% pullback
+  if (currentState === 'ready_open_bull') {
+    const currentPeak = position._aggPeak || bbSum;
+    
+    // Update peak if we've gone higher
+    if (bbSum > currentPeak) {
+      positionPatches._aggPeak = bbSum;
+      return { 
+        action: 'hold', 
+        nextState: 'ready_open_bull', 
+        positionStateUpdates: positionPatches,
+        reason: `new peak: ${bbSum.toFixed(2)}` 
+      };
+    }
+    
+    // Check for 20% pullback from peak
+    const pullbackThreshold = currentPeak * 0.8; // 20% below peak
+    if (bbSum <= pullbackThreshold) {
+      return { 
+        action: 'open_bull', 
+        nextState: 'open', 
+        positionStateUpdates: { type: 'bull' },
+        reason: `bbSum=${bbSum.toFixed(2)} pulled back 20% from peak ${currentPeak.toFixed(2)}` 
+      };
+    }
+    
+    // If bbSum goes negative, reset to new
+    if (bbSum < 0) {
+      return { 
+        action: 'hold', 
+        nextState: 'new', 
+        positionStateUpdates: { _aggPeak: undefined, _aggTrough: undefined },
+        reason: `bbSum went negative, resetting` 
+      };
+    }
+    
+    return { action: 'hold', nextState: 'ready_open_bull', reason: `waiting for pullback from ${currentPeak.toFixed(2)}` };
+  }
+  
+  // State: ready_open_bear -> track trough and check for 20% bounce
+  if (currentState === 'ready_open_bear') {
+    const currentTrough = position._aggTrough || bbSum;
+    
+    // Update trough if we've gone lower
+    if (bbSum < currentTrough) {
+      positionPatches._aggTrough = bbSum;
+      return { 
+        action: 'hold', 
+        nextState: 'ready_open_bear', 
+        positionStateUpdates: positionPatches,
+        reason: `new trough: ${bbSum.toFixed(2)}` 
+      };
+    }
+    
+    // Check for 20% bounce from trough (trough is negative, so 20% toward zero)
+    const bounceThreshold = currentTrough * 0.8; // 20% above trough (less negative)
+    if (bbSum >= bounceThreshold) {
+      return { 
+        action: 'open_bear', 
+        nextState: 'open', 
+        positionStateUpdates: { type: 'bear' },
+        reason: `bbSum=${bbSum.toFixed(2)} bounced 20% from trough ${currentTrough.toFixed(2)}` 
+      };
+    }
+    
+    // If bbSum goes positive, reset to new
+    if (bbSum > 0) {
+      return { 
+        action: 'hold', 
+        nextState: 'new', 
+        positionStateUpdates: { _aggPeak: undefined, _aggTrough: undefined },
+        reason: `bbSum went positive, resetting` 
+      };
+    }
+    
+    return { action: 'hold', nextState: 'ready_open_bear', reason: `waiting for bounce from ${currentTrough.toFixed(2)}` };
+  }
+  
+  return { action: 'hold', nextState: currentState, reason: 'unknown_state' };
+}
+
+/**
+ * Aggregate Scores Strategy - Cover Logic
+ * 
+ * Covers position when bbSum gets within 0.2 of zero (between -0.2 and +0.2)
+ */
+function strategyAggregateScoresCover(position = {}, analysis = {}, context = {}, options = {}) {
+  const currentState = position.state || 'open';
+  const aggregated = analysis.aggregated;
+  
+  if (!aggregated || !aggregated.candles || aggregated.candles.length === 0) {
+    return { action: 'hold', nextState: currentState, reason: 'no_aggregated_data' };
+  }
+  
+  const latestCandle = aggregated.candles[0]; // newest first
+  const bbSum = latestCandle?.bbSum;
+  
+  if (typeof bbSum !== 'number') {
+    return { action: 'hold', nextState: currentState, reason: 'no_bbSum' };
+  }
+  
+  // Cover when bbSum is between -0.2 and +0.2
+  if (bbSum >= -0.2 && bbSum <= 0.2) {
+    return { 
+      action: 'cover', 
+      nextState: 'covered', 
+      reason: `bbSum=${bbSum.toFixed(2)} near zero (within ±0.2)` 
+    };
+  }
+  
+  return { action: 'hold', nextState: currentState, reason: `bbSum=${bbSum.toFixed(2)} not near zero` };
+}
+
 module.exports = {
   calculateBBScore,
   strategySimple5mBBScoreOpen,
@@ -1053,5 +1223,7 @@ module.exports = {
   strategyPriceTrailv3Cover,
   resetPriceTrailv3State,
   strategyStateOpen,
-  strategyStateCover
+  strategyStateCover,
+  strategyAggregateScoresOpen,
+  strategyAggregateScoresCover
 };

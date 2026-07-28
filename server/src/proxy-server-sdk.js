@@ -1114,6 +1114,42 @@ async function startServer() {
       console.log(`🔄 Starting position check loop (runs at :30 seconds each minute)...`);
       let positionCheckInterval = null;
       
+      // Helper to get ET market time info
+      const getETTimeInfo = () => {
+        const etDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const day = etDate.getDay();
+        const totalMinutes = etDate.getHours() * 60 + etDate.getMinutes();
+        return {
+          isWeekday: day >= 1 && day <= 5,
+          totalMinutes,
+          isPreMarket: day >= 1 && day <= 5 && totalMinutes >= 555 && totalMinutes < 570,  // 9:15-9:30 AM
+          isMarketHours: day >= 1 && day <= 5 && totalMinutes >= 570 && totalMinutes < 960, // 9:30 AM-3:59 PM
+          isAfterClose: day >= 1 && day <= 5 && totalMinutes >= 965,                        // After 4:05 PM
+        };
+      };
+
+      // Manage stream connection based on time of day
+      const manageStreamConnection = async () => {
+        const { isPreMarket, isAfterClose } = getETTimeInfo();
+        if (isPreMarket && !streamingCandleSource.isConnected) {
+          console.log('🌊 Pre-market: stream not connected, attempting to connect...');
+          try {
+            const initialized = await streamingCandleSource.initialize();
+            if (initialized) {
+              setTimeout(() => {
+                ['NDX', 'SPX'].forEach(sym => streamingCandleSource.subscribeSymbol(sym));
+                console.log('🌊 Pre-market: stream connected and symbols subscribed');
+              }, 2000);
+            }
+          } catch (err) {
+            console.warn('🌊 Pre-market connect failed:', err.message);
+          }
+        } else if (isAfterClose && streamingCandleSource.isConnected) {
+          console.log('🌊 Market closed: disconnecting stream...');
+          await streamingCandleSource.disconnect();
+        }
+      };
+
       // Execution state tracking for diagnostics
       let isCheckingPositions = false;
       let lastCheckStartTime = null;
@@ -1139,6 +1175,8 @@ async function startServer() {
       setTimeout(() => {
         // Run immediately at :30 seconds
         (async () => {
+          await manageStreamConnection();
+
           const now = new Date();
           const timeStr = now.toLocaleTimeString('en-US', { 
             timeZone: 'America/New_York', 
@@ -1188,6 +1226,8 @@ async function startServer() {
         // Then run every minute at :30 seconds
         if (!positionCheckInterval) {
           positionCheckInterval = setInterval(async () => {
+            await manageStreamConnection();
+
             const now = new Date();
             const timeStr = now.toLocaleTimeString('en-US', { 
               timeZone: 'America/New_York', 

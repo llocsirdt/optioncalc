@@ -747,11 +747,22 @@ class BacktestController {
             previousBBScores['60m'] = bbScore60m;
           }
 
+          // Find the aggregated candle for this timestamp
+          const aggregatedCandle = this.aggregatedAnalysis?.candles?.find(c => c.datetime === currentCandle.datetime);
+          
+          // Debug: Log bbSum for first few minutes
+          if ((hour === 9 && minute <= 40) && aggregatedCandle) {
+            console.log(`   🔍 DEBUG bbSum at ${timestamp}: ${aggregatedCandle.bbSum?.toFixed(2) || 'N/A'} (1m: ${aggregatedCandle.bbScore?.toFixed(2)}, 5m: ${aggregatedCandle.bbScore5m?.toFixed(2) || 'null'}, 15m: ${aggregatedCandle.bbScore15m?.toFixed(2) || 'null'})`);
+          }
+          
           const analysisForStrategy = {
             '1m': { close: currentCandle.close, bbScore: bbScore1m, bbScoreDelta: bbScoreDelta1m, trendScore: trendScore1m },
             '5m': { close: candle5m.close, bbScore: bbScore5m, bbScoreDelta: bbScoreDelta5m, trendScore: trendScore5m },
             '15m': { close: candle15m.close, bbScore: bbScore15m, bbScoreDelta: bbScoreDelta15m, trendScore: trendScore15m },
-            '60m': { close: candle60m.close, bbScore: bbScore60m, bbScoreDelta: bbScoreDelta60m, trendScore: trendScore60m }
+            '60m': { close: candle60m.close, bbScore: bbScore60m, bbScoreDelta: bbScoreDelta60m, trendScore: trendScore60m },
+            aggregated: aggregatedCandle ? {
+              candles: [aggregatedCandle] // Wrap in array to match production format
+            } : null
           };
 
           const applyStateUpdates = (next = {}) => {

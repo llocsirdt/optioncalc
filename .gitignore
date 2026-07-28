@@ -10,6 +10,23 @@ SCHWAB_SETUP_UNSAFE.md
 restart-proxy.sh
 schwab-proxy.zip
 
+# Deployment build artifacts
+schwab-proxy-deploy.zip
+
+# Backtest/strategy output files (root-level)
+strategy-analysis-truly-fixed-*.json
+strategy-comparison-*.json
+
+# Backtest config/state snapshots
+backtest-configs/
+
+# Backtest result logs (not covered by tests/backtest/backtest-*.json patterns below)
+tests/backtest/*-results.txt
+tests/backtest/*.csv
+tests/backtest/algorithm-test-results.txt
+tests/backtest/signal-analysis.txt
+tests/backtest/pricetrail-validation.txt
+
 # Files to block but need to be uncommented for dev/debug at times
 DEV_ENDPOINTS_GUIDE.md
 API_SAMPLES.md
@@ -25,11 +42,7 @@ server/src/persistence/positions-*.json
 server/nodemon.json
 
 # Backtest output files (large JSON files with historical data)
-tests/backtest/backtest-*.json
-tests/backtest/backtest-actions-*.json
-tests/backtest/production-analysis-*.json
-tests/backtest/backtest-data/
-tests/backtest/backtest-actions/
+tests/backtest/
 
 # Node.js dependencies
 node_modules/

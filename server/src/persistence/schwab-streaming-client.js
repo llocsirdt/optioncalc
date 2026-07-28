@@ -339,9 +339,26 @@ class SchwabStreamingClient extends EventEmitter {
   }
 
   /**
+   * Returns true if current wall-clock time is within streaming hours (Mon-Fri 9:10 AM - 4:10 PM ET)
+   */
+  _isWithinStreamingHours() {
+    const now = new Date();
+    const estDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const day = estDate.getDay();
+    if (day < 1 || day > 5) return false;
+    const totalMinutes = estDate.getHours() * 60 + estDate.getMinutes();
+    return totalMinutes >= 550 && totalMinutes <= 970; // 9:10 AM - 4:10 PM ET
+  }
+
+  /**
    * Handle reconnection logic
    */
   handleReconnect() {
+    if (!this._isWithinStreamingHours()) {
+      console.log('🌊 Outside streaming hours - skipping reconnect until market opens');
+      return;
+    }
+
     this.reconnectAttempts++;
     // Exponential backoff: 2s, 4s, 8s, 16s, 32s, then 60s max
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60000);
@@ -370,13 +387,27 @@ class SchwabStreamingClient extends EventEmitter {
             console.log('🌊 ✅ Streaming credentials refreshed');
           }
           
+          // Capture symbols before connecting (subscriptions map may be modified during connect)
+          const symbolsToResubscribe = Array.from(this.subscriptions.keys());
+
           await this.connect(this.config);
           
-          // Re-subscribe to previous subscriptions
-          const symbols = Array.from(this.subscriptions.keys());
-          if (symbols.length > 0) {
-            console.log(`🌊 🔄 Re-subscribing to ${symbols.length} symbols...`);
-            this.subscribeCharts(symbols);
+          // Wait for server-side login ACK before sending SUBS — otherwise the server
+          // rejects the subscription with "STREAM CONNECTION NOT FOUND"
+          if (symbolsToResubscribe.length > 0) {
+            await new Promise((resolve) => {
+              const timeout = setTimeout(() => {
+                console.warn('🌊 ⚠️ Timed out waiting for login ACK before re-subscribing');
+                resolve();
+              }, 10000);
+
+              this.once('authenticated', () => {
+                clearTimeout(timeout);
+                console.log(`🌊 🔄 Re-subscribing to ${symbolsToResubscribe.length} symbols...`);
+                this.subscribeCharts(symbolsToResubscribe);
+                resolve();
+              });
+            });
           }
           
           console.log('🌊 ✅ Reconnection successful');

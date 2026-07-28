@@ -449,39 +449,12 @@ function aggregateToTimeframe(oneMinCandles, targetMinutes) {
   for (const [key, candles] of groups.entries()) {
     if (candles.length === 0) continue;
     
-    // Candles are sorted newest first, so reverse for aggregation
+    // Candles are sorted oldest first from API, but may be mixed in groups
     const sorted = [...candles].sort((a, b) => a.datetime - b.datetime);
     
-    // Calculate the proper boundary timestamp
-    // Use the first (oldest) candle in the group to determine the boundary
-    const firstCandle = sorted[0];
-    const firstDate = new Date(firstCandle.datetime);
-    
-    // Get EST time components
-    const estString = firstDate.toLocaleString('en-US', { 
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-    
-    // Parse EST components
-    const [datePart, timePart] = estString.split(', ');
-    const [month, day, year] = datePart.split('/');
-    const [hours, minutes] = timePart.split(':');
-    
-    // Calculate boundary minutes
-    const totalMinutes = parseInt(hours) * 60 + parseInt(minutes);
-    const boundaryMinutes = Math.floor(totalMinutes / targetMinutes) * targetMinutes;
-    const boundaryHours = Math.floor(boundaryMinutes / 60);
-    const boundaryMins = boundaryMinutes % 60;
-    
-    // Create ISO string in EST and convert to UTC timestamp
-    const estISOString = `${year}-${month}-${day}T${boundaryHours.toString().padStart(2, '0')}:${boundaryMins.toString().padStart(2, '0')}:00`;
-    const boundaryTimestamp = new Date(estISOString + '-05:00').getTime(); // EST is UTC-5
+    // Use the timestamp from the first candle in the group as the boundary
+    // The API already provides correct UTC timestamps that align to boundaries
+    const boundaryTimestamp = sorted[0].datetime;
     
     aggregated.push({
       datetime: boundaryTimestamp,
@@ -500,25 +473,8 @@ function aggregateToTimeframe(oneMinCandles, targetMinutes) {
 }
 
 /**
- * Filter candles to market hours only (9:30 AM - 4:00 PM ET)
- */
-function filterMarketHoursOnly(candles) {
-  return candles.filter(c => {
-    const d = new Date(c.datetime);
-    const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const hour = estDate.getHours();
-    const minute = estDate.getMinutes();
-    const totalMinutes = hour * 60 + minute;
-    
-    // Market hours: 9:30 AM (570 min) to 4:00 PM (960 min)
-    // 4:00 PM is market close, so we include up to 3:59 PM (959 min)
-    return totalMinutes >= 570 && totalMinutes < 960;
-  });
-}
-
-/**
  * Create historical working data for a specific date (backtest mode)
- * Matches fetchSeedData behavior exactly: 5m/15m/30m end on prior day, market hours only
+ * Simplified approach: Fetch only 1m candles and aggregate to all other timeframes
  * @param {string} symbol - Symbol to fetch data for
  * @param {string} date - Date in YYYY-MM-DD format (the backtest date)
  */
@@ -530,231 +486,185 @@ async function createHistoricalWorkingData(symbol, date) {
   
   // Parse backtest date
   const [year, month, day] = date.split('-').map(Number);
-  const backtestDateObj = new Date(year, month - 1, day, 12, 0, 0); // Noon to avoid timezone issues
+  const backtestDateObj = new Date(year, month - 1, day, 12, 0, 0);
   
-  // Calculate prior day (for 5m, 15m, 30m endDate)
-  const priorDayObj = new Date(year, month - 1, day - 1, 12, 0, 0);
-  
-  // Ensure prior day lands on a trading day (skip weekends)
-  while (priorDayObj.getDay() === 0 || priorDayObj.getDay() === 6) {
-    priorDayObj.setDate(priorDayObj.getDate() - 1);
-  }
-  
-  const priorDayMs = priorDayObj.getTime();
-  
-  const historicalData = {};
-  
-  // 1. Fetch 1 day of 5m candles ending on PRIOR day (not backtest day)
-  console.log(`🕯️   Fetching 5m (1 day ending ${priorDayObj.toISOString().split('T')[0]})...`);
-  const data5m = await marketClient.priceHistory(apiSymbol, {
-    periodType: 'day',
-    period: 1,
-    frequencyType: 'minute',
-    frequency: 5,
-    endDate: priorDayMs
-  });
-  let candles5m = (data5m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-  candles5m = filterMarketHoursOnly(candles5m);
-  candles5m.sort((a, b) => b.datetime - a.datetime);
-  candles5m = candles5m.map(c => ({ ...c, timeEST: toESTTime(c.datetime) }));
-  
-  historicalData['5m'] = {
-    candles: candles5m,
-    count: candles5m.length,
-    timeframe: '5m',
-    raw: true
-  };
-  console.log(`🕯️   5m: ${candles5m.length} candles`);
-  
-  // 2. Fetch 5 days of 15m candles ending on PRIOR day
-  console.log(`🕯️   Fetching 15m (5 days ending ${priorDayObj.toISOString().split('T')[0]})...`);
-  const data15m = await marketClient.priceHistory(apiSymbol, {
-    periodType: 'day',
-    period: 5,
-    frequencyType: 'minute',
-    frequency: 15,
-    endDate: priorDayMs
-  });
-  let candles15m = (data15m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-  candles15m = filterMarketHoursOnly(candles15m);
-  candles15m.sort((a, b) => b.datetime - a.datetime);
-  
-  // Filter to match production's date range (keep only last 4 days)
-  if (candles15m.length > 0) {
-    const cutoffDate = new Date(backtestDateObj);
-    cutoffDate.setDate(cutoffDate.getDate() - 4);
-    cutoffDate.setHours(0, 0, 0, 0);
-    
-    candles15m = candles15m.filter(c => {
-      const candleDate = new Date(c.datetime);
-      const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
-      return candleDateOnly >= cutoffDate;
-    });
-  }
-  candles15m = candles15m.map(c => ({ ...c, timeEST: toESTTime(c.datetime) }));
-  
-  historicalData['15m'] = {
-    candles: candles15m,
-    count: candles15m.length,
-    timeframe: '15m',
-    raw: true
-  };
-  console.log(`🕯️   15m: ${candles15m.length} candles`);
-  
-  // 3. Fetch 5 days of 30m candles ending on PRIOR day
-  console.log(`🕯️   Fetching 30m (5 days ending ${priorDayObj.toISOString().split('T')[0]})...`);
-  const data30m = await marketClient.priceHistory(apiSymbol, {
-    periodType: 'day',
-    period: 5,
-    frequencyType: 'minute',
-    frequency: 30,
-    endDate: priorDayMs
-  });
-  const unfiltered30m = (data30m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-  let candles30m = [...unfiltered30m];
-  
-  // Filter to market hours only (9:30 AM - 4:00 PM ET)
-  candles30m = filterMarketHoursOnly(candles30m);
-  // Sort newest first
-  candles30m.sort((a, b) => b.datetime - a.datetime);
-  
-  // Filter to match production's date range (keep only last 4 days)
-  if (candles30m.length > 0) {
-    const cutoffDate = new Date(backtestDateObj);
-    cutoffDate.setDate(cutoffDate.getDate() - 4);
-    cutoffDate.setHours(0, 0, 0, 0);
-    
-    candles30m = candles30m.filter(c => {
-      const candleDate = new Date(c.datetime);
-      const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
-      return candleDateOnly >= cutoffDate;
-    });
-    
-    // Check if cutoff filter left too few trading days - if so, restore full unfiltered range
-    const unique30mDates = new Set(candles30m.map(c => new Date(c.datetime).toDateString()));
-    if (unique30mDates.size < 3) {
-      console.log(`🕯️   ⚠️ 30m cutoff filter left only ${unique30mDates.size} trading day(s); restoring full seed range`);
-      candles30m = [...unfiltered30m]; // Restore UNFILTERED data (no market hours filter)
-    }
-  }
-  candles30m = candles30m.map(c => ({ ...c, timeEST: toESTTime(c.datetime) }));
-  
-  historicalData['30m'] = {
-    candles: candles30m,
-    count: candles30m.length,
-    timeframe: '30m',
-    raw: true
-  };
-  console.log(`🕯️   30m: ${candles30m.length} candles`);
-  
-  // 4. Fetch 2 days of 1m candles ending on BACKTEST day (includes both prior and backtest day)
-  console.log(`🕯️   Fetching 1m (2 days ending ${date})...`);
+  // Fetch 5 days of 1m candles to ensure we have enough historical data
+  // This covers the backtest day plus sufficient prior days for indicator calculations
+  console.log(`🕯️   Fetching 1m candles (5 days ending ${date})...`);
   const data1m = await marketClient.priceHistory(apiSymbol, {
     periodType: 'day',
-    period: 2,
+    period: 5,
     frequencyType: 'minute',
     frequency: 1,
     endDate: backtestDateObj.getTime()
   });
+  
+  // Filter out zero candles and keep in original order (oldest first from API)
   let candles1m = (data1m.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-  candles1m = filterMarketHoursOnly(candles1m);
-  // Do NOT sort - fetchSeedData doesn't sort 1m, API returns them in correct order
+  
+  // Add timeEST to all candles
   candles1m = candles1m.map(c => ({ ...c, timeEST: toESTTime(c.datetime) }));
   
-  historicalData['1m'] = {
-    candles: candles1m,
-    count: candles1m.length,
-    timeframe: '1m',
-    raw: true
-  };
-  console.log(`🕯️   1m: ${candles1m.length} candles`);
+  console.log(`🕯️   1m: ${candles1m.length} candles (raw)`);
   
-  // Build 1h from 30m data
-  historicalData['1h'] = {
-    timeframe: '1h',
-    candles: aggregate30mTo60m(historicalData['30m'].candles),
-    count: 0,
-    raw: true
-  };
-  historicalData['1h'].count = historicalData['1h'].candles.length;
+  // Filter to market hours BEFORE aggregation (9:30 AM - 4:00 PM ET)
+  // ALL data should be market hours only - no extended hours
+  candles1m = candles1m.filter(c => {
+    const d = new Date(c.datetime);
+    const estDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const hour = estDate.getHours();
+    const minute = estDate.getMinutes();
+    const totalMinutes = hour * 60 + minute;
+    // Market hours: 9:30 AM (570 min) to 4:00 PM (960 min)
+    // 4:00 PM is market close, so we include up to 3:59 PM (959 min)
+    return totalMinutes >= 570 && totalMinutes < 960;
+  });
   
-  // Add 60m alias
-  historicalData['60m'] = {
-    ...historicalData['1h'],
-    timeframe: '60m'
-  };
+  console.log(`🕯️   1m: ${candles1m.length} candles (market hours only)`);
   
-  console.log(`🕯️ ✅ Historical data loaded for ${symbol} on ${date}`);
-  return historicalData;
-}
-
-// Old implementation removed - replaced with exact fetchSeedData match above
-async function createHistoricalWorkingDataOld(symbol, date) {
-  // This old version is kept for reference but not used
-  const indexSymbols = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
-  const apiSymbol = symbol.startsWith('$') ? symbol : (indexSymbols.includes(symbol) ? `$${symbol}` : symbol);
+  // Store complete market-hours 1m for 30m restore and 60m aggregation
+  const unfilteredMarketHours1m = [...candles1m];
   
-  console.log(`🕯️ Fetching historical candles for backtest on ${date}`);
+  // Aggregate 1m to higher timeframes
+  console.log(`🕯️   Aggregating 1m to higher timeframes...`);
+  let candles5m = aggregateToTimeframe(candles1m, 5);
+  let candles15m = aggregateToTimeframe(candles1m, 15);
+  let candles30m = aggregateToTimeframe(candles1m, 30);
+  let candles60m = aggregateToTimeframe(candles1m, 60);
   
-  const historicalData = {};
+  // Filter to match fetchSeedData's date ranges
+  // Identify actual trading days from the 1m data (handles weekends AND holidays)
+  const tradingDays = [...new Set(unfilteredMarketHours1m.map(c => {
+    const d = new Date(c.datetime);
+    return d.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+  }))].sort((a, b) => new Date(b) - new Date(a)); // newest first
   
-  // Fetch each timeframe with appropriate period to match fetchSeedData
-  // 1m: 2 days, 5m: 1 day, 15m: 5 days, 30m: 5 days
-  const timeframes = [
-    { name: '1m', minutes: 1, days: 2 },
-    { name: '5m', minutes: 5, days: 1 },
-    { name: '15m', minutes: 15, days: 5 },
-    { name: '30m', minutes: 30, days: 5 }
-  ];
+  console.log(`🕯️   Detected ${tradingDays.length} trading days in 1m data`);
   
-  for (const tf of timeframes) {
-    try {
-      console.log(`🕯️   Fetching ${tf.name} (${tf.days} day${tf.days > 1 ? 's' : ''} ending ${date})...`);
-      const data = await marketClient.priceHistory(apiSymbol, {
-        periodType: 'day',
-        period: tf.days,
-        frequencyType: 'minute',
-        frequency: tf.minutes,
-        endDate: new Date(date).getTime(),
-        needExtendedHoursData: false,
-        needPreviousClose: true
-      });
-      
-      let candles = (data.candles || []).map(c => ({
-        ...c,
-        timeEST: toESTTime(c.datetime)
-      }));
-      
-      // Sort newest first
-      candles.sort((a, b) => b.datetime - a.datetime);
-      
-      historicalData[tf.name] = {
-        candles: candles,
-        count: candles.length,
-        timeframe: tf.name,
-        raw: true
-      };
-      
-      console.log(`🕯️   ${tf.name}: ${candles.length} candles`);
-    } catch (error) {
-      console.error(`🕯️ ❌ Failed to fetch historical ${tf.name}:`, error.message);
-      historicalData[tf.name] = { candles: [], count: 0, error: error.message };
-    }
+  // Find the prior trading day (the day before backtest date that has market data)
+  const backtestDateStr = backtestDateObj.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+  const priorDayStr = tradingDays.find(d => new Date(d) < new Date(backtestDateStr));
+  const priorDayObj = priorDayStr ? new Date(priorDayStr + ' 12:00:00') : new Date(year, month - 1, day - 1, 12, 0, 0);
+  
+  console.log(`🕯️   Prior trading day: ${priorDayObj.toLocaleDateString('en-US', { timeZone: 'America/New_York' })}`);
+  
+  // 1m: Keep only last 2 trading days (prior day + backtest day)
+  // This matches fetchSeedData which fetches period=2 ending on backtest date
+  const priorDayStart1m = new Date(priorDayObj);
+  priorDayStart1m.setHours(0, 0, 0, 0);
+  const backtestDayEnd = new Date(backtestDateObj);
+  backtestDayEnd.setHours(23, 59, 59, 999);
+  candles1m = candles1m.filter(c => {
+    const candleDate = new Date(c.datetime);
+    const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+    return candleDateOnly >= priorDayStart1m && candleDateOnly <= backtestDayEnd;
+  });
+  // Sort newest-first for consistency across all timeframes
+  candles1m.sort((a, b) => b.datetime - a.datetime);
+  console.log(`🕯️   1m: ${candles1m.length} candles (after date filter)`);
+  
+  // 5m: Keep candles from prior day through backtest day (for aggregated analysis)
+  // Note: fetchSeedData only uses prior day, but we need backtest day for aggregation
+  const priorDayStart = new Date(priorDayObj);
+  priorDayStart.setHours(0, 0, 0, 0);
+  const backtestDayEnd5m = new Date(backtestDateObj);
+  backtestDayEnd5m.setHours(23, 59, 59, 999);
+  candles5m = candles5m.filter(c => {
+    const candleDate = new Date(c.datetime);
+    const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+    return candleDateOnly >= priorDayStart && candleDateOnly <= backtestDayEnd5m;
+  });
+  // Sort newest first to match fetchSeedData
+  candles5m.sort((a, b) => b.datetime - a.datetime);
+  
+  // 15m and 30m: Keep last 4 days before backtest date, plus backtest day for aggregation
+  const fourDaysAgo = new Date(backtestDateObj);
+  fourDaysAgo.setDate(fourDaysAgo.getDate() - 4);
+  fourDaysAgo.setHours(0, 0, 0, 0);
+  const backtestDayEnd15m = new Date(backtestDateObj);
+  backtestDayEnd15m.setHours(23, 59, 59, 999);
+  
+  candles15m = candles15m.filter(c => {
+    const candleDate = new Date(c.datetime);
+    const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+    return candleDateOnly >= fourDaysAgo && candleDateOnly <= backtestDayEnd15m;
+  });
+  // Sort newest first to match fetchSeedData
+  candles15m.sort((a, b) => b.datetime - a.datetime);
+  
+  const priorDayEnd30m = new Date(priorDayObj);
+  priorDayEnd30m.setHours(23, 59, 59, 999);
+  candles30m = candles30m.filter(c => {
+    const candleDate = new Date(c.datetime);
+    const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+    return candleDateOnly >= fourDaysAgo && candleDateOnly <= priorDayEnd30m;
+  });
+  // Sort newest first to match fetchSeedData
+  candles30m.sort((a, b) => b.datetime - a.datetime);
+  
+  // Check if 30m has fewer than 3 trading days - if so, keep all candles (restore logic)
+  const unique30mDates = new Set(candles30m.map(c => new Date(c.datetime).toDateString()));
+  if (unique30mDates.size < 3) {
+    console.log(`🕯️   ⚠️ 30m filter left only ${unique30mDates.size} trading day(s); keeping all available candles`);
+    // Restore from complete market-hours 1m candles (no extended hours)
+    candles30m = aggregateToTimeframe(unfilteredMarketHours1m, 30);
+    candles30m.sort((a, b) => b.datetime - a.datetime);
   }
   
-  // Build 1h from 30m data
-  historicalData['1h'] = {
-    timeframe: '1h',
-    candles: aggregate30mTo60m(historicalData['30m'].candles),
-    count: 0,
-    raw: true
-  };
-  historicalData['1h'].count = historicalData['1h'].candles.length;
+  // 60m: Aggregate from the filtered 30m candles
+  const priorDayEnd60m = new Date(priorDayObj);
+  priorDayEnd60m.setHours(23, 59, 59, 999);
+  candles60m = aggregateToTimeframe(unfilteredMarketHours1m, 60).filter(c => {
+    const candleDate = new Date(c.datetime);
+    const candleDateOnly = new Date(candleDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' }));
+    return candleDateOnly >= fourDaysAgo && candleDateOnly <= priorDayEnd60m;
+  });
+  // Sort newest first to match fetchSeedData
+  candles60m.sort((a, b) => b.datetime - a.datetime);
   
-  // Add 60m alias
-  historicalData['60m'] = {
-    ...historicalData['1h'],
-    timeframe: '60m'
+  console.log(`🕯️   5m: ${candles5m.length} candles`);
+  console.log(`🕯️   15m: ${candles15m.length} candles`);
+  console.log(`🕯️   30m: ${candles30m.length} candles`);
+  console.log(`🕯️   60m: ${candles60m.length} candles`);
+  
+  // Build historical data structure
+  const historicalData = {
+    '1m': {
+      candles: candles1m,
+      count: candles1m.length,
+      timeframe: '1m',
+      raw: true
+    },
+    '5m': {
+      candles: candles5m,
+      count: candles5m.length,
+      timeframe: '5m',
+      raw: true
+    },
+    '15m': {
+      candles: candles15m,
+      count: candles15m.length,
+      timeframe: '15m',
+      raw: true
+    },
+    '30m': {
+      candles: candles30m,
+      count: candles30m.length,
+      timeframe: '30m',
+      raw: true
+    },
+    '1h': {
+      candles: candles60m,
+      count: candles60m.length,
+      timeframe: '1h',
+      raw: true
+    },
+    '60m': {
+      candles: candles60m,
+      count: candles60m.length,
+      timeframe: '60m',
+      raw: true
+    }
   };
   
   console.log(`🕯️ ✅ Historical data loaded for ${symbol} on ${date}`);
@@ -1279,6 +1189,7 @@ function createAggregatedAnalysis(candleData) {
   
   console.log(`🔄 Creating aggregated analysis from ${candles1m.length} 1m candles`);
   
+  let debugCount = 0;
   const aggregatedCandles = candles1m.map(candle1m => {
     const timestamp1m = candle1m.datetime;
     
@@ -1294,6 +1205,10 @@ function createAggregatedAnalysis(candleData) {
       if (candle5m) {
         bbScore5m = candle5m.bbScore;
         trendScore5m = candle5m.trendScore;
+      } else if (debugCount < 3) {
+        console.log(`🔍 No 5m match for 1m timestamp ${new Date(timestamp1m).toISOString()}`);
+        console.log(`   First 5m candle: ${new Date(candles5m[0]?.datetime).toISOString()}`);
+        debugCount++;
       }
     }
     

@@ -112,6 +112,11 @@ const strategies = [
     name: 'Price Trail v3',
     open: 'strategyPriceTrailv3Open',
     cover: 'strategyPriceTrailv3Cover'
+  },
+  {
+    name: 'Aggregate Scores',
+    open: 'strategyAggregateScoresOpen',
+    cover: 'strategyAggregateScoresCover'
   }
 ];
 
