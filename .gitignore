@@ -45,6 +45,9 @@ server/nodemon.json
 # Backtest output files (large JSON files with historical data)
 tests/backtest/
 
+# Superseded scratch debug/analysis scripts
+tests/archive/
+
 # Node.js dependencies
 node_modules/
 npm-debug.log*
