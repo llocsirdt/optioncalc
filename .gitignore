@@ -8,10 +8,11 @@
 # Files with sensitive credentials
 SCHWAB_SETUP_UNSAFE.md
 restart-proxy.sh
-schwab-proxy.zip
+schwab-proxy*.zip
 
 # Deployment build artifacts
 schwab-proxy-deploy.zip
+server/build-info.json
 
 # Backtest/strategy output files (root-level)
 strategy-analysis-truly-fixed-*.json

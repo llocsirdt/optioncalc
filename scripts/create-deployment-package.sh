@@ -1,61 +1,55 @@
 #!/bin/bash
-# Create deployment ZIP for Elastic Beanstalk
+# Create deployment ZIP for Elastic Beanstalk.
+# Packages the ACTUAL working tree of server/ (including any uncommitted
+# local edits — run `git status` first if you only want committed code),
+# stamped with a build-info.json recording exactly what was packaged so
+# GET /health on the deployed server can prove what's actually running
+# instead of having to infer it from behavior.
+set -euo pipefail
 
-echo "🚀 Creating Schwab Proxy deployment package..."
+cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
+SERVER_DIR="$REPO_ROOT/server"
+OUTPUT_ZIP="$REPO_ROOT/schwab-proxy-deploy.zip"
 
-# Create deployment directory
-DEPLOY_DIR="schwab-proxy-deploy"
-rm -rf $DEPLOY_DIR
-mkdir $DEPLOY_DIR
+echo "Writing server/build-info.json..."
+GIT_COMMIT="$(git rev-parse HEAD)"
+GIT_COMMIT_SHORT="$(git rev-parse --short HEAD)"
+GIT_DIRTY="clean"
+if [ -n "$(git status --porcelain)" ]; then
+  GIT_DIRTY="dirty (uncommitted changes present at package time)"
+fi
+PACKAGED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-# Copy necessary files
-echo "📁 Copying files..."
-cp package.json $DEPLOY_DIR/
-cp proxy-server-sdk.js $DEPLOY_DIR/
-
-# Create .ebignore to exclude unnecessary files
-echo "📝 Creating .ebignore..."
-cat > $DEPLOY_DIR/.ebignore << EOF
-.env
-.env.local
-.env.*.local
-node_modules
-.git
-.gitignore
-*.log
-.DS_Store
-README.md
-.nyc_output
-coverage
-.nyc_output
-.cache
-dist
-build
+cat > "$SERVER_DIR/build-info.json" << EOF
+{
+  "gitCommit": "$GIT_COMMIT",
+  "gitCommitShort": "$GIT_COMMIT_SHORT",
+  "gitStatus": "$GIT_DIRTY",
+  "packagedAt": "$PACKAGED_AT"
+}
 EOF
-
-# Create .env.template (safe to include)
-echo "📝 Creating .env.template..."
-cat > $DEPLOY_DIR/.env.template << EOF
-# Schwab API Configuration
-SCHWAB_API_KEY=your-api-key-here
-SCHWAB_SECRET=your-secret-here
-SCHWAB_ACCESS_TOKEN=your-access-token-here
-PORT=3001
-EOF
-
-# Create ZIP file
-echo "📦 Creating ZIP file..."
-cd $DEPLOY_DIR
-zip -r ../schwab-proxy.zip . -x ".git/*" "node_modules/*" "*.log"
-cd ..
-
-# Clean up
-rm -rf $DEPLOY_DIR
-
-echo "✅ Deployment package created: schwab-proxy.zip"
-echo "📊 Package contents:"
-unzip -l schwab-proxy.zip
+cat "$SERVER_DIR/build-info.json"
 
 echo ""
-echo "🚀 Ready for Elastic Beanstalk deployment!"
-echo "📍 Upload schwab-proxy.zip to AWS Elastic Beanstalk"
+echo "Creating $OUTPUT_ZIP from the current server/ working tree..."
+rm -f "$OUTPUT_ZIP"
+cd "$SERVER_DIR"
+zip -r "$OUTPUT_ZIP" . \
+  -x "node_modules/*" \
+  -x "*.DS_Store" \
+  -x "src/persistence/chain-cache/*" \
+  -x "src/persistence/server-state.json" \
+  -x "src/persistence/server-state.backup.json" \
+  -x "src/persistence/positions.json" \
+  -x "src/persistence/positions-*.json" \
+  > /dev/null
+
+echo ""
+echo "Done: $OUTPUT_ZIP"
+unzip -l "$OUTPUT_ZIP"
+
+echo ""
+echo "After deploying, verify with:"
+echo "  curl https://your-eb-url/health"
+echo "and confirm the \"build\" field matches gitCommit=$GIT_COMMIT_SHORT above."

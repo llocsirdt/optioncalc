@@ -6,7 +6,7 @@
  * Handles finding and analyzing offsetting positions
  */
 
-const OffsetCalculations = require('../../../shared/offset-calculations');
+const OffsetCalculations = require('../../shared/offset-calculations');
 
 class OffsetManager {
   constructor() {

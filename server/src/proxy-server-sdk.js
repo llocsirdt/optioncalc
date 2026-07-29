@@ -131,12 +131,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Populated at deployment-package time (see scripts/create-deployment-package.sh)
+// with the exact git commit that was zipped up — not present in local dev,
+// since it's only written right before packaging, and gitignored so it never
+// goes stale in the repo itself. Lets /health prove exactly what's actually
+// running on a given environment instead of inferring it from behavior.
+let buildInfo = { note: 'no build-info.json found — likely running from source, not a packaged deploy' };
+try {
+  buildInfo = require('../build-info.json');
+} catch (err) {
+  // Expected in local dev — build-info.json is only generated when packaging for deploy.
+}
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     sdk: 'schwab-client-js',
+    build: buildInfo,
     endpoints: {
       marketData: true,
       trading: true
