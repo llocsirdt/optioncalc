@@ -313,6 +313,7 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
         <td>${trendScore}</td>
         <td>${bbScore}</td>
         <td>${bbDelta}</td>
+        <td>${formatPrice(candle.close)}</td>
         <td>${formatPrice(indicators.sma20)}</td>
         <td>${formatPrice(indicators.ema9)}</td>
         <td>${formatPrice(bb.upper)}</td>
@@ -320,7 +321,6 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
         <td>${formatPrice(candle.open)}</td>
         <td>${formatPrice(candle.high)}</td>
         <td>${formatPrice(candle.low)}</td>
-        <td>${formatPrice(candle.close)}</td>
         <td>${candleTime}</td>
       </tr>
     `;
@@ -365,16 +365,16 @@ function displayCandleAnalysis(divId, candleData, timeframe) {
             <tr>
               <th>Time</th>
               <th>Trend</th>
-              <th>BB Score</th>
+              <th>BB Scr</th>
               <th>BB Δ</th>
+              <th>Close</th>
               <th>SMA20</th>
               <th>EMA9</th>
-              <th>BB Upper</th>
-              <th>BB Lower</th>
+              <th>BBU</th>
+              <th>BBL</th>
               <th>Open</th>
               <th>High</th>
               <th>Low</th>
-              <th>Close</th>
               <th>Time</th>
             </tr>
           </thead>
@@ -460,13 +460,13 @@ function displayAggregatedAnalysis(divId, aggregatedData) {
             <tr>
               <th>Time</th>
               <th>Close</th>
-              <th>Trend Sum</th>
-              <th>BB Sum</th>
-              <th>1m Trend</th>
+              <th>Trend Σ</th>
+              <th>BB Σ</th>
+              <th>1m T</th>
               <th>1m BB</th>
-              <th>5m Trend</th>
+              <th>5m T</th>
               <th>5m BB</th>
-              <th>15m Trend</th>
+              <th>15m T</th>
               <th>15m BB</th>
             </tr>
           </thead>

@@ -819,22 +819,21 @@ async function createWorkingData(symbol, date = null) {
 }
 
 /**
- * Convert epoch milliseconds to EST datetime string (YYYY-MM-DD HH:MM:SS)
- * Used for duplicate detection - must include date to avoid treating same time on different days as duplicates
+ * Convert epoch milliseconds to a compact EST datetime string (MM/DD HH:MM)
+ * Used for duplicate detection - must include date to avoid treating same time on different days as duplicates.
+ * Omits year (all data is current-year intraday) and seconds (candles are minute-aligned) to keep UI tables narrow.
  */
 function toESTTime(datetime) {
   const date = new Date(datetime);
-  const estDateTime = date.toLocaleString('en-US', { 
+  const estDateTime = date.toLocaleString('en-US', {
     timeZone: 'America/New_York',
-    year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour12: false,
     hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
+    minute: '2-digit'
   });
-  return estDateTime;
+  return estDateTime.replace(', ', ' ');
 }
 
 /**
