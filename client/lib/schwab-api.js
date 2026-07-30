@@ -1,9 +1,12 @@
 // Schwab API Integration Functions
 
 // Proxy server configuration, Dynamically detect environment and set appropriate proxy URL
-// For local development: 'http://localhost:3001'
-// For AWS deployment: 'https://your-env-name.eba-region.amazonaws.com'
-const PROXY_URL = (window.location.href.startsWith('http') ? "http://llocsirdt-optioncalc.us-east-1.elasticbeanstalk.com" : "http://localhost:3001");
+// Local development opens the page as a file:// URL and hits the proxy directly
+// over HTTP on localhost:3001. Anything served over http(s) (e.g. the HTTPS
+// GitHub Pages site) must use HTTPS, or the browser blocks the request as mixed
+// content. The EB environment only serves plain HTTP, so we front it with a
+// CloudFront distribution that terminates TLS.
+const PROXY_URL = (window.location.href.startsWith('http') ? "https://d1kbxyxn33vpw2.cloudfront.net" : "http://localhost:3001");
 
 // Schwab API integration variables
 let schwabConnected = false;
