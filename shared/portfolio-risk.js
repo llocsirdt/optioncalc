@@ -118,6 +118,12 @@
     const netPutQty = normalizedLegs.filter(leg => leg.type === 'p').reduce((sum, leg) => sum + leg.qty, 0);
     const unboundedUpsideRisk = netCallQty < 0; // naked short calls: loss grows as price rises without limit
     const unboundedDownsideRisk = netPutQty < 0; // naked short puts: loss grows as price falls toward zero
+    // Net long calls: best case grows without limit as price rises, so the sampled
+    // profitPotential is just the value at the window's edge (an artifact of padding),
+    // NOT a real best case. Flagged so callers can DISPLAY "unbounded gain" instead of
+    // that misleading finite number. Deliberately does NOT overwrite profitPotential —
+    // rankCandidateScore still needs a finite value to rank candidates against.
+    const unboundedUpsideGain = netCallQty > 0;
 
     if (unboundedUpsideRisk || unboundedDownsideRisk) {
       lockedInProfit = -Infinity;
@@ -135,7 +141,37 @@
       bestCasePrice,
       unboundedUpsideRisk,
       unboundedDownsideRisk,
+      unboundedUpsideGain,
       totalCostBasis
+    };
+  }
+
+  // Builds the per-candidate display fields shared by every hedge search: the
+  // hedge's OWN standalone economics (its worst/best case in isolation — what
+  // the user reads as "this trade locks X / can make Y"), plus the baseline and
+  // combined portfolio worst/best case so the card can show the hedge's effect
+  // on the whole portfolio ("worst: A → was B"). Kept separate from the ranking
+  // fields (lockedInProfit/profitPotential/rankScore on the candidate stay the
+  // COMBINED values the sort relies on) so display and ranking don't fight.
+  // Each of the three carries an unbounded-gain / unbounded-loss flag so the
+  // card can print "Unbounded gain/loss" instead of a padding-dependent number.
+  function candidateDisplayFields(candidateLegs, baseline, combinedResult, options = {}) {
+    const solo = analyzePortfolioRisk(candidateLegs, options);
+    const lossFlag = (r) => !!(r.unboundedUpsideRisk || r.unboundedDownsideRisk);
+    const gainFlag = (r) => !!r.unboundedUpsideGain;
+    return {
+      hedgeLocked: solo.lockedInProfit,
+      hedgePotential: solo.profitPotential,
+      hedgeUnboundedGain: gainFlag(solo),
+      hedgeUnboundedLoss: lossFlag(solo),
+      baselineLocked: baseline.lockedInProfit,
+      baselinePotential: baseline.profitPotential,
+      baselineUnboundedGain: gainFlag(baseline),
+      baselineUnboundedLoss: lossFlag(baseline),
+      portfolioLocked: combinedResult.lockedInProfit,
+      portfolioPotential: combinedResult.profitPotential,
+      portfolioUnboundedGain: gainFlag(combinedResult),
+      portfolioUnboundedLoss: lossFlag(combinedResult)
     };
   }
 
@@ -337,7 +373,8 @@
         strikeGapWidth,
         lockedFraction: combinedMaxValue ? result.lockedInProfit / combinedMaxValue : 0,
         rankScore: rankCandidateScore(result.lockedInProfit, result.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
-        improvementOverBaseline
+        improvementOverBaseline,
+        ...candidateDisplayFields(candidateLegs, baseline, result, options)
       });
     }
 
@@ -537,7 +574,8 @@
           strikeGapWidth,
           lockedFraction: combinedMaxValue ? result.lockedInProfit / combinedMaxValue : 0,
           rankScore: rankCandidateScore(result.lockedInProfit, result.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
-          improvementOverBaseline
+          improvementOverBaseline,
+          ...candidateDisplayFields(wingLegs, baseline, result, options)
         });
       });
     });
@@ -629,7 +667,8 @@
         strikeGapWidth,
         lockedFraction: combinedMaxValue ? result.lockedInProfit / combinedMaxValue : 0,
         rankScore: rankCandidateScore(result.lockedInProfit, result.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
-        improvementOverBaseline
+        improvementOverBaseline,
+        ...candidateDisplayFields(candidateLegs, baseline, result, options)
       });
     }
 
@@ -697,7 +736,8 @@
     findShortStrike,
     gapRealizationFactor,
     rankCandidateScore,
-    compareCandidatesByTier
+    compareCandidatesByTier,
+    candidateDisplayFields
   };
 
   // Node.js / CommonJS

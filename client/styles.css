@@ -917,6 +917,35 @@ pre {
   white-space: nowrap;
 }
 
+/* Portfolio effect block: how the whole portfolio's worst/best case changes
+   with this hedge added, shown under the hedge's own standalone economics. */
+.trade-portfolio-effect {
+  margin: 4px 0;
+  padding-top: 4px;
+  border-top: 1px dashed #ccc;
+  white-space: nowrap;
+}
+
+.portfolio-effect-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #999;
+  margin-bottom: 2px;
+}
+
+.portfolio-effect-row {
+  font-size: 12px;
+  font-weight: bold;
+  color: #333;
+}
+
+.portfolio-effect-was {
+  font-size: 11px;
+  font-weight: 400;
+  color: #999;
+}
+
 .trade-total-profit {
   font-size: 12px;
   font-weight: bold;

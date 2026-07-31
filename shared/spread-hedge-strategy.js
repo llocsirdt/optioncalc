@@ -140,6 +140,7 @@
   function evaluateCandidate(label, family, positionLegs, candidateLegs, positionWidth, candidateWidth, meta) {
     const combinedLegs = positionLegs.concat(candidateLegs);
     const analysis = PortfolioRisk.analyzePortfolioRisk(combinedLegs);
+    const baseline = PortfolioRisk.analyzePortfolioRisk(positionLegs);
     const cost = candidateLegs.reduce((sum, leg) => sum + leg.cost, 0);
     const combinedMaxValue = positionWidth * 100 + candidateWidth * 100;
     const combinedWidth = positionWidth + candidateWidth;
@@ -156,7 +157,8 @@
       strikeGapWidth,
       lockedFraction: combinedMaxValue ? analysis.lockedInProfit / combinedMaxValue : 0,
       rankScore: PortfolioRisk.rankCandidateScore(analysis.lockedInProfit, analysis.profitPotential, combinedMaxValue, strikeGapWidth, combinedWidth),
-      meta
+      meta,
+      ...PortfolioRisk.candidateDisplayFields(candidateLegs, baseline, analysis)
     };
   }
 

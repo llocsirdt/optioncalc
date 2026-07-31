@@ -40,9 +40,20 @@ function sortWithConflictsLast(candidates, positionLegs) {
   });
 }
 
+// Worst case (a min) prints "Unbounded loss" when the position has naked short
+// exposure; best case (a max) prints "Unbounded gain" when it has net-long-call
+// upside — in both cases the underlying finite number is a sampling-window
+// artifact, not a real bound, so we show the flag instead.
+function formatWorstCase(value, unboundedLoss) {
+  return unboundedLoss ? 'Unbounded loss' : formatOffsetMoney(value);
+}
+function formatBestCase(value, unboundedGain) {
+  return unboundedGain ? 'Unbounded gain' : formatOffsetMoney(value);
+}
+
 function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass = '') {
-  const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.lockedInProfit ? 'cost-less-than-locked' : '';
-  const profitClass = candidate.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
+  const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.hedgeLocked ? 'cost-less-than-locked' : '';
+  const profitClass = candidate.hedgeLocked > 0 ? 'profit-positive' : 'profit-neutral';
   const hasOppositeLeg = candidateHasOppositeLeg(candidate.legs, positionLegs);
   // "family" (shift/width/same-side) only exists on the curated single-spread
   // candidates — the aggregate search has no such family, so fall back to
@@ -75,8 +86,13 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
         ${conflictNote}
       </div>
       <div class="trade-metrics">
-        <div class="trade-potential">Potential: ${formatOffsetMoney(candidate.profitPotential)}</div>
-        <div class="trade-locked-profit">Locked: ${formatOffsetMoney(candidate.lockedInProfit)}</div>
+        <div class="trade-locked-profit" title="This hedge trade's own guaranteed worst-case P&L, in isolation">Hedge locked: ${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)}</div>
+        <div class="trade-potential" title="This hedge trade's own best-case P&L, in isolation">Hedge potential: ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)}</div>
+        <div class="trade-portfolio-effect" title="Your whole portfolio's worst/best case after adding this hedge, versus before">
+          <div class="portfolio-effect-title">Portfolio with hedge</div>
+          <div class="portfolio-effect-row">Worst: ${formatWorstCase(candidate.portfolioLocked, candidate.portfolioUnboundedLoss)} <span class="portfolio-effect-was">(was ${formatWorstCase(candidate.baselineLocked, candidate.baselineUnboundedLoss)})</span></div>
+          <div class="portfolio-effect-row">Best: ${formatBestCase(candidate.portfolioPotential, candidate.portfolioUnboundedGain)} <span class="portfolio-effect-was">(was ${formatBestCase(candidate.baselinePotential, candidate.baselineUnboundedGain)})</span></div>
+        </div>
         <div class="trade-gap" title="Distance between the existing position's strikes and this candidate's short strike — the zone that has to be closed in to realize the upside above, not just the locked floor">Gap: ${candidate.strikeGapWidth} pts</div>
         <div class="trade-score ${profitClass}">Score: ${(candidate.rankScore * 100).toFixed(1)}%</div>
       </div>
