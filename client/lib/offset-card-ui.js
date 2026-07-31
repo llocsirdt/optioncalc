@@ -40,7 +40,7 @@ function sortWithConflictsLast(candidates, positionLegs) {
   });
 }
 
-function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs) {
+function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass = '') {
   const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.lockedInProfit ? 'cost-less-than-locked' : '';
   const profitClass = candidate.lockedInProfit > 0 ? 'profit-positive' : 'profit-neutral';
   const hasOppositeLeg = candidateHasOppositeLeg(candidate.legs, positionLegs);
@@ -65,7 +65,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
     : '';
 
   return `
-    <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass}"
+    <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass} ${extraClass}"
          onclick="${selectFnName}(${index}, this)"
          title="Click to select these options in the table">
       <div class="trade-description">
@@ -87,6 +87,89 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
 
 function renderOffsetCandidateCards(candidates, selectFnName, addFnName, positionLegs) {
   return candidates.map((c, index) => renderOffsetCandidateCard(c, index, selectFnName, addFnName, positionLegs)).join('');
+}
+
+// The three hedge categories the aggregate portfolio search produces, in fallback
+// order. Display order at render time is dynamic (best group first — see below);
+// this map only supplies labels.
+const HEDGE_GROUPS = {
+  'cover':     { label: 'Two-leg covers' },
+  'tail-risk': { label: 'Tail-risk hedges' },
+  'local-dip': { label: 'Valley hedges' },
+};
+
+// Classify a candidate into one of the three groups. tail-risk / local-dip carry
+// an explicit `family`; the plain aggregate 2-leg covers carry none (only a
+// `strategy` like bull_call_spread), so anything without a recognized family is a
+// cover.
+function getHedgeGroup(candidate) {
+  if (candidate.family === 'tail-risk') return 'tail-risk';
+  if (candidate.family === 'local-dip') return 'local-dip';
+  return 'cover';
+}
+
+// Total number of cards shown across all groups before "show more" is used.
+const HEDGE_GROUP_TOTAL_BUDGET = 20;
+
+// Renders the candidates split into per-type sections with headers, instead of one
+// flat intermingled list. Assumes `candidates` is already globally ranked (tier /
+// rankScore, conflicts last) — so a group's first appearance in that array is also
+// its best candidate, which lets us order the sections "best group first" just by
+// first-appearance order (no re-sorting). Each card keeps its ORIGINAL index into
+// `candidates`, because the select/add click handlers index back into the stored
+// flat array.
+function renderGroupedOffsetCandidateCards(candidates, selectFnName, addFnName, positionLegs) {
+  // Partition, preserving original index and within-group order.
+  const groups = new Map(); // key -> [{ candidate, index }]  (insertion order = best-group-first)
+  candidates.forEach((candidate, index) => {
+    const key = getHedgeGroup(candidate);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ candidate, index });
+  });
+
+  const activeGroups = [...groups.keys()];
+  const n = activeGroups.length;
+  if (n === 0) return '';
+
+  // Split the 20-card budget across active groups, giving any remainder to the
+  // earliest (best) groups: 1 group -> [20], 2 -> [10,10], 3 -> [7,7,6].
+  const base = Math.floor(HEDGE_GROUP_TOTAL_BUDGET / n);
+  const remainder = HEDGE_GROUP_TOTAL_BUDGET - base * n;
+  const capFor = (groupIndex) => base + (groupIndex < remainder ? 1 : 0);
+
+  return activeGroups.map((key, groupIndex) => {
+    const items = groups.get(key);
+    const cap = capFor(groupIndex);
+    const meta = HEDGE_GROUPS[key] || { label: key };
+
+    const cardsHtml = items.map(({ candidate, index }, i) => {
+      // Cards beyond the cap are rendered but hidden until "show more".
+      const extraClass = i < cap ? '' : 'hidden-extra';
+      return renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass);
+    }).join('');
+
+    const hiddenCount = Math.max(0, items.length - cap);
+    const moreBtn = hiddenCount > 0
+      ? `<button class="offset-group-more" onclick="toggleHedgeGroupExtra(this)" data-more="${hiddenCount}">Show ${hiddenCount} more</button>`
+      : '';
+
+    return `
+      <div class="offset-group ${key}" data-group="${key}">
+        <div class="offset-group-header">${meta.label} <span class="offset-group-count">(${items.length})</span></div>
+        <div class="offset-group-cards">${cardsHtml}</div>
+        ${moreBtn}
+      </div>
+    `;
+  }).join('');
+}
+
+// Reveals/hides the beyond-cap cards in a group (toggling `.expanded` on the
+// section; the CSS hides `.hidden-extra` cards only while not expanded).
+function toggleHedgeGroupExtra(button) {
+  const group = button.closest('.offset-group');
+  if (!group) return;
+  const expanded = group.classList.toggle('expanded');
+  button.textContent = expanded ? 'Show fewer' : `Show ${button.getAttribute('data-more')} more`;
 }
 
 // findAndClickOptionCell dispatches a real click per leg, which toggles that

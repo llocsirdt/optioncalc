@@ -91,8 +91,10 @@ function renderPortfolioRiskResults(analysis, positionLegs) {
   } else {
     // Same card layout/scoring as the "Risk Offsetting Opportunities" panel
     // (see offset-card-ui.js) so a candidate surfaced in both places is
-    // immediately recognizable as the same trade.
-    html += renderOffsetCandidateCards(candidates, 'selectPortfolioRiskCandidateInTable', 'loadPortfolioHedgeCandidate', positionLegs);
+    // immediately recognizable as the same trade — but grouped into per-type
+    // sections (two-leg covers / tail-risk / valley) with the best-scoring group
+    // first, rather than one flat intermingled list.
+    html += renderGroupedOffsetCandidateCards(candidates, 'selectPortfolioRiskCandidateInTable', 'loadPortfolioHedgeCandidate', positionLegs);
   }
 
   container.innerHTML = html;
