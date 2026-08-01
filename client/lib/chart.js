@@ -528,10 +528,14 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         const profitLossText = profitLoss >= 0 ? `+$${profitLoss.toFixed(2)}` : `-$${Math.abs(profitLoss).toFixed(2)}`;
         const profitLossColor = profitLoss >= 0 ? '#4CAF50' : '#F44336';
         
-        const labelText = `$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
+        // Top line is the underlying price (the x-axis value) this info reflects,
+        // then the position value and profit/loss at that price.
+        const labelText = `@ $${d.closingPrice.toFixed(2)}\n$${d.totalIntrinsicValue.toFixed(2)}\n${profitLossText}`;
         const labelX = xScale(d.closingPrice);
         //const labelY = yScale(d.totalIntrinsicValue) - 10;
-        const labelY = 345;
+        // Nudged up so the taller 3-line box (price/value/P&L) doesn't clip below
+        // the bottom of the drawing canvas.
+        const labelY = 337;
         
         // Add background rectangle first
         const textElement = interactionGroup.append("text")
@@ -551,8 +555,11 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
               .attr("x", labelX)
               .attr("dy", index === 0 ? "0" : "1.2em")
               .text(line);
-          
-          if (index === 1) {
+
+          if (index === 0) {
+            // Underlying price line — muted so the value/P&L stay the focus.
+            tspan.attr("fill", "#666").attr("font-size", "11px");
+          } else if (index === 2) {
             tspan.attr("fill", profitLossColor).attr("font-size", "12px");
           }
         });
@@ -567,6 +574,51 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .attr("y", bbox.y - 2)
             .attr("width", bbox.width + 4)
             .attr("height", bbox.height + 4);
+
+        // If a temp position exists, add a second box showing the value / P&L of
+        // the "with temp added" scenario at the same price, up near its own
+        // (green dotted) combined-cost line.
+        if (tempData && tempData.length > 0 && combinedCost !== null && combinedCost !== undefined) {
+            const tIdx = bisectDate(tempData, x0, 1);
+            const t0 = tempData[tIdx - 1];
+            const t1 = tempData[tIdx];
+            const tempD = (t0 && t1) ? (x0 - t0.closingPrice > t1.closingPrice - x0 ? t1 : t0) : (t1 || t0);
+            if (tempD) {
+                const tempPl = tempD.totalIntrinsicValue - combinedCost;
+                const tempPlText = tempPl >= 0 ? `+$${tempPl.toFixed(2)}` : `-$${Math.abs(tempPl).toFixed(2)}`;
+                const tempPlColor = tempPl >= 0 ? '#4CAF50' : '#F44336';
+                // Same 3-line format as the main box: underlying price / value / P&L.
+                const tempLabelText = `@ $${tempD.closingPrice.toFixed(2)}\n$${tempD.totalIntrinsicValue.toFixed(2)}\n${tempPlText}`;
+                const tempLabelY = yScale(combinedCost) - 30; // just above the green line
+
+                const tempTextEl = interactionGroup.append("text")
+                    .attr("class", "chart-label")
+                    .attr("x", labelX)
+                    .attr("y", tempLabelY)
+                    .attr("text-anchor", "middle")
+                    .attr("alignment-baseline", "middle");
+
+                tempLabelText.split('\n').forEach((line, index) => {
+                    const tspan = tempTextEl.append("tspan")
+                        .attr("x", labelX)
+                        .attr("dy", index === 0 ? "0" : "1.2em")
+                        .text(line);
+                    if (index === 0) {
+                        tspan.attr("fill", "#666").attr("font-size", "11px");
+                    } else if (index === 2) {
+                        tspan.attr("fill", tempPlColor).attr("font-size", "12px");
+                    }
+                });
+
+                const tempBbox = tempTextEl.node().getBBox();
+                interactionGroup.insert("rect", "text")
+                    .attr("class", "chart-label-bg")
+                    .attr("x", tempBbox.x - 2)
+                    .attr("y", tempBbox.y - 2)
+                    .attr("width", tempBbox.width + 4)
+                    .attr("height", tempBbox.height + 4);
+            }
+        }
     }
 
     // Add event listeners for both mouse and touch events
