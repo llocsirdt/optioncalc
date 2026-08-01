@@ -19,16 +19,13 @@ function getCurrentPortfolioLegs() {
 
 function getCurrentChainData() {
   // Reuses whatever chain data is already backing the "Live Options Chain" UI
-  // table (stashed in schwab-api.js's lastLiveChainData whenever live data
-  // polling refreshes it) instead of making an independent fetch — so this
-  // only ever analyzes against the exact same data the user can see on screen,
-  // and only while live data is actually enabled.
-  if (typeof liveDataEnabled === 'undefined' || !liveDataEnabled) {
-    throw new Error('Enable "Start Live Data" first — portfolio risk analysis only runs against the live chain data shown on screen.');
-  }
-
+  // table (stashed in schwab-api.js's lastLiveChainData whenever a chain snapshot
+  // loads) instead of making an independent fetch — so this only ever analyzes
+  // against the exact same data the user can see on screen. Works off a single
+  // snapshot too (e.g. the one auto-loaded outside market hours), so it no longer
+  // requires continuous live data to be enabled — just that a snapshot exists.
   if (!lastLiveChainData) {
-    throw new Error('No live chain data received yet — wait for the next live data update.');
+    throw new Error('No live chain data yet — waiting for the next update.');
   }
 
   const rawChainData = lastLiveChainData.raw;
@@ -100,9 +97,11 @@ function renderPortfolioRiskResults(analysis, positionLegs) {
   container.innerHTML = html;
 }
 
-async function analyzePortfolioRiskUI() {
+async function analyzePortfolioRiskUI(options = {}) {
   const container = document.getElementById('portfolio-risk-results');
-  if (container) container.innerHTML = '<p>Analyzing...</p>';
+  // On silent auto-refreshes (every live-data cycle) skip the "Analyzing..."
+  // placeholder so the panel updates in place instead of flickering.
+  if (!options.silent && container) container.innerHTML = '<p>Analyzing...</p>';
 
   try {
     const legs = getCurrentPortfolioLegs();
@@ -130,7 +129,12 @@ async function analyzePortfolioRiskUI() {
     portfolioRiskHedgeCandidates = candidates;
     renderPortfolioRiskResults({ baseline: analysis.baseline, candidates }, legs);
   } catch (err) {
-    if (container) container.innerHTML = `<p class="portfolio-risk-error">${err.message}</p>`;
+    // On a silent auto-refresh, leave the last good results in place rather than
+    // clobbering them with a transient error (e.g. a momentary chain/expiration
+    // mismatch between refresh cycles).
+    if (!options.silent && container) {
+      container.innerHTML = `<p class="portfolio-risk-error">${err.message}</p>`;
+    }
   }
 }
 

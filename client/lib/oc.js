@@ -2308,40 +2308,54 @@ function proceedWithLiveData() {
   }
 }
 
-// Start live data updates
-let liveDataInterval = null;
-function startLiveDataUpdates() {
-  if (liveDataInterval) {
-    clearInterval(liveDataInterval);
-  }
-  
-  // Initial candle analysis update
-  if (typeof startCandleAnalysisUpdates === 'function') {
-    startCandleAnalysisUpdates(currentSymbol, 10000); // Update every 10 seconds to match main data
-  }
-  
-  // Update every 10 seconds
-  liveDataInterval = setInterval(() => {
-    console.log('⏰ Live data interval check:', { liveDataEnabled, currentSymbol, schwabConnected });
-    if (liveDataEnabled && currentSymbol && schwabConnected) {
-      console.log('🔄 Triggering live data update for:', currentSymbol);
-      updateCalculatorWithLiveData(currentSymbol);
-    } else {
-      console.log('⏸️ Skipping live data update - conditions not met');
-    }
-  }, liveDataIntervalDuration);
+// Live data refresh loop. Instead of a fixed setInterval, each cycle schedules
+// the NEXT fetch only after the current one resolves — so the refresh rate is as
+// fast as the network/API round-trip allows — but two fetches never START less
+// than LIVE_DATA_MIN_GAP_MS apart, so a fast connection can't hammer Schwab's
+// rate limit. (Previously a flat 3s interval.)
+const LIVE_DATA_MIN_GAP_MS = 2000;
+let liveDataTimeout = null;
+let liveDataLoopActive = false;
 
-  // kick it off immediately
-  if (liveDataEnabled && currentSymbol && schwabConnected) {
-    updateCalculatorWithLiveData(currentSymbol);
+function startLiveDataUpdates() {
+  // Candle analysis runs on its own slower cadence, independent of this loop.
+  if (typeof startCandleAnalysisUpdates === 'function') {
+    startCandleAnalysisUpdates(currentSymbol, 10000);
   }
+
+  if (liveDataLoopActive) return; // already looping — don't stack cycles
+  liveDataLoopActive = true;
+
+  const runCycle = async () => {
+    if (!liveDataEnabled || !currentSymbol || !schwabConnected) {
+      liveDataLoopActive = false;
+      return;
+    }
+    const startedAt = Date.now();
+    try {
+      await updateCalculatorWithLiveData(currentSymbol);
+    } catch (err) {
+      console.error('Live data cycle error:', err);
+    }
+    if (!liveDataEnabled) {
+      liveDataLoopActive = false;
+      return;
+    }
+    // Space the next fetch at least MIN_GAP from this one's START, so a fast
+    // response doesn't fire back-to-back, but a slow one incurs no extra wait.
+    const wait = Math.max(0, LIVE_DATA_MIN_GAP_MS - (Date.now() - startedAt));
+    liveDataTimeout = setTimeout(runCycle, wait);
+  };
+
+  runCycle(); // immediate first fetch
 }
 
 // Stop live data updates
 function stopLiveDataUpdates() {
-  if (liveDataInterval) {
-    clearInterval(liveDataInterval);
-    liveDataInterval = null;
+  liveDataLoopActive = false;
+  if (liveDataTimeout) {
+    clearTimeout(liveDataTimeout);
+    liveDataTimeout = null;
   }
 
   // Stop candle analysis updates
@@ -2352,6 +2366,39 @@ function stopLiveDataUpdates() {
   // Don't let stale chain data be reused (e.g. by portfolio risk analysis)
   // once live data is turned off.
   lastLiveChainData = null;
+}
+
+// Auto-start live data on page load: ensure a Schwab connection, then during
+// market hours start the continuous refresh loop; outside market hours just load
+// a single snapshot so positions can still be analyzed against last-known data
+// (the user can hit "Start Live Data" to begin polling). Keeps the manual toggle
+// working exactly as before.
+async function autoStartLiveData() {
+  const symbolInput = document.getElementById('symbol-input');
+  currentSymbol = symbolInput ? symbolInput.value.trim().toUpperCase() : '';
+  if (!currentSymbol) return;
+
+  if (!schwabConnected && typeof testSchwabConnection === 'function') {
+    try { await testSchwabConnection(); } catch (e) { /* connection errors are logged in testSchwabConnection */ }
+  }
+  if (!schwabConnected) {
+    console.log('Auto live data: Schwab not connected — skipping initial load.');
+    return;
+  }
+
+  const marketOpen = typeof isMarketHours === 'function' && isMarketHours();
+  if (marketOpen) {
+    liveDataEnabled = true;
+    const toggleButton = document.getElementById('live-data-toggle');
+    if (toggleButton) {
+      toggleButton.textContent = 'Stop Live Data';
+      toggleButton.className = 'button-stop';
+    }
+    startLiveDataUpdates();
+  } else {
+    // Single snapshot; leave the toggle showing "Start Live Data".
+    await updateCalculatorWithLiveData(currentSymbol);
+  }
 }
 
 // Initialize slider event listeners
@@ -2393,6 +2440,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const symbol = document.getElementById('symbol-input')?.value.trim();
   const expiration = document.getElementById('expiration-dropdown')?.value;
   restoreAppropriateInput(symbol, expiration);
+
+  // If positions were restored, submit them so they're active (populates the
+  // aggregate risk curve). Portfolio risk then auto-runs once live data arrives
+  // (see autoStartLiveData, kicked off from the load handler below once the last
+  // symbol has been restored).
+  if (document.getElementById('textInput')?.value.trim()) {
+    try { processInput(); } catch (e) { console.error('Initial processInput failed:', e); }
+  }
 });
 
 // Helper function to restore appropriate input based on symbol and expiration
@@ -2941,10 +2996,12 @@ document.addEventListener('DOMContentLoaded', function() {
   console.log('🚀 Page loaded, initializing...');
   restoreLastSymbol();
   initSlider();
-  
-  // Auto-test connection on page load
-  console.log('🔄 Auto-testing connection on page load...');
-  testSchwabConnection();
+
+  // Ensure a Schwab connection and load live data automatically (continuous
+  // refresh loop during market hours, a single snapshot otherwise). Runs after
+  // restoreLastSymbol so it uses the correct symbol. Replaces the old standalone
+  // connection test — autoStartLiveData tests the connection itself.
+  autoStartLiveData();
   
   // Add event listener to save symbol when input changes
   const symbolInput = document.getElementById('symbol-input');

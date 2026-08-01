@@ -11,12 +11,15 @@ let brokerImportGroups = [];
 
 function toggleBrokerImportPanel() {
   const container = document.getElementById('broker-import-container');
-  const toggleButton = document.getElementById('broker-import-toggle');
-  if (!container || !toggleButton) return;
-
+  if (!container) return;
   const isHidden = container.style.display === 'none';
   container.style.display = isHidden ? '' : 'none';
-  toggleButton.textContent = isHidden ? 'Hide Import' : 'Show Import';
+}
+
+// Reveal the "additional options" panel (paste CSV + source select).
+function showBrokerImportPanel() {
+  const container = document.getElementById('broker-import-container');
+  if (container) container.style.display = '';
 }
 
 function parseCsvText(text) {
@@ -131,9 +134,20 @@ function runBrokerImport(csvText, sourceKey) {
   try {
     const result = buildOptionArrayFromCsv(csvText, sourceKey);
     brokerImportGroups = result.groups;
-    renderBrokerImportResults(result);
+
+    // Common case: a single position group — load it straight into the
+    // calculator so "choose file → Import" is all that's needed. Multiple
+    // groups (e.g. several expirations/underlyings) still show a picker.
+    if (result.groups.length === 1) {
+      renderBrokerImportResults(result);
+      loadBrokerImportGroupIntoTextarea(0);
+    } else {
+      showBrokerImportPanel(); // make sure the picker is visible
+      renderBrokerImportResults(result);
+    }
   } catch (err) {
     brokerImportGroups = [];
+    showBrokerImportPanel();
     if (container) container.innerHTML = `<p class="broker-import-error">${err.message}</p>`;
   }
 }
@@ -152,8 +166,11 @@ function importBrokerCsv() {
   } else if (pasteArea && pasteArea.value.trim()) {
     runBrokerImport(pasteArea.value, sourceKey);
   } else {
-    const container = document.getElementById('broker-import-results');
-    if (container) container.innerHTML = '<p class="broker-import-error">Choose a CSV file or paste CSV text first.</p>';
+    // No file and nothing pasted: open the additional panel so the user can
+    // paste CSV text or pick a source, rather than erroring.
+    showBrokerImportPanel();
+    const paste = document.getElementById('broker-csv-paste');
+    if (paste) paste.focus();
   }
 }
 

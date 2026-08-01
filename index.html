@@ -30,7 +30,7 @@
 <body>
 
 <div id="header">
-  <h1>Option Calc v3.0.1</h1>
+  <h1>Option Calc v3.1.0</h1>
   
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
@@ -48,11 +48,13 @@
   <div id="container-col1">
     <textarea id="textInput" placeholder="Enter option positions"></textarea>
 
-    <button id="broker-import-toggle" onclick="toggleBrokerImportPanel()">Show Import</button>
+    <div id="import-row">
+      <input type="file" id="broker-csv-file" accept=".csv">
+      <button onclick="importBrokerCsv()">Import CSV</button>
+    </div>
 
     <div id="broker-import-container" style="display: none;">
-      <h4>Import Brokerage CSV</h4>
-      <input type="file" id="broker-csv-file" accept=".csv">
+      <h4>Import options</h4>
       <textarea id="broker-csv-paste" placeholder="...or paste raw CSV here"></textarea><br>
       <label for="broker-source-select">Source:</label>
       <select id="broker-source-select">
@@ -89,9 +91,8 @@
     </div>
 
     <div id="portfolio-risk-container">
-      <h4>Analyze Portfolio Risk</h4>
-      <p>Finds the combined worst/best case across every position currently loaded above, and searches the live chain for trades that improve it.</p>
-      <button onclick="analyzePortfolioRiskUI()">Analyze Portfolio Risk</button>
+      <h4>Portfolio Risk</h4>
+      <p>Automatically finds the combined worst/best case across every position loaded above and searches the live chain for trades that improve it — refreshing as new data arrives.</p>
       <div id="portfolio-risk-results"></div>
     </div>
 

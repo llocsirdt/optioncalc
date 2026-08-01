@@ -1158,9 +1158,16 @@ pre {
   background-color: #9bff9b !important;
 }
 
-#broker-import-toggle {
-  display: block;
-  margin-left: auto;
+#import-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#import-row input[type="file"] {
+  flex: 1;
+  min-width: 0;
 }
 
 #broker-import-container {

@@ -12,7 +12,6 @@ const PROXY_URL = (window.location.href.startsWith('http') ? "https://d1kbxyxn33
 let schwabConnected = false;
 let currentSymbol = '';
 let liveDataEnabled = false;
-let liveDataIntervalDuration = 3000;
 
 // The raw chain data currently backing the "Live Options Chain" UI table —
 // stashed here so other features (e.g. portfolio risk analysis) can reuse the
@@ -953,6 +952,14 @@ async function updateCalculatorWithLiveData(symbol) {
         console.log('📈 Parsed options:', options);
         console.log('🔄 Calling updateOptionsChain with', options.length, 'options');
         updateOptionsChain(options);
+
+        // Re-run portfolio risk against the fresh chain, if positions are loaded.
+        // Silent so it doesn't flash "Analyzing..." on every refresh cycle.
+        if (typeof analyzePortfolioRiskUI === 'function' &&
+            typeof getCurrentPortfolioLegs === 'function' &&
+            getCurrentPortfolioLegs().length > 0) {
+          analyzePortfolioRiskUI({ silent: true });
+        }
       } else {
         // Handle case where chains API fails (common for index options like NDX)
         lastLiveChainData = null;
