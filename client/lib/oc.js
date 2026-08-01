@@ -2869,58 +2869,95 @@ function processInput() {
     }
     
     // Display the processed output
-    const formatCurve = (curve) => curve
-      .map(p => {
-        const diff = p.totalIntrinsicValue - fullCost;
-        const diffStr = diff >= 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
-        return `${p.closingPrice}: ${p.totalIntrinsicValue} (${diffStr})`;
-      })
-      .join('\n');
+
+    // Aggregate net put/call quantity at each strike, for the position columns
+    // in the curve table below.
+    const aggregateOptionsByStrike = (options) => {
+      const byStrike = new Map(); // strike -> { put, call }
+      (options || []).forEach(opt => {
+        if (!opt.type || opt.strike == null || opt.qty === 0) return;
+        if (!byStrike.has(opt.strike)) byStrike.set(opt.strike, { put: 0, call: 0 });
+        const entry = byStrike.get(opt.strike);
+        if (opt.type === 'c') entry.call += opt.qty;
+        else if (opt.type === 'p') entry.put += opt.qty;
+      });
+      return byStrike;
+    };
+
+    const signedQty = (q) => (q === 0 ? '' : (q > 0 ? `+${q}` : `${q}`));
+
+    // Exact position value at expiration for a given underlying price — the same
+    // piecewise-linear payoff calculatePortfolioValueAtExpiration samples, so an
+    // inserted strike row is exact and consistent with its neighbors (merged vs.
+    // unmerged legs sum to the same total).
+    const valueAtPrice = (opts, price) => {
+      let v = 0;
+      (opts || []).forEach(o => {
+        if (!o.type || o.strike == null || o.qty === 0) return;
+        const intrinsic = o.type === 'c' ? Math.max(0, price - o.strike) : Math.max(0, o.strike - price);
+        v += intrinsic * o.qty * 100;
+      });
+      return v;
+    };
+
+    // The value curve as a table: strike (underlying price), value, profit/loss,
+    // and the net put/call quantity held at that strike (blank where none). This
+    // merges what used to be a separate bottom "Positions" list into the curve
+    // rows. A held strike that falls between sampled prices gets its OWN row
+    // inserted at the true strike (value computed exactly) rather than snapping to
+    // a nearby sampled price, which would be misleading in real-time analysis.
+    const formatCurveTable = (curve, cost, options) => {
+      const byStrike = aggregateOptionsByStrike(options);
+
+      const rows = curve.map(p => ({
+        price: p.closingPrice,
+        value: p.totalIntrinsicValue,
+        pos: null,
+        inserted: false
+      }));
+
+      const EPS = 1e-9;
+      byStrike.forEach((qtys, strike) => {
+        const exact = rows.find(r => !r.inserted && Math.abs(r.price - strike) < EPS);
+        if (exact) {
+          exact.pos = exact.pos
+            ? { put: exact.pos.put + qtys.put, call: exact.pos.call + qtys.call }
+            : { ...qtys };
+        } else {
+          rows.push({ price: strike, value: valueAtPrice(options, strike), pos: { ...qtys }, inserted: true });
+        }
+      });
+
+      rows.sort((a, b) => a.price - b.price);
+
+      // Put/call cells colored like the live options chain: long (positive qty)
+      // is white on green, short (negative) is white on red, empty otherwise.
+      const qtyCell = (q) => {
+        if (!q) return '<td></td>';
+        const cls = q > 0 ? 'position-long' : 'position-short';
+        return `<td class="${cls}">${signedQty(q)}</td>`;
+      };
+
+      const body = rows.map(r => {
+        const diff = r.value - cost;
+        const diffStr = diff >= 0 ? `+$${diff.toFixed(2)}` : `-$${Math.abs(diff).toFixed(2)}`;
+        const diffClass = diff >= 0 ? 'curve-pl-pos' : 'curve-pl-neg';
+        const cls = r.pos ? (r.inserted ? ' class="curve-strike-row curve-strike-inserted"' : ' class="curve-strike-row"') : '';
+        const title = r.inserted ? ' title="Exact held strike, inserted between sampled prices"' : '';
+        return `<tr${cls}${title}><td>${r.price}</td><td>$${r.value.toFixed(2)}</td>` +
+               `<td class="${diffClass}">${diffStr}</td>${qtyCell(r.pos ? r.pos.put : 0)}${qtyCell(r.pos ? r.pos.call : 0)}</tr>`;
+      }).join('');
+
+      return `<table class="curve-table"><thead><tr>` +
+             `<th>Strike</th><th>Value</th><th>P/L</th><th>Puts</th><th>Calls</th>` +
+             `</tr></thead><tbody>${body}</tbody></table>`;
+    };
 
     // Find key points on the main curve
     const keyPoints = ChartModule.findKeyPointsOnCurve(data, fullCost);
     const formatKeyPoints = (points) => points
       .map(p => `${p.description}: $${p.closingPrice.toFixed(2)} (Value: $${p.totalIntrinsicValue.toFixed(2)})`)
       .join('\n');
-
-    // Format positions list: strike (+/- qty), sorted by strike low to high, calls before puts
-    const formatPositionsList = (options) => {
-      // Group by strike
-      const strikeGroups = new Map();
-      options.forEach(opt => {
-        if (!strikeGroups.has(opt.strike)) {
-          strikeGroups.set(opt.strike, { calls: [], puts: [] });
-        }
-        if (opt.type === 'c') {
-          strikeGroups.get(opt.strike).calls.push(opt);
-        } else {
-          strikeGroups.get(opt.strike).puts.push(opt);
-        }
-      });
-      
-      // Sort strikes low to high
-      const sortedStrikes = Array.from(strikeGroups.keys()).sort((a, b) => a - b);
-      
-      // Build formatted list
-      const lines = [];
-      sortedStrikes.forEach(strike => {
-        const group = strikeGroups.get(strike);
-        
-        // Calls first
-        group.calls.forEach(opt => {
-          const sign = opt.qty >= 0 ? '+' : '';
-          lines.push(`${strike} (${sign}${opt.qty} Call)`);
-        });
-        
-        // Then puts
-        group.puts.forEach(opt => {
-          const sign = opt.qty >= 0 ? '+' : '';
-          lines.push(`${strike} (${sign}${opt.qty} Put)`);
-        });
-      });
-      
-      return lines.join('<br>');
-    };
 
     let outputStr = `
       <strong>Processed Output:</strong><br>
@@ -2936,14 +2973,13 @@ function processInput() {
       `;
     }
 
-    outputStr += `
-      <pre>${formatCurve(data)}</pre>
-    `;
+    outputStr += formatCurveTable(data, fullCost, fullOptionArray);
 
     if (combinedData.length > 0) {
+      const combinedOptionsForTable = fullOptionArray.concat(tempOptionArray);
 
-      // Find key points on combined curve as well
-      const combinedKeyPoints = ChartModule.findKeyPointsOnCurve(combinedData, fullCost);
+      // Find key points on combined curve as well (vs the combined cost basis).
+      const combinedKeyPoints = ChartModule.findKeyPointsOnCurve(combinedData, combinedCost);
       if (combinedKeyPoints.length > 0) {
         outputStr += `
           <strong>Key Points on Combined Curve (optionArray + tempOptionArray):</strong><br>
@@ -2951,15 +2987,8 @@ function processInput() {
         `;
       }
 
-      outputStr += `
-        <pre>${formatCurve(combinedData)}</pre>
-      `;
+      outputStr += formatCurveTable(combinedData, combinedCost, combinedOptionsForTable);
     }
-
-    outputStr += `
-      <strong>Positions:</strong><br><br>
-      ${formatPositionsList(fullOptionArray)}<br>
-    `;
 
     outputDiv.innerHTML = outputStr;
 
