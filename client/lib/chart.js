@@ -12,121 +12,109 @@ const calculatePortfolioValueAtExpiration = PortfolioRisk.calculatePortfolioValu
  * @returns {Array<object>} Array of key points with type and value information
  */
 function findKeyPointsOnCurve(valueCurve, cost) {
-    if (!Array.isArray(valueCurve) || valueCurve.length < 3) {
+    if (!Array.isArray(valueCurve) || valueCurve.length < 2) {
         return [];
     }
 
+    const n = valueCurve.length;
+    // P/L at each sampled point. Slopes between points are cost-independent (the
+    // cost cancels), so up/down/flat classification is exact to the cent.
+    const V = valueCurve.map(p => p.totalIntrinsicValue - cost);
     const keyPoints = [];
-    let trend = null; // 'up', 'down', or 'flat'
-    let lastNonFlatPoint = null;
-    let flatStartIndex = null;
 
-    // Check the first point - if it's different from the second point, mark it
-    if (valueCurve.length >= 2) {
-        const first = valueCurve[0];
-        const second = valueCurve[1];
-        const firstValue = first.totalIntrinsicValue - cost;
-        const secondValue = second.totalIntrinsicValue - cost;
-        
-        if (firstValue !== secondValue) {
-            keyPoints.push({
-                type: 'curve_endpoint',
-                closingPrice: first.closingPrice,
-                totalIntrinsicValue: first.totalIntrinsicValue,
-                description: 'Curve Start'
-            });
-        }
+    const pushPoint = (type, description, idx) => {
+        keyPoints.push({
+            type,
+            closingPrice: valueCurve[idx].closingPrice,
+            totalIntrinsicValue: valueCurve[idx].totalIntrinsicValue,
+            description
+        });
+    };
+
+    // --- Break-even points: where the P/L curve reaches zero ---
+    // Points sitting exactly on zero (a touch or an on-sample crossing).
+    for (let i = 0; i < n; i++) {
+        if (V[i] === 0) pushPoint('zero_crossing', 'Break-even', i);
     }
-
-    for (let i = 1; i < valueCurve.length - 1; i++) {
-        const prev = valueCurve[i - 1];
-        const current = valueCurve[i];
-        const next = valueCurve[i + 1];
-
-        const prevValue = prev.totalIntrinsicValue - cost;
-        const currentValue = current.totalIntrinsicValue - cost;
-        const nextValue = next.totalIntrinsicValue - cost;
-
-        // Determine current trend
-        let currentTrend;
-        if (currentValue > prevValue) {
-            currentTrend = 'up';
-        } else if (currentValue < prevValue) {
-            currentTrend = 'down';
-        } else {
-            currentTrend = 'flat';
-        }
-
-        // Handle trend changes
-        if (trend !== currentTrend) {
-            if (trend !== 'up' && currentTrend === 'up') {
-                // Low point (trend changes from down to up)
-                keyPoints.push({
-                    type: 'low_point',
-                    closingPrice: prev.closingPrice,
-                    totalIntrinsicValue: prev.totalIntrinsicValue,
-                    description: 'Low point'
-                });
-            } else if (trend !== 'down' && currentTrend === 'down') {
-                // High point (trend changes from up to down)
-                keyPoints.push({
-                    type: 'high_point',
-                    closingPrice: prev.closingPrice,
-                    totalIntrinsicValue: prev.totalIntrinsicValue,
-                    description: 'High point'
-                });
-            } else if (trend === 'flat' && currentTrend !== 'flat') {
-                // Transition from flat to trend - use the last non-flat point as the turning point
-                if (lastNonFlatPoint) {
-                    const pointType = currentTrend === 'up' ? 'low_point' : 'high_point';
-                    const description = currentTrend === 'up' ? 'Low point (after flat)' : 'High point (after flat)';
-                    
-                    keyPoints.push({
-                        type: pointType,
-                        closingPrice: lastNonFlatPoint.closingPrice,
-                        totalIntrinsicValue: lastNonFlatPoint.totalIntrinsicValue,
-                        description: description
-                    });
-                }
-            }
-
-            trend = currentTrend;
-        }
-
-         // Check for zero crossing (profit/loss crosses zero)
-        if ((prevValue < 0 && currentValue >= 0) || (prevValue > 0 && currentValue <= 0)) {
+    // Strict sign changes between neighbors (neither endpoint exactly zero):
+    // interpolate the exact price where P/L = 0 (payoff is linear between samples).
+    for (let g = 0; g < n - 1; g++) {
+        const a = V[g], b = V[g + 1];
+        if ((a < 0 && b > 0) || (a > 0 && b < 0)) {
+            const t = -a / (b - a); // fraction from g to g+1 where P/L hits 0
+            const price = valueCurve[g].closingPrice +
+                t * (valueCurve[g + 1].closingPrice - valueCurve[g].closingPrice);
             keyPoints.push({
                 type: 'zero_crossing',
-                closingPrice: current.closingPrice,
-                totalIntrinsicValue: current.totalIntrinsicValue,
+                closingPrice: price,
+                totalIntrinsicValue: cost, // P/L = 0 here
                 description: 'Break-even'
             });
         }
-
-        // Track the last non-flat point
-        if (currentTrend !== 'flat') {
-            lastNonFlatPoint = current;
-        }
     }
 
-    // Check the last point - if it's different from the second-to-last point, mark it
-    if (valueCurve.length >= 2) {
-        const last = valueCurve[valueCurve.length - 1];
-        const secondLast = valueCurve[valueCurve.length - 2];
-        const lastValue = last.totalIntrinsicValue - cost;
-        const secondLastValue = secondLast.totalIntrinsicValue - cost;
-        
-        if (lastValue !== secondLastValue) {
-            keyPoints.push({
-                type: 'curve_endpoint',
-                closingPrice: last.closingPrice,
-                totalIntrinsicValue: last.totalIntrinsicValue,
-                description: 'Curve End'
-            });
+    // --- Slope runs, for extrema detection with plateau handling ---
+    // Collapse consecutive gaps of the same direction into segments spanning a
+    // range of point indices. Adjacent segments always differ in direction.
+    const segments = [];
+    let g = 0;
+    while (g < n - 1) {
+        const dir = Math.sign(valueCurve[g + 1].totalIntrinsicValue - valueCurve[g].totalIntrinsicValue);
+        const startPt = g;
+        while (g < n - 1 &&
+               Math.sign(valueCurve[g + 1].totalIntrinsicValue - valueCurve[g].totalIntrinsicValue) === dir) {
+            g++;
         }
+        segments.push({ dir, startPt, endPt: g });
     }
 
-    return keyPoints;
+    // Sharp corners (no plateau): an up-run meeting a down-run is a peak — a down
+    // arrow ▼ (local top); a down-run meeting an up-run is a valley — an up arrow
+    // ▲ (local bottom). The shared point is the corner.
+    for (let k = 0; k < segments.length - 1; k++) {
+        const a = segments[k], b = segments[k + 1];
+        if (a.dir === 1 && b.dir === -1) pushPoint('down_arrow', '↓', a.endPt);
+        else if (a.dir === -1 && b.dir === 1) pushPoint('up_arrow', '↑', a.endPt);
+    }
+
+    // Plateau corners. Each corner is marked from the slope on its NON-flat side,
+    // by whether that neighbor sits below the plateau (a local top → down arrow ▼)
+    // or above it (a local bottom → up arrow ▲):
+    //   left corner  — rose INTO the plateau (neighbor below) → ↓ ; fell in → ↑
+    //   right corner — rises AWAY from it (neighbor above)    → ↑ ; falls away → ↓
+    // So a peak plateau reads ↓ ↓, a valley ↑ ↑, a rising step ↓ then ↑, a falling
+    // step ↑ then ↓. Edge plateaus only mark their interior (sloped) corner.
+    for (let k = 0; k < segments.length; k++) {
+        const seg = segments[k];
+        if (seg.dir !== 0) continue;
+        const prevDir = k > 0 ? segments[k - 1].dir : null;
+        const nextDir = k < segments.length - 1 ? segments[k + 1].dir : null;
+
+        if (prevDir === 1) pushPoint('down_arrow', '↓', seg.startPt);
+        else if (prevDir === -1) pushPoint('up_arrow', '↑', seg.startPt);
+
+        if (nextDir === 1) pushPoint('up_arrow', '↑', seg.endPt);
+        else if (nextDir === -1) pushPoint('down_arrow', '↓', seg.endPt);
+    }
+
+    // --- Sloping endpoints kept as reference. A still-rising/falling tail isn't a
+    // true extremum, but marks where the sampled window ends. Flat edges are
+    // already handled above as caps/floors, so only sloping edges get a marker. ---
+    if (segments.length > 0) {
+        if (segments[0].dir !== 0) pushPoint('curve_endpoint', 'Curve Start', 0);
+        if (segments[segments.length - 1].dir !== 0) pushPoint('curve_endpoint', 'Curve End', n - 1);
+    }
+
+    // Left-to-right by price; drop consecutive duplicates of the same type/price.
+    keyPoints.sort((p, q) => p.closingPrice - q.closingPrice);
+    const deduped = [];
+    keyPoints.forEach(p => {
+        const last = deduped[deduped.length - 1];
+        if (!last || last.type !== p.type || Math.abs(last.closingPrice - p.closingPrice) > 1e-9) {
+            deduped.push(p);
+        }
+    });
+    return deduped;
 }
 
 /**
@@ -338,11 +326,11 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
                 const x = xScale(d.closingPrice);
                 const y = yScale(d.totalIntrinsicValue);
                 
-                if (d.type === 'low_point') {
-                    // Green triangle pointing up (in SVG coordinates, this means negative Y offset)
+                if (d.type === 'up_arrow') {
+                    // Triangle pointing up (in SVG coordinates, this means negative Y offset)
                     return `M ${x},${y - 8} L ${x - 6},${y + 4} L ${x + 6},${y + 4} Z`;
-                } else if (d.type === 'high_point') {
-                    // Red triangle pointing down (in SVG coordinates, this means positive Y offset)
+                } else if (d.type === 'down_arrow') {
+                    // Triangle pointing down (in SVG coordinates, this means positive Y offset)
                     return `M ${x},${y + 8} L ${x - 6},${y - 4} L ${x + 6},${y - 4} Z`;
                 } else if (d.type === 'zero_crossing') {
                     // Gray circle
@@ -354,8 +342,8 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
                 return '';
             })
             .attr("fill", d => {
-                if (d.type === 'low_point') return '#4CAF50';
-                if (d.type === 'high_point') return '#F44336';
+                if (d.type === 'up_arrow') return '#4CAF50';   // green ▲ (local bottom)
+                if (d.type === 'down_arrow') return '#F44336';  // red ▼ (local top)
                 if (d.type === 'zero_crossing') return '#808080';
                 if (d.type === 'curve_endpoint') return '#FF9800'; // Orange
                 return '#666';
@@ -368,8 +356,8 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .attr("x", d => xScale(d.closingPrice))
             .attr("y", d => {
                 const y = yScale(d.totalIntrinsicValue);
-                if (d.type === 'low_point') return y + 14;
-                if (d.type === 'high_point') return y - 7;
+                if (d.type === 'up_arrow') return y + 14;
+                if (d.type === 'down_arrow') return y - 7;
                 if (d.type === 'zero_crossing') return y - 7;
                 if (d.type === 'curve_endpoint') return y - 7;
                 return y;
@@ -396,11 +384,11 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
                 const x = xScale(d.closingPrice);
                 const y = yScale(d.totalIntrinsicValue);
                 
-                if (d.type === 'low_point') {
-                    // Light green triangle pointing up (in SVG coordinates, this means negative Y offset)
+                if (d.type === 'up_arrow') {
+                    // Triangle pointing up (in SVG coordinates, this means negative Y offset)
                     return `M ${x},${y - 8} L ${x - 6},${y + 4} L ${x + 6},${y + 4} Z`;
-                } else if (d.type === 'high_point') {
-                    // Light red triangle pointing down (in SVG coordinates, this means positive Y offset)
+                } else if (d.type === 'down_arrow') {
+                    // Triangle pointing down (in SVG coordinates, this means positive Y offset)
                     return `M ${x},${y + 8} L ${x - 6},${y - 4} L ${x + 6},${y - 4} Z`;
                 } else if (d.type === 'zero_crossing') {
                     // Light gray circle
@@ -412,8 +400,8 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
                 return '';
             })
             .attr("fill", d => {
-                if (d.type === 'low_point') return '#81C784';
-                if (d.type === 'high_point') return '#EF9A9A';
+                if (d.type === 'up_arrow') return '#81C784';   // light green ▲
+                if (d.type === 'down_arrow') return '#EF9A9A';  // light red ▼
                 if (d.type === 'zero_crossing') return '#A0A0A0';
                 if (d.type === 'curve_endpoint') return '#FFCC80'; // Light orange
                 return '#999';
@@ -427,8 +415,8 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .attr("x", d => xScale(d.closingPrice))
             .attr("y", d => {
                 const y = yScale(d.totalIntrinsicValue);
-                if (d.type === 'low_point') return y + 14;
-                if (d.type === 'high_point') return y - 7;
+                if (d.type === 'up_arrow') return y + 14;
+                if (d.type === 'down_arrow') return y - 7;
                 if (d.type === 'zero_crossing') return y - 7;
                 if (d.type === 'curve_endpoint') return y - 7;
                 return y;

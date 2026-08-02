@@ -2955,8 +2955,14 @@ function processInput() {
 
     // Find key points on the main curve
     const keyPoints = ChartModule.findKeyPointsOnCurve(data, fullCost);
-    const formatKeyPoints = (points) => points
-      .map(p => `${p.description}: $${p.closingPrice.toFixed(2)} (Value: $${p.totalIntrinsicValue.toFixed(2)})`)
+    // Show P/L at each key point (so a break-even reads +$0.00 and highs/lows
+    // show their max profit / max loss). Pass the cost basis matching the curve.
+    const formatKeyPoints = (points, pointsCost) => points
+      .map(p => {
+        const pl = p.totalIntrinsicValue - pointsCost;
+        const plStr = pl >= 0 ? `+$${pl.toFixed(2)}` : `-$${Math.abs(pl).toFixed(2)}`;
+        return `${p.description}: $${p.closingPrice.toFixed(2)} (P/L: ${plStr})`;
+      })
       .join('\n');
 
     let outputStr = `
@@ -2969,7 +2975,7 @@ function processInput() {
     if (keyPoints.length > 0) {
       outputStr += `
         <strong>Key Points on Curve (optionArray):</strong><br>
-        <pre>${formatKeyPoints(keyPoints)}</pre>
+        <pre>${formatKeyPoints(keyPoints, fullCost)}</pre>
       `;
     }
 
@@ -2983,7 +2989,7 @@ function processInput() {
       if (combinedKeyPoints.length > 0) {
         outputStr += `
           <strong>Key Points on Combined Curve (optionArray + tempOptionArray):</strong><br>
-          <pre>${formatKeyPoints(combinedKeyPoints)}</pre>
+          <pre>${formatKeyPoints(combinedKeyPoints, combinedCost)}</pre>
         `;
       }
 
