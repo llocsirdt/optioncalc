@@ -73,8 +73,8 @@ function findKeyPointsOnCurve(valueCurve, cost) {
     // ▲ (local bottom). The shared point is the corner.
     for (let k = 0; k < segments.length - 1; k++) {
         const a = segments[k], b = segments[k + 1];
-        if (a.dir === 1 && b.dir === -1) pushPoint('down_arrow', '↓', a.endPt);
-        else if (a.dir === -1 && b.dir === 1) pushPoint('up_arrow', '↑', a.endPt);
+        if (a.dir === 1 && b.dir === -1) pushPoint('down_arrow', 'High point', a.endPt);
+        else if (a.dir === -1 && b.dir === 1) pushPoint('up_arrow', 'Low point', a.endPt);
     }
 
     // Plateau corners. Each corner is marked from the slope on its NON-flat side,
@@ -90,11 +90,11 @@ function findKeyPointsOnCurve(valueCurve, cost) {
         const prevDir = k > 0 ? segments[k - 1].dir : null;
         const nextDir = k < segments.length - 1 ? segments[k + 1].dir : null;
 
-        if (prevDir === 1) pushPoint('down_arrow', '↓', seg.startPt);
-        else if (prevDir === -1) pushPoint('up_arrow', '↑', seg.startPt);
+        if (prevDir === 1) pushPoint('down_arrow', 'High point', seg.startPt);
+        else if (prevDir === -1) pushPoint('up_arrow', 'Low point', seg.startPt);
 
-        if (nextDir === 1) pushPoint('up_arrow', '↑', seg.endPt);
-        else if (nextDir === -1) pushPoint('down_arrow', '↓', seg.endPt);
+        if (nextDir === 1) pushPoint('up_arrow', 'Low point', seg.endPt);
+        else if (nextDir === -1) pushPoint('down_arrow', 'High point', seg.endPt);
     }
 
     // --- Sloping endpoints kept as reference. A still-rising/falling tail isn't a

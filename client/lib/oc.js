@@ -2940,16 +2940,16 @@ function processInput() {
 
       const body = rows.map(r => {
         const diff = r.value - cost;
-        const diffStr = diff >= 0 ? `+$${diff.toFixed(2)}` : `-$${Math.abs(diff).toFixed(2)}`;
+        const diffStr = diff >= 0 ? `+$${diff.toFixed(0)}` : `-$${Math.abs(diff).toFixed(0)}`;
         const diffClass = diff >= 0 ? 'curve-pl-pos' : 'curve-pl-neg';
         const cls = r.pos ? (r.inserted ? ' class="curve-strike-row curve-strike-inserted"' : ' class="curve-strike-row"') : '';
         const title = r.inserted ? ' title="Exact held strike, inserted between sampled prices"' : '';
-        return `<tr${cls}${title}><td>${r.price}</td><td>$${r.value.toFixed(2)}</td>` +
-               `<td class="${diffClass}">${diffStr}</td>${qtyCell(r.pos ? r.pos.put : 0)}${qtyCell(r.pos ? r.pos.call : 0)}</tr>`;
+        return `<tr${cls}${title}><td>${r.price}</td><td>$${r.value.toFixed(0)}</td>` +
+               `<td class="${diffClass}">${diffStr}</td>${qtyCell(r.pos ? r.pos.call : 0)}${qtyCell(r.pos ? r.pos.put : 0)}</tr>`;
       }).join('');
 
       return `<table class="curve-table"><thead><tr>` +
-             `<th>Strike</th><th>Value</th><th>P/L</th><th>Puts</th><th>Calls</th>` +
+             `<th>Strike</th><th>Value</th><th>P/L</th><th>Calls</th><th>Puts</th>` +
              `</tr></thead><tbody>${body}</tbody></table>`;
     };
 
