@@ -737,6 +737,26 @@ pre {
   font-weight: bold;
 }
 
+/* Candidate flagged as invalid (bad bid/ask data) or poor risk/reward — kept
+   visible but pushed to a trailing "Flagged — review" section and given a full
+   red border so it's clearly distinct from a normal card. */
+.offset-trade.quality-flagged {
+  border: 2px solid #f44336;
+  background-color: #fff5f5;
+}
+
+.trade-flag {
+  font-size: 11px;
+  color: #c62828;
+  font-weight: bold;
+  margin-top: 2px;
+}
+
+.offset-group.flagged-group .offset-group-header {
+  border-bottom-color: #f44336;
+  color: #c62828;
+}
+
 /* Dual-wing tail-risk hedge (call spread above + put spread below, added
    together) — structurally different from a single spread, gets its own color. */
 .offset-trade.tail-risk {

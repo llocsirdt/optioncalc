@@ -51,6 +51,43 @@ function formatBestCase(value, unboundedGain) {
   return unboundedGain ? 'Unbounded gain' : formatOffsetMoney(value);
 }
 
+// Don't risk more than this share of a hedge's own max value to make the rest
+// (e.g. paying $1500 for a $2000-wide spread risks 75% to make 25%).
+const MAX_RISK_FRACTION = 0.60;
+
+// Flags a candidate that looks invalid or poor risk/reward, judged on its OWN
+// standalone economics (hedgeLocked/hedgePotential, computed for the hedge in
+// isolation). Returns { type, note } or null. These are NOT hidden — just marked
+// and moved to the bottom, so bad bid/ask data (or lopsided trades) can be spotted
+// and confirmed rather than silently trusted.
+function getCandidateQualityFlag(candidate) {
+  const locked = candidate.hedgeLocked;       // hedge's own worst-case P/L
+  const potential = candidate.hedgePotential; // hedge's own best-case P/L
+  if (typeof locked !== 'number' || typeof potential !== 'number') return null;
+
+  // Bad data: a standalone hedge that cannot lose is a free-money arbitrage —
+  // only possible from crossed/stale quotes (e.g. a credit spread crediting more
+  // than its width, which would guarantee a profit).
+  if (locked > 0) {
+    return { type: 'bad-data', note: '⚠ Invalid: implies risk-free profit (credit exceeds width) — likely bad bid/ask data' };
+  }
+
+  // Poor risk/reward: the potential loss is too big a share of the trade's total
+  // range (max loss + max profit) — i.e. risking more than MAX_RISK_FRACTION of
+  // the spread's value to make the rest.
+  const range = potential - locked; // max loss + max profit (= spread width × 100 for a vertical)
+  if (range > 0) {
+    const riskFraction = (-locked) / range;
+    if (riskFraction > MAX_RISK_FRACTION) {
+      return {
+        type: 'poor-rr',
+        note: `⚠ Poor risk/reward: risking ${Math.round(riskFraction * 100)}% to make ${Math.round((1 - riskFraction) * 100)}%`
+      };
+    }
+  }
+  return null;
+}
+
 function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass = '') {
   const costLessThanLockedClass = Math.abs(candidate.cost) < candidate.hedgeLocked ? 'cost-less-than-locked' : '';
   const profitClass = candidate.hedgeLocked > 0 ? 'profit-positive' : 'profit-neutral';
@@ -70,13 +107,18 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
         ? (candidate.family === 'same-side' ? 'credit' : 'spread')
         : (candidate.cost < 0 ? 'credit' : 'spread'));
   const weakClass = candidate.lockedInProfit < 0 ? 'low-locked-profit' : '';
+  const qualityFlag = getCandidateQualityFlag(candidate);
+  const qualityClass = qualityFlag ? 'quality-flagged' : '';
+  const qualityNote = qualityFlag
+    ? `<div class="trade-flag" title="Marked for review — kept visible but pushed to the bottom of the list">${qualityFlag.note}</div>`
+    : '';
   const legsSummary = candidate.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
   const conflictNote = hasOppositeLeg
     ? '<div class="trade-conflict" title="One of this trade\'s legs is the opposite direction of the same strike/type already in your position">⚠ Opposes an existing leg</div>'
     : '';
 
   return `
-    <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass} ${extraClass}"
+    <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${extraClass}"
          onclick="${selectFnName}(${index}, this)"
          title="Click to select these options in the table">
       <div class="trade-description">
@@ -84,6 +126,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
         <div class="trade-action">${legsSummary}</div>
         <div class="trade-cost">Cost: ${formatOffsetMoney(candidate.cost)}</div>
         ${conflictNote}
+        ${qualityNote}
       </div>
       <div class="trade-metrics">
         <div class="trade-locked-profit" title="This hedge trade's own guaranteed worst-case P&L, in isolation">Hedge locked: ${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)}</div>
@@ -135,9 +178,16 @@ const HEDGE_GROUP_TOTAL_BUDGET = 20;
 // `candidates`, because the select/add click handlers index back into the stored
 // flat array.
 function renderGroupedOffsetCandidateCards(candidates, selectFnName, addFnName, positionLegs) {
-  // Partition, preserving original index and within-group order.
+  // Partition, preserving original index and within-group order. Invalid / poor
+  // risk-reward candidates are pulled out into a trailing "Flagged" section
+  // instead of a type group, so they sink to the bottom but stay visible.
   const groups = new Map(); // key -> [{ candidate, index }]  (insertion order = best-group-first)
+  const flagged = [];       // [{ candidate, index }]
   candidates.forEach((candidate, index) => {
+    if (getCandidateQualityFlag(candidate)) {
+      flagged.push({ candidate, index });
+      return;
+    }
     const key = getHedgeGroup(candidate);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ candidate, index });
@@ -145,38 +195,57 @@ function renderGroupedOffsetCandidateCards(candidates, selectFnName, addFnName, 
 
   const activeGroups = [...groups.keys()];
   const n = activeGroups.length;
-  if (n === 0) return '';
 
-  // Split the 20-card budget across active groups, giving any remainder to the
-  // earliest (best) groups: 1 group -> [20], 2 -> [10,10], 3 -> [7,7,6].
-  const base = Math.floor(HEDGE_GROUP_TOTAL_BUDGET / n);
-  const remainder = HEDGE_GROUP_TOTAL_BUDGET - base * n;
-  const capFor = (groupIndex) => base + (groupIndex < remainder ? 1 : 0);
+  let html = '';
 
-  return activeGroups.map((key, groupIndex) => {
-    const items = groups.get(key);
-    const cap = capFor(groupIndex);
-    const meta = HEDGE_GROUPS[key] || { label: key };
+  if (n > 0) {
+    // Split the 20-card budget across active groups, giving any remainder to the
+    // earliest (best) groups: 1 group -> [20], 2 -> [10,10], 3 -> [7,7,6].
+    const base = Math.floor(HEDGE_GROUP_TOTAL_BUDGET / n);
+    const remainder = HEDGE_GROUP_TOTAL_BUDGET - base * n;
+    const capFor = (groupIndex) => base + (groupIndex < remainder ? 1 : 0);
 
-    const cardsHtml = items.map(({ candidate, index }, i) => {
-      // Cards beyond the cap are rendered but hidden until "show more".
-      const extraClass = i < cap ? '' : 'hidden-extra';
-      return renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass);
+    html += activeGroups.map((key, groupIndex) => {
+      const items = groups.get(key);
+      const cap = capFor(groupIndex);
+      const meta = HEDGE_GROUPS[key] || { label: key };
+
+      const cardsHtml = items.map(({ candidate, index }, i) => {
+        // Cards beyond the cap are rendered but hidden until "show more".
+        const extraClass = i < cap ? '' : 'hidden-extra';
+        return renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs, extraClass);
+      }).join('');
+
+      const hiddenCount = Math.max(0, items.length - cap);
+      const moreBtn = hiddenCount > 0
+        ? `<button class="offset-group-more" onclick="toggleHedgeGroupExtra(this)" data-more="${hiddenCount}">Show ${hiddenCount} more</button>`
+        : '';
+
+      return `
+        <div class="offset-group ${key}" data-group="${key}">
+          <div class="offset-group-header">${meta.label} <span class="offset-group-count">(${items.length})</span></div>
+          <div class="offset-group-cards">${cardsHtml}</div>
+          ${moreBtn}
+        </div>
+      `;
     }).join('');
+  }
 
-    const hiddenCount = Math.max(0, items.length - cap);
-    const moreBtn = hiddenCount > 0
-      ? `<button class="offset-group-more" onclick="toggleHedgeGroupExtra(this)" data-more="${hiddenCount}">Show ${hiddenCount} more</button>`
-      : '';
-
-    return `
-      <div class="offset-group ${key}" data-group="${key}">
-        <div class="offset-group-header">${meta.label} <span class="offset-group-count">(${items.length})</span></div>
-        <div class="offset-group-cards">${cardsHtml}</div>
-        ${moreBtn}
+  // Trailing section: flagged candidates, shown in full (not capped) so they can
+  // be reviewed. Each already carries a red border + note from the card renderer.
+  if (flagged.length > 0) {
+    const flaggedCards = flagged
+      .map(({ candidate, index }) => renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, positionLegs))
+      .join('');
+    html += `
+      <div class="offset-group flagged-group" data-group="flagged">
+        <div class="offset-group-header">⚠ Flagged — review <span class="offset-group-count">(${flagged.length})</span></div>
+        <div class="offset-group-cards">${flaggedCards}</div>
       </div>
     `;
-  }).join('');
+  }
+
+  return html;
 }
 
 // Reveals/hides the beyond-cap cards in a group (toggling `.expanded` on the
