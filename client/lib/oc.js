@@ -2967,10 +2967,13 @@ function processInput() {
 
     let outputStr = `
       <strong>Processed Output:</strong><br>
-      <strong>Position Count:</strong> ${fullOptionArray.length}<br>
-      <strong>Total Cost:</strong> $${fullCost.toFixed(2)}<br><br>
-      <strong>Value Curve:</strong><br><br>
+      <strong>Total Cost:</strong> $${fullCost.toFixed(2)} (Positions: ${fullOptionArray.length})<br><br>
     `;
+
+    // Current aggregate risk (worst/best case across the whole position) — same
+    // computation as the Portfolio Risk panel's old baseline, now shown here above
+    // Key Points. Uses the shared analyzePortfolioRisk so the numbers match.
+    outputStr += renderAggregateRisk();
 
     if (keyPoints.length > 0) {
       outputStr += `
@@ -2997,6 +3000,9 @@ function processInput() {
     }
 
     outputDiv.innerHTML = outputStr;
+
+    // Mark where the current underlying price falls in the strike table(s).
+    updateCurvePriceLine(underlyingPrice);
 
     // Keep Portfolio Risk in sync with whatever position was just submitted,
     // not just whatever was loaded when the panel was last opened.
@@ -3050,7 +3056,56 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
+// Builds the "Current aggregate risk" block (worst/best case across the whole
+// loaded position) for the Processed Output, above Key Points. Uses the same
+// analyzePortfolioRisk the Portfolio Risk panel used, so the numbers match. Works
+// off the loaded positions alone — no live chain data required.
+function renderAggregateRisk() {
+  try {
+    if (typeof getCurrentPortfolioLegs !== 'function' || !window.PortfolioRisk) return '';
+    const legs = getCurrentPortfolioLegs();
+    if (!legs || legs.length === 0) return '';
+    const baseline = PortfolioRisk.analyzePortfolioRisk(legs);
+    const f = (v) => v === Infinity ? 'Unbounded gain'
+      : v === -Infinity ? 'Unbounded loss'
+      : (Number.isFinite(v) ? `$${v.toFixed(2)}` : '—');
+    return `
+      <div class="aggregate-risk">
+        <strong>Current aggregate risk</strong><br>
+        Worst case: ${f(baseline.lockedInProfit)} @ ${baseline.worstCasePrice ?? '—'}<br>
+        Best case: ${f(baseline.profitPotential)} @ ${baseline.bestCasePrice ?? '—'}<br>
+        ${baseline.unboundedUpsideRisk ? '<span class="portfolio-risk-warning">Unbounded upside risk (naked short calls)</span><br>' : ''}
+        ${baseline.unboundedDownsideRisk ? '<span class="portfolio-risk-warning">Unbounded downside risk (naked short puts)</span><br>' : ''}
+      </div>
+    `;
+  } catch (e) {
+    console.error('renderAggregateRisk failed:', e);
+    return '';
+  }
+}
+
+// Marks the row in each processed-output strike table where the current
+// underlying price falls (a horizontal border above the first strike >= price),
+// so the price level is visible in the chain. Scans the rendered DOM so it can be
+// re-run cheaply on live price ticks without rebuilding the table.
+function updateCurvePriceLine(price) {
+  if (!Number.isFinite(price) || price <= 0) return;
+  document.querySelectorAll('#output .curve-table').forEach(table => {
+    const rows = table.querySelectorAll('tbody tr');
+    let marked = null;
+    rows.forEach(r => r.classList.remove('curve-current-price-row'));
+    for (const r of rows) {
+      const firstCell = r.querySelector('td');
+      if (!firstCell) continue;
+      const strike = parseFloat(firstCell.textContent);
+      if (Number.isFinite(strike) && strike >= price) { marked = r; break; }
+    }
+    if (marked) marked.classList.add('curve-current-price-row');
+  });
+}
+
 // Export functions for use in other files (global approach)
+window.updateCurvePriceLine = updateCurvePriceLine;
 window.restoreAppropriateInput = restoreAppropriateInput;
 window.debugStoredInputs = debugStoredInputs;
 window.testInputRestoration = testInputRestoration;

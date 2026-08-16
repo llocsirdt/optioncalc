@@ -12,7 +12,7 @@ h1 {
 
 textarea {
   width: 100%;
-  height: 30vh;
+  height: 20vh;
 }
 
 button {
@@ -118,6 +118,12 @@ pre {
 .curve-table td.position-long,
 .curve-table td.position-short {
   text-align: center;
+}
+
+/* Horizontal line marking where the current underlying price falls in the chain
+   (drawn above the first strike >= price). Mirrors the chart's gray price line. */
+.curve-table .curve-current-price-row td {
+  border-top: 2px solid #777;
 }
 
 .curve-table .curve-pl-pos {
@@ -1302,6 +1308,16 @@ pre {
   border-radius: 4px;
   padding: 8px;
   margin: 8px 0;
+}
+
+/* "Current aggregate risk" block, relocated into the Processed Output above the
+   Key Points. */
+.aggregate-risk {
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px;
+  margin: 0 0 12px;
 }
 
 .portfolio-risk-warning {

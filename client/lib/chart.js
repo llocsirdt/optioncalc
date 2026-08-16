@@ -5,6 +5,12 @@
 // see PortfolioRisk.analyzePortfolioRisk / findPortfolioHedgeCandidates.
 const calculatePortfolioValueAtExpiration = PortfolioRisk.calculatePortfolioValueAtExpiration;
 
+// Remembered across redraws so the chart can be re-rendered when only the live
+// underlying price changes (redrawWithPrice), and so a click info box the user
+// opened is re-applied after each redraw rather than lost.
+let lastChartArgs = null;
+let lastClickedPrice = null; // the underlying price of the last chart click
+
 /**
  * Find key points on the value curve: local lows, highs, and break-even points.
  * @param {Array<object>} valueCurve - Array of objects with closingPrice and totalIntrinsicValue
@@ -127,6 +133,9 @@ function findKeyPointsOnCurve(valueCurve, cost) {
  * @param {number} combinedCost - Optional combined cost (main + temp positions)
  */
 function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice = null, combinedCost = null) {
+    // Remember these so redrawWithPrice() can re-render with only the price changed.
+    lastChartArgs = { data, cost, optionArray, tempData, underlyingPrice, combinedCost };
+
     // Clear previous chart
     d3.select("#chart").selectAll("*").remove();
     
@@ -428,77 +437,71 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .text(d => `$${d.closingPrice.toFixed(0)}`);
     }
 
-        // Add vertical line for current underlying price if provided
-    if (underlyingPrice !== null && underlyingPrice !== undefined) {
-        // Check if underlying price is within the chart range
+    // Vertical dotted line for the current underlying price. Always drawn whenever
+    // we have a real price; if the price sits beyond the x-axis range it's clamped
+    // to the nearest edge (with an arrow on the label) rather than hidden.
+    if (Number.isFinite(underlyingPrice) && underlyingPrice > 0) {
         const minPrice = d3.min(data, d => d.closingPrice);
         const maxPrice = d3.max(data, d => d.closingPrice);
-        
-        if (underlyingPrice >= minPrice && underlyingPrice <= maxPrice) {
-            svg.append("line")
-                .attr("x1", xScale(underlyingPrice))
-                .attr("y1", yScale(d3.min(data, d => d.totalIntrinsicValue)))
-                .attr("x2", xScale(underlyingPrice))
-                .attr("y2", yScale(d3.max(data, d => d.totalIntrinsicValue)))
-                .attr("stroke", "gray")
-                .attr("stroke-width", 1)  // Thinner line (was 2)
-                .attr("stroke-dasharray", "8, 4")
-                .style("opacity", 0.7);
-            
-            // Add label box below x-axis
-            const labelGroup = svg.append("g")
-                .attr("transform", `translate(${xScale(underlyingPrice)}, ${height - 5})`);
-            
-            // Add background rectangle for label
-            const labelText = `$${underlyingPrice.toFixed(2)}`;
-            const textWidth = labelText.length * 7; // Approximate text width
-            const textHeight = 16;
-            
-            labelGroup.append("rect")
-                .attr("x", -textWidth/2 - 4)
-                .attr("y", -textHeight - 2)
-                .attr("width", textWidth + 8)
-                .attr("height", textHeight + 4)
-                .attr("fill", "white")
-                .attr("stroke", "lightgray")
-                .attr("stroke-width", 1)
-                .attr("rx", 3)  // Rounded corners
-                .style("opacity", 0.9);
-            
-            // Add text label
-            labelGroup.append("text")
-                .attr("text-anchor", "middle")
-                .attr("dy", -5)  // Center vertically in the box
-                .style("font-size", "11px")
-                .style("fill", "gray")
-                .style("font-weight", "bold")
-                .text(labelText);
-            
-            console.log(`📍 Added underlying price line at $${underlyingPrice.toFixed(2)} with label box`);
-        } else {
-            console.log(`⚠️ Underlying price $${underlyingPrice.toFixed(2)} is outside chart range ($${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)})`);
-        }
+        const clampedPrice = Math.max(minPrice, Math.min(maxPrice, underlyingPrice));
+        const xPos = xScale(clampedPrice);
+        const offLow = underlyingPrice < minPrice;
+        const offHigh = underlyingPrice > maxPrice;
+
+        svg.append("line")
+            .attr("x1", xPos)
+            .attr("y1", yScale(d3.min(data, d => d.totalIntrinsicValue)))
+            .attr("x2", xPos)
+            .attr("y2", yScale(d3.max(data, d => d.totalIntrinsicValue)))
+            .attr("stroke", "gray")
+            .attr("stroke-width", 1)
+            .attr("stroke-dasharray", "8, 4")
+            .style("opacity", 0.7);
+
+        // Label box below the x-axis; add ←/→ when the price is off the visible range.
+        const labelGroup = svg.append("g")
+            .attr("transform", `translate(${xPos}, ${height - 5})`);
+        const labelText = `${offLow ? '← ' : ''}$${underlyingPrice.toFixed(2)}${offHigh ? ' →' : ''}`;
+        const textWidth = labelText.length * 7;
+        const textHeight = 16;
+
+        labelGroup.append("rect")
+            .attr("x", -textWidth/2 - 4)
+            .attr("y", -textHeight - 2)
+            .attr("width", textWidth + 8)
+            .attr("height", textHeight + 4)
+            .attr("fill", "white")
+            .attr("stroke", "lightgray")
+            .attr("stroke-width", 1)
+            .attr("rx", 3)
+            .style("opacity", 0.9);
+
+        labelGroup.append("text")
+            .attr("text-anchor", "middle")
+            .attr("dy", -5)
+            .style("font-size", "11px")
+            .style("fill", "gray")
+            .style("font-weight", "bold")
+            .text(labelText);
     }
 
     // Add a group for the interactive elements (drawn last to appear on top)
     const interactionGroup = svg.append("g");
 
-    // Function to handle both touch and mouse events
-    function handlePointerEvent(event) {
-        event.preventDefault(); // Prevent default touch behavior
-        const touch = event.type.includes('touch') ? event.changedTouches[0] : event;
-        const [xCoord] = d3.pointer(touch, this);
-        
+    // Draws the click info box(es) at underlying price x0. Split out from the
+    // pointer handler so a redraw (e.g. a live price update) can re-apply the last
+    // click instead of losing it.
+    function renderClickInfo(x0) {
         // Remove any existing vertical line and label
         interactionGroup.selectAll(".vertical-line, .chart-label, .chart-label-bg").remove();
-        
-        // Find the closest data point to the x-coordinate
+
+        // Find the closest data point to x0 (guarding the ends of the range)
         const bisectDate = d3.bisector(d => d.closingPrice).left;
-        const x0 = xScale.invert(xCoord);
         const i = bisectDate(data, x0, 1);
         const d0 = data[i - 1];
         const d1 = data[i];
-        const d = x0 - d0.closingPrice > d1.closingPrice - x0 ? d1 : d0;
+        const d = !d1 ? d0 : !d0 ? d1 : (x0 - d0.closingPrice > d1.closingPrice - x0 ? d1 : d0);
+        if (!d) return;
         
         // Add vertical line
         interactionGroup.append("line")
@@ -609,14 +612,36 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         }
     }
 
+    function handlePointerEvent(event) {
+        event.preventDefault(); // Prevent default touch behavior
+        const touch = event.type.includes('touch') ? event.changedTouches[0] : event;
+        const [xCoord] = d3.pointer(touch, this);
+        lastClickedPrice = xScale.invert(xCoord);
+        renderClickInfo(lastClickedPrice);
+    }
+
     // Add event listeners for both mouse and touch events
     svg.on("click", handlePointerEvent)
        .on("touchstart", handlePointerEvent);
+
+    // Re-apply the last click so a redraw (e.g. a live price update) preserves the
+    // info box the user opened rather than clearing it.
+    if (lastClickedPrice !== null) renderClickInfo(lastClickedPrice);
+}
+
+// Re-render the chart with only the underlying price changed (keeps the payoff
+// curve, options, and any open click info box). Used to keep the current-price
+// line in sync as live data ticks, without the caller recomputing the curve.
+function redrawChartWithPrice(price) {
+    if (!lastChartArgs) return;
+    const a = lastChartArgs;
+    drawChart(a.data, a.cost, a.optionArray, a.tempData, price, a.combinedCost);
 }
 
 // Export chart functions for use in other modules
 window.ChartModule = {
     calculatePortfolioValueAtExpiration,
     findKeyPointsOnCurve,
-    drawChart
+    drawChart,
+    redrawChartWithPrice
 };

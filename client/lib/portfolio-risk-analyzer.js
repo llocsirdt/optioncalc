@@ -71,17 +71,11 @@ function renderPortfolioRiskResults(analysis, positionLegs) {
   const container = document.getElementById('portfolio-risk-results');
   if (!container) return;
 
-  const { baseline, candidates } = analysis;
+  // "Current aggregate risk" now lives in the Processed Output (above Key Points),
+  // computed in oc.js's processInput — see renderAggregateRisk there.
+  const { candidates } = analysis;
 
-  let html = `
-    <div class="portfolio-risk-baseline">
-      <strong>Current aggregate risk</strong><br>
-      Worst case: ${formatPnl(baseline.lockedInProfit)} @ ${baseline.worstCasePrice ?? '—'}<br>
-      Best case: ${formatPnl(baseline.profitPotential)} @ ${baseline.bestCasePrice ?? '—'}<br>
-      ${baseline.unboundedUpsideRisk ? '<span class="portfolio-risk-warning">Unbounded upside risk (naked short calls)</span><br>' : ''}
-      ${baseline.unboundedDownsideRisk ? '<span class="portfolio-risk-warning">Unbounded downside risk (naked short puts)</span><br>' : ''}
-    </div>
-  `;
+  let html = '';
 
   if (candidates.length === 0) {
     html += '<p>No improving hedge candidates found in the current chain.</p>';

@@ -1000,6 +1000,14 @@ function updateUnderlyingPrice(price) {
   if (priceElement) {
     priceElement.textContent = `$${price.toFixed(2)}`;
   }
+  // Keep the risk-curve chart's current-price line and the strike-table marker in
+  // sync as live data ticks (no-op if the chart/table haven't been drawn yet).
+  if (window.ChartModule && typeof ChartModule.redrawChartWithPrice === 'function') {
+    ChartModule.redrawChartWithPrice(price);
+  }
+  if (typeof updateCurvePriceLine === 'function') {
+    updateCurvePriceLine(price);
+  }
 }
 
 // Global exports for browser
