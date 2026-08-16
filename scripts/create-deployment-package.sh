@@ -43,6 +43,7 @@ zip -r "$OUTPUT_ZIP" . \
   -x "src/persistence/server-state.backup.json" \
   -x "src/persistence/positions.json" \
   -x "src/persistence/positions-*.json" \
+  -x "src/persistence/candle-spread-runs/*" \
   > /dev/null
 
 echo ""

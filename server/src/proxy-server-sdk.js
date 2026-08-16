@@ -10,6 +10,7 @@ const PersistenceManager = require('./persistence/persistence');
 const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
 const { analyzeCandles, streamingCandleSource } = require('./persistence/candle-analyzer');
+const candleSpread = require('./candle-spread');
 const { marketClient } = require('./persistence/market-client');
 
 const app = express();
@@ -909,6 +910,29 @@ app.get('/api/v1/positions/offsetting', async (req, res) => {
   }
 });
 
+// Candle-spread trader — read-only status/log endpoints (NOT dev-gated, so the
+// production UI can poll them). The engine itself runs internally; these only read.
+app.get('/api/v1/candle-spread/runs', (req, res) => {
+  try {
+    res.json({ runs: candleSpread.listRuns(), timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list candle-spread runs', message: error.message });
+  }
+});
+
+app.get('/api/v1/candle-spread/runs/:symbol/:expiration', (req, res) => {
+  try {
+    const { symbol, expiration } = req.params;
+    const record = candleSpread.getRun(symbol, expiration, req.query.date);
+    if (!record) {
+      return res.status(404).json({ error: 'Run not found', symbol, expiration, date: req.query.date || 'today' });
+    }
+    res.json(record);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read candle-spread run', message: error.message });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {
@@ -1067,7 +1091,16 @@ async function startServer() {
   try {
     // Initialize persistence first
     await initializePersistence();
-    
+
+    // Start the candle-spread trader (dry-run) — internal engine, separate from the
+    // paper-sim position-manager. Orders are built + logged but NOT sent while dryRun.
+    candleSpread.start({
+      analyzeCandles,
+      getOrFetchChainData: (symbol, expiration) => persistence.getOrFetchChainData(symbol, expiration),
+      tradingClient,
+      accountHash: process.env.ACCOUNT_HASH
+    });
+
     app.listen(PORT, () => {
       console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/health`);

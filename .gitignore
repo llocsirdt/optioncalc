@@ -40,6 +40,7 @@ server/src/persistence/server-state.json
 server/src/persistence/server-state.backup.json
 server/src/persistence/positions.json
 server/src/persistence/positions-*.json
+server/src/persistence/candle-spread-runs/
 server/nodemon.json
 
 # Backtest output files (large JSON files with historical data)
