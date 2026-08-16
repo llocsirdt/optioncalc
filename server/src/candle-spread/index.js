@@ -64,19 +64,27 @@ function msToNextBoundary(now = Date.now()) {
   return Math.ceil((now + 1) / period) * period - now;
 }
 
-// The dry-run order placer. Builds nothing new (payload already built) — logs and, while
-// dryRun, ASSUMES the order fills at its limit so state advances. Real sending is the
-// deliberate future step in the `else` branch.
+// The order placer.
+//
+// HARD SAFETY RULE: real orders are sent ONLY in production (DEPS.isProd) AND only when
+// this run's dryRun flag is off. DEV MODE NEVER SENDS, regardless of dryRun — otherwise a
+// local dev server running alongside the prod server would place DUPLICATE orders to
+// Schwab. Anything that isn't a real send is simulated: logged and ASSUMED filled at its
+// limit so the day's state machine advances.
 function makePlaceOrder(run, record) {
   return function placeOrder(payload, meta) {
-    if (run.dryRun) {
-      store.appendEvent(record, { type: 'order_dry_run', meta, payload, note: 'DRY RUN — not sent; assumed filled at limit' });
-      return { status: 'dry-run-assumed-fill', filled: true };
+    const canSendReal = DEPS && DEPS.isProd === true && run.dryRun === false;
+    if (!canSendReal) {
+      const why = !(DEPS && DEPS.isProd) ? 'dev-mode' : 'dryRun';
+      store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `not sent (${why}); assumed filled at limit` });
+      return { status: `simulated:${why}`, filled: true };
     }
-    // FUTURE (real): gated, internal call — NOT enabled yet.
-    // return DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, payload)...
-    store.appendEvent(record, { type: 'order_send_blocked', meta, note: 'real send not enabled' });
-    return { status: 'blocked', filled: false };
+    // PROD + dryRun off = the REAL send path. Still STOPPED SHORT for now: the internal
+    // tradingClient.placeOrderByAcct(...) call is intentionally not wired yet — enable it
+    // here (and make placeOrder async) when ready to go live.
+    // e.g. return DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, payload)...
+    store.appendEvent(record, { type: 'order_real_pending', meta, payload, note: 'PROD real-send path reached — actual send not yet wired' });
+    return { status: 'real-not-enabled', filled: false };
   };
 }
 

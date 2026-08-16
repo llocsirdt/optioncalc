@@ -1098,7 +1098,10 @@ async function startServer() {
       analyzeCandles,
       getOrFetchChainData: (symbol, expiration) => persistence.getOrFetchChainData(symbol, expiration),
       tradingClient,
-      accountHash: process.env.ACCOUNT_HASH
+      accountHash: process.env.ACCOUNT_HASH,
+      // Real order sending is prod-only; dev mode never sends (avoids duplicate orders
+      // when a local dev server runs alongside prod).
+      isProd: !isDevMode
     });
 
     app.listen(PORT, () => {
@@ -1171,6 +1174,10 @@ async function startServer() {
           isPreMarket: day >= 1 && day <= 5 && totalMinutes >= 555 && totalMinutes < 570,  // 9:15-9:30 AM
           isMarketHours: day >= 1 && day <= 5 && totalMinutes >= 570 && totalMinutes < 960, // 9:30 AM-3:59 PM
           isAfterClose: day >= 1 && day <= 5 && totalMinutes >= 965,                        // After 4:05 PM
+          // Active window we run checkPositions in: pre-market 9:15 through ~4:05 PM ET,
+          // weekdays. Off-hours we skip the (candle-based) position check entirely — there
+          // are no new candles, so it only wastes compute + Schwab priceHistory calls.
+          isActiveWindow: day >= 1 && day <= 5 && totalMinutes >= 555 && totalMinutes < 965,
         };
       };
 
@@ -1241,6 +1248,10 @@ async function startServer() {
             return; // Don't start another execution
           }
           
+          // Off-hours: skip the (candle-based) position check entirely — stream
+          // management above already ran. Cuts overnight/weekend compute + Schwab calls.
+          if (!getETTimeInfo().isActiveWindow) return;
+
           isCheckingPositions = true;
           lastCheckStartTime = Date.now();
           console.log(`🔄 [CHECK #${checkCount}] Starting checkPositions at ${timeStr}`);
@@ -1292,6 +1303,10 @@ async function startServer() {
               return; // Don't start another execution
             }
             
+            // Off-hours: skip the (candle-based) position check entirely — stream
+            // management above already ran. Cuts overnight/weekend compute + Schwab calls.
+            if (!getETTimeInfo().isActiveWindow) return;
+
             isCheckingPositions = true;
             lastCheckStartTime = Date.now();
             console.log(`🔄 [CHECK #${checkCount}] Starting checkPositions at ${timeStr}`);
