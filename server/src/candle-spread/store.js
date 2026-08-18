@@ -7,7 +7,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const RUNS_DIR = path.join(__dirname, '..', 'persistence', 'candle-spread-runs');
+// Override via CANDLE_SPREAD_RUNS_DIR so tests can point at an isolated temp dir
+// (store-internal reads/writes use this local binding, so a module-level override is
+// the only reliable way to redirect persistence).
+const RUNS_DIR = process.env.CANDLE_SPREAD_RUNS_DIR || path.join(__dirname, '..', 'persistence', 'candle-spread-runs');
 
 function ensureDir() {
   try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch (_) { /* exists */ }

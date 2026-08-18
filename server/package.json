@@ -5,6 +5,7 @@
   "main": "src/proxy-server-sdk.js",
   "scripts": {
     "start": "NODE_ENV=production node src/proxy-server-sdk.js",
+    "predev": "sh scripts/free-port.sh",
     "dev": "nodemon src/proxy-server-sdk.js",
     "test": "node ../tests/nogit/test-apis.js"
   },

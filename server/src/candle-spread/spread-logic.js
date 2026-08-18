@@ -45,6 +45,35 @@ function classifyOpen(candle, priorCandle, bands /* {upper, lower} | null */) {
   return candle.close > bands.lower ? 'bear' : null;
 }
 
+// Whether a reversal candle CONFIRMS a reversal strongly enough to cover the held
+// (uncovered) spreads. Replaces the naive "any opposite close-vs-open" trigger, which
+// gave false positives (see the run where the first 3 opens flip-flopped). Rule:
+//   - Only a candle closing OPPOSITE the held direction can trigger a cover.
+//   - Held BULL, reversal is a RED candle: cover only if the red candle did NOT make a
+//     new high vs the prior candle (the uptrend failed to extend). If it broke the prior
+//     HIGH, the trend is intact -> do NOT cover.
+//   - Held BEAR, reversal is a GREEN candle: cover only if it did NOT make a new low.
+//   - Bollinger override: if the PRIOR (trend) candle closed OUTSIDE its band on the
+//     trend-extreme side (bull: above upper band; bear: below lower band), the move is
+//     over-extended -> cover REGARDLESS of the high/low break.
+// priorBands = the prior candle's own Bollinger(20,2) { upper, lower } (or null).
+function shouldCover(heldDirection, candle, priorCandle, priorBands) {
+  const dir = simpleDirection(candle);
+  if (heldDirection === 'bull') {
+    if (dir !== 'bear') return false;
+    if (!priorCandle) return true; // can't evaluate the break -> fall back to covering
+    if (priorBands && priorBands.upper != null && priorCandle.close > priorBands.upper) return true; // over-extended up
+    return !(candle.high > priorCandle.high); // cover unless it made a NEW HIGH
+  }
+  if (heldDirection === 'bear') {
+    if (dir !== 'bull') return false;
+    if (!priorCandle) return true;
+    if (priorBands && priorBands.lower != null && priorCandle.close < priorBands.lower) return true; // over-extended down
+    return !(candle.low < priorCandle.low); // cover unless it made a NEW LOW
+  }
+  return false; // heldDirection === 'none'
+}
+
 // --- Strike / leg construction --------------------------------------------
 
 // Greatest grid strike at or below the close (the spread is CENTERED here). Off-grid
@@ -131,6 +160,7 @@ function validateWidth(spreadWidth, strikeIncrement) {
 module.exports = {
   simpleDirection,
   classifyOpen,
+  shouldCover,
   centerStrike,
   spreadStrikes,
   openLegs,

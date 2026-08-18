@@ -87,6 +87,7 @@ function processCandleClose(record, candle, priorCandle, deps) {
 
   const firstOfDay = !priorCandle;
   const bands = firstOfDay ? bandsFor(candle) : null;
+  const priorBands = priorCandle ? bandsFor(priorCandle) : null; // for the cover over-extension override
   const simpleDir = L.simpleDirection(candle);
   const openSide = L.classifyOpen(candle, priorCandle, bands);
 
@@ -103,10 +104,29 @@ function processCandleClose(record, candle, priorCandle, deps) {
     st.pendingOpenId = null;
   }
 
-  // (3) COVER — uses SIMPLE direction only (ignores the high/low break): if the candle
-  // closed opposite our held direction, cover every filled, uncovered spread 1:1. This
-  // can happen in the same candle that also opens a new spread (step 4).
-  if (st.direction !== 'none' && simpleDir !== 'flat' && simpleDir !== st.direction) {
+  // Cover evaluation + context (logged so run analysis can show WHY we covered or held:
+  // whether the reversal candle broke the prior extreme, and whether the Bollinger override
+  // fired). Only meaningful while we hold a position.
+  const coverSignal = L.shouldCover(st.direction, candle, priorCandle, priorBands);
+  const coverContext = st.direction === 'none' ? null : {
+    heldDirection: st.direction,
+    reversalDir: simpleDir,
+    prior: priorCandle ? { high: priorCandle.high, low: priorCandle.low, close: priorCandle.close } : null,
+    priorBands: priorBands ? { upper: priorBands.upper, lower: priorBands.lower } : null,
+    brokeNewHigh: priorCandle ? candle.high > priorCandle.high : null,
+    brokeNewLow: priorCandle ? candle.low < priorCandle.low : null,
+    bbOverride: !!(priorCandle && priorBands && (
+      (st.direction === 'bull' && priorBands.upper != null && priorCandle.close > priorBands.upper) ||
+      (st.direction === 'bear' && priorBands.lower != null && priorCandle.close < priorBands.lower)
+    )),
+    covered: coverSignal
+  };
+
+  // (3) COVER — only on a CONFIRMED reversal (see spread-logic.shouldCover): a candle
+  // closing opposite our held direction that FAILED to extend the prior candle's extreme
+  // (or where the prior trend candle closed outside its Bollinger band). Covers every
+  // filled, uncovered spread 1:1. Can happen in the same candle that also opens (step 4).
+  if (coverSignal) {
     const uncovered = st.positions.filter(p => p.filled && !p.covered);
     for (const pos of uncovered) {
       const res = buildCover(pos, cfg, deps.getLeg);
@@ -129,7 +149,14 @@ function processCandleClose(record, candle, priorCandle, deps) {
 
   // (4) OPEN — if the candle strictly qualifies. Neutral (openSide === null) intentionally
   // does nothing for now; this is the isolated branch to extend later.
-  if (openSide) {
+  //
+  // Conflict guard: with the confirmed-reversal cover rule, a candle can signal the OPPOSITE
+  // side while we still hold an uncovered position (because the reversal wasn't confirmed, so
+  // step 3 didn't cover). In that case stay in the trend — don't open a counter-position. A
+  // real flip only happens after a cover (which sets direction to 'none').
+  if (openSide && openSide !== st.direction && st.direction !== 'none') {
+    decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
+  } else if (openSide) {
     const res = buildOpen(openSide, candle, cfg, deps.getLeg);
     if (res.error) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
@@ -163,6 +190,7 @@ function processCandleClose(record, candle, priorCandle, deps) {
     type: 'candle_close',
     candle: { time: candle.timeEST, open: candle.open, high: candle.high, low: candle.low, close: candle.close },
     bands,
+    coverContext,
     classification: { simpleDir, openSide, firstOfDay },
     direction: st.direction,
     realizedPnl: st.realizedPnl,
