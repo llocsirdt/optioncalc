@@ -186,3 +186,6 @@ Thumbs.db
 
 # Local cache of fetched candle-spread runs (durability backup; may be large)
 candle-spread-archive/
+
+# Signal-lab historical dataset (fetched from Schwab; large, regenerable)
+signal-lab-data/
