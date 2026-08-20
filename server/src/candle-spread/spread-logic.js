@@ -126,10 +126,84 @@ function coverLegs(coveredDirection, shortStrike, spreadWidth, coverStyle) {
   return [ { side: 'short', type: 'C', strike: shortStrike }, { side: 'long', type: 'C', strike: shortStrike - spreadWidth } ];
 }
 
+// --- Cover-geometry candidates (see project-candle-spread-cover-geometry) -----
+// The fixed tent (coverLegs above) locks a loss on the LAST stacked open when the
+// reversal fires before price retraces past its entry. Instead we generate a small set
+// of candidate covers and let a selector pick. Each candidate is parameterized by its
+// LONG strike; the short leg is longStrike ∓ width. For a covered BULL (short = Kup) the
+// cover is a bear put with long strike >= Kup (box = long Kup; tent = long Kup+width;
+// deeper = long further above). Mirror for a covered BEAR (short = Klow), a bull call
+// with long strike <= Klow. Any longStrike on the correct side of the short leg keeps the
+// combined (covered spread + cover) value >= width EVERYWHERE — so the guaranteed floor
+// (width − openDebit − coverDebit) formula holds for every candidate, and there is never
+// net adverse (old-direction) risk.
+
+// Half-distance anchor: place the cover's long leg ~halfway between the underlying and the
+// covered short strike. Rounds to the grid and clamps to the valid side (never inside box).
+function coverAnchorLong(coveredSide, shortStrike, underlying, incr) {
+  const raw = shortStrike + (underlying - shortStrike) / 2;
+  const rounded = Math.round(raw / incr) * incr;
+  return coveredSide === 'bull' ? Math.max(shortStrike, rounded) : Math.min(shortStrike, rounded);
+}
+
+// Candidate long strikes = anchor ± k increments, where k grows with how deep the move is
+// (|underlying − short| in increments) but is hard-capped. The BOX (long = short strike) is
+// always included as the guaranteed-floor candidate. Returns sorted, de-duped, valid-side longs.
+function coverCandidateLongs(coveredSide, shortStrike, underlying, incr, kCap = 5) {
+  const anchor = coverAnchorLong(coveredSide, shortStrike, underlying, incr);
+  const depth = Math.abs(underlying - shortStrike) / incr;
+  const k = Math.max(1, Math.min(kCap, Math.round(depth / 2)));
+  const set = new Set([shortStrike]); // box always in the set
+  for (let j = -k; j <= k; j++) {
+    const Lstrike = anchor + j * incr;
+    if (coveredSide === 'bull' ? Lstrike >= shortStrike : Lstrike <= shortStrike) set.add(Lstrike);
+  }
+  return [...set].sort((a, b) => a - b);
+}
+
+// Legs of a cover with a chosen long strike (width = spreadWidth). Generalizes coverLegs
+// (which is this at longStrike = short ± width, i.e. the tent).
+//   bull cover -> bear put: short P (long−width), long P (long)
+//   bear cover -> bull call: long C (long), short C (long+width)
+function candidateCoverLegs(coveredSide, longStrike, spreadWidth) {
+  if (coveredSide === 'bull') {
+    return [ { side: 'short', type: 'P', strike: longStrike - spreadWidth }, { side: 'long', type: 'P', strike: longStrike } ];
+  }
+  return [ { side: 'short', type: 'C', strike: longStrike + spreadWidth }, { side: 'long', type: 'C', strike: longStrike } ];
+}
+
+// Peak EXTRA value a candidate retains above the guaranteed width floor:
+// = min(width, |long − short|). Box -> 0 (locked flat); tent (|long−short| = width) -> width
+// (can reach 2×width near the short strike); deeper -> still capped at width. This is the
+// "potential" a selector weighs against the guaranteed floor.
+function coverPeakExtra(shortStrike, longStrike, spreadWidth) {
+  return Math.min(spreadWidth, Math.abs(longStrike - shortStrike));
+}
+
+// Signed intrinsic payoff of a set of {side,type,strike} legs at an expiry price (per 1x,
+// per point — caller scales by 100 × qty). Long adds intrinsic, short subtracts.
+function legsPayoff(legs, price) {
+  let v = 0;
+  for (const leg of legs) {
+    const intrinsic = leg.type === 'C' ? Math.max(price - leg.strike, 0) : Math.max(leg.strike - price, 0);
+    v += (leg.side === 'long' ? 1 : -1) * intrinsic;
+  }
+  return v;
+}
+
 // --- Pricing ---------------------------------------------------------------
 
 function roundToTick(price, tick) {
   return Math.round(price / tick) * tick;
+}
+
+// Cover limit under the new (skew-aware) pricing: pay the real spread mark + 1 tick toward
+// the ask so it fills, bounded by a loose sanity ceiling (width − 1 tick) and a tick floor.
+// No sub-market cap (unlike debitLimit's width/2×1.05, which suppressed fills on ATM spreads).
+function coverLimitFromMark(mark, spreadWidth, tick) {
+  const ceil = spreadWidth - tick;
+  const limit = roundToTick(mark + tick, tick);
+  return round2(Math.max(tick, Math.min(limit, ceil)));
 }
 
 // Net-debit limit for an OPEN or a debit-offset COVER.
@@ -166,7 +240,13 @@ module.exports = {
   openLegs,
   shortStrikeOf,
   coverLegs,
+  coverAnchorLong,
+  coverCandidateLongs,
+  candidateCoverLegs,
+  coverPeakExtra,
+  legsPayoff,
   roundToTick,
   debitLimit,
+  coverLimitFromMark,
   validateWidth
 };

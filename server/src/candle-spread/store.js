@@ -16,9 +16,12 @@ function ensureDir() {
   try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch (_) { /* exists */ }
 }
 
-// e.g. NDX_2026-08-11_2026-08-11 (symbol_expiration_tradeDate)
-function makeRunId(symbol, expiration, tradeDate) {
-  return `${symbol}_${expiration}_${tradeDate}`;
+// e.g. NDX_2026-08-11_2026-08-11 (symbol_expiration_tradeDate), or
+// NDX_2026-08-11_2026-08-11_v1 when a variant is given (the 3 parallel shadow strategies).
+// variant is optional so pre-variant run files keep their original ids.
+function makeRunId(symbol, expiration, tradeDate, variant) {
+  const base = `${symbol}_${expiration}_${tradeDate}`;
+  return variant ? `${base}_${variant}` : base;
 }
 
 function runFilePath(runId) {
@@ -43,7 +46,7 @@ function writeRun(record) {
 // Create (or load existing) record for a run+day. Initial state carries the direction
 // machine and position list the engine maintains.
 function initRun(config, tradeDate) {
-  const runId = makeRunId(config.symbol, config.expiration, tradeDate);
+  const runId = makeRunId(config.symbol, config.expiration, tradeDate, config.variant);
   const existing = readRun(runId);
   if (existing) return existing;
   const record = {
@@ -87,6 +90,9 @@ function listRunsSummary() {
       symbol: r.config?.symbol,
       expiration: r.config?.expiration,
       tradeDate: r.tradeDate,
+      variant: r.config?.variant || null,
+      variantLabel: r.config?.variantLabel || null,
+      coverSelector: r.config?.coverSelector || null,
       direction: r.state?.direction,
       positionCount: r.state?.positions?.length || 0,
       realizedPnl: r.state?.realizedPnl || 0,

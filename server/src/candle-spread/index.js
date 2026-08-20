@@ -7,9 +7,11 @@
 const store = require('./store');
 const trader = require('./trader');
 
-// Default run(s). Each run is independent, keyed by (symbol, expiration). NDX 0DTE first.
+// Base run config(s), keyed by (symbol, expiration). NDX 0DTE first. Each base run is
+// fanned out into one shadow run PER VARIANT (see VARIANTS) that share the same live candle
+// and chain snapshot each tick and differ ONLY in cover-selection, so they can be compared.
 // dryRun=true => build + log orders but DO NOT send; assume fills so the day simulates.
-const DEFAULT_RUNS = [
+const BASE_RUNS = [
   {
     symbol: 'NDX',
     // expiration is set to "today" (0DTE) at start; overridden per environment if needed.
@@ -23,6 +25,26 @@ const DEFAULT_RUNS = [
     dryRun: true
   }
 ];
+
+// The 3 parallel shadow strategies. coverSelector is the only behavioral difference.
+//   v0 fixed  = current deployed behavior (tent cover, old cap pricing) — the baseline.
+//   v1 greedy = phase-1 best-per-position candidate cover (skew-aware pricing).
+//   v2 joint  = phase-2 joint basket optimization over the covering stack.
+const VARIANTS = [
+  { variant: 'v0', variantLabel: 'fixed-tent', coverSelector: 'fixed' },
+  { variant: 'v1', variantLabel: 'greedy',     coverSelector: 'greedy' },
+  { variant: 'v2', variantLabel: 'joint',      coverSelector: 'joint' }
+];
+
+// Expand base runs × variants into the concrete run list.
+function buildRuns() {
+  const runs = [];
+  for (const base of BASE_RUNS) for (const v of VARIANTS) runs.push({ ...base, ...v });
+  return runs;
+}
+
+// Back-compat: some tests/importers reference DEFAULT_RUNS.
+const DEFAULT_RUNS = BASE_RUNS;
 
 let DEPS = null;         // { analyzeCandles, getOrFetchChainData, tradingClient, accountHash }
 let RUNS = [];
@@ -103,34 +125,46 @@ function pickJustClosed(candles, now = Date.now()) {
   return { candle: null, prior: null };
 }
 
-async function runDecisionForBoundary(run, kind) {
-  const expiration = run.expiration || todayEST(); // 0DTE default
-  const tradeDate = todayEST();
-  const cfg = { ...run, expiration };
-  const record = store.initRun(cfg, tradeDate);
+// Group runs that share live data (candles + chain) so we fetch ONCE per (symbol, expiration)
+// per tick instead of once per variant — 3 variants must not triple the Schwab load.
+function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`; }
 
-  // Candles
-  const analysis = await DEPS.analyzeCandles(cfg.symbol, { timeframe: '15m' });
+async function processGroup(runs, kind) {
+  const sample = runs[0];
+  const expiration = sample.expiration || todayEST(); // 0DTE default
+  const tradeDate = todayEST();
+
+  // Fetch shared candle + chain ONCE for the whole group.
+  const analysis = await DEPS.analyzeCandles(sample.symbol, { timeframe: '15m' });
   const candles = analysis?.candleData?.['15m']?.candles || [];
   const { candle, prior } = pickJustClosed(candles);
   if (!candle) return { pending: 'candle-not-available' };
+  const chainData = await DEPS.getOrFetchChainData(sample.symbol, expiration);
 
-  // Chain marks
-  const chainData = await DEPS.getOrFetchChainData(cfg.symbol, expiration);
-  const getLeg = trader.makeLegAccessor(chainData, expiration);
-
-  // First candle of the day uses the Bollinger gate: pass prior=null so classifyOpen
-  // takes the first-candle branch even though a prior-session candle exists in the data.
+  // First candle of the day uses the Bollinger gate: pass prior=null so classifyOpen takes
+  // the first-candle branch even though a prior-session candle exists in the data.
   const priorForLogic = kind === 'first' ? null : prior;
 
-  const placeOrder = makePlaceOrder(run, record);
-  const result = trader.processCandleClose(record, candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun });
-  return { acted: true, result };
+  // Feed every variant the SAME candle + chain so the comparison is apples-to-apples.
+  for (const run of runs) {
+    try {
+      const cfg = { ...run, expiration };
+      const record = store.initRun(cfg, tradeDate);
+      const getLeg = trader.makeLegAccessor(chainData, expiration);
+      const placeOrder = makePlaceOrder(run, record);
+      trader.processCandleClose(record, candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun });
+    } catch (e) {
+      console.error(`[candle-spread] variant ${run.variant} error:`, e && e.message);
+    }
+  }
+  return { acted: true };
 }
 
 // Poll for candle availability: fire at boundary+5s, retry every 5s up to a cap.
 function attemptTick(kind, retriesLeft) {
-  Promise.all(RUNS.map(run => runDecisionForBoundary(run, kind).catch(e => ({ error: e.message }))))
+  const groups = {};
+  for (const run of RUNS) { (groups[groupKey(run)] = groups[groupKey(run)] || []).push(run); }
+  Promise.all(Object.values(groups).map(runs => processGroup(runs, kind).catch(e => ({ error: e.message }))))
     .then(results => {
       const stillPending = results.some(r => r && r.pending);
       if (stillPending && retriesLeft > 0) {
@@ -140,13 +174,37 @@ function attemptTick(kind, retriesLeft) {
     .catch(err => console.error('[candle-spread] tick error:', err && err.message));
 }
 
-function eodPlaceholder() {
-  // PLACEHOLDER: last-15-minutes routine (15:45–16:00). Intended: sweep for cheap covers
-  // (cover cost < 5% of spread width) to lock profit on still-open 0DTE positions, else
-  // let them settle. To be defined. For now we just note it in each run's log.
-  for (const run of RUNS) {
-    const record = store.initRun({ ...run, expiration: run.expiration || todayEST() }, todayEST());
-    store.appendEvent(record, { type: 'eod_placeholder', note: 'EOD hook (cheap-cover sweep) not yet implemented' });
+// EOD (16:00): book each run's TERMINAL settlement P/L — the fair cross-variant metric,
+// valuing every established position at the day's settle price (0DTE => intrinsic), so the
+// joint variant's retained upside is actually counted. (The parked cheap-cover sweep < 5%
+// width would slot in just before this.)
+async function eodSettlement() {
+  const bySymbol = {};
+  for (const run of RUNS) { (bySymbol[run.symbol] = bySymbol[run.symbol] || []).push(run); }
+  for (const [symbol, runs] of Object.entries(bySymbol)) {
+    // Settle price = newest 15m candle close (~4pm print); fall back to a run's last logged close.
+    let settle = null;
+    try {
+      const analysis = await DEPS.analyzeCandles(symbol, { timeframe: '15m' });
+      const candles = analysis?.candleData?.['15m']?.candles || [];
+      if (candles.length && candles[0].close != null) settle = Number(candles[0].close);
+    } catch (e) { console.error('[candle-spread] EOD candle fetch failed:', e && e.message); }
+
+    for (const run of runs) {
+      const cfg = { ...run, expiration: run.expiration || todayEST() };
+      const record = store.initRun(cfg, todayEST());
+      let px = settle;
+      if (px == null) {
+        const lastCC = [...record.events].reverse().find(ev => ev.type === 'candle_close');
+        px = lastCC ? Number(lastCC.candle.close) : null;
+      }
+      if (px == null) { store.appendEvent(record, { type: 'eod_settlement', variant: run.variant, note: 'no settle price available' }); continue; }
+      const term = trader.computeTerminalPnl(record.state, cfg, px);
+      store.appendEvent(record, {
+        type: 'eod_settlement', variant: run.variant, settle: px,
+        terminalPnl: term.total, floorPnl: term.floor, positions: term.positions
+      });
+    }
   }
 }
 
@@ -157,7 +215,7 @@ function scheduleNext() {
     // The boundary we just passed is ~now (minus the 5s). Classify by current ET minute.
     const kind = classifyBoundary(now);
     try {
-      if (kind === 'eod') eodPlaceholder();
+      if (kind === 'eod') eodSettlement().catch(e => console.error('[candle-spread] EOD error:', e && e.message));
       else if (kind === 'first' || kind === 'action') attemptTick(kind, 12); // ~1 min of polling
     } catch (e) {
       console.error('[candle-spread] boundary error:', e && e.message);
@@ -173,23 +231,28 @@ function start(deps) {
     return;
   }
   DEPS = deps;
-  RUNS = DEFAULT_RUNS.map(r => ({ ...r }));
+  RUNS = buildRuns();
   started = true;
   scheduleNext();
-  console.log(`[candle-spread] started (dry-run) — ${RUNS.length} run(s):`, RUNS.map(r => r.symbol).join(', '));
+  console.log(`[candle-spread] started (dry-run) — ${RUNS.length} run(s):`,
+    RUNS.map(r => `${r.symbol}/${r.variant}(${r.coverSelector})`).join(', '));
 }
 
 // --- read accessors for the API -------------------------------------------
 function listRuns() { return store.listRunsSummary(); }
-function getRun(symbol, expiration, date) {
-  const tradeDate = date || todayEST();
-  return store.readRun(store.makeRunId(symbol, expiration, tradeDate));
+// date defaults to the EXPIRATION (0DTE: tradeDate == expiration), so `/runs/NDX/2026-08-18`
+// with no ?date= resolves to that day's run instead of today. variant is optional.
+function getRun(symbol, expiration, date, variant) {
+  const tradeDate = date || expiration;
+  return store.readRun(store.makeRunId(symbol, expiration, tradeDate, variant));
 }
 
 module.exports = {
   start,
   listRuns,
   getRun,
+  buildRuns,
+  VARIANTS,
   // exported for tests
   classifyBoundary,
   msToNextBoundary,

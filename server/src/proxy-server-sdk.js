@@ -920,12 +920,15 @@ app.get('/api/v1/candle-spread/runs', (req, res) => {
   }
 });
 
+// ?date= defaults to the expiration (0DTE). ?variant=v0|v1|v2 selects a shadow strategy;
+// omit it to read a pre-variant (single-strategy) run.
 app.get('/api/v1/candle-spread/runs/:symbol/:expiration', (req, res) => {
   try {
     const { symbol, expiration } = req.params;
-    const record = candleSpread.getRun(symbol, expiration, req.query.date);
+    const date = req.query.date || expiration;
+    const record = candleSpread.getRun(symbol, expiration, date, req.query.variant);
     if (!record) {
-      return res.status(404).json({ error: 'Run not found', symbol, expiration, date: req.query.date || 'today' });
+      return res.status(404).json({ error: 'Run not found', symbol, expiration, date, variant: req.query.variant || null });
     }
     res.json(record);
   } catch (error) {

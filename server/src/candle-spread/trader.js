@@ -126,22 +126,28 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // closing opposite our held direction that FAILED to extend the prior candle's extreme
   // (or where the prior trend candle closed outside its Bollinger band). Covers every
   // filled, uncovered spread 1:1. Can happen in the same candle that also opens (step 4).
+  //
+  // WHICH cover geometry is chosen is delegated to a pluggable selector (cfg.coverSelector:
+  // 'fixed' = current tent | 'greedy' = best per-position candidate | 'joint' = basket
+  // optimization). This is the seam the 3 shadow variants differ on; everything else is shared.
   if (coverSignal) {
     const uncovered = st.positions.filter(p => p.filled && !p.covered);
-    for (const pos of uncovered) {
-      const res = buildCover(pos, cfg, deps.getLeg);
-      if (res.error) { decisions.push({ action: 'cover-skip', positionId: pos.id, error: res.error }); continue; }
-      const placed = deps.placeOrder(res.payload, { kind: 'cover', of: pos.id, legs: res.legs, limit: res.limit, mark: res.mark });
+    const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying: candle.close, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
+    for (const plan of plans) {
+      if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
+      const pos = uncovered.find(p => p.id === plan.positionId);
+      const placed = deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
       pos.covered = true;
       pos.coverId = nextId('cov');
-      pos.coverLimit = res.limit;
+      pos.coverLimit = plan.limit;
+      pos.coverLegs = plan.legs;      // kept for EOD terminal-settlement P/L + offline replay
       pos.coverStatus = placed.status;
-      // Running LOCKED P&L: the covered debit-offset pair is a "tent" whose guaranteed
-      // floor value = spreadWidth. So the locked floor = (width - openDebit - coverDebit)
-      // * 100 * qty. (It can end higher near the shared strike; this is the floor.)
-      const lockedFloor = (cfg.spreadWidth - pos.limit - res.limit) * 100 * cfg.quantity;
-      st.realizedPnl = round2(st.realizedPnl + lockedFloor);
-      decisions.push({ action: 'cover', positionId: pos.id, coverId: pos.coverId, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, lockedFloor });
+      pos.coverGeometry = plan.geometry;
+      // Running LOCKED P&L uses the candidate's guaranteed floor (width − open − cover),
+      // valid for every candidate since value >= width everywhere. Retained upside
+      // (plan.peakExtra) is tracked separately, not counted in the locked figure.
+      st.realizedPnl = round2(st.realizedPnl + plan.floor);
+      decisions.push({ action: 'cover', positionId: pos.id, coverId: pos.coverId, legs: plan.legs, mark: plan.mark, limit: plan.limit, geometry: plan.geometry, longStrike: plan.longStrike, peakExtra: plan.peakExtra, lockedFloor: plan.floor });
     }
     // Cover-only reversal leaves us flat unless step 4 opens a new side below.
     st.direction = 'none';
@@ -186,6 +192,11 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // candle (not just reversals). Exact semantics (which side, continuing vs reversing) TBD.
   // if (cfg.coverTiming === 'each-candle') { ... }
 
+  // Snapshot the strike window around the underlying so past days can be replayed and new
+  // cover geometries re-scored offline (we don't store historical option chains anywhere else).
+  const chainSnapshot = cfg.captureChain === false ? null
+    : snapshotChain(deps.getLeg, candle.close, cfg.strikeIncrement, cfg.snapshotStrikes || 16);
+
   store.appendEvent(record, {
     type: 'candle_close',
     candle: { time: candle.timeEST, open: candle.open, high: candle.high, low: candle.low, close: candle.close },
@@ -194,7 +205,8 @@ function processCandleClose(record, candle, priorCandle, deps) {
     classification: { simpleDir, openSide, firstOfDay },
     direction: st.direction,
     realizedPnl: st.realizedPnl,
-    decisions
+    decisions,
+    chainSnapshot
   });
   return { decisions };
 }
@@ -228,6 +240,172 @@ function buildCover(pos, cfg, getLeg) {
   return { legs, mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT') };
 }
 
+// --- Cover selection (the seam the 3 shadow variants differ on) ------------
+// selectCovers(uncovered, cfg, getLeg, ctx) -> array of cover PLANS (or {error,positionId}).
+// ctx = { underlying (candle close), reversedDir ('bull'|'bear' of the covering candle), bbOverride }.
+// A plan: { positionId, legs, resolved, mark, limit, floor($), peakExtra($), geometry, longStrike, payload }.
+function selectCovers(uncovered, cfg, getLeg, ctx) {
+  const sel = cfg.coverSelector || 'fixed';
+  if (sel === 'joint') return selectCoversJoint(uncovered, cfg, getLeg, ctx);
+  // 'fixed' and 'greedy' are independent per position.
+  return uncovered.map(pos => sel === 'greedy'
+    ? selectCoverGreedy(pos, cfg, getLeg, ctx)
+    : selectCoverFixed(pos, cfg, getLeg));
+}
+
+function coverGeometryLabel(coveredSide, shortStrike, longStrike, width) {
+  if (longStrike === shortStrike) return 'box';
+  const tentLong = coveredSide === 'bull' ? shortStrike + width : shortStrike - width;
+  return longStrike === tentLong ? 'tent' : 'anchor';
+}
+
+// Price one candidate cover (skew-aware: real chain mark + 1 tick, no sub-market cap).
+function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
+  const legs = L.candidateCoverLegs(coveredSide, longStrike, cfg.spreadWidth);
+  const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
+  if (error) return { error, positionId: pos.id, longStrike };
+  const mark = round2(longMid - shortMid);
+  const limit = L.coverLimitFromMark(mark, cfg.spreadWidth, cfg.tickIncrement);
+  const floor = round2((cfg.spreadWidth - pos.limit - limit) * 100 * cfg.quantity);
+  const peakExtra = round2(L.coverPeakExtra(pos.shortStrike, longStrike, cfg.spreadWidth) * 100 * cfg.quantity);
+  return {
+    positionId: pos.id, legs, resolved, mark, limit, floor, peakExtra, longStrike,
+    geometry: coverGeometryLabel(coveredSide, pos.shortStrike, longStrike, cfg.spreadWidth)
+  };
+}
+
+// V0 baseline: the current fixed tent, priced with the old debitLimit (so V0 reproduces the
+// deployed behavior exactly for a clean A/B against the smarter variants).
+function selectCoverFixed(pos, cfg, getLeg) {
+  const res = buildCover(pos, cfg, getLeg);
+  if (res.error) return { error: res.error, positionId: pos.id };
+  const tentLong = pos.side === 'bull' ? pos.shortStrike + cfg.spreadWidth : pos.shortStrike - cfg.spreadWidth;
+  return {
+    positionId: pos.id, legs: res.legs, mark: res.mark, limit: res.limit,
+    floor: round2((cfg.spreadWidth - pos.limit - res.limit) * 100 * cfg.quantity),
+    peakExtra: round2(L.coverPeakExtra(pos.shortStrike, tentLong, cfg.spreadWidth) * 100 * cfg.quantity),
+    geometry: 'tent', longStrike: tentLong, payload: res.payload
+  };
+}
+
+// Weight on retained upside vs guaranteed floor; scaled up when the reversal is high-conviction
+// (prior candle closed outside its Bollinger band).
+function upsideLambda(cfg, ctx) {
+  const base = cfg.upsideLambda != null ? cfg.upsideLambda : 0.3;
+  return base * (ctx.bbOverride ? (cfg.convictionMult || 1.5) : 1);
+}
+
+// V1 phase-1: best candidate per position, score = floor + λ·peakExtra. Naturally picks the
+// box for an un-retraced last open (cheap box beats an ATM tent) and the tent/deeper for deep
+// stacked opens (both cheap, so the upside bonus tips it).
+function selectCoverGreedy(pos, cfg, getLeg, ctx) {
+  const longs = L.coverCandidateLongs(pos.side, pos.shortStrike, ctx.underlying, cfg.strikeIncrement, cfg.coverKCap || 5);
+  const priced = longs.map(Ls => priceCoverCandidate(pos.side, pos, Ls, cfg, getLeg)).filter(p => !p.error);
+  if (!priced.length) return { error: `no chain quotes for any cover candidate of ${pos.id}`, positionId: pos.id };
+  const lambda = upsideLambda(cfg, ctx);
+  priced.forEach(p => { p.score = round2(p.floor + lambda * p.peakExtra); });
+  priced.sort((a, b) => b.score - a.score);
+  const best = priced[0];
+  best.payload = buildOrderPayload(best.resolved, best.limit, cfg.quantity, 'DEBIT');
+  return best;
+}
+
+// Terminal-price scenarios for the joint objective: a continued move in the REVERSED direction,
+// triangular weights peaking at ~one spread-width drift. (conviction could widen this later.)
+function reversalScenarios(underlying, reversedDir, cfg) {
+  const drift = cfg.jointDrift != null ? cfg.jointDrift : cfg.spreadWidth;
+  const sign = reversedDir === 'bear' ? -1 : 1;
+  const pts = [0, 0.5, 1.0, 1.5, 2.0].map(m => ({ price: underlying + sign * m * drift, w: 1 - Math.abs(m - 1.0) }));
+  const wsum = pts.reduce((s, p) => s + p.w, 0) || 1;
+  pts.forEach(p => { p.w /= wsum; });
+  return pts;
+}
+
+// Expected aggregate P/L of a chosen combination across the scenarios. Non-separable across
+// positions (they share the terminal price), so it rewards LADDERING the covers' long strikes
+// across the landing zone rather than stacking identical greedy picks.
+function jointScore(chosen, positions, scenarios, cfg) {
+  let ev = 0;
+  for (const s of scenarios) {
+    let agg = 0;
+    for (let i = 0; i < chosen.length; i++) {
+      const value = L.legsPayoff(positions[i].legs, s.price) + L.legsPayoff(chosen[i].legs, s.price);
+      agg += (value - positions[i].limit - chosen[i].limit) * 100 * cfg.quantity;
+    }
+    ev += s.w * agg;
+  }
+  return ev;
+}
+
+// V2 phase-2: optimize the whole covering basket jointly. Price + prune each position's
+// candidates to the top-N by greedy score, take the (capped) cartesian product, and pick the
+// combination maximizing expected aggregate P/L under the reversal scenarios. Falls back to
+// greedy per position if any position lacks quotes or the product exceeds the cap.
+function selectCoversJoint(uncovered, cfg, getLeg, ctx) {
+  const topN = cfg.jointTopN || 3;
+  const lambda = upsideLambda(cfg, ctx);
+  const perPos = uncovered.map(pos => {
+    const longs = L.coverCandidateLongs(pos.side, pos.shortStrike, ctx.underlying, cfg.strikeIncrement, cfg.coverKCap || 5);
+    const priced = longs.map(Ls => priceCoverCandidate(pos.side, pos, Ls, cfg, getLeg)).filter(p => !p.error);
+    priced.forEach(p => { p.gscore = p.floor + lambda * p.peakExtra; });
+    priced.sort((a, b) => b.gscore - a.gscore);
+    return { pos, priced: priced.slice(0, topN) };
+  });
+  const combos = perPos.reduce((n, pp) => n * pp.priced.length, 1);
+  if (perPos.some(pp => pp.priced.length === 0) || combos > (cfg.jointMaxCombos || 500)) {
+    return uncovered.map(pos => selectCoverGreedy(pos, cfg, getLeg, ctx));
+  }
+  const positions = perPos.map(pp => pp.pos);
+  const scenarios = reversalScenarios(ctx.underlying, ctx.reversedDir, cfg);
+  const counts = perPos.map(pp => pp.priced.length);
+  let best = null, bestScore = -Infinity;
+  for (let c = 0; c < combos; c++) {
+    let rem = c; const chosen = [];
+    for (let i = 0; i < perPos.length; i++) { chosen.push(perPos[i].priced[rem % counts[i]]); rem = Math.floor(rem / counts[i]); }
+    const score = jointScore(chosen, positions, scenarios, cfg);
+    if (score > bestScore) { bestScore = score; best = chosen; }
+  }
+  return best.map(p => ({ ...p, payload: buildOrderPayload(p.resolved, p.limit, cfg.quantity, 'DEBIT') }));
+}
+
+// Strike-window snapshot around the underlying for offline replay/re-scoring.
+function snapshotChain(getLeg, underlying, incr, windowStrikes) {
+  const center = L.centerStrike(underlying, incr);
+  const half = Math.floor(windowStrikes / 2);
+  const strikes = [];
+  for (let i = -half; i <= half; i++) {
+    const strike = center + i * incr;
+    const c = getLeg('C', strike), p = getLeg('P', strike);
+    strikes.push({
+      strike,
+      call: c ? { mid: c.mid, bid: c.bid, ask: c.ask } : null,
+      put: p ? { mid: p.mid, bid: p.bid, ask: p.ask } : null
+    });
+  }
+  return { underlying, center, strikes };
+}
+
+// --- EOD terminal-settlement P/L ------------------------------------------
+// The fair cross-variant metric: value every established position at the day's settle
+// price (0DTE => intrinsic). Covered pairs realize their true value INCLUDING the upside
+// the floor number ignores (so it doesn't undersell the joint variant); uncovered filled
+// spreads settle at their own intrinsic. floor = state.realizedPnl (guaranteed locked sum).
+function computeTerminalPnl(state, cfg, settle) {
+  const positions = [];
+  let total = 0;
+  for (const pos of state.positions || []) {
+    if (!pos.filled) continue;
+    const qty = pos.quantity || cfg.quantity;
+    let value = L.legsPayoff(pos.legs, settle);
+    let cost = pos.limit;
+    if (pos.covered && pos.coverLegs) { value += L.legsPayoff(pos.coverLegs, settle); cost += (pos.coverLimit || 0); }
+    const pnl = round2((value - cost) * 100 * qty);
+    total = round2(total + pnl);
+    positions.push({ id: pos.id, side: pos.side, covered: !!pos.covered, geometry: pos.coverGeometry || null, value: round2(value), cost: round2(cost), pnl });
+  }
+  return { settle, total, floor: state.realizedPnl, positions };
+}
+
 function round2(n) { return Math.round(n * 100) / 100; }
 
 module.exports = {
@@ -236,5 +414,11 @@ module.exports = {
   buildOrderPayload,
   buildOpen,
   buildCover,
-  resolveLegs
+  resolveLegs,
+  selectCovers,
+  selectCoverGreedy,
+  selectCoversJoint,
+  priceCoverCandidate,
+  snapshotChain,
+  computeTerminalPnl
 };
