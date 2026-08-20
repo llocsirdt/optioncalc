@@ -183,3 +183,6 @@ npm-debug.log
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Local cache of fetched candle-spread runs (durability backup; may be large)
+candle-spread-archive/

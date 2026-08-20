@@ -9,34 +9,55 @@
  *   --local            hit localhost:3001 instead of the deployed server
  *   --variant v0|v1|v2 render a specific variant's timeline
  *   --compare          fetch v0/v1/v2 and compare them (summary + cumulative P/L by candle)
+ *   --offline          skip the server; read the last-cached copy from candle-spread-archive/
+ *
+ * Every successful fetch is cached to candle-spread-archive/<runId>.json on THIS machine, and
+ * fetches fall back to that cache when the server no longer has the run — so a server restart
+ * or deploy can't cost us the history we've already looked at (until S3 backup is wired).
+ *
  * Examples:
  *   node scripts/analyze-candle-spread-run.js NDX 2026-08-19 --variant v1
  *   node scripts/analyze-candle-spread-run.js NDX 2026-08-19 --compare
  */
+const fs = require('fs');
+const path = require('path');
 const PROD = 'https://d1kbxyxn33vpw2.cloudfront.net';
 const LOCAL = 'http://localhost:3001';
+const ARCHIVE = path.join(__dirname, '..', 'candle-spread-archive');
 
 const args = process.argv.slice(2);
 const local = args.includes('--local');
 const compare = args.includes('--compare');
+const offline = args.includes('--offline');
 const vIdx = args.indexOf('--variant');
 const variant = vIdx >= 0 ? args[vIdx + 1] : null;
 const rest = args.filter((a, i) => !a.startsWith('--') && !(vIdx >= 0 && i === vIdx + 1));
 const [symbol, expiration, dateArg] = rest;
 if (!symbol || !expiration) {
-  console.error('Usage: node scripts/analyze-candle-spread-run.js <SYMBOL> <EXPIRATION> [YYYY-MM-DD] [--local] [--variant vN] [--compare]');
+  console.error('Usage: node scripts/analyze-candle-spread-run.js <SYMBOL> <EXPIRATION> [YYYY-MM-DD] [--local] [--variant vN] [--compare] [--offline]');
   process.exit(1);
 }
 const date = dateArg || expiration; // 0DTE: tradeDate == expiration
 const base = local ? LOCAL : PROD;
 
+const runId = v => `${symbol}_${expiration}_${date}${v ? `_${v}` : ''}`;
+const archivePath = v => path.join(ARCHIVE, `${runId(v)}.json`);
+function saveArchive(v, j) {
+  try { fs.mkdirSync(ARCHIVE, { recursive: true }); fs.writeFileSync(archivePath(v), JSON.stringify(j, null, 2)); } catch (_) { /* best-effort */ }
+}
+function loadArchive(v) {
+  try { return JSON.parse(fs.readFileSync(archivePath(v), 'utf8')); } catch (_) { return null; }
+}
+
 const runUrl = v => `${base}/api/v1/candle-spread/runs/${symbol}/${expiration}?date=${date}${v ? `&variant=${v}` : ''}`;
 async function fetchRun(v) {
+  if (offline) return loadArchive(v);
   try {
     const res = await fetch(runUrl(v));
     const j = await res.json();
-    return j && !j.error ? j : null;
-  } catch (_) { return null; }
+    if (j && !j.error) { saveArchive(v, j); return j; }        // cache the freshest copy
+  } catch (_) { /* network error -> fall through to cache */ }
+  return loadArchive(v);                                        // server lost it? use our local copy
 }
 
 const money = n => (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(0);
