@@ -23,10 +23,13 @@ const INDEX_SYMBOLS = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
 const CHUNK_DAYS = 10; // calendar days per priceHistory call
 
 const args = process.argv.slice(2);
-const symbol = (args.find(a => !a.startsWith('--')) || 'NDX').toUpperCase();
+// Symbol may be an index (NDX -> API '$NDX') or a future (/NQ -> API '/NQ', file token 'NQ').
+const rawArg = args.find(a => !a.startsWith('--')) || 'NDX';
+const isFutures = rawArg.startsWith('/');
+const symbol = rawArg.replace(/^\//, '').toUpperCase();   // token for cache files / dataset name
 const freq = intArg('--freq', 1);
 const days = intArg('--days', 45);
-const apiSymbol = INDEX_SYMBOLS.has(symbol) ? `$${symbol}` : symbol;
+const apiSymbol = isFutures ? `/${symbol}` : (INDEX_SYMBOLS.has(symbol) ? `$${symbol}` : symbol);
 const RAW = path.join(DATA, `raw-${freq}m`);
 
 function intArg(flag, def) { const i = args.indexOf(flag); return i >= 0 ? parseInt(args[i + 1], 10) : def; }
