@@ -200,7 +200,7 @@ function renderCompare(runs) {
 
 (async () => {
   if (compare) {
-    const runs = await Promise.all(['v0', 'v1', 'v2'].map(fetchRun));
+    const runs = await Promise.all(['v0', 'v3', 'v1', 'v2'].map(fetchRun));
     return renderCompare(runs);
   }
   const j = await fetchRun(variant);

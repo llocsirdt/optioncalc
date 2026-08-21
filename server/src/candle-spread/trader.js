@@ -247,10 +247,12 @@ function buildCover(pos, cfg, getLeg) {
 function selectCovers(uncovered, cfg, getLeg, ctx) {
   const sel = cfg.coverSelector || 'fixed';
   if (sel === 'joint') return selectCoversJoint(uncovered, cfg, getLeg, ctx);
-  // 'fixed' and 'greedy' are independent per position.
-  return uncovered.map(pos => sel === 'greedy'
-    ? selectCoverGreedy(pos, cfg, getLeg, ctx)
-    : selectCoverFixed(pos, cfg, getLeg));
+  // 'fixed' / 'fixed-mark' / 'greedy' are independent per position.
+  return uncovered.map(pos => {
+    if (sel === 'greedy') return selectCoverGreedy(pos, cfg, getLeg, ctx);
+    if (sel === 'fixed-mark') return selectCoverFixedMark(pos, cfg, getLeg);
+    return selectCoverFixed(pos, cfg, getLeg);
+  });
 }
 
 function coverGeometryLabel(coveredSide, shortStrike, longStrike, width) {
@@ -286,6 +288,18 @@ function selectCoverFixed(pos, cfg, getLeg) {
     peakExtra: round2(L.coverPeakExtra(pos.shortStrike, tentLong, cfg.spreadWidth) * 100 * cfg.quantity),
     geometry: 'tent', longStrike: tentLong, payload: res.payload
   };
+}
+
+// Same fixed TENT geometry as V0, but priced at the realistic mark (mark + 1 tick, no
+// sub-market cap) instead of the 0.525×width cap. Isolates the fill-price effect from the
+// geometry: v3 vs v1/v2 is an apples-to-apples geometry comparison (all mark-priced), while
+// V0 stays capped as the optimistic-instant-fill reference for the future fill-tracking work.
+function selectCoverFixedMark(pos, cfg, getLeg) {
+  const tentLong = pos.side === 'bull' ? pos.shortStrike + cfg.spreadWidth : pos.shortStrike - cfg.spreadWidth;
+  const plan = priceCoverCandidate(pos.side, pos, tentLong, cfg, getLeg); // geometry === 'tent'
+  if (plan.error) return { error: plan.error, positionId: pos.id };
+  plan.payload = buildOrderPayload(plan.resolved, plan.limit, cfg.quantity, 'DEBIT');
+  return plan;
 }
 
 // Weight on retained upside vs guaranteed floor; scaled up when the reversal is high-conviction

@@ -26,12 +26,16 @@ const BASE_RUNS = [
   }
 ];
 
-// The 3 parallel shadow strategies. coverSelector is the only behavioral difference.
-//   v0 fixed  = current deployed behavior (tent cover, old cap pricing) — the baseline.
-//   v1 greedy = phase-1 best-per-position candidate cover (skew-aware pricing).
-//   v2 joint  = phase-2 joint basket optimization over the covering stack.
+// The parallel shadow strategies. coverSelector is the only behavioral difference.
+//   v0 fixed      = original behavior (tent cover, 0.525×width CAP pricing) — kept UNCHANGED
+//                   as the optimistic-instant-fill reference for future realistic fill tracking.
+//   v3 fixed-mark = same tent geometry as v0 but priced at the real mark (mark+tick, no cap),
+//                   so v3 vs v1/v2 is an apples-to-apples (all mark-priced) geometry comparison.
+//   v1 greedy     = phase-1 best-per-position candidate cover (skew-aware pricing).
+//   v2 joint      = phase-2 joint basket optimization over the covering stack.
 const VARIANTS = [
-  { variant: 'v0', variantLabel: 'fixed-tent', coverSelector: 'fixed' },
+  { variant: 'v0', variantLabel: 'fixed-cap',  coverSelector: 'fixed' },
+  { variant: 'v3', variantLabel: 'fixed-mark', coverSelector: 'fixed-mark' },
   { variant: 'v1', variantLabel: 'greedy',     coverSelector: 'greedy' },
   { variant: 'v2', variantLabel: 'joint',      coverSelector: 'joint' }
 ];
