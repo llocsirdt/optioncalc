@@ -1,6 +1,6 @@
 'use strict';
 // Run: node scripts/signal-lab/indicators.test.js
-const { resample, bollinger, withIndicators, color } = require('./indicators');
+const { resample, bollinger, ema, withIndicators, color } = require('./indicators');
 
 let pass = 0, fail = 0;
 const eq = (a, e, label) => { if (JSON.stringify(a) === JSON.stringify(e)) pass++; else { fail++; console.log(`FAIL ${label}\n  got:    ${JSON.stringify(a)}\n  expect: ${JSON.stringify(e)}`); } };
@@ -44,6 +44,15 @@ ok(jump.percentB > 1, 'close beyond the upper band -> %B > 1');
 // --- withIndicators merges fields; color ---
 const wi = withIndicators(seq, 20, 2);
 ok(wi[19].close === 20 && wi[19].percentB > 0.8 && wi[19].percentB < 1, 'withIndicators keeps OHLC + adds %B');
+
+// --- ema(9): seed = SMA(first 9), then recursive with k = 2/10 ---
+const eFlat = ema(flat, 9);
+ok(eFlat[7] === null, 'ema9 warmup: index 7 null');
+ok(eFlat[8] === 50, 'ema9 flat series = value after warmup');
+const eSeq = ema(seq, 9);
+ok(eSeq[8] === 5, 'ema9 seed = SMA(1..9) = 5');
+ok(eSeq[9] === 6, 'ema9 step = (10-5)*0.2+5 = 6');
+ok(wi[19].ema9 != null, 'withIndicators adds ema9');
 eq([color({ open: 1, close: 2 }), color({ open: 2, close: 1 }), color({ open: 1, close: 1 })], ['green', 'red', 'flat'], 'color by close vs open');
 
 console.log(`\n${pass} passed, ${fail} failed`);

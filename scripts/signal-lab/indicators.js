@@ -41,10 +41,31 @@ function bollinger(candles, period = 20, mult = 2) {
   return out;
 }
 
-// candles decorated with their Bollinger fields.
-function withIndicators(candles, period = 20, mult = 2) {
-  const bb = bollinger(candles, period, mult);
-  return candles.map((c, i) => ({ ...c, ...bb[i] }));
+// Exponential moving average over closes (default 9-bar), aligned to input; warmup null.
+// Matches the live engine's calculateEMA: seed with the SMA of the first `period` closes,
+// then EMA_i = (close_i - EMA_{i-1}) * (2/(period+1)) + EMA_{i-1}.
+function ema(candles, period = 9) {
+  const k = 2 / (period + 1);
+  const out = candles.map(() => null);
+  let prev = null;
+  for (let i = period - 1; i < candles.length; i++) {
+    if (i === period - 1) {
+      let sum = 0;
+      for (let j = 0; j <= i; j++) sum += candles[j].close;
+      prev = sum / period;
+    } else {
+      prev = (candles[i].close - prev) * k + prev;
+    }
+    out[i] = r2(prev);
+  }
+  return out;
+}
+
+// candles decorated with their Bollinger fields + 9-bar EMA (ema9).
+function withIndicators(candles, bbPeriod = 20, bbMult = 2) {
+  const bb = bollinger(candles, bbPeriod, bbMult);
+  const e9 = ema(candles, 9);
+  return candles.map((c, i) => ({ ...c, ...bb[i], ema9: e9[i] }));
 }
 
 // candle color by close-vs-open (matches the trader's simpleDirection).
@@ -53,4 +74,4 @@ function color(c) { return c.close > c.open ? 'green' : c.close < c.open ? 'red'
 const r2 = n => Math.round(n * 100) / 100;
 const r4 = n => Math.round(n * 10000) / 10000;
 
-module.exports = { resample, bollinger, withIndicators, color };
+module.exports = { resample, bollinger, ema, withIndicators, color };
