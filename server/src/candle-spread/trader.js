@@ -91,6 +91,12 @@ function processCandleClose(record, candle, priorCandle, deps) {
   const simpleDir = L.simpleDirection(candle);
   const openSide = L.classifyOpen(candle, priorCandle, bands);
 
+  // SIGNAL vs PRICING split: `candle` is the SIGNAL instrument (e.g. NQ futures) that drives
+  // direction / Bollinger gates / reversal detection; `underlying` is the PRICING instrument's
+  // level (e.g. cash NDX) used for STRIKE placement, since the options we trade settle on NDX.
+  // Defaults to candle.close (single-instrument mode) when deps.underlying isn't supplied.
+  const underlying = deps.underlying != null ? deps.underlying : candle.close;
+
   // (1) Cancel any unfilled prior OPEN order before doing anything else.
   if (st.pendingOpenId) {
     const pos = st.positions.find(p => p.id === st.pendingOpenId);
@@ -132,7 +138,7 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // optimization). This is the seam the 3 shadow variants differ on; everything else is shared.
   if (coverSignal) {
     const uncovered = st.positions.filter(p => p.filled && !p.covered);
-    const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying: candle.close, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
+    const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
     for (const plan of plans) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
       const pos = uncovered.find(p => p.id === plan.positionId);
@@ -163,7 +169,7 @@ function processCandleClose(record, candle, priorCandle, deps) {
   if (openSide && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
-    const res = buildOpen(openSide, candle, cfg, deps.getLeg);
+    const res = buildOpen(openSide, underlying, cfg, deps.getLeg);
     if (res.error) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
@@ -192,14 +198,19 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // candle (not just reversals). Exact semantics (which side, continuing vs reversing) TBD.
   // if (cfg.coverTiming === 'each-candle') { ... }
 
-  // Snapshot the strike window around the underlying so past days can be replayed and new
-  // cover geometries re-scored offline (we don't store historical option chains anywhere else).
+  // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
+  // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
   const chainSnapshot = cfg.captureChain === false ? null
-    : snapshotChain(deps.getLeg, candle.close, cfg.strikeIncrement, cfg.snapshotStrikes || 16);
+    : snapshotChain(deps.getLeg, underlying, cfg.strikeIncrement, cfg.snapshotStrikes || 16);
 
   store.appendEvent(record, {
     type: 'candle_close',
+    // `candle` = the SIGNAL instrument's OHLC (e.g. NQ); `underlying` = the PRICING level (NDX)
+    // the strikes are placed around. They differ by the basis when signal != price symbol.
     candle: { time: candle.timeEST, open: candle.open, high: candle.high, low: candle.low, close: candle.close },
+    underlying,
+    signalSymbol: deps.signalSymbol || null,
+    priceSymbol: deps.priceSymbol || null,
     bands,
     coverContext,
     classification: { simpleDir, openSide, firstOfDay },
@@ -218,8 +229,8 @@ function bandsFor(candle) {
   return { upper: bb.upper, lower: bb.lower, middle: bb.middle };
 }
 
-function buildOpen(side, candle, cfg, getLeg) {
-  const center = L.centerStrike(candle.close, cfg.strikeIncrement);
+function buildOpen(side, underlying, cfg, getLeg) {
+  const center = L.centerStrike(underlying, cfg.strikeIncrement);
   const { lower, upper } = L.spreadStrikes(center, cfg.spreadWidth);
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);

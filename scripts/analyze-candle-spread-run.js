@@ -81,7 +81,8 @@ const candleCloses = j => (j.events || []).filter(e => e.type === 'candle_close'
 function renderTimeline(j) {
   const cc = candleCloses(j);
   const v = j.config.variant ? ` [${j.config.variant}/${j.config.coverSelector}]` : '';
-  console.log(`RUN  ${j.config.symbol} ${j.config.expiration} (0DTE)${v}  |  width $${j.config.spreadWidth}, incr ${j.config.strikeIncrement}, qty ${j.config.quantity}, cover=${j.config.coverStyle}/${j.config.coverTiming}, dryRun=${j.config.dryRun}`);
+  const sig = j.config.signalSymbol && j.config.signalSymbol !== j.config.symbol ? `  signal=${j.config.signalSymbol}` : '';
+  console.log(`RUN  ${j.config.symbol} ${j.config.expiration} (0DTE)${v}${sig}  |  width $${j.config.spreadWidth}, incr ${j.config.strikeIncrement}, qty ${j.config.quantity}, cover=${j.config.coverStyle}/${j.config.coverTiming}, dryRun=${j.config.dryRun}`);
   if (!cc.length) { console.log('(no candle_close events yet)'); return; }
   console.log(`first action ~${closeTime(cc[0].candle.time)} ET · last ~${closeTime(cc[cc.length - 1].candle.time)} ET · ${cc.length} candles\n`);
 
@@ -90,7 +91,9 @@ function renderTimeline(j) {
 
   for (const e of cc) {
     const t = closeTime(e.candle.time);
-    const close = Number(e.candle.close).toFixed(0);
+    // CLOSE column shows the PRICING underlying (NDX) so it aligns with the strikes; when
+    // signal==price they're the same. (The signal candle's own close can differ by the basis.)
+    const close = Number(e.underlying != null ? e.underlying : e.candle.close).toFixed(0);
     const col = e.classification.simpleDir === 'bull' ? 'green' : e.classification.simpleDir === 'bear' ? 'red' : 'flat';
     const rows = [];
     for (const d of e.decisions) {

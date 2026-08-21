@@ -13,7 +13,8 @@ const trader = require('./trader');
 // dryRun=true => build + log orders but DO NOT send; assume fills so the day simulates.
 const BASE_RUNS = [
   {
-    symbol: 'NDX',
+    symbol: 'NDX',             // PRICING instrument: strikes/chain/mark (options settle on NDX)
+    signalSymbol: '/NQ',       // SIGNAL instrument: direction/Bollinger/reversal off NQ futures
     // expiration is set to "today" (0DTE) at start; overridden per environment if needed.
     expiration: null,
     spreadWidth: 20,
@@ -137,26 +138,40 @@ async function processGroup(runs, kind) {
   const sample = runs[0];
   const expiration = sample.expiration || todayEST(); // 0DTE default
   const tradeDate = todayEST();
+  const priceSymbol = sample.symbol;                       // NDX (strikes/chain)
+  const signalSymbol = sample.signalSymbol || priceSymbol; // /NQ (direction/BB), else same
 
-  // Fetch shared candle + chain ONCE for the whole group.
-  const analysis = await DEPS.analyzeCandles(sample.symbol, { timeframe: '15m' });
-  const candles = analysis?.candleData?.['15m']?.candles || [];
-  const { candle, prior } = pickJustClosed(candles);
-  if (!candle) return { pending: 'candle-not-available' };
-  const chainData = await DEPS.getOrFetchChainData(sample.symbol, expiration);
+  // SIGNAL candles (direction/Bollinger/reversal) — from the signal instrument.
+  const sigAnalysis = await DEPS.analyzeCandles(signalSymbol, { timeframe: '15m' });
+  const sigCandles = sigAnalysis?.candleData?.['15m']?.candles || [];
+  const sig = pickJustClosed(sigCandles);
+  if (!sig.candle) return { pending: 'signal-candle-not-available' };
+
+  // PRICING underlying (strike centering) — the price instrument's just-closed close (NDX).
+  // When signal == price we reuse the signal candle (single-instrument mode, no extra fetch).
+  let underlying = sig.candle.close;
+  if (signalSymbol !== priceSymbol) {
+    const pxAnalysis = await DEPS.analyzeCandles(priceSymbol, { timeframe: '15m' });
+    const px = pickJustClosed(pxAnalysis?.candleData?.['15m']?.candles || []);
+    if (!px.candle) return { pending: 'price-candle-not-available' };
+    underlying = px.candle.close;
+  }
+
+  // Option chain for pricing — the price instrument (NDX).
+  const chainData = await DEPS.getOrFetchChainData(priceSymbol, expiration);
 
   // First candle of the day uses the Bollinger gate: pass prior=null so classifyOpen takes
   // the first-candle branch even though a prior-session candle exists in the data.
-  const priorForLogic = kind === 'first' ? null : prior;
+  const priorForLogic = kind === 'first' ? null : sig.prior;
 
-  // Feed every variant the SAME candle + chain so the comparison is apples-to-apples.
+  // Feed every variant the SAME signal candle + underlying + chain (apples-to-apples).
   for (const run of runs) {
     try {
       const cfg = { ...run, expiration };
       const record = store.initRun(cfg, tradeDate);
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
-      trader.processCandleClose(record, candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun });
+      trader.processCandleClose(record, sig.candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun, underlying, signalSymbol, priceSymbol });
     } catch (e) {
       console.error(`[candle-spread] variant ${run.variant} error:`, e && e.message);
     }
