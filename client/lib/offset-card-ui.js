@@ -137,17 +137,15 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
          title="Click to select these options in the table">
       ${(conflictNote || qualityNote) ? `<div class="trade-review-bar">${conflictNote}${qualityNote}</div>` : ''}
       <div class="trade-strategy-header">
-        <div class="trade-strategy-type">${strategyTitle}</div>
-        <div class="trade-strategy-detail">${legsSummary} &nbsp;·&nbsp; Cost: ${formatOffsetMoney(candidate.cost)}</div>
+        <div class="trade-strategy-type"><span>${strategyTitle}</span><span class="trade-strategy-cost">${formatOffsetMoney(candidate.cost)}</span></div>
+        <div class="trade-strategy-detail">${legsSummary}</div>
       </div>
       <div class="trade-body">
       <div class="trade-metrics">
-        <div class="trade-locked-profit" title="This hedge trade's own guaranteed worst-case P&L, in isolation">Hedge locked: ${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)}</div>
-        <div class="trade-potential" title="This hedge trade's own best-case P&L, in isolation">Hedge potential: ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)}</div>
+        <div class="trade-hedge" title="This hedge trade's own worst-case / best-case P&L, in isolation">Hedge (${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)} / ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)})</div>
         <div class="trade-portfolio-effect" title="Your whole portfolio's worst/best case after adding this hedge, versus before">
-          <div class="portfolio-effect-title">Portfolio with hedge</div>
-          <div class="portfolio-effect-row">Worst: ${formatWorstCase(candidate.portfolioLocked, candidate.portfolioUnboundedLoss)} <span class="portfolio-effect-was">(was ${formatWorstCase(candidate.baselineLocked, candidate.baselineUnboundedLoss)})</span></div>
-          <div class="portfolio-effect-row">Best: ${formatBestCase(candidate.portfolioPotential, candidate.portfolioUnboundedGain)} <span class="portfolio-effect-was">(was ${formatBestCase(candidate.baselinePotential, candidate.baselineUnboundedGain)})</span></div>
+          <div class="portfolio-effect-row">New worst: ${formatWorstCase(candidate.portfolioLocked, candidate.portfolioUnboundedLoss)} <span class="portfolio-effect-was">(was ${formatWorstCase(candidate.baselineLocked, candidate.baselineUnboundedLoss)})</span></div>
+          <div class="portfolio-effect-row">New best: ${formatBestCase(candidate.portfolioPotential, candidate.portfolioUnboundedGain)} <span class="portfolio-effect-was">(was ${formatBestCase(candidate.baselinePotential, candidate.baselineUnboundedGain)})</span></div>
         </div>
       </div>
       <div class="trade-actions">

@@ -746,7 +746,14 @@ pre {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px;
+  padding: 6px 10px;
+}
+/* Combined hedge economics on one line: Hedge (worst / best). */
+.trade-hedge {
+  font-size: 12px;
+  color: #333;
+  font-weight: bold;
+  white-space: nowrap;
 }
 /* Right-side column: gap + score stacked above the Add button. */
 .offset-trade.offset-trade-carded .trade-actions {
@@ -763,19 +770,32 @@ pre {
   background-color: #eef1f5;
   border-bottom: 1px solid #e0e0e0;
 }
-/* Small muted strategy-type line, with the strikes + cost prominent just below it. */
+/* Compact header: small muted strategy type on the left with the cost on the right (same
+   line), and the strikes on a tight line just below. */
 .trade-strategy-type {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
   font-weight: 600;
   font-size: 0.72em;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: #6a7280;
 }
+.trade-strategy-cost {
+  font-size: 1.3em;      /* bump the cost back up relative to the small type label */
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: bold;
+  color: #222;
+}
 .trade-strategy-detail {
   font-weight: 600;
-  font-size: 0.95em;
+  font-size: calc(0.95em - 2px);
   color: #222;
-  margin-top: 1px;
+  margin-top: 0;
+  line-height: 1.2;
 }
 /* Red review bar at the very top of a flagged card, collecting all review warnings
    (invalid pricing, poor risk/reward, opposes-existing-leg, etc.) above the header. */
@@ -1093,8 +1113,8 @@ pre {
 /* Portfolio effect block: how the whole portfolio's worst/best case changes
    with this hedge added, shown under the hedge's own standalone economics. */
 .trade-portfolio-effect {
-  margin: 4px 0;
-  padding-top: 4px;
+  margin: 2px 0 0;
+  padding-top: 2px;
   border-top: 1px dashed #ccc;
   white-space: nowrap;
 }
