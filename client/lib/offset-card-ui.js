@@ -111,6 +111,8 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
   const qualityClass = qualityFlag ? 'quality-flagged' : '';
   // Invalid-pricing candidates are always dimmed/translucent (like low-locked-profit ones).
   const invalidClass = qualityFlag && qualityFlag.type === 'bad-data' ? 'offset-invalid-dim' : '';
+  // Locked (worst-case) colored by sign: green when >= 0, red when negative/unbounded loss.
+  const hedgeLockedCls = (candidate.hedgeUnboundedLoss || !(candidate.hedgeLocked >= 0)) ? 'hedge-locked-neg' : 'hedge-locked-pos';
   const qualityNote = qualityFlag
     ? `<div class="trade-flag" title="Marked for review — kept visible but pushed to the bottom of the list">${qualityFlag.note}</div>`
     : '';
@@ -142,7 +144,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
       </div>
       <div class="trade-body">
       <div class="trade-metrics">
-        <div class="trade-hedge" title="This hedge trade's own worst-case / best-case P&L, in isolation">Hedge (${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)} / ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)})</div>
+        <div class="trade-hedge" title="This hedge trade's own worst-case (locked) / best-case (potential) P&L, in isolation">Hedge (<span class="${hedgeLockedCls}">locked: ${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)}</span> / <span class="hedge-potential">potential: ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)}</span>)</div>
         <div class="trade-portfolio-effect" title="Your whole portfolio's worst/best case after adding this hedge, versus before">
           <div class="portfolio-effect-row">New worst: ${formatWorstCase(candidate.portfolioLocked, candidate.portfolioUnboundedLoss)} <span class="portfolio-effect-was">(was ${formatWorstCase(candidate.baselineLocked, candidate.baselineUnboundedLoss)})</span></div>
           <div class="portfolio-effect-row">New best: ${formatBestCase(candidate.portfolioPotential, candidate.portfolioUnboundedGain)} <span class="portfolio-effect-was">(was ${formatBestCase(candidate.baselinePotential, candidate.baselineUnboundedGain)})</span></div>

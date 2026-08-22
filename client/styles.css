@@ -748,13 +748,17 @@ pre {
   align-items: center;
   padding: 6px 10px;
 }
-/* Combined hedge economics on one line: Hedge (worst / best). */
+/* Combined hedge economics on one line: Hedge (locked: … / potential: …). Locked keeps the
+   red/green sign coding, potential the blue, as before the two lines were merged. */
 .trade-hedge {
   font-size: 12px;
   color: #333;
   font-weight: bold;
   white-space: nowrap;
 }
+.trade-hedge .hedge-locked-pos { color: #4CAF50; }
+.trade-hedge .hedge-locked-neg { color: #F44336; }
+.trade-hedge .hedge-potential { color: #2196F3; }
 /* Right-side column: gap + score stacked above the Add button. */
 .offset-trade.offset-trade-carded .trade-actions {
   display: flex;
