@@ -109,6 +109,8 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
   const weakClass = candidate.lockedInProfit < 0 ? 'low-locked-profit' : '';
   const qualityFlag = getCandidateQualityFlag(candidate);
   const qualityClass = qualityFlag ? 'quality-flagged' : '';
+  // Invalid-pricing candidates are always dimmed/translucent (like low-locked-profit ones).
+  const invalidClass = qualityFlag && qualityFlag.type === 'bad-data' ? 'offset-invalid-dim' : '';
   const qualityNote = qualityFlag
     ? `<div class="trade-flag" title="Marked for review — kept visible but pushed to the bottom of the list">${qualityFlag.note}</div>`
     : '';
@@ -130,7 +132,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
     : '';
 
   return `
-    <div class="offset-trade offset-trade-carded ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${extraClass}"
+    <div class="offset-trade offset-trade-carded ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${invalidClass} ${extraClass}"
          onclick="${selectFnName}(${index}, this)"
          title="Click to select these options in the table">
       ${(conflictNote || qualityNote) ? `<div class="trade-review-bar">${conflictNote}${qualityNote}</div>` : ''}

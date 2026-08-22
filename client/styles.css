@@ -798,6 +798,11 @@ pre {
   opacity: 0.5;
 }
 
+/* Invalid-pricing (bad-data) candidates are always dimmed/translucent, like low-locked ones. */
+.offset-trade.offset-invalid-dim {
+  opacity: 0.5;
+}
+
 /* Light green background for trades where cost is less than locked value */
 .offset-trade.cost-less-than-locked {
   background-color: #e8f5e8 !important;
