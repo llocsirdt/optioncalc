@@ -741,6 +741,22 @@ pre {
   color: #222;
   margin-top: 1px;
 }
+/* Red review bar at the very top of a flagged card, collecting all review warnings
+   (invalid pricing, poor risk/reward, opposes-existing-leg, etc.) above the header. */
+.trade-review-bar {
+  background-color: #f44336;
+  padding: 4px 10px;
+}
+.trade-review-bar .trade-flag,
+.trade-review-bar .trade-conflict {
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+  margin: 0;
+}
+.trade-review-bar > * + * {
+  margin-top: 2px;
+}
 
 .offset-trade.low-locked-profit {
   opacity: 0.5;

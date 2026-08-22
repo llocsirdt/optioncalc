@@ -133,12 +133,12 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
     <div class="offset-trade offset-trade-carded ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${extraClass}"
          onclick="${selectFnName}(${index}, this)"
          title="Click to select these options in the table">
+      ${(conflictNote || qualityNote) ? `<div class="trade-review-bar">${conflictNote}${qualityNote}</div>` : ''}
       <div class="trade-strategy-header">
         <div class="trade-strategy-type">${strategyTitle}</div>
         <div class="trade-strategy-detail">${legsSummary} &nbsp;·&nbsp; Cost: ${formatOffsetMoney(candidate.cost)}</div>
       </div>
       <div class="trade-body">
-      ${(conflictNote || qualityNote) ? `<div class="trade-description">${conflictNote}${qualityNote}</div>` : ''}
       <div class="trade-metrics">
         <div class="trade-locked-profit" title="This hedge trade's own guaranteed worst-case P&L, in isolation">Hedge locked: ${formatWorstCase(candidate.hedgeLocked, candidate.hedgeUnboundedLoss)}</div>
         <div class="trade-potential" title="This hedge trade's own best-case P&L, in isolation">Hedge potential: ${formatBestCase(candidate.hedgePotential, candidate.hedgeUnboundedGain)}</div>
