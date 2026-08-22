@@ -112,17 +112,30 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
   const qualityNote = qualityFlag
     ? `<div class="trade-flag" title="Marked for review — kept visible but pushed to the bottom of the list">${qualityFlag.note}</div>`
     : '';
-  const legsSummary = candidate.legs.map(l => `${l.qty > 0 ? '+' : ''}${l.qty}${l.type.toUpperCase()}${l.strike}`).join(', ');
+  // Strategy type shown in the card's header bar (title-cased from the candidate label).
+  const strategyTitle = (candidate.label || candidate.strategy || 'Spread')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+  // Simplified legs: strikes in ascending order, a leading "-" on each SHORT leg, no qty/type
+  // clutter (e.g. bull call = "29240 / -29260", bear put = "-29220 / 29240"). The option type
+  // (C/P) is only appended when a candidate mixes calls and puts (e.g. a tail-risk condor).
+  const mixedTypes = new Set(candidate.legs.map(l => (l.type || '').toUpperCase())).size > 1;
+  const legsSummary = candidate.legs
+    .slice()
+    .sort((a, b) => a.strike - b.strike)
+    .map(l => `${l.qty < 0 ? '-' : ''}${l.strike}${mixedTypes ? (l.type || '').toUpperCase() : ''}`)
+    .join(' / ');
   const conflictNote = hasOppositeLeg
     ? '<div class="trade-conflict" title="One of this trade\'s legs is the opposite direction of the same strike/type already in your position">⚠ Opposes an existing leg</div>'
     : '';
 
   return `
-    <div class="offset-trade ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${extraClass}"
+    <div class="offset-trade offset-trade-carded ${familyClass} ${weakClass} ${costLessThanLockedClass} ${qualityClass} ${extraClass}"
          onclick="${selectFnName}(${index}, this)"
          title="Click to select these options in the table">
+      <div class="trade-strategy-header">${strategyTitle}</div>
+      <div class="trade-body">
       <div class="trade-description">
-        <strong>${candidate.label}</strong>
         <div class="trade-action">${legsSummary}</div>
         <div class="trade-cost">Cost: ${formatOffsetMoney(candidate.cost)}</div>
         ${conflictNote}
@@ -140,6 +153,7 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
         <div class="trade-score ${profitClass}">Score: ${(candidate.rankScore * 100).toFixed(1)}%</div>
       </div>
       <button onclick="event.stopPropagation(); ${addFnName}(${index})">Add to calculator</button>
+      </div>
     </div>
   `;
 }

@@ -707,6 +707,31 @@ pre {
   cursor: pointer;
 }
 
+/* Carded layout: strategy type in a full-width header bar, the rest of the card below it.
+   Scoped to offset-trade-carded (the hedge/portfolio candidate cards) so the server-offset
+   row cards keep their original single-row layout. The family border-left color still shows. */
+.offset-trade.offset-trade-carded {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+.offset-trade.offset-trade-carded .trade-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+}
+.trade-strategy-header {
+  font-weight: 600;
+  font-size: 0.9em;
+  padding: 5px 10px;
+  background-color: #eef1f5;
+  border-bottom: 1px solid #e0e0e0;
+  color: #333;
+  letter-spacing: 0.02em;
+}
+
 .offset-trade.low-locked-profit {
   opacity: 0.5;
 }
