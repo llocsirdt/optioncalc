@@ -207,6 +207,12 @@ function renderGroupedOffsetCandidateCards(candidates, selectFnName, addFnName, 
     groups.get(key).push({ candidate, index });
   });
 
+  // Within the flagged section, invalid-pricing ("bad-data") cards always sink to the very
+  // bottom — after poor risk/reward and any other flag. Stable sort keeps rank order within
+  // each flag type.
+  const flagRank = (c) => (getCandidateQualityFlag(c)?.type === 'bad-data' ? 1 : 0);
+  flagged.sort((a, b) => flagRank(a.candidate) - flagRank(b.candidate));
+
   const activeGroups = [...groups.keys()];
   const n = activeGroups.length;
 
