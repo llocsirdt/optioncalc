@@ -382,6 +382,7 @@ function handleOptionCellClick(event, optionsData) {
 
 // Function to update the selected positions display
 function updateSelectedPositionsDisplay(optionsData = null) {
+  updateCurveSelectedStrikes(); // reflect selected strikes on the Processed-Output value curve
   const displayArea = document.getElementById('selected-positions-display');
   if (!displayArea) return;
   
@@ -3000,6 +3001,7 @@ function processInput() {
 
     // Mark where the current underlying price falls in the strike table(s).
     updateCurvePriceLine(underlyingPrice);
+    updateCurveSelectedStrikes(); // re-apply selected-strike marks after the curve re-renders
 
     // Keep Portfolio Risk in sync with whatever position was just submitted,
     // not just whatever was loaded when the panel was last opened.
@@ -3103,6 +3105,39 @@ function updateCurvePriceLine(price) {
 
 // Export functions for use in other files (global approach)
 window.updateCurvePriceLine = updateCurvePriceLine;
+
+// Mark, in each Processed-Output curve table, the strikes currently selected via offset cards
+// / chain clicks (selectedTablePositions) — accent the strike row and outline the call/put cell
+// for the selected side (long green / short red). Mirrors the option-chain highlight so a
+// selected card's strikes are also visible on the value curve. Display-only DOM pass; safe to
+// re-run on every selection change and after a re-render.
+function updateCurveSelectedStrikes() {
+  const byStrike = new Map(); // strike -> { call: 'long'|'short'|null, put: 'long'|'short'|null }
+  if (typeof selectedTablePositions !== 'undefined') {
+    selectedTablePositions.forEach(pos => {
+      if (!pos || pos.strike == null) return;
+      if (!byStrike.has(pos.strike)) byStrike.set(pos.strike, { call: null, put: null });
+      const side = pos.side === 'short' ? 'short' : 'long';
+      if (pos.type === 'c') byStrike.get(pos.strike).call = side;
+      else byStrike.get(pos.strike).put = side;
+    });
+  }
+  document.querySelectorAll('#output .curve-table').forEach(table => {
+    table.querySelectorAll('tbody tr').forEach(r => {
+      r.classList.remove('curve-selected-strike');
+      r.querySelectorAll('td').forEach(td => td.classList.remove('curve-selected-call', 'curve-selected-put', 'sel-long', 'sel-short'));
+      const firstCell = r.querySelector('td');
+      if (!firstCell) return;
+      const sel = byStrike.get(parseFloat(firstCell.textContent));
+      if (!sel) return;
+      r.classList.add('curve-selected-strike');
+      const cells = r.querySelectorAll('td'); // [strike, value, P/L, calls, puts]
+      if (sel.call && cells[3]) cells[3].classList.add('curve-selected-call', sel.call === 'short' ? 'sel-short' : 'sel-long');
+      if (sel.put && cells[4]) cells[4].classList.add('curve-selected-put', sel.put === 'short' ? 'sel-short' : 'sel-long');
+    });
+  });
+}
+window.updateCurveSelectedStrikes = updateCurveSelectedStrikes;
 window.restoreAppropriateInput = restoreAppropriateInput;
 window.debugStoredInputs = debugStoredInputs;
 window.testInputRestoration = testInputRestoration;

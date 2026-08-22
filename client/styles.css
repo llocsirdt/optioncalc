@@ -120,6 +120,23 @@ pre {
   text-align: center;
 }
 
+/* A strike currently SELECTED via an offset card / chain click — mirrors the option-chain
+   highlight on the value curve: orange accent on the strike, outlined call/put cell for the
+   selected side, long green / short red. Distinct from held-position fills. */
+.curve-table tr.curve-selected-strike td:first-child {
+  box-shadow: inset 3px 0 0 #ff9800;
+  font-weight: 700;
+}
+.curve-table td.curve-selected-call,
+.curve-table td.curve-selected-put {
+  outline: 2px solid #ff9800;
+  outline-offset: -2px;
+  text-align: center;
+  font-weight: 700;
+}
+.curve-table td.sel-long { color: #2e7d32; }
+.curve-table td.sel-short { color: #c62828; }
+
 /* Horizontal line marking where the current underlying price falls in the chain
    (drawn above the first strike >= price). Mirrors the chart's gray price line. */
 .curve-table .curve-current-price-row td {
