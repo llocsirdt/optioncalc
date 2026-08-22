@@ -2064,19 +2064,22 @@ function getVolumeColorClass(volume) {
 }
 
 // Note: testSchwabConnection function is now in schwab-api.js
-function updateOptionsChain(options) {
-  console.log('🎨 Updating options chain UI with', options.length, 'options');
+function updateOptionsChain(options, opts) {
+  // runHedgeSearch defaults true so non-live callers (initial load, manual refresh) keep
+  // the hedge candidates fresh; the live loop passes false on throttled ticks (Tier 1 perf).
+  const runHedgeSearch = !opts || opts.runHedgeSearch !== false;
+  // console.log('🎨 Updating options chain UI with', options.length, 'options');
   
   // Store current options data for real-time updates
   currentOptionsData = options;
-  console.log('💾 Stored current options data:', currentOptionsData.length, 'options');
+  // console.log('💾 Stored current options data:', currentOptionsData.length, 'options');
   
   const chainElement = document.getElementById('options-chain');
-  console.log('🔍 Chain element found:', !!chainElement);
+  // console.log('🔍 Chain element found:', !!chainElement);
   
   if (chainElement) {
-    console.log('📋 Options array length:', options.length);
-    console.log('📊 First option sample:', options[0]);
+    // console.log('📋 Options array length:', options.length);
+    // console.log('📊 First option sample:', options[0]);
     
     if (options.length > 0) {
       // Get the expiration date from the first option (they're all from the same date)
@@ -2130,7 +2133,7 @@ function updateOptionsChain(options) {
         const priceText = priceElement.textContent;
         underlyingPrice = parseFloat(priceText.replace('$', '')) || 0;
       }
-      console.log('💰 Current underlying price:', underlyingPrice);
+      // console.log('💰 Current underlying price:', underlyingPrice);
       
       // Create HTML table with calls and puts side by side
       let html = `<div class="options-header">`;
@@ -2209,7 +2212,7 @@ function updateOptionsChain(options) {
 
       // Insert options chain HTML (without offsetting trades)
       chainElement.innerHTML = html;
-      console.log('✅ Options chain updated in UI');
+      // console.log('✅ Options chain updated in UI');
       
       // Set up click and touch handlers for bid/ask cells
       const clickableCells = chainElement.querySelectorAll('.clickable');
@@ -2224,7 +2227,7 @@ function updateOptionsChain(options) {
             const touch = event.touches[0];
             const element = document.elementFromPoint(touch.clientX, touch.clientY);
             if (element !== this && !this.contains(element)) {
-              console.log('🚫 Touch not on target element, ignoring');
+              // console.log('🚫 Touch not on target element, ignoring');
               return;
             }
           }
@@ -2234,29 +2237,29 @@ function updateOptionsChain(options) {
       });
       
       // Render curated hedge candidates (see hedge-strategy-ui.js) in place of
-      // the old exhaustive server+client offsetting search.
-      updateHedgeCandidatesUI();
+      // the old exhaustive server+client offsetting search. Throttled on live ticks.
+      if (runHedgeSearch) updateHedgeCandidatesUI();
 
       // Restore selections after table is rendered
       restoreTableSelections();
       
       // Update selected positions display with new options data
       if (selectedTablePositions.size > 0) {
-        console.log('🔄 Updating selected positions display with new options data');
-        console.log('📊 Options data length:', options.length);
-        console.log('📋 Selected positions count:', selectedTablePositions.size);
-        console.log('💰 Sample option data:', options[0]);
-        console.log('🎯 Selected positions:', Array.from(selectedTablePositions.keys()));
+        // console.log('🔄 Updating selected positions display with new options data');
+        // console.log('📊 Options data length:', options.length);
+        // console.log('📋 Selected positions count:', selectedTablePositions.size);
+        // console.log('💰 Sample option data:', options[0]);
+        // console.log('🎯 Selected positions:', Array.from(selectedTablePositions.keys()));
         updateSelectedPositionsDisplay(options);
       } else {
-        console.log('📝 No selected positions to update');
+        // console.log('📝 No selected positions to update');
       }
     } else {
-      console.log('❌ No options to display');
+      // console.log('❌ No options to display');
       chainElement.innerHTML = '<p>No options data available</p>';
     }
   } else {
-    console.log('❌ Chain element not found in DOM');
+    // console.log('❌ Chain element not found in DOM');
   }
 }
 

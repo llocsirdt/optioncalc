@@ -842,11 +842,21 @@ function clearExpirationCache() {
 }
 
 // Update calculator with live Schwab data
+// TIER 1 perf: (a) change-detection — skip the expensive chain fetch / table rebuild /
+// chart rebuild / four searches when the underlying hasn't moved since our last render;
+// (b) decouple — run the four O(strikes^2) hedge/portfolio searches on a slower cadence
+// (HEAVY_ANALYSIS_GAP_MS) than the ~2s price loop so they stop blocking the main thread
+// every tick. See client-perf notes.
+let _lastRenderedPrice = null;
+let _lastHeavyAnalysisAt = 0;
+const HEAVY_ANALYSIS_GAP_MS = 15000;
+
 async function updateCalculatorWithLiveData(symbol) {
   if (!schwabConnected) {
-    console.log('Schwab API not connected');
+    // console.log('Schwab API not connected');
     return;
   }
+  let runHeavy = false; // set below once we know the price actually changed
 
   // Get current selected expiration
   const selectedExpiration = getSelectedExpiration ? getSelectedExpiration() : null;
@@ -856,22 +866,28 @@ async function updateCalculatorWithLiveData(symbol) {
     return; // Skip API call if outside market hours and no data changes
   }
 
-  console.log('🔄 Updating with live data for:', symbol);
+  // console.log('🔄 Updating with live data for:', symbol);
 
   try {
     // Get underlying quote - use quote mapping
     const quoteSymbol = mapSymbolForAPI(symbol, 'quote');
     const quote = await getUnderlyingQuote(quoteSymbol);
-    console.log('📊 Quote data:', quote);
+    // console.log('📊 Quote data:', quote);
     
     if (quote && quote[quoteSymbol] && quote[quoteSymbol].quote) {
       const lastPrice = quote[quoteSymbol].quote.lastPrice;
-      console.log('💰 Last price:', lastPrice);
-      updateUnderlyingPrice(lastPrice);
+      // console.log('💰 Last price:', lastPrice);
+      updateUnderlyingPrice(lastPrice); // cheap: price text + chart price line only
+      // (a) Change-detection gate: nothing moved -> skip everything expensive below.
+      if (_lastRenderedPrice !== null && lastPrice === _lastRenderedPrice) return;
+      _lastRenderedPrice = lastPrice;
+      // (b) Decouple: only let the four searches run once per HEAVY_ANALYSIS_GAP_MS.
+      runHeavy = (Date.now() - _lastHeavyAnalysisAt) >= HEAVY_ANALYSIS_GAP_MS;
+      if (runHeavy) _lastHeavyAnalysisAt = Date.now();
     } else {
-      console.log('❌ Invalid quote data structure');
-      console.log('Available keys in quote:', quote ? Object.keys(quote) : 'quote is null');
-      console.log('Tried symbol:', quoteSymbol);
+      // console.log('❌ Invalid quote data structure');
+      // console.log('Available keys in quote:', quote ? Object.keys(quote) : 'quote is null');
+      // console.log('Tried symbol:', quoteSymbol);
     }
 
     // Use cached expirations or load if symbol changed
@@ -879,19 +895,19 @@ async function updateCalculatorWithLiveData(symbol) {
     const chainsSymbol = mapSymbolForAPI(symbol, 'chains'); // Define here for use later
     
     if (!expirations || currentSymbolForExpirations !== symbol) {
-      console.log('🔄 Symbol changed or no cached expirations, loading expirations for:', symbol);
-      console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
+      // console.log('🔄 Symbol changed or no cached expirations, loading expirations for:', symbol);
+      // console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
       expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
-      console.log('📅 Expirations data:', expirations);
+      // console.log('📅 Expirations data:', expirations);
       
       // Cache the expirations for this symbol
       if (expirations) {
         cachedExpirations = expirations;
         currentSymbolForExpirations = symbol;
-        console.log('💾 Cached expirations for symbol:', symbol);
+        // console.log('💾 Cached expirations for symbol:', symbol);
       }
     } else {
-      console.log('📋 Using cached expirations for symbol:', symbol);
+      // console.log('📋 Using cached expirations for symbol:', symbol);
     }
     
     if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
@@ -904,9 +920,9 @@ async function updateCalculatorWithLiveData(symbol) {
         // Use the user-selected expiration
         targetExpiration = expirations.expirationList.find(exp => exp.expirationDate === selectedExpiration);
         if (targetExpiration) {
-          console.log('🎯 Using user-selected expiration:', targetExpiration.expirationDate);
+          // console.log('🎯 Using user-selected expiration:', targetExpiration.expirationDate);
         } else {
-          console.log('⚠️ Selected expiration not found, falling back to nearest');
+          // console.log('⚠️ Selected expiration not found, falling back to nearest');
           targetExpiration = expirations.expirationList[0];
         }
       } else {
@@ -938,7 +954,7 @@ async function updateCalculatorWithLiveData(symbol) {
       const chainData = await getOptionsChainFromSchwab(chainsSymbol, targetExpiration.expirationDate, {
         strike_count: 75
       });
-    console.log('⛓️ Chain data (limited to 50 strikes):', chainData);
+    // console.log('⛓️ Chain data (limited to 50 strikes):', chainData);
       
       if (chainData) {
         lastLiveChainData = {
@@ -949,13 +965,17 @@ async function updateCalculatorWithLiveData(symbol) {
         };
 
         const options = parseSchwabOptionsData(chainData, targetExpiration.expirationDate);
-        console.log('📈 Parsed options:', options);
-        console.log('🔄 Calling updateOptionsChain with', options.length, 'options');
-        updateOptionsChain(options);
+        // console.log('📈 Parsed options:', options);
+        // console.log('🔄 Calling updateOptionsChain with', options.length, 'options');
+        // runHedgeSearch:false on throttled ticks -> table still refreshes, but the
+        // hedge-candidate search inside is skipped (see updateOptionsChain).
+        updateOptionsChain(options, { runHedgeSearch: runHeavy });
 
         // Re-run portfolio risk against the fresh chain, if positions are loaded.
-        // Silent so it doesn't flash "Analyzing..." on every refresh cycle.
-        if (typeof analyzePortfolioRiskUI === 'function' &&
+        // Silent so it doesn't flash "Analyzing..." on every refresh cycle. Gated by
+        // runHeavy so the O(strikes^2) searches run on the slow cadence, not every tick.
+        if (runHeavy &&
+            typeof analyzePortfolioRiskUI === 'function' &&
             typeof getCurrentPortfolioLegs === 'function' &&
             getCurrentPortfolioLegs().length > 0) {
           analyzePortfolioRiskUI({ silent: true });
@@ -963,7 +983,7 @@ async function updateCalculatorWithLiveData(symbol) {
       } else {
         // Handle case where chains API fails (common for index options like NDX)
         lastLiveChainData = null;
-        console.log('⚠️ Options chain data not available - this is common for index options');
+        // console.log('⚠️ Options chain data not available - this is common for index options');
         const chainElement = document.getElementById('options-chain');
         if (chainElement) {
           chainElement.innerHTML = `
@@ -979,14 +999,14 @@ async function updateCalculatorWithLiveData(symbol) {
         }
       }
     } else {
-      console.log('❌ No expirations found');
+      // console.log('❌ No expirations found');
       const chainElement = document.getElementById('options-chain');
       if (chainElement) {
         chainElement.innerHTML = '<p>No options expirations available for this symbol</p>';
       }
     }
   } catch (error) {
-    console.error('Error updating with live data:', error);
+    // console.error('Error updating with live data:', error);
     const chainElement = document.getElementById('options-chain');
     if (chainElement) {
       chainElement.innerHTML = '<p>Error loading options data</p>';
