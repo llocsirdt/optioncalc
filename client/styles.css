@@ -121,9 +121,10 @@ pre {
 }
 
 /* A strike currently SELECTED via an offset card / chain click — mirrors the option-chain
-   highlight on the value curve. The selected call/put cell is outlined in the SAME green
-   (long) / red-pink (short) shades the chain uses (#4CAF50 / #F44336), so the side is clear.
-   Injected rows (curve-selected-inserted) are selected strikes that aren't sampled/held. */
+   highlight on the value curve. The selected call/put cell is bordered in the SAME light
+   shades the chain's selected cells use: lime green #9bff9b for long (buy/ask), light pink
+   #ff94a4 for short (sell/bid). Injected rows (curve-selected-inserted) are selected strikes
+   that aren't sampled/held. */
 .curve-table tr.curve-selected-strike td:first-child {
   box-shadow: inset 3px 0 0 #888;
   font-weight: 700;
@@ -137,14 +138,12 @@ pre {
   font-weight: 700;
 }
 .curve-table td.sel-long {
-  outline: 2px solid #4CAF50;   /* chain long = green */
+  outline: 2px solid #9bff9b;   /* chain long (ask) = lime green */
   outline-offset: -2px;
-  color: #2e7d32;
 }
 .curve-table td.sel-short {
-  outline: 2px solid #F44336;   /* chain short = red/pink */
+  outline: 2px solid #ff94a4;   /* chain short (bid) = light pink */
   outline-offset: -2px;
-  color: #c62828;
 }
 
 /* Horizontal line marking where the current underlying price falls in the chain
