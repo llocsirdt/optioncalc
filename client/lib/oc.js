@@ -2214,27 +2214,21 @@ function updateOptionsChain(options, opts) {
       chainElement.innerHTML = html;
       // console.log('✅ Options chain updated in UI');
       
-      // Set up click and touch handlers for bid/ask cells
-      const clickableCells = chainElement.querySelectorAll('.clickable');
-      clickableCells.forEach(cell => {
-        // Mouse events for desktop
-        cell.addEventListener('click', (event) => handleOptionCellClick(event, options));
-        
-        // Touch events for mobile devices (only touchstart to prevent double-firing)
-        cell.addEventListener('touchstart', function(event) {
-          // Additional verification using elementFromPoint for zoomed scenarios
-          if (event.touches && event.touches.length > 0) {
-            const touch = event.touches[0];
-            const element = document.elementFromPoint(touch.clientX, touch.clientY);
-            if (element !== this && !this.contains(element)) {
-              // console.log('🚫 Touch not on target element, ignoring');
-              return;
-            }
-          }
-          
-          handleOptionCellClick.call(this, event, options);
+      // Event delegation (Tier 2 perf): bind ONE click + one touchstart handler to the
+      // container ONCE, instead of re-attaching ~300 per-cell listeners on every rebuild.
+      // The container survives innerHTML swaps. We only act when a .clickable cell is the
+      // target (preserves table scrolling on touch), and handleOptionCellClick resolves the
+      // cell from event.target and does its own bid/ask + touch-bounds checks, so behavior is
+      // unchanged. currentOptionsData is refreshed at the top of updateOptionsChain each cycle.
+      if (!chainElement.dataset.cellHandlersBound) {
+        chainElement.addEventListener('click', (event) => {
+          if (event.target.closest && event.target.closest('.clickable')) handleOptionCellClick(event, currentOptionsData);
+        });
+        chainElement.addEventListener('touchstart', (event) => {
+          if (event.target.closest && event.target.closest('.clickable')) handleOptionCellClick(event, currentOptionsData);
         }, { passive: false });
-      });
+        chainElement.dataset.cellHandlersBound = 'true';
+      }
       
       // Render curated hedge candidates (see hedge-strategy-ui.js) in place of
       // the old exhaustive server+client offsetting search. Throttled on live ticks.
