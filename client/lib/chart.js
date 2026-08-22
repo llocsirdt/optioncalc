@@ -156,9 +156,14 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
         .append("g")
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Calculate the min and max of totalIntrinsicValue from data
-    const minIntrinsicValue = d3.min(data, d => d.totalIntrinsicValue);
-    const maxIntrinsicValue = d3.max(data, d => d.totalIntrinsicValue);
+    // Include the temp/comparison curve (when present) in the axis range so the scales
+    // accommodate the FULL span of both the current position and the temp one — otherwise
+    // the temp curve runs off-scale and is hard to read.
+    const rangeData = (tempData && tempData.length > 0) ? data.concat(tempData) : data;
+
+    // Calculate the min and max of totalIntrinsicValue across both curves
+    const minIntrinsicValue = d3.min(rangeData, d => d.totalIntrinsicValue);
+    const maxIntrinsicValue = d3.max(rangeData, d => d.totalIntrinsicValue);
 
     // Determine the overall min and max for the Y-axis domain, including the cost
     const overallMinY = Math.min(minIntrinsicValue, cost);
@@ -170,7 +175,7 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
 
     // Create scales
     const xScale = d3.scaleLinear()
-        .domain(d3.extent(data, d => d.closingPrice))
+        .domain(d3.extent(rangeData, d => d.closingPrice))
         .range([0, width]);
 
     const yScale = d3.scaleLinear()
