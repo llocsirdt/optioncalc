@@ -722,6 +722,16 @@ pre {
   align-items: center;
   padding: 10px;
 }
+/* Right-side column: gap + score stacked above the Add button. */
+.offset-trade.offset-trade-carded .trade-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  text-align: right;
+}
 .trade-strategy-header {
   padding: 4px 10px;
   background-color: #eef1f5;

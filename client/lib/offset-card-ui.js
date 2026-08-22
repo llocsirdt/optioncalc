@@ -147,10 +147,12 @@ function renderOffsetCandidateCard(candidate, index, selectFnName, addFnName, po
           <div class="portfolio-effect-row">Worst: ${formatWorstCase(candidate.portfolioLocked, candidate.portfolioUnboundedLoss)} <span class="portfolio-effect-was">(was ${formatWorstCase(candidate.baselineLocked, candidate.baselineUnboundedLoss)})</span></div>
           <div class="portfolio-effect-row">Best: ${formatBestCase(candidate.portfolioPotential, candidate.portfolioUnboundedGain)} <span class="portfolio-effect-was">(was ${formatBestCase(candidate.baselinePotential, candidate.baselineUnboundedGain)})</span></div>
         </div>
+      </div>
+      <div class="trade-actions">
         <div class="trade-gap" title="Distance between the existing position's strikes and this candidate's short strike — the zone that has to be closed in to realize the upside above, not just the locked floor">Gap: ${candidate.strikeGapWidth} pts</div>
         <div class="trade-score ${profitClass}">Score: ${(candidate.rankScore * 100).toFixed(1)}%</div>
+        <button onclick="event.stopPropagation(); ${addFnName}(${index})">Add to pos</button>
       </div>
-      <button onclick="event.stopPropagation(); ${addFnName}(${index})">Add to calculator</button>
       </div>
     </div>
   `;
