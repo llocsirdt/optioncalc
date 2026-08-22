@@ -2946,6 +2946,9 @@ function processInput() {
                `<td class="${diffClass}">${diffStr}</td>${qtyCell(r.pos ? r.pos.call : 0)}${qtyCell(r.pos ? r.pos.put : 0)}</tr>`;
       }).join('');
 
+      // Stash the position + cost basis so updateCurveSelectedStrikes() can value and INJECT
+      // rows for selected strikes that fall between sampled prices (complete potential view).
+      window.__curveCtx = { options, cost };
       return `<table class="curve-table"><thead><tr>` +
              `<th>Strike</th><th>Value</th><th>P/L</th><th>Calls</th><th>Puts</th>` +
              `</tr></thead><tbody>${body}</tbody></table>`;
@@ -3122,19 +3125,72 @@ function updateCurveSelectedStrikes() {
       else byStrike.get(pos.strike).put = side;
     });
   }
+  const sideCls = side => (side === 'short' ? 'sel-short' : 'sel-long');
+  const sideMark = side => (side === 'short' ? '−' : '+');
+  // Exact position value at an underlying price (same payoff as the curve builder) so an
+  // injected selected-strike row is consistent with its sampled neighbors.
+  const ctx = window.__curveCtx;
+  const valueAt = price => {
+    if (!ctx || !Array.isArray(ctx.options)) return null;
+    let v = 0;
+    ctx.options.forEach(o => {
+      if (!o.type || o.strike == null || !o.qty) return;
+      const intrinsic = o.type === 'c' ? Math.max(0, price - o.strike) : Math.max(0, o.strike - price);
+      v += intrinsic * o.qty * 100;
+    });
+    return v;
+  };
+
   document.querySelectorAll('#output .curve-table').forEach(table => {
-    table.querySelectorAll('tbody tr').forEach(r => {
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    // Clear the prior pass: drop injected rows, strip marks from real rows.
+    tbody.querySelectorAll('tr.curve-selected-inserted').forEach(r => r.remove());
+    tbody.querySelectorAll('tr').forEach(r => {
       r.classList.remove('curve-selected-strike');
       r.querySelectorAll('td').forEach(td => td.classList.remove('curve-selected-call', 'curve-selected-put', 'sel-long', 'sel-short'));
+    });
+
+    // Mark selected strikes that already have a row; note which we handled.
+    const handled = new Set();
+    tbody.querySelectorAll('tr').forEach(r => {
       const firstCell = r.querySelector('td');
       if (!firstCell) return;
-      const sel = byStrike.get(parseFloat(firstCell.textContent));
+      const strike = parseFloat(firstCell.textContent);
+      const sel = byStrike.get(strike);
       if (!sel) return;
+      handled.add(strike);
       r.classList.add('curve-selected-strike');
       const cells = r.querySelectorAll('td'); // [strike, value, P/L, calls, puts]
-      if (sel.call && cells[3]) cells[3].classList.add('curve-selected-call', sel.call === 'short' ? 'sel-short' : 'sel-long');
-      if (sel.put && cells[4]) cells[4].classList.add('curve-selected-put', sel.put === 'short' ? 'sel-short' : 'sel-long');
+      if (sel.call && cells[3]) cells[3].classList.add('curve-selected-call', sideCls(sel.call));
+      if (sel.put && cells[4]) cells[4].classList.add('curve-selected-put', sideCls(sel.put));
     });
+
+    // Inject a row for each selected strike that isn't sampled, so the curve table is a
+    // complete view of the potential position (needs the stashed curve context to value it).
+    if (ctx && Array.isArray(ctx.options)) {
+      byStrike.forEach((sel, strike) => {
+        if (handled.has(strike)) return;
+        const value = valueAt(strike);
+        if (value == null) return;
+        const diff = value - (ctx.cost || 0);
+        const diffStr = diff >= 0 ? `+$${diff.toFixed(0)}` : `-$${Math.abs(diff).toFixed(0)}`;
+        const diffCls = diff >= 0 ? 'curve-pl-pos' : 'curve-pl-neg';
+        const callCell = sel.call ? `<td class="curve-selected-call ${sideCls(sel.call)}">${sideMark(sel.call)}</td>` : '<td></td>';
+        const putCell = sel.put ? `<td class="curve-selected-put ${sideCls(sel.put)}">${sideMark(sel.put)}</td>` : '<td></td>';
+        const tr = document.createElement('tr');
+        tr.className = 'curve-strike-row curve-selected-strike curve-selected-inserted';
+        tr.title = 'Selected strike (not currently held)';
+        tr.innerHTML = `<td>${strike}</td><td>$${value.toFixed(0)}</td><td class="${diffCls}">${diffStr}</td>${callCell}${putCell}`;
+        // Insert in ascending-strike order (scan live rows so multiple injects stay ordered).
+        let next = null;
+        for (const r of tbody.querySelectorAll('tr')) {
+          const c = r.querySelector('td');
+          if (c && parseFloat(c.textContent) > strike) { next = r; break; }
+        }
+        if (next) tbody.insertBefore(tr, next); else tbody.appendChild(tr);
+      });
+    }
   });
 }
 window.updateCurveSelectedStrikes = updateCurveSelectedStrikes;
