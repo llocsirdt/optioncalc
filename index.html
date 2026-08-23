@@ -24,21 +24,21 @@
   <script src="client/lib/offset-card-ui.js"></script>
   <script src="client/lib/portfolio-risk-analyzer.js"></script>
   <script src="client/lib/hedge-strategy-ui.js"></script>
+  <script src="client/lib/nq-chart.js"></script>
 
 
 </head>
 <body>
 
 <div id="header">
-  <h1>Option Calc v3.3.13</h1>
+  <h1>Option Calc v3.4.0</h1>
   
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
   </div>
 
   <div id="sliderContainer" style="display: none;">
-    <label for="optionRange">Positions: <span id="optionCount">n</span></label>
-    <input type="range" id="optionRange" min="1" max="1" value="1">
+    <input type="range" id="optionRange" min="1" max="1" value="1"><label for="optionRange">Pos: <span id="optionCount">n</span></label>
   </div>
 
 </div>
@@ -99,6 +99,16 @@
   </div>
 
   <div id="container-col2">
+
+    <!-- Custom NQ chart (candles + Bollinger + 9EMA) — replacement-in-progress for the TV widgets -->
+    <div id="nq-chart-container">
+      <div id="nq-chart-toolbar">
+        <span class="nq-chart-title">NQ futures</span>
+        <span id="nq-chart-tf-buttons"></span>
+        <span id="nq-chart-ohlc" class="nq-chart-ohlc"></span>
+      </div>
+      <div id="nq-chart"></div>
+    </div>
 
     <div id="candle-analysis-aggregated"></div>
 
