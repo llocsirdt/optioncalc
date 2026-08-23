@@ -150,7 +150,10 @@ async function populateBaseCache(symbol) {
   
   const now = Date.now();
   const timeframes = [
-    { periodType: 'day', period: 2, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
+    // period:5 (not 2) so FUTURES (e.g. /NQ) still return data when the base cache is populated
+    // off-hours/weekend — a 2-day window ending "now" can be entirely closed and come back empty,
+    // which zeros out 1m and cascades to break the 60m/1h aggregation. Index symbols are unaffected.
+    { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 1, endDate: now, name: '1m' },
     { periodType: 'day', period: 3, frequencyType: 'minute', frequency: 5, endDate: now, name: '5m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 15, endDate: now, name: '15m' },
     { periodType: 'day', period: 5, frequencyType: 'minute', frequency: 30, endDate: now, name: '30m' }
@@ -280,13 +283,17 @@ async function getLatest1mCandles(symbol, sinceTime) {
     }
   }
   
-  // Fall back to REST API
+  // Fall back to REST API. Fetch the window SINCE the base's newest candle via a start/end
+  // RANGE rather than a fixed 2-day period ending "now" — the period form returns EMPTY for
+  // futures like /NQ off-hours/weekends (the last 2 calendar days can be entirely closed),
+  // which prepends nothing and freezes the data at whenever the base was populated. A range
+  // reaches back to the last real session regardless of when "now" is; the filter below trims
+  // to datetime > sinceTime. Start an hour before sinceTime for safety.
   const fetchTime = Date.now();
   const options = {
-    periodType: 'day',
-    period: 2,
     frequencyType: 'minute',
     frequency: 1,
+    startDate: Math.max(0, sinceTime - 60 * 60 * 1000),
     endDate: fetchTime
   };
   
