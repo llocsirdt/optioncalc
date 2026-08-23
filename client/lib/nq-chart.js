@@ -17,11 +17,14 @@
 
   const SYMBOL = '/NQ';
   const TIMEFRAMES = ['1m', '5m', '15m', '60m'];
-  const REFRESH_MS = 15000;
+  // The server accepts these timeframe params but returns 60m data under the key "1h".
+  const RESP_KEY = { '1m': '1m', '5m': '5m', '15m': '15m', '60m': '1h' };
+  const REFRESH_MS = 4000;                 // interim; true real-time needs a streaming relay
   const INIT_BARS = 90;                    // how many recent bars to show initially
   const margin = { top: 8, right: 66, bottom: 22, left: 6 };
 
   let timeframe = '15m';
+  let lastSig = null;                       // skip redundant redraws when nothing changed
   let data = [];                           // chronological candles: {i,t,o,h,l,c,v,bbU,bbM,bbL,ema9}
   let transform = d3.zoomIdentity;
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
@@ -41,7 +44,7 @@
     const url = `${apiBase()}/candleanalysis?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${timeframe}`;
     const res = await fetch(url);
     const j = await res.json();
-    const tf = j && j.candleData && j.candleData[timeframe];
+    const tf = j && j.candleData && j.candleData[RESP_KEY[timeframe] || timeframe];
     const cs = (tf && tf.candles) || [];
     data = cs.slice().reverse().map((c, i) => ({
       i, t: c.datetime, o: +c.open, h: +c.high, l: +c.low, c: +c.close, v: +c.volume || 0,
@@ -237,8 +240,12 @@
   async function load(resetTheView) {
     try {
       await fetchCandles();
-      if (resetTheView) resetView(); else render();
-      updateReadout(data[data.length - 1]);
+      const last = data[data.length - 1];
+      const sig = data.length + ':' + timeframe + ':' + (last ? last.t + ':' + last.c + ':' + last.h + ':' + last.l : '');
+      if (resetTheView) { resetView(); }
+      else if (sig !== lastSig) { render(); }   // only redraw on a real change (keeps zoom/hover steady)
+      lastSig = sig;
+      if (hoverIndex == null) updateReadout(last);
     } catch (e) { console.error('[nq-chart] load failed:', e && e.message); }
   }
 
