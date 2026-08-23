@@ -235,7 +235,9 @@ pre {
   font-size: 11px;
 }
 .nq-chart-title { font-weight: bold; color: #333; }
-#nq-chart-tf-buttons { display: flex; gap: 2px; }
+#nq-chart-tf-buttons { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.nq-tf-group { display: flex; align-items: center; gap: 2px; }
+.nq-tf-line { margin: 0; cursor: pointer; }
 .nq-tf-btn {
   padding: 2px 7px;
   font-size: 11px;

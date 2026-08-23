@@ -26,7 +26,7 @@
   let data = [];                           // selected-TF candles: {i,t,o,h,l,c,v,bbU,bbM,bbL,ema9}
   let allData = {};                        // tf -> raw server candles (for the multi-TF overlay)
   let overlayMapped = {};                  // tf -> {bbU,bbM,bbL,ema9} arrays indexed by selected candle
-  let showAllTf = false;                   // overlay every timeframe's BB + 9EMA lines
+  let lineTfs = new Set(['15m']);          // which timeframes' BB + 9EMA lines are drawn
   let transform = d3.zoomIdentity;
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
   let refreshTimer = null;
@@ -164,23 +164,16 @@
     const slot = zx(1) - zx(0);
     const bw = Math.max(1, Math.min(slot * 0.7, 22));
 
-    if (showAllTf) {
-      // Multi-TF overlay: hide the single-TF band/lines, draw every TF's BB + EMA lines.
-      els.gClip.select('.nq-bb-band').attr('d', null);
-      els.gClip.selectAll('.nq-bb, .nq-ema').attr('d', null);
-      els.gClip.select('.nq-overlay').style('display', null);
-      renderOverlay(zx, y, i0, i1);
-    } else {
-      // Single-TF: filled band + BB lines + EMA for the selected timeframe only.
-      els.gClip.select('.nq-overlay').style('display', 'none').selectAll('path.nq-ol').remove();
-      const dfn = key => d3.line().defined(d => d[key] != null).x(d => zx(d.i)).y(d => y(d[key]));
+    // Subtle filled band for the SELECTED timeframe, only when its own lines are enabled.
+    if (lineTfs.has(timeframe)) {
       const band = d3.area().defined(d => d.bbU != null && d.bbL != null).x(d => zx(d.i)).y0(d => y(d.bbL)).y1(d => y(d.bbU));
       els.gClip.select('.nq-bb-band').datum(vis).attr('d', band);
-      els.gClip.select('.nq-bb-upper').datum(vis).attr('d', dfn('bbU'));
-      els.gClip.select('.nq-bb-middle').datum(vis).attr('d', dfn('bbM'));
-      els.gClip.select('.nq-bb-lower').datum(vis).attr('d', dfn('bbL'));
-      els.gClip.select('.nq-ema').datum(vis).attr('d', dfn('ema9'));
+    } else {
+      els.gClip.select('.nq-bb-band').attr('d', null);
     }
+    // All BB/EMA lines (including the selected TF's) are drawn by the overlay, per lineTfs.
+    els.gClip.selectAll('.nq-bb, .nq-ema').attr('d', null);
+    renderOverlay(zx, y, i0, i1);
 
     // Candles (only visible)
     const sel = els.gClip.select('.nq-candles').selectAll('g.nq-candle').data(vis, d => d.t);
@@ -217,6 +210,7 @@
     const R = TIMEFRAMES.indexOf(timeframe);
     const specs = [];
     TIMEFRAMES.forEach((tf, r) => {
+      if (!lineTfs.has(tf)) return;
       const m = overlayMapped[tf];
       if (!m) return;
       const dist = r - R;
@@ -258,7 +252,8 @@
 
     // y-axis drag: stretch/compress price (manual vertical zoom); dbl-click restores auto-fit.
     els.yHit.style('cursor', 'ns-resize').call(d3.drag().on('drag', ev => {
-      yZoom = Math.max(0.2, Math.min(8, yZoom * Math.exp(ev.dy * 0.005)));
+      // TradingView-style: drag DOWN condenses (more range), drag UP expands (less range).
+      yZoom = Math.max(0.2, Math.min(8, yZoom * Math.exp(-ev.dy * 0.005)));
       render();
     })).on('dblclick', () => { yZoom = 1; render(); });
 
@@ -306,13 +301,34 @@
   }
 
   // --- public API + lifecycle --------------------------------------------
+  // Each timeframe = a button (selects candles) + a checkbox (shows that TF's lines). Plus an
+  // "all" checkbox to toggle every timeframe's lines at once.
   function buildToolbar() {
     const bar = document.getElementById('nq-chart-tf-buttons');
     if (!bar) return;
+    const allOn = lineTfs.size === TIMEFRAMES.length;
     bar.innerHTML = TIMEFRAMES.map(tf =>
-      `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}">${tf}</button>`).join('');
-    bar.querySelectorAll('.nq-tf-btn').forEach(b =>
-      b.addEventListener('click', () => setTimeframe(b.getAttribute('data-tf'))));
+      `<span class="nq-tf-group">` +
+        `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}">${tf}</button>` +
+        `<input type="checkbox" class="nq-tf-line" data-tf="${tf}" title="show ${tf} Bollinger + 9EMA lines"${lineTfs.has(tf) ? ' checked' : ''}>` +
+      `</span>`).join('') +
+      `<label class="nq-multi-toggle" title="toggle every timeframe's lines"><input type="checkbox" class="nq-all-lines"${allOn ? ' checked' : ''}> all</label>`;
+    bar.querySelectorAll('.nq-tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.getAttribute('data-tf'))));
+    bar.querySelectorAll('.nq-tf-line').forEach(c => c.addEventListener('change', () => toggleLine(c.getAttribute('data-tf'), c.checked)));
+    const allc = bar.querySelector('.nq-all-lines');
+    if (allc) allc.addEventListener('change', () => toggleAllLines(allc.checked));
+  }
+
+  function toggleLine(tf, on) {
+    if (on) lineTfs.add(tf); else lineTfs.delete(tf);
+    const allc = document.querySelector('#nq-chart-tf-buttons .nq-all-lines');
+    if (allc) allc.checked = lineTfs.size === TIMEFRAMES.length;
+    render();
+  }
+  function toggleAllLines(on) {
+    lineTfs = on ? new Set(TIMEFRAMES) : new Set();
+    buildToolbar();
+    render();
   }
 
   async function load(resetTheView) {
@@ -353,8 +369,6 @@
     if (!document.getElementById('nq-chart')) return;
     if (!buildSkeleton()) return;
     buildToolbar();
-    const cb = document.getElementById('nq-multi-tf');
-    if (cb) cb.addEventListener('change', () => { showAllTf = cb.checked; render(); });
     load(true);
     startRefresh();
     window.addEventListener('resize', () => render());
