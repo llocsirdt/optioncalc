@@ -164,14 +164,9 @@
     const slot = zx(1) - zx(0);
     const bw = Math.max(1, Math.min(slot * 0.7, 22));
 
-    // Subtle filled band for the SELECTED timeframe, only when its own lines are enabled.
-    if (lineTfs.has(timeframe)) {
-      const band = d3.area().defined(d => d.bbU != null && d.bbL != null).x(d => zx(d.i)).y0(d => y(d.bbL)).y1(d => y(d.bbU));
-      els.gClip.select('.nq-bb-band').datum(vis).attr('d', band);
-    } else {
-      els.gClip.select('.nq-bb-band').attr('d', null);
-    }
-    // All BB/EMA lines (including the selected TF's) are drawn by the overlay, per lineTfs.
+    // Bands + lines for every enabled timeframe are drawn by the overlay (per lineTfs);
+    // the single legacy band/line paths stay cleared.
+    els.gClip.select('.nq-bb-band').attr('d', null);
     els.gClip.selectAll('.nq-bb, .nq-ema').attr('d', null);
     renderOverlay(zx, y, i0, i1);
 
@@ -208,7 +203,8 @@
   // as stronger support/resistance, which is the whole point.
   function renderOverlay(zx, y, i0, i1) {
     const R = TIMEFRAMES.indexOf(timeframe);
-    const specs = [];
+    const bandSpecs = [];
+    const lineSpecs = [];
     TIMEFRAMES.forEach((tf, r) => {
       if (!lineTfs.has(tf)) return;
       const m = overlayMapped[tf];
@@ -217,8 +213,10 @@
       const dash = dist === 0 ? null : dist > 0 ? '6,3' : '2,3';
       const opacity = dist === 0 ? 0.9 : Math.max(0.22, 0.62 - 0.13 * Math.abs(dist));
       const width = dist === 0 ? 1.7 : 1.1;
+      // Always shade between this TF's bands; low opacity so overlapping bands stack/darken.
+      bandSpecs.push({ key: tf, bbU: m.bbU, bbL: m.bbL });
       [['bbU', false], ['bbM', false], ['bbL', false], ['ema9', true]].forEach(([field, isEma]) => {
-        specs.push({ key: tf + field, arr: m[field], isEma, dash, opacity, width });
+        lineSpecs.push({ key: tf + field, arr: m[field], isEma, dash, opacity, width });
       });
     });
     const lo = Math.max(0, i0 - 1), hi = Math.min(data.length - 1, i1 + 1);
@@ -227,7 +225,22 @@
       for (let i = lo; i <= hi; i++) pts.push([i, arr[i]]);
       return d3.line().defined(p => p[1] != null).x(p => zx(p[0])).y(p => y(p[1]))(pts);
     };
-    const sel = els.gClip.select('.nq-overlay').selectAll('path.nq-ol').data(specs, s => s.key);
+    const mkBand = (u, l) => {
+      const pts = [];
+      for (let i = lo; i <= hi; i++) pts.push([i, u[i], l[i]]);
+      return d3.area().defined(p => p[1] != null && p[2] != null)
+        .x(p => zx(p[0])).y1(p => y(p[1])).y0(p => y(p[2]))(pts);
+    };
+    const ov = els.gClip.select('.nq-overlay');
+
+    // Filled bands first (behind the lines).
+    const bsel = ov.selectAll('path.nq-ol-band').data(bandSpecs, s => s.key);
+    bsel.exit().remove();
+    bsel.enter().insert('path', ':first-child').attr('class', 'nq-ol-band')
+      .attr('stroke', 'none').attr('fill', '#5c6bc0').attr('opacity', 0.2)
+      .merge(bsel).attr('d', s => mkBand(s.bbU, s.bbL));
+
+    const sel = ov.selectAll('path.nq-ol').data(lineSpecs, s => s.key);
     sel.exit().remove();
     sel.enter().append('path').attr('class', 'nq-ol').attr('fill', 'none').merge(sel)
       .attr('d', s => mkLine(s.arr))
