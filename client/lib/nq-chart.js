@@ -348,6 +348,7 @@
   function setTimeframe(tf) {
     if (!TIMEFRAMES.includes(tf) || tf === timeframe) return;
     timeframe = tf;
+    lineTfs.add(tf);            // selecting a timeframe also turns on its band/EMA lines
     buildToolbar();
     if (allData[tf] && allData[tf].length) {
       rebuildSelected(); lastSig = null; resetView();
