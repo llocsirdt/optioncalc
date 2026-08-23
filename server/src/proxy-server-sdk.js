@@ -10,6 +10,7 @@ const PersistenceManager = require('./persistence/persistence');
 const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
 const { analyzeCandles, streamingCandleSource } = require('./persistence/candle-analyzer');
+const { getChartSeries } = require('./chart-series');
 const candleSpread = require('./candle-spread');
 const { marketClient } = require('./persistence/market-client');
 
@@ -206,7 +207,18 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       
       console.log(`[${timestamp}] Analyzing candles for: ${symbol}${timeframe ? ` (${timeframe})` : ''}`);
       result = await analyzeCandles(symbol, options);
-      
+
+    } else if (path.startsWith('/chartseries')) {
+      // Deep, chart-ready OHLC + Bollinger(20,2) + 9EMA per timeframe, independent of the
+      // engine's candle-analyzer base cache (see chart-series.js). Used by the custom NQ chart.
+      const url = new URL(`http://localhost${query}`);
+      const symbol = url.searchParams.get('symbol');
+      const timeframe = url.searchParams.get('timeframe') || '15m';
+      if (!symbol) throw new Error('symbol parameter is required (e.g., ?symbol=/NQ)');
+      console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})`);
+      const candles = await getChartSeries(symbol, timeframe);
+      result = { symbol, timeframe, candles };
+
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);
     }

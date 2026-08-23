@@ -16,9 +16,7 @@
   if (typeof d3 === 'undefined') { console.warn('[nq-chart] d3 not loaded'); return; }
 
   const SYMBOL = '/NQ';
-  const TIMEFRAMES = ['1m', '5m', '15m', '60m'];
-  // The server accepts these timeframe params but returns 60m data under the key "1h".
-  const RESP_KEY = { '1m': '1m', '5m': '5m', '15m': '15m', '60m': '1h' };
+  const TIMEFRAMES = ['1m', '5m', '15m', '60m', 'daily'];
   const REFRESH_MS = 4000;                 // interim; true real-time needs a streaming relay
   const INIT_BARS = 90;                    // how many recent bars to show initially
   const margin = { top: 8, right: 66, bottom: 22, left: 6 };
@@ -39,19 +37,16 @@
     timeZone: 'America/New_York', hour12: false,
     ...(withDate ? { month: '2-digit', day: '2-digit' } : {}), hour: '2-digit', minute: '2-digit'
   });
+  const etDateOnly = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit' });
 
   async function fetchCandles() {
-    const url = `${apiBase()}/candleanalysis?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${timeframe}`;
+    const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${timeframe}`;
     const res = await fetch(url);
     const j = await res.json();
-    const tf = j && j.candleData && j.candleData[RESP_KEY[timeframe] || timeframe];
-    const cs = (tf && tf.candles) || [];
-    data = cs.slice().reverse().map((c, i) => ({
+    const cs = (j && j.candles) || [];   // already chronological, with flat BB/EMA fields
+    data = cs.map((c, i) => ({
       i, t: c.datetime, o: +c.open, h: +c.high, l: +c.low, c: +c.close, v: +c.volume || 0,
-      bbU: num(c.indicators && c.indicators.bollinger20_2 && c.indicators.bollinger20_2.upper),
-      bbM: num(c.indicators && c.indicators.bollinger20_2 && c.indicators.bollinger20_2.middle),
-      bbL: num(c.indicators && c.indicators.bollinger20_2 && c.indicators.bollinger20_2.lower),
-      ema9: num(c.indicators && c.indicators.ema9)
+      bbU: num(c.bbUpper), bbM: num(c.bbMiddle), bbL: num(c.bbLower), ema9: num(c.ema9)
     }));
   }
 
@@ -155,10 +150,11 @@
       .attr('height', d => Math.max(1, Math.abs(y(d.o) - y(d.c))));
 
     // Axes
-    const tfMin = { '1m': 1, '5m': 5, '15m': 15, '60m': 60 }[timeframe] || 15;
+    const tfMin = { '1m': 1, '5m': 5, '15m': 15, '60m': 60, 'daily': 1440 }[timeframe] || 15;
     const spanBars = i1 - i0;
+    const isDaily = timeframe === 'daily';
     els.gx.call(d3.axisBottom(zx).ticks(Math.min(8, Math.max(2, Math.floor(innerW / 90))))
-      .tickFormat(v => { const idx = Math.round(v); const d = data[idx]; return d ? etTime(d.t, spanBars * tfMin > 8 * 60) : ''; }));
+      .tickFormat(v => { const idx = Math.round(v); const d = data[idx]; return d ? (isDaily ? etDateOnly(d.t) : etTime(d.t, spanBars * tfMin > 8 * 60)) : ''; }));
     els.gy.call(d3.axisRight(y).ticks(6).tickFormat(fmtP));
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH };
@@ -209,7 +205,7 @@
     if (!box || !d) return;
     const chg = d.c - d.o, up = chg >= 0;
     box.innerHTML =
-      `<span class="nq-ro-time">${etTime(d.t, true)} ET</span>` +
+      `<span class="nq-ro-time">${timeframe === 'daily' ? etDateOnly(d.t) : etTime(d.t, true) + ' ET'}</span>` +
       `<span class="nq-ro ${up ? 'nq-up-t' : 'nq-down-t'}">O ${fmtP(d.o)} H ${fmtP(d.h)} L ${fmtP(d.l)} C ${fmtP(d.c)}</span>` +
       (d.bbU != null ? `<span class="nq-ro nq-ro-bb">BB ${fmtP(d.bbU)}/${fmtP(d.bbM)}/${fmtP(d.bbL)}</span>` : '') +
       (d.ema9 != null ? `<span class="nq-ro nq-ro-ema">9EMA ${fmtP(d.ema9)}</span>` : '');

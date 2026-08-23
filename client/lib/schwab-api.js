@@ -6,7 +6,11 @@
 // GitHub Pages site) must use HTTPS, or the browser blocks the request as mixed
 // content. The EB environment only serves plain HTTP, so we front it with a
 // CloudFront distribution that terminates TLS.
-const PROXY_URL = (window.location.href.startsWith('http') ? "https://d1kbxyxn33vpw2.cloudfront.net" : "http://localhost:3001");
+// ?proxy=local forces the local dev server even when served over http (for testing an
+// http-hosted copy against localhost:3001); otherwise file:// -> localhost, http -> CloudFront.
+const PROXY_URL = (new URLSearchParams(window.location.search).get('proxy') === 'local')
+  ? "http://localhost:3001"
+  : (window.location.href.startsWith('http') ? "https://d1kbxyxn33vpw2.cloudfront.net" : "http://localhost:3001");
 
 // Schwab API integration variables
 let schwabConnected = false;

@@ -1,0 +1,94 @@
+'use strict';
+/**
+ * Chart series endpoint helper — purpose-built data for the custom NQ chart, independent of the
+ * candle-spread engine's candle-analyzer base cache (so we can pull DEEP history per timeframe
+ * without touching the engine's data path). Uses start/end RANGE fetches (which return deep
+ * history for futures, unlike the capped periodType:'day' form), RTH-filters intraday, aggregates
+ * 60m from 30m, and computes Bollinger(20,2) + EMA(9) server-side so every timeframe shows full
+ * bands (not just 1 warmup-limited bar). All analysis on the server; the client only renders.
+ */
+const { marketClient } = require('./persistence/market-client');
+
+const INDEX = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
+const DAY_MS = 864e5;
+const MAX_BARS = 400;               // cap payload; still leaves >>20 warmup bars for full BB
+const BB_PERIOD = 20, BB_MULT = 2, EMA_PERIOD = 9;
+
+// Per timeframe: native Schwab frequency to fetch, target bar minutes, lookback window, and the
+// aggregation factor (fetch 30m, aggregate x2 -> 60m). Lookbacks are generous so BB is warmed
+// across the whole visible range.
+const TF = {
+  '1m':    { freq: 1,  minutes: 1,   lookbackDays: 5,   agg: 1 },
+  '5m':    { freq: 5,  minutes: 5,   lookbackDays: 20,  agg: 1 },
+  '15m':   { freq: 15, minutes: 15,  lookbackDays: 45,  agg: 1 },
+  '60m':   { freq: 30, minutes: 60,  lookbackDays: 60,  agg: 2 },
+  'daily': { daily: true,            lookbackDays: 400 }
+};
+
+const apiSym = s => (s.startsWith('$') || s.startsWith('/')) ? s : (INDEX.has(s.toUpperCase()) ? `$${s.toUpperCase()}` : s.toUpperCase());
+const r2 = n => Math.round(n * 100) / 100;
+const etMin = ms => {
+  const s = new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+  const [h, m] = s.split(':').map(Number); return h * 60 + m;
+};
+
+function aggregate(candles, periodMin) {
+  const ms = periodMin * 60000;
+  const m = new Map();
+  for (const c of candles) {
+    const start = Math.floor(c.datetime / ms) * ms;
+    const b = m.get(start);
+    if (!b) m.set(start, { datetime: start, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0 });
+    else { b.high = Math.max(b.high, c.high); b.low = Math.min(b.low, c.low); b.close = c.close; b.volume += c.volume || 0; }
+  }
+  return [...m.values()].sort((a, b) => a.datetime - b.datetime);
+}
+
+function bollinger(cs) {
+  const out = cs.map(() => ({ bbUpper: null, bbMiddle: null, bbLower: null }));
+  for (let i = BB_PERIOD - 1; i < cs.length; i++) {
+    let sum = 0; for (let j = i - BB_PERIOD + 1; j <= i; j++) sum += cs[j].close;
+    const mean = sum / BB_PERIOD;
+    let v = 0; for (let j = i - BB_PERIOD + 1; j <= i; j++) { const d = cs[j].close - mean; v += d * d; }
+    const sd = Math.sqrt(v / BB_PERIOD);
+    out[i] = { bbUpper: r2(mean + BB_MULT * sd), bbMiddle: r2(mean), bbLower: r2(mean - BB_MULT * sd) };
+  }
+  return out;
+}
+
+function ema(cs) {
+  const k = 2 / (EMA_PERIOD + 1);
+  const out = cs.map(() => null);
+  let prev = null;
+  for (let i = EMA_PERIOD - 1; i < cs.length; i++) {
+    if (i === EMA_PERIOD - 1) { let s = 0; for (let j = 0; j <= i; j++) s += cs[j].close; prev = s / EMA_PERIOD; }
+    else prev = (cs[i].close - prev) * k + prev;
+    out[i] = r2(prev);
+  }
+  return out;
+}
+
+async function getChartSeries(symbol, timeframe) {
+  const cfg = TF[timeframe];
+  if (!cfg) throw new Error(`unsupported timeframe '${timeframe}' (use ${Object.keys(TF).join('/')})`);
+  const sym = apiSym(symbol);
+  const now = Date.now();
+  const opts = cfg.daily
+    ? { periodType: 'year', period: 1, frequencyType: 'daily', frequency: 1 }
+    : { frequencyType: 'minute', frequency: cfg.freq, startDate: now - cfg.lookbackDays * DAY_MS, endDate: now };
+
+  const resp = await marketClient.priceHistory(sym, opts);
+  let cs = (resp && resp.candles || []).filter(c => c.open || c.high || c.low || c.close);
+  if (!cfg.daily) cs = cs.filter(c => { const t = etMin(c.datetime); return t >= 570 && t < 960; }); // RTH
+  cs.sort((a, b) => a.datetime - b.datetime);
+  if (cfg.agg > 1) cs = aggregate(cs, cfg.minutes);
+  if (cs.length > MAX_BARS) cs = cs.slice(cs.length - MAX_BARS);
+
+  const bb = bollinger(cs), e9 = ema(cs);
+  return cs.map((c, i) => ({
+    datetime: c.datetime, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0,
+    bbUpper: bb[i].bbUpper, bbMiddle: bb[i].bbMiddle, bbLower: bb[i].bbLower, ema9: e9[i]
+  }));
+}
+
+module.exports = { getChartSeries, TIMEFRAMES: Object.keys(TF) };
