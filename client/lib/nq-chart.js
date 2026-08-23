@@ -23,7 +23,10 @@
 
   let timeframe = '15m';
   let lastSig = null;                       // skip redundant redraws when nothing changed
-  let data = [];                           // chronological candles: {i,t,o,h,l,c,v,bbU,bbM,bbL,ema9}
+  let data = [];                           // selected-TF candles: {i,t,o,h,l,c,v,bbU,bbM,bbL,ema9}
+  let allData = {};                        // tf -> raw server candles (for the multi-TF overlay)
+  let overlayMapped = {};                  // tf -> {bbU,bbM,bbL,ema9} arrays indexed by selected candle
+  let showAllTf = false;                   // overlay every timeframe's BB + 9EMA lines
   let transform = d3.zoomIdentity;
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
   let refreshTimer = null;
@@ -39,15 +42,49 @@
   });
   const etDateOnly = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit' });
 
-  async function fetchCandles() {
-    const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${timeframe}`;
-    const res = await fetch(url);
-    const j = await res.json();
-    const cs = (j && j.candles) || [];   // already chronological, with flat BB/EMA fields
-    data = cs.map((c, i) => ({
+  async function fetchTf(tf) {
+    const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${tf}`;
+    const j = await (await fetch(url)).json();
+    return (j && j.candles) || [];   // chronological, flat BB/EMA fields
+  }
+
+  // Fetch every timeframe (parallel) — needed for the multi-TF overlay; switching timeframes
+  // then reads from this cache (no refetch).
+  async function fetchAll() {
+    const results = await Promise.all(TIMEFRAMES.map(async tf => {
+      try { return [tf, await fetchTf(tf)]; } catch (e) { return [tf, allData[tf] || []]; }
+    }));
+    allData = Object.fromEntries(results);
+  }
+
+  // Derive the selected-TF `data` from the cache and rebuild the overlay mapping.
+  function rebuildSelected() {
+    data = (allData[timeframe] || []).map((c, i) => ({
       i, t: c.datetime, o: +c.open, h: +c.high, l: +c.low, c: +c.close, v: +c.volume || 0,
       bbU: num(c.bbUpper), bbM: num(c.bbMiddle), bbL: num(c.bbLower), ema9: num(c.ema9)
     }));
+    buildOverlayMapped();
+  }
+
+  // For each timeframe, map its BB/EMA onto the selected TF's time grid: overlayMapped[tf].bbU[i]
+  // is that TF's upper-band value at the time of selected candle i (its most recent closed bar).
+  function buildOverlayMapped() {
+    overlayMapped = {};
+    const times = data.map(c => c.t);
+    for (const tf of TIMEFRAMES) {
+      const cs = allData[tf];
+      if (!cs || !cs.length) continue;
+      const bbU = [], bbM = [], bbL = [], ema9 = [];
+      let j = 0;
+      for (let i = 0; i < times.length; i++) {
+        const T = times[i];
+        while (j + 1 < cs.length && cs[j + 1].datetime <= T) j++;
+        const c = (cs[j] && cs[j].datetime <= T) ? cs[j] : null;
+        bbU.push(c ? num(c.bbUpper) : null); bbM.push(c ? num(c.bbMiddle) : null);
+        bbL.push(c ? num(c.bbLower) : null); ema9.push(c ? num(c.ema9) : null);
+      }
+      overlayMapped[tf] = { bbU, bbM, bbL, ema9 };
+    }
   }
 
   // --- skeleton (built once) ---------------------------------------------
@@ -65,6 +102,7 @@
     gClip.append('path').attr('class', 'nq-bb nq-bb-middle');
     gClip.append('path').attr('class', 'nq-bb nq-bb-lower');
     gClip.append('path').attr('class', 'nq-ema');
+    gClip.append('g').attr('class', 'nq-overlay');   // multi-TF BB/EMA lines (behind candles)
     gClip.append('g').attr('class', 'nq-candles');
 
     const gx = gPlot.append('g').attr('class', 'nq-axis nq-x-axis');
@@ -126,14 +164,23 @@
     const slot = zx(1) - zx(0);
     const bw = Math.max(1, Math.min(slot * 0.7, 22));
 
-    // BB band + lines + EMA
-    const dfn = key => d3.line().defined(d => d[key] != null).x(d => zx(d.i)).y(d => y(d[key]));
-    const band = d3.area().defined(d => d.bbU != null && d.bbL != null).x(d => zx(d.i)).y0(d => y(d.bbL)).y1(d => y(d.bbU));
-    els.gClip.select('.nq-bb-band').datum(vis).attr('d', band);
-    els.gClip.select('.nq-bb-upper').datum(vis).attr('d', dfn('bbU'));
-    els.gClip.select('.nq-bb-middle').datum(vis).attr('d', dfn('bbM'));
-    els.gClip.select('.nq-bb-lower').datum(vis).attr('d', dfn('bbL'));
-    els.gClip.select('.nq-ema').datum(vis).attr('d', dfn('ema9'));
+    if (showAllTf) {
+      // Multi-TF overlay: hide the single-TF band/lines, draw every TF's BB + EMA lines.
+      els.gClip.select('.nq-bb-band').attr('d', null);
+      els.gClip.selectAll('.nq-bb, .nq-ema').attr('d', null);
+      els.gClip.select('.nq-overlay').style('display', null);
+      renderOverlay(zx, y, i0, i1);
+    } else {
+      // Single-TF: filled band + BB lines + EMA for the selected timeframe only.
+      els.gClip.select('.nq-overlay').style('display', 'none').selectAll('path.nq-ol').remove();
+      const dfn = key => d3.line().defined(d => d[key] != null).x(d => zx(d.i)).y(d => y(d[key]));
+      const band = d3.area().defined(d => d.bbU != null && d.bbL != null).x(d => zx(d.i)).y0(d => y(d.bbL)).y1(d => y(d.bbU));
+      els.gClip.select('.nq-bb-band').datum(vis).attr('d', band);
+      els.gClip.select('.nq-bb-upper').datum(vis).attr('d', dfn('bbU'));
+      els.gClip.select('.nq-bb-middle').datum(vis).attr('d', dfn('bbM'));
+      els.gClip.select('.nq-bb-lower').datum(vis).attr('d', dfn('bbL'));
+      els.gClip.select('.nq-ema').datum(vis).attr('d', dfn('ema9'));
+    }
 
     // Candles (only visible)
     const sel = els.gClip.select('.nq-candles').selectAll('g.nq-candle').data(vis, d => d.t);
@@ -159,6 +206,41 @@
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH };
     if (hoverIndex != null) drawCross();
+  }
+
+  // Draw every timeframe's BB (upper/mid/lower) + 9EMA as lines mapped onto the selected axis.
+  // Encoding relative to the SELECTED timeframe: current = solid, most opaque, thickest; LONGER
+  // timeframes = dashed; SHORTER = dotted; opacity falls off with distance. All are semi-
+  // transparent so overlapping lines visually thicken — clustered levels across timeframes read
+  // as stronger support/resistance, which is the whole point.
+  function renderOverlay(zx, y, i0, i1) {
+    const R = TIMEFRAMES.indexOf(timeframe);
+    const specs = [];
+    TIMEFRAMES.forEach((tf, r) => {
+      const m = overlayMapped[tf];
+      if (!m) return;
+      const dist = r - R;
+      const dash = dist === 0 ? null : dist > 0 ? '6,3' : '2,3';
+      const opacity = dist === 0 ? 0.9 : Math.max(0.22, 0.62 - 0.13 * Math.abs(dist));
+      const width = dist === 0 ? 1.7 : 1.1;
+      [['bbU', false], ['bbM', false], ['bbL', false], ['ema9', true]].forEach(([field, isEma]) => {
+        specs.push({ key: tf + field, arr: m[field], isEma, dash, opacity, width });
+      });
+    });
+    const lo = Math.max(0, i0 - 1), hi = Math.min(data.length - 1, i1 + 1);
+    const mkLine = arr => {
+      const pts = [];
+      for (let i = lo; i <= hi; i++) pts.push([i, arr[i]]);
+      return d3.line().defined(p => p[1] != null).x(p => zx(p[0])).y(p => y(p[1]))(pts);
+    };
+    const sel = els.gClip.select('.nq-overlay').selectAll('path.nq-ol').data(specs, s => s.key);
+    sel.exit().remove();
+    sel.enter().append('path').attr('class', 'nq-ol').attr('fill', 'none').merge(sel)
+      .attr('d', s => mkLine(s.arr))
+      .attr('stroke', s => s.isEma ? '#ff9800' : '#5c6bc0')
+      .attr('stroke-width', s => s.width)
+      .attr('stroke-dasharray', s => s.dash)
+      .attr('opacity', s => s.opacity);
   }
 
   // --- interactions -------------------------------------------------------
@@ -235,7 +317,8 @@
 
   async function load(resetTheView) {
     try {
-      await fetchCandles();
+      await fetchAll();
+      rebuildSelected();
       const last = data[data.length - 1];
       const sig = data.length + ':' + timeframe + ':' + (last ? last.t + ':' + last.c + ':' + last.h + ':' + last.l : '');
       if (resetTheView) { resetView(); }
@@ -245,11 +328,17 @@
     } catch (e) { console.error('[nq-chart] load failed:', e && e.message); }
   }
 
+  // Switching timeframe reads from the already-fetched cache (no refetch) — instant.
   function setTimeframe(tf) {
     if (!TIMEFRAMES.includes(tf) || tf === timeframe) return;
     timeframe = tf;
     buildToolbar();
-    load(true);
+    if (allData[tf] && allData[tf].length) {
+      rebuildSelected(); lastSig = null; resetView();
+      if (hoverIndex == null) updateReadout(data[data.length - 1]);
+    } else {
+      load(true);
+    }
   }
 
   function startRefresh() {
@@ -264,6 +353,8 @@
     if (!document.getElementById('nq-chart')) return;
     if (!buildSkeleton()) return;
     buildToolbar();
+    const cb = document.getElementById('nq-multi-tf');
+    if (cb) cb.addEventListener('change', () => { showAllTf = cb.checked; render(); });
     load(true);
     startRefresh();
     window.addEventListener('resize', () => render());
