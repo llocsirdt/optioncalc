@@ -77,9 +77,17 @@ async function getChartSeries(symbol, timeframe) {
     ? { periodType: 'year', period: 1, frequencyType: 'daily', frequency: 1 }
     : { frequencyType: 'minute', frequency: cfg.freq, startDate: now - cfg.lookbackDays * DAY_MS, endDate: now };
 
+  const isFutures = sym.startsWith('/');
   const resp = await marketClient.priceHistory(sym, opts);
   let cs = (resp && resp.candles || []).filter(c => c.open || c.high || c.low || c.close);
-  if (!cfg.daily) cs = cs.filter(c => { const t = etMin(c.datetime); return t >= 570 && t < 960; }); // RTH
+  if (!cfg.daily) {
+    // Futures trade the near-24h Globex session, so restricting to equity RTH would freeze the
+    // chart every evening/overnight — keep the whole session, only dropping the 5–6pm ET daily
+    // maintenance break. Index/equity symbols still get the 9:30–16:00 ET RTH filter.
+    cs = isFutures
+      ? cs.filter(c => { const t = etMin(c.datetime); return t < 1020 || t >= 1080; })  // exclude 17:00–18:00 ET
+      : cs.filter(c => { const t = etMin(c.datetime); return t >= 570 && t < 960; });    // 9:30–16:00 ET RTH
+  }
   cs.sort((a, b) => a.datetime - b.datetime);
   if (cfg.agg > 1) cs = aggregate(cs, cfg.minutes);
   if (cs.length > MAX_BARS) cs = cs.slice(cs.length - MAX_BARS);
