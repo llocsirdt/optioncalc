@@ -224,7 +224,7 @@
     els.gy.call(d3.axisRight(y).ticks(6).tickFormat(fmtP));
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH };
-    if (hoverIndex != null) updateCrosshair();
+    if (hoverIndex != null) updateCrosshair(); else showRestingTags();
   }
 
   // Draw every timeframe's BB (upper/mid/lower) + 9EMA as lines mapped onto the selected axis.
@@ -311,7 +311,7 @@
         updateCrosshair();
         updateReadout(data[hoverIndex]);
       })
-      .on('mouseleave', () => { hoverIndex = null; hoverY = null; hideCross(); updateReadout(data[data.length - 1]); });
+      .on('mouseleave', () => { hoverIndex = null; hoverY = null; showRestingTags(); updateReadout(data[data.length - 1]); });
   }
 
   function hideCross() {
@@ -345,14 +345,21 @@
     els.xLab.select('rect').attr('x', -tw / 2).attr('y', 2).attr('width', tw).attr('height', 16);
     els.xLab.select('text').attr('x', 0).attr('y', 14).attr('text-anchor', 'middle').text(label);
 
-    // Colored value tags for each enabled timeframe's BB (upper/mid/lower) + 9EMA.
+    drawValueTags(hoverIndex);
+  }
+
+  // Colored value tags (BB upper/mid/lower + 9EMA, per enabled timeframe) on the right y-axis for
+  // one bar. Used at the hovered bar while the crosshair is active, and at the most recent bar as
+  // the resting default when the cursor is off the chart.
+  function drawValueTags(index) {
+    const s = els._scales; if (!s || index == null) return;
     const tags = [];
     TIMEFRAMES.forEach(tf => {
       if (!lineTfs.has(tf)) return;
       const m = overlayMapped[tf]; if (!m) return;
       const col = TF_COLORS[tf] || TF_COLORS['15m'];
       [['bbU', col.outer], ['bbM', col.mid], ['bbL', col.outer], ['ema9', col.ema]].forEach(([field, color]) => {
-        const v = m[field] ? m[field][hoverIndex] : null;
+        const v = m[field] ? m[field][index] : null;
         if (v == null) return;
         tags.push({ key: tf + field, y: Math.max(7, Math.min(s.innerH - 7, s.y(v))), color, text: fmtP(v) });
       });
@@ -366,6 +373,15 @@
     const gAll = gEnter.merge(g).attr('transform', t => `translate(${s.innerW},${t.y})`);
     gAll.select('rect').attr('x', 1).attr('y', -7).attr('width', margin.right - 2).attr('height', 14).attr('rx', 2).attr('fill', t => t.color);
     gAll.select('text').attr('x', 4).attr('y', 3.5).attr('fill', t => textOn(t.color)).text(t => t.text);
+  }
+
+  // Resting state (no cursor): hide the crosshair lines + cursor axis labels, but keep the value
+  // tags showing the most recent bar's levels.
+  function showRestingTags() {
+    if (!els._scales || !data.length) { hideCross(); return; }
+    els.cross.style('display', 'none');
+    els.gAxisLab.style('display', 'none');
+    drawValueTags(data.length - 1);
   }
 
   function updateReadout(d) {
