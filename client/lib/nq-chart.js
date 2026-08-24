@@ -30,7 +30,8 @@
     'daily': { outer: '#6a1b9a', mid: '#8e24aa', ema: '#ba68c8', band: '#ab47bc' }
   };
   const REFRESH_MS = 4000;                 // interim; true real-time needs a streaming relay
-  const INIT_BARS = 90;                    // how many recent bars to show initially
+  const INIT_BARS = 25;                    // default recent bars to show (until the user zooms)
+  const PREFS_KEY = 'nqChartPrefs.v1';     // localStorage: timeframe + enabled lines + zoom width
   const margin = { top: 8, right: 66, bottom: 22, left: 6 };
 
   let timeframe = '15m';
@@ -41,6 +42,7 @@
   let lineTfs = new Set(['15m']);          // which timeframes' BB + 9EMA lines are drawn
   let transform = d3.zoomIdentity;
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
+  let visibleBars = INIT_BARS;             // how many bars to fit on reset / timeframe change
   let refreshTimer = null;
   let els = null;                          // cached selections
   let hoverIndex = null;
@@ -48,6 +50,20 @@
 
   const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
   const fmtP = d3.format(',.2f');
+
+  // Remember the user's timeframe, which overlay lines are on, and their zoom width (visible bars)
+  // across reloads.
+  function loadPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+      if (p.timeframe && TIMEFRAMES.includes(p.timeframe)) timeframe = p.timeframe;
+      if (Array.isArray(p.lineTfs)) lineTfs = new Set(p.lineTfs.filter(t => TIMEFRAMES.includes(t)));
+      if (p.visibleBars) visibleBars = Math.max(5, Math.min(400, p.visibleBars));
+    } catch (e) { /* ignore malformed prefs */ }
+  }
+  function savePrefs() {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ timeframe, lineTfs: [...lineTfs], visibleBars })); } catch (e) { /* private mode etc. */ }
+  }
   // Readable text color on a colored tag (dark text on light fills, white on dark).
   const textOn = hex => {
     const c = hex.replace('#', '');
@@ -282,17 +298,21 @@
   }
 
   // --- interactions -------------------------------------------------------
-  const zoom = d3.zoom().scaleExtent([0.4, 60]).on('zoom', ev => { transform = ev.transform; render(); });
+  const zoom = d3.zoom().scaleExtent([0.4, 60])
+    .on('zoom', ev => { transform = ev.transform; render(); })
+    .on('end', ev => { if (ev.sourceEvent) saveVisibleBars(); });   // remember zoom width (user gestures only)
 
   function wireInteractions() {
     els.zoomHit.call(zoom).on('dblclick.zoom', null).on('dblclick', resetView);
 
     // x-axis drag: stretch/compress time (scale around the right edge = latest bar).
-    els.xHit.style('cursor', 'ew-resize').call(d3.drag().on('drag', ev => {
-      const s = els._scales; if (!s) return;
-      const factor = Math.exp(-ev.dx * 0.005);
-      els.zoomHit.call(zoom.scaleBy, factor, [s.innerW, s.innerH / 2]);
-    })).on('dblclick', resetView);
+    els.xHit.style('cursor', 'ew-resize').call(d3.drag()
+      .on('drag', ev => {
+        const s = els._scales; if (!s) return;
+        const factor = Math.exp(-ev.dx * 0.005);
+        els.zoomHit.call(zoom.scaleBy, factor, [s.innerW, s.innerH / 2]);
+      })
+      .on('end', saveVisibleBars)).on('dblclick', resetView);
 
     // y-axis drag: stretch/compress price (manual vertical zoom); dbl-click restores auto-fit.
     els.yHit.style('cursor', 'ns-resize').call(d3.drag().on('drag', ev => {
@@ -401,10 +421,17 @@
     const n = data.length;
     if (!n) return;
     const baseX = d3.scaleLinear().domain([-0.5, n - 0.5]).range([0, innerW]);
-    const bars = Math.min(INIT_BARS, n);
+    const bars = Math.min(visibleBars, n);
     const k = n / bars;
     const tx = innerW - 4 - k * baseX(n - 1);
     els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
+  }
+
+  // Capture the current on-screen bar count so reloads / timeframe changes reopen at this zoom.
+  function saveVisibleBars() {
+    const s = els._scales; if (!s) return;
+    visibleBars = Math.max(5, Math.min(data.length || 400, s.i1 - s.i0 + 1));
+    savePrefs();
   }
 
   // --- public API + lifecycle --------------------------------------------
@@ -414,11 +441,13 @@
     const bar = document.getElementById('nq-chart-tf-buttons');
     if (!bar) return;
     const allOn = lineTfs.size === TIMEFRAMES.length;
-    bar.innerHTML = TIMEFRAMES.map(tf =>
-      `<span class="nq-tf-group">` +
-        `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}">${tfLabel(tf)}</button>` +
-        `<input type="checkbox" class="nq-tf-line" data-tf="${tf}" title="show ${tfLabel(tf)} Bollinger + 9EMA lines"${lineTfs.has(tf) ? ' checked' : ''}>` +
-      `</span>`).join('') +
+    bar.innerHTML = TIMEFRAMES.map(tf => {
+      const c = (TF_COLORS[tf] || {}).mid || '#888';   // color-code each control to its line family
+      return `<span class="nq-tf-group">` +
+        `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}" style="border-bottom:3px solid ${c}">${tfLabel(tf)}</button>` +
+        `<input type="checkbox" class="nq-tf-line" data-tf="${tf}" style="accent-color:${c}" title="show ${tfLabel(tf)} Bollinger + 9EMA lines"${lineTfs.has(tf) ? ' checked' : ''}>` +
+      `</span>`;
+    }).join('') +
       `<label class="nq-multi-toggle" title="toggle every timeframe's lines"><input type="checkbox" class="nq-all-lines"${allOn ? ' checked' : ''}> all</label>`;
     bar.querySelectorAll('.nq-tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.getAttribute('data-tf'))));
     bar.querySelectorAll('.nq-tf-line').forEach(c => c.addEventListener('change', () => toggleLine(c.getAttribute('data-tf'), c.checked)));
@@ -430,10 +459,12 @@
     if (on) lineTfs.add(tf); else lineTfs.delete(tf);
     const allc = document.querySelector('#nq-chart-tf-buttons .nq-all-lines');
     if (allc) allc.checked = lineTfs.size === TIMEFRAMES.length;
+    savePrefs();
     render();
   }
   function toggleAllLines(on) {
     lineTfs = on ? new Set(TIMEFRAMES) : new Set();
+    savePrefs();
     buildToolbar();
     render();
   }
@@ -484,6 +515,7 @@
     if (!TIMEFRAMES.includes(tf) || tf === timeframe) return;
     timeframe = tf;
     lineTfs.add(tf);            // selecting a timeframe also turns on its band/EMA lines
+    savePrefs();
     buildToolbar();
     if (allData[tf] && allData[tf].length) {
       rebuildSelected(); lastSig = null; resetView();
@@ -503,6 +535,7 @@
 
   function init() {
     if (!document.getElementById('nq-chart')) return;
+    loadPrefs();                 // restore timeframe / enabled lines / zoom width before first paint
     if (!buildSkeleton()) return;
     buildToolbar();
     load(true);
