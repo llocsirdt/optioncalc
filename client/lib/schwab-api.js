@@ -260,13 +260,34 @@ function updateSchwabStatus(status, type) {
   if (statusElement) {
     statusElement.textContent = status;
     statusElement.className = 'schwab-status';
-    
+
     if (type === 'success') {
       statusElement.classList.add('connected');
     } else if (type === 'error') {
       statusElement.classList.add('error');
     } else if (type === 'testing') {
       statusElement.classList.add('testing');
+    }
+
+    // On an error, surface a direct link to the server's /health so it's one click to see whether
+    // the backend is up (JSON build info) or down (a CloudFront 5xx) — distinct from a token issue.
+    const isError = status === 'Error' || type === 'error';
+    let link = document.getElementById('schwab-health-link');
+    if (isError) {
+      if (!link) {
+        link = document.createElement('a');
+        link.id = 'schwab-health-link';
+        link.textContent = '(health)';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.style.marginLeft = '6px';
+        link.style.fontSize = '12px';
+        statusElement.insertAdjacentElement('afterend', link);
+      }
+      link.href = `${PROXY_URL}/health`;
+      link.style.display = 'inline';
+    } else if (link) {
+      link.style.display = 'none';
     }
   }
 }
