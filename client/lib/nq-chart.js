@@ -17,6 +17,18 @@
 
   const SYMBOL = '/NQ';
   const TIMEFRAMES = ['1m', '5m', '15m', '60m', 'daily'];
+  const tfLabel = tf => tf === 'daily' ? '1D' : tf;
+
+  // Per-timeframe coordinating colors so each TF's bands are easy to tell apart:
+  //   1m amber/orange/yellow · 5m green/lime · 15m teal/aqua/light-blue · 60m blues · 1D purples.
+  // outer = the upper/lower band stroke, mid = the center line, ema = the 9EMA, band = the fill.
+  const TF_COLORS = {
+    '1m':    { outer: '#ff8f00', mid: '#ffb300', ema: '#ffca28', band: '#ffc107' },
+    '5m':    { outer: '#558b2f', mid: '#7cb342', ema: '#9ccc65', band: '#8bc34a' },
+    '15m':   { outer: '#00838f', mid: '#00acc1', ema: '#4dd0e1', band: '#26c6da' },
+    '60m':   { outer: '#1565c0', mid: '#1e88e5', ema: '#64b5f6', band: '#42a5f5' },
+    'daily': { outer: '#6a1b9a', mid: '#8e24aa', ema: '#ba68c8', band: '#ab47bc' }
+  };
   const REFRESH_MS = 4000;                 // interim; true real-time needs a streaming relay
   const INIT_BARS = 90;                    // how many recent bars to show initially
   const margin = { top: 8, right: 66, bottom: 22, left: 6 };
@@ -209,15 +221,16 @@
       if (!lineTfs.has(tf)) return;
       const m = overlayMapped[tf];
       if (!m) return;
-      const dist = r - R;
-      const dash = dist === 0 ? null : dist > 0 ? '6,3' : '2,3';
-      const opacity = dist === 0 ? 0.9 : Math.max(0.22, 0.62 - 0.13 * Math.abs(dist));
-      const width = dist === 0 ? 1.7 : 1.1;
-      // Always shade between this TF's bands; low opacity so overlapping bands stack/darken.
-      bandSpecs.push({ key: tf, bbU: m.bbU, bbL: m.bbL });
-      [['bbU', false], ['bbM', false], ['bbL', false], ['ema9', true]].forEach(([field, isEma]) => {
-        lineSpecs.push({ key: tf + field, arr: m[field], isEma, dash, opacity, width });
-      });
+      const col = TF_COLORS[tf] || TF_COLORS['15m'];
+      const width = r === R ? 1.9 : 1.2;      // selected timeframe drawn a touch heavier
+      // Always shade between this TF's bands; low opacity so overlapping bands stack.
+      bandSpecs.push({ key: tf, bbU: m.bbU, bbL: m.bbL, fill: col.band });
+      // Line style encodes the value: outer bands dotted, center line solid, 9EMA dashed;
+      // color encodes the timeframe.
+      lineSpecs.push({ key: tf + 'bbU', arr: m.bbU, color: col.outer, dash: '2,2', width });
+      lineSpecs.push({ key: tf + 'bbL', arr: m.bbL, color: col.outer, dash: '2,2', width });
+      lineSpecs.push({ key: tf + 'bbM', arr: m.bbM, color: col.mid, dash: null, width });
+      lineSpecs.push({ key: tf + 'ema9', arr: m.ema9, color: col.ema, dash: '6,4', width });
     });
     const lo = Math.max(0, i0 - 1), hi = Math.min(data.length - 1, i1 + 1);
     const mkLine = arr => {
@@ -237,17 +250,16 @@
     const bsel = ov.selectAll('path.nq-ol-band').data(bandSpecs, s => s.key);
     bsel.exit().remove();
     bsel.enter().insert('path', ':first-child').attr('class', 'nq-ol-band')
-      .attr('stroke', 'none').attr('fill', '#5c6bc0').attr('opacity', 0.2)
-      .merge(bsel).attr('d', s => mkBand(s.bbU, s.bbL));
+      .attr('stroke', 'none').attr('opacity', 0.2)
+      .merge(bsel).attr('fill', s => s.fill).attr('d', s => mkBand(s.bbU, s.bbL));
 
     const sel = ov.selectAll('path.nq-ol').data(lineSpecs, s => s.key);
     sel.exit().remove();
-    sel.enter().append('path').attr('class', 'nq-ol').attr('fill', 'none').merge(sel)
+    sel.enter().append('path').attr('class', 'nq-ol').attr('fill', 'none').attr('opacity', 0.9).merge(sel)
       .attr('d', s => mkLine(s.arr))
-      .attr('stroke', s => s.isEma ? '#ff9800' : '#5c6bc0')
+      .attr('stroke', s => s.color)
       .attr('stroke-width', s => s.width)
-      .attr('stroke-dasharray', s => s.dash)
-      .attr('opacity', s => s.opacity);
+      .attr('stroke-dasharray', s => s.dash);
   }
 
   // --- interactions -------------------------------------------------------
@@ -322,8 +334,8 @@
     const allOn = lineTfs.size === TIMEFRAMES.length;
     bar.innerHTML = TIMEFRAMES.map(tf =>
       `<span class="nq-tf-group">` +
-        `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}">${tf}</button>` +
-        `<input type="checkbox" class="nq-tf-line" data-tf="${tf}" title="show ${tf} Bollinger + 9EMA lines"${lineTfs.has(tf) ? ' checked' : ''}>` +
+        `<button class="nq-tf-btn ${tf === timeframe ? 'active' : ''}" data-tf="${tf}">${tfLabel(tf)}</button>` +
+        `<input type="checkbox" class="nq-tf-line" data-tf="${tf}" title="show ${tfLabel(tf)} Bollinger + 9EMA lines"${lineTfs.has(tf) ? ' checked' : ''}>` +
       `</span>`).join('') +
       `<label class="nq-multi-toggle" title="toggle every timeframe's lines"><input type="checkbox" class="nq-all-lines"${allOn ? ' checked' : ''}> all</label>`;
     bar.querySelectorAll('.nq-tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.getAttribute('data-tf'))));
