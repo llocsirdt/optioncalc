@@ -11,6 +11,7 @@ const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
 const { analyzeCandles, streamingCandleSource } = require('./persistence/candle-analyzer');
 const { getChartSeries } = require('./chart-series');
+const { getBasis } = require('./nq-ndx-basis');
 const candleSpread = require('./candle-spread');
 const { marketClient } = require('./persistence/market-client');
 
@@ -217,7 +218,9 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       if (!symbol) throw new Error('symbol parameter is required (e.g., ?symbol=/NQ)');
       console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})`);
       const candles = await getChartSeries(symbol, timeframe);
-      result = { symbol, timeframe, candles };
+      // For NQ, include the held NQ↔NDX basis so the client can optionally re-label to NDX terms.
+      const basis = /nq/i.test(symbol) ? await getBasis() : null;
+      result = { symbol, timeframe, candles, basis };
 
     } else {
       throw new Error(`Unsupported market data endpoint: ${path}`);

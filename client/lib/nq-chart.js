@@ -40,6 +40,8 @@
   let allData = {};                        // tf -> raw server candles (for the multi-TF overlay)
   let overlayMapped = {};                  // tf -> {bbU,bbM,bbL,ema9} arrays indexed by selected candle
   let lineTfs = new Set(['15m']);          // which timeframes' BB + 9EMA lines are drawn
+  let ndxMode = false;                      // show values skewed to NDX terms (subtract the basis)
+  let serverBasis = null;                   // { basis, source, asOf, ndx, nq } from the server
   let transform = d3.zoomIdentity;
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
   let visibleBars = INIT_BARS;             // how many bars to fit on reset / timeframe change
@@ -50,6 +52,9 @@
 
   const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
   const fmtP = d3.format(',.2f');
+  // How much to subtract from raw NQ prices for display (0 unless NDX mode is on and a basis exists).
+  // Purely additive, so it only changes the numbers shown — candle/band/line geometry is unaffected.
+  const priceShift = () => (ndxMode && serverBasis && typeof serverBasis.basis === 'number') ? serverBasis.basis : 0;
 
   // Remember the user's timeframe, which overlay lines are on, and their zoom width (visible bars)
   // across reloads.
@@ -59,10 +64,11 @@
       if (p.timeframe && TIMEFRAMES.includes(p.timeframe)) timeframe = p.timeframe;
       if (Array.isArray(p.lineTfs)) lineTfs = new Set(p.lineTfs.filter(t => TIMEFRAMES.includes(t)));
       if (p.visibleBars) visibleBars = Math.max(5, Math.min(400, p.visibleBars));
+      if (typeof p.ndxMode === 'boolean') ndxMode = p.ndxMode;
     } catch (e) { /* ignore malformed prefs */ }
   }
   function savePrefs() {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ timeframe, lineTfs: [...lineTfs], visibleBars })); } catch (e) { /* private mode etc. */ }
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ timeframe, lineTfs: [...lineTfs], visibleBars, ndxMode })); } catch (e) { /* private mode etc. */ }
   }
   // Readable text color on a colored tag (dark text on light fills, white on dark).
   const textOn = hex => {
@@ -80,7 +86,8 @@
   async function fetchTf(tf) {
     const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${tf}`;
     const j = await (await fetch(url)).json();
-    return (j && j.candles) || [];   // chronological, flat BB/EMA fields
+    if (j && j.basis) serverBasis = j.basis;   // NQ↔NDX basis (same for every timeframe)
+    return (j && j.candles) || [];             // chronological, flat BB/EMA fields
   }
 
   // Fetch every timeframe (parallel) — needed for the multi-TF overlay; switching timeframes
@@ -166,8 +173,37 @@
     const yHit = gPlot.append('rect').attr('class', 'nq-hit nq-y-hit');
 
     els = { host, svg, defs, gPlot, gClip, gx, gy, cross, gTags, gAxisLab, yLab, xLab, zoomHit, xHit, yHit };
+    buildNdxToggle();
     wireInteractions();
     return true;
+  }
+
+  // Checkbox in the bottom-right of the chart area: re-label all values into NDX terms.
+  function buildNdxToggle() {
+    const container = document.getElementById('nq-chart-container') || els.host;
+    if (!container || container.querySelector('.nq-ndx-toggle')) return;
+    const lbl = document.createElement('label');
+    lbl.className = 'nq-ndx-toggle';
+    lbl.title = 'Skew NQ values to NDX terms (subtract the NQ↔NDX basis) so levels line up with NDX option strikes';
+    lbl.innerHTML = `<input type="checkbox" class="nq-ndx-check"${ndxMode ? ' checked' : ''}> NDX<span class="nq-ndx-basis"></span>`;
+    container.appendChild(lbl);
+    lbl.querySelector('input').addEventListener('change', e => setNdxMode(e.target.checked));
+    els.ndxBasisLabel = lbl.querySelector('.nq-ndx-basis');
+  }
+
+  function setNdxMode(on) {
+    ndxMode = on;
+    savePrefs();
+    render();
+    if (hoverIndex == null) updateReadout(data[data.length - 1]);
+  }
+
+  // Show the applied offset (and whether it's live or a held close) next to the toggle.
+  function updateBasisLabel() {
+    if (!els || !els.ndxBasisLabel) return;
+    els.ndxBasisLabel.textContent = (ndxMode && serverBasis && typeof serverBasis.basis === 'number')
+      ? ` −${fmtP(serverBasis.basis)}${serverBasis.source === 'live' ? '' : '*'}` : '';
+    els.ndxBasisLabel.title = serverBasis && serverBasis.source !== 'live' ? 'held from last regular-hours close' : 'live basis';
   }
 
   function dims() {
@@ -237,9 +273,18 @@
     const isDaily = timeframe === 'daily';
     els.gx.call(d3.axisBottom(zx).ticks(Math.min(8, Math.max(2, Math.floor(innerW / 90))))
       .tickFormat(v => { const idx = Math.round(v); const d = data[idx]; return d ? (isDaily ? etDateOnly(d.t) : etTime(d.t, spanBars * tfMin > 8 * 60)) : ''; }));
-    els.gy.call(d3.axisRight(y).ticks(6).tickFormat(fmtP));
+    // Geometry stays in raw price; when NDX mode is on, place ticks at nice NDX values (mapped back
+    // to raw positions) and label everything as value − basis.
+    const shift = priceShift();
+    const yAxis = d3.axisRight(y).tickFormat(v => fmtP(v - shift));
+    if (shift) {
+      const dispTicks = d3.scaleLinear().domain([cy - half - shift, cy + half - shift]).ticks(6);
+      yAxis.tickValues(dispTicks.map(t => t + shift));
+    } else yAxis.ticks(6);
+    els.gy.call(yAxis);
 
-    els._scales = { zx, y, i0, i1, baseX, innerW, innerH };
+    els._scales = { zx, y, i0, i1, baseX, innerW, innerH, shift };
+    updateBasisLabel();
     if (hoverIndex != null) updateCrosshair(); else showRestingTags();
   }
 
@@ -355,7 +400,7 @@
     if (hoverY != null) {
       els.yLab.style('display', null).attr('transform', `translate(${s.innerW},${hoverY})`);
       els.yLab.select('rect').attr('x', 1).attr('y', -8).attr('width', margin.right - 2).attr('height', 16);
-      els.yLab.select('text').attr('x', 4).attr('y', 4).text(fmtP(s.y.invert(hoverY)));
+      els.yLab.select('text').attr('x', 4).attr('y', 4).text(fmtP(s.y.invert(hoverY) - s.shift));
     } else els.yLab.style('display', 'none');
     const d = data[hoverIndex];
     const label = d ? (timeframe === 'daily' ? etDateOnly(d.t) : etTime(d.t, true) + ' ET') : '';
@@ -381,7 +426,7 @@
       [['bbU', col.outer], ['bbM', col.mid], ['bbL', col.outer], ['ema9', col.ema]].forEach(([field, color]) => {
         const v = m[field] ? m[field][index] : null;
         if (v == null) return;
-        tags.push({ key: tf + field, y: Math.max(7, Math.min(s.innerH - 7, s.y(v))), color, text: fmtP(v) });
+        tags.push({ key: tf + field, y: Math.max(7, Math.min(s.innerH - 7, s.y(v))), color, text: fmtP(v - s.shift) });
       });
     });
     els.gTags.style('display', null);
@@ -407,12 +452,14 @@
   function updateReadout(d) {
     const box = document.getElementById('nq-chart-ohlc');
     if (!box || !d) return;
-    const chg = d.c - d.o, up = chg >= 0;
+    const sh = priceShift();
+    const p = v => fmtP(v - sh);                 // show prices in NDX terms when the toggle is on
+    const up = (d.c - d.o) >= 0;
     box.innerHTML =
       `<span class="nq-ro-time">${timeframe === 'daily' ? etDateOnly(d.t) : etTime(d.t, true) + ' ET'}</span>` +
-      `<span class="nq-ro ${up ? 'nq-up-t' : 'nq-down-t'}">O ${fmtP(d.o)} H ${fmtP(d.h)} L ${fmtP(d.l)} C ${fmtP(d.c)}</span>` +
-      (d.bbU != null ? `<span class="nq-ro nq-ro-bb">BB ${fmtP(d.bbU)}/${fmtP(d.bbM)}/${fmtP(d.bbL)}</span>` : '') +
-      (d.ema9 != null ? `<span class="nq-ro nq-ro-ema">9EMA ${fmtP(d.ema9)}</span>` : '');
+      `<span class="nq-ro ${up ? 'nq-up-t' : 'nq-down-t'}">O ${p(d.o)} H ${p(d.h)} L ${p(d.l)} C ${p(d.c)}</span>` +
+      (d.bbU != null ? `<span class="nq-ro nq-ro-bb">BB ${p(d.bbU)}/${p(d.bbM)}/${p(d.bbL)}</span>` : '') +
+      (d.ema9 != null ? `<span class="nq-ro nq-ro-ema">9EMA ${p(d.ema9)}</span>` : '');
   }
 
   function resetView() {
