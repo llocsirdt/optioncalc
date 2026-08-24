@@ -438,17 +438,45 @@
     render();
   }
 
+  // The timeframes whose data is actually on screen right now = the selected candles plus every
+  // enabled overlay line. Only these need re-fetching on the fast refresh tick.
+  const liveTfs = () => new Set([timeframe, ...lineTfs]);
+
+  // Signature over the last bar of every on-screen timeframe, so a refresh only redraws when
+  // something visible actually changed (keeps zoom/hover steady otherwise).
+  function seriesSig() {
+    let sig = timeframe + '#' + data.length;
+    for (const tf of liveTfs()) {
+      const cs = allData[tf], l = cs && cs[cs.length - 1];
+      sig += '|' + tf + ':' + (l ? l.datetime + ',' + l.close + ',' + l.high + ',' + l.low : '');
+    }
+    return sig;
+  }
+
   async function load(resetTheView) {
     try {
       await fetchAll();
       rebuildSelected();
-      const last = data[data.length - 1];
-      const sig = data.length + ':' + timeframe + ':' + (last ? last.t + ':' + last.c + ':' + last.h + ':' + last.l : '');
-      if (resetTheView) { resetView(); }
-      else if (sig !== lastSig) { render(); }   // only redraw on a real change (keeps zoom/hover steady)
-      lastSig = sig;
-      if (hoverIndex == null) updateReadout(last);
+      if (resetTheView) resetView();
+      else if (seriesSig() !== lastSig) render();
+      lastSig = seriesSig();
+      if (hoverIndex == null) updateReadout(data[data.length - 1]);
     } catch (e) { console.error('[nq-chart] load failed:', e && e.message); }
+  }
+
+  // Fast poll: refetch only the on-screen timeframes (not all 5 every tick) and redraw if changed.
+  async function refreshTick() {
+    try {
+      const tfs = [...liveTfs()];
+      const results = await Promise.all(tfs.map(async tf => {
+        try { return [tf, await fetchTf(tf)]; } catch (e) { return [tf, allData[tf] || []]; }
+      }));
+      for (const [tf, cs] of results) allData[tf] = cs;
+      rebuildSelected();
+      if (seriesSig() !== lastSig) render();
+      lastSig = seriesSig();
+      if (hoverIndex == null) updateReadout(data[data.length - 1]);
+    } catch (e) { console.error('[nq-chart] refresh failed:', e && e.message); }
   }
 
   // Switching timeframe reads from the already-fetched cache (no refetch) — instant.
@@ -465,11 +493,11 @@
     }
   }
 
+  // The chart is a self-contained futures view — it polls on its own, independent of the app's
+  // "Start Live Data" toggle (NQ trades nearly 24h and the data source is always fresh).
   function startRefresh() {
     stopRefresh();
-    refreshTimer = setInterval(() => {
-      if (typeof liveDataEnabled === 'undefined' || liveDataEnabled) load(false);
-    }, REFRESH_MS);
+    refreshTimer = setInterval(refreshTick, REFRESH_MS);
   }
   function stopRefresh() { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } }
 
