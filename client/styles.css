@@ -289,6 +289,14 @@ pre {
 .nq-axis path, .nq-axis line { stroke: #ddd; }
 .nq-cross line { stroke: #999; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
 .nq-hit { fill: transparent; }
+
+/* Crosshair axis labels (price on the right, time on the bottom) */
+.nq-axis-lab rect { fill: #2b2b2b; rx: 2; }
+.nq-axis-lab text { fill: #fff; font: 10px ui-monospace, Menlo, monospace; dominant-baseline: middle; }
+.nq-x-lab text { dominant-baseline: auto; }
+/* Colored BB/EMA value tags on the right y-axis */
+.nq-val-tags, .nq-axis-labels { pointer-events: none; }
+.nq-val-tag text { font: 9px ui-monospace, Menlo, monospace; dominant-baseline: middle; }
 .nq-zoom-hit { cursor: crosshair; }
 
 /* Trading View Styles */

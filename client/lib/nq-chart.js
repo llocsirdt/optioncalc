@@ -44,9 +44,16 @@
   let refreshTimer = null;
   let els = null;                          // cached selections
   let hoverIndex = null;
+  let hoverY = null;                        // cursor y (px) for the price axis label
 
   const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
   const fmtP = d3.format(',.2f');
+  // Readable text color on a colored tag (dark text on light fills, white on dark).
+  const textOn = hex => {
+    const c = hex.replace('#', '');
+    const r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#1a1a1a' : '#fff';
+  };
   const apiBase = () => (typeof PROXY_URL !== 'undefined' ? PROXY_URL : 'http://localhost:3001') + '/api/v1/marketdata';
   const etTime = (ms, withDate) => new Date(ms).toLocaleString('en-US', {
     timeZone: 'America/New_York', hour12: false,
@@ -120,17 +127,29 @@
     const gx = gPlot.append('g').attr('class', 'nq-axis nq-x-axis');
     const gy = gPlot.append('g').attr('class', 'nq-axis nq-y-axis');
 
-    // crosshair
+    // crosshair (lines clipped to the plot area)
     const cross = gClip.append('g').attr('class', 'nq-cross').style('display', 'none');
     cross.append('line').attr('class', 'nq-cross-x');
     cross.append('line').attr('class', 'nq-cross-y');
+
+    // hover annotations that live in the axis margins (unclipped): colored BB/EMA value tags on
+    // the right y-axis, plus the crosshair's own price (y) and time (x) axis labels.
+    const gTags = gPlot.append('g').attr('class', 'nq-val-tags').style('display', 'none');
+    const gAxisLab = gPlot.append('g').attr('class', 'nq-axis-labels').style('display', 'none');
+    const MONO = 'ui-monospace, Menlo, monospace';
+    const yLab = gAxisLab.append('g').attr('class', 'nq-axis-lab nq-y-lab');
+    yLab.append('rect').attr('fill', '#2b2b2b').attr('rx', 2);
+    yLab.append('text').attr('fill', '#fff').attr('font-size', 10).attr('font-family', MONO).attr('dominant-baseline', 'middle');
+    const xLab = gAxisLab.append('g').attr('class', 'nq-axis-lab nq-x-lab');
+    xLab.append('rect').attr('fill', '#2b2b2b').attr('rx', 2);
+    xLab.append('text').attr('fill', '#fff').attr('font-size', 10).attr('font-family', MONO).attr('text-anchor', 'middle');
 
     // interaction hit areas
     const zoomHit = gPlot.append('rect').attr('class', 'nq-hit nq-zoom-hit');
     const xHit = gPlot.append('rect').attr('class', 'nq-hit nq-x-hit');
     const yHit = gPlot.append('rect').attr('class', 'nq-hit nq-y-hit');
 
-    els = { host, svg, defs, gPlot, gClip, gx, gy, cross, zoomHit, xHit, yHit };
+    els = { host, svg, defs, gPlot, gClip, gx, gy, cross, gTags, gAxisLab, yLab, xLab, zoomHit, xHit, yHit };
     wireInteractions();
     return true;
   }
@@ -205,7 +224,7 @@
     els.gy.call(d3.axisRight(y).ticks(6).tickFormat(fmtP));
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH };
-    if (hoverIndex != null) drawCross();
+    if (hoverIndex != null) updateCrosshair();
   }
 
   // Draw every timeframe's BB (upper/mid/lower) + 9EMA as lines mapped onto the selected axis.
@@ -286,20 +305,67 @@
     els.zoomHit
       .on('mousemove touchmove', ev => {
         const s = els._scales; if (!s) return;
-        const [mx] = d3.pointer(ev, els.gPlot.node());
+        const [mx, my] = d3.pointer(ev, els.gPlot.node());
         hoverIndex = Math.max(s.i0, Math.min(s.i1, Math.round(s.zx.invert(mx))));
-        drawCross(d3.pointer(ev, els.gPlot.node())[1]);
+        hoverY = my;
+        updateCrosshair();
         updateReadout(data[hoverIndex]);
       })
-      .on('mouseleave', () => { hoverIndex = null; els.cross.style('display', 'none'); updateReadout(data[data.length - 1]); });
+      .on('mouseleave', () => { hoverIndex = null; hoverY = null; hideCross(); updateReadout(data[data.length - 1]); });
   }
 
-  function drawCross(my) {
-    const s = els._scales; if (!s || hoverIndex == null) return;
+  function hideCross() {
+    els.cross.style('display', 'none');
+    els.gAxisLab.style('display', 'none');
+    els.gTags.style('display', 'none');
+  }
+
+  // Crosshair lines + a price label (right y-axis) and time label (bottom x-axis) at the cursor,
+  // plus color-coded BB/9EMA value tags on the right axis for every enabled timeframe at the
+  // hovered bar (colors match each timeframe's lines).
+  function updateCrosshair() {
+    const s = els._scales; if (!s || hoverIndex == null) { hideCross(); return; }
     const x = s.zx(hoverIndex);
     els.cross.style('display', null);
     els.cross.select('.nq-cross-x').attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', s.innerH);
-    if (my != null) els.cross.select('.nq-cross-y').attr('x1', 0).attr('x2', s.innerW).attr('y1', my).attr('y2', my);
+    if (hoverY != null) els.cross.select('.nq-cross-y').attr('x1', 0).attr('x2', s.innerW).attr('y1', hoverY).attr('y2', hoverY);
+
+    // Crosshair axis labels (price at cursor height, time at cursor column).
+    els.gAxisLab.style('display', null);
+    if (hoverY != null) {
+      els.yLab.style('display', null).attr('transform', `translate(${s.innerW},${hoverY})`);
+      els.yLab.select('rect').attr('x', 1).attr('y', -8).attr('width', margin.right - 2).attr('height', 16);
+      els.yLab.select('text').attr('x', 4).attr('y', 4).text(fmtP(s.y.invert(hoverY)));
+    } else els.yLab.style('display', 'none');
+    const d = data[hoverIndex];
+    const label = d ? (timeframe === 'daily' ? etDateOnly(d.t) : etTime(d.t, true) + ' ET') : '';
+    const tw = Math.max(46, label.length * 6.4 + 10);
+    const lx = Math.max(tw / 2, Math.min(s.innerW - tw / 2, x));
+    els.xLab.style('display', null).attr('transform', `translate(${lx},${s.innerH})`);
+    els.xLab.select('rect').attr('x', -tw / 2).attr('y', 2).attr('width', tw).attr('height', 16);
+    els.xLab.select('text').attr('x', 0).attr('y', 14).attr('text-anchor', 'middle').text(label);
+
+    // Colored value tags for each enabled timeframe's BB (upper/mid/lower) + 9EMA.
+    const tags = [];
+    TIMEFRAMES.forEach(tf => {
+      if (!lineTfs.has(tf)) return;
+      const m = overlayMapped[tf]; if (!m) return;
+      const col = TF_COLORS[tf] || TF_COLORS['15m'];
+      [['bbU', col.outer], ['bbM', col.mid], ['bbL', col.outer], ['ema9', col.ema]].forEach(([field, color]) => {
+        const v = m[field] ? m[field][hoverIndex] : null;
+        if (v == null) return;
+        tags.push({ key: tf + field, y: Math.max(7, Math.min(s.innerH - 7, s.y(v))), color, text: fmtP(v) });
+      });
+    });
+    els.gTags.style('display', null);
+    const g = els.gTags.selectAll('g.nq-val-tag').data(tags, t => t.key);
+    g.exit().remove();
+    const gEnter = g.enter().append('g').attr('class', 'nq-val-tag');
+    gEnter.append('rect');
+    gEnter.append('text').attr('font-size', 9).attr('font-family', 'ui-monospace, Menlo, monospace').attr('dominant-baseline', 'middle');
+    const gAll = gEnter.merge(g).attr('transform', t => `translate(${s.innerW},${t.y})`);
+    gAll.select('rect').attr('x', 1).attr('y', -7).attr('width', margin.right - 2).attr('height', 14).attr('rx', 2).attr('fill', t => t.color);
+    gAll.select('text').attr('x', 4).attr('y', 3.5).attr('fill', t => textOn(t.color)).text(t => t.text);
   }
 
   function updateReadout(d) {
