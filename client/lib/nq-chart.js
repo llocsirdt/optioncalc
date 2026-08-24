@@ -167,12 +167,17 @@
     xLab.append('rect').attr('fill', '#2b2b2b').attr('rx', 2);
     xLab.append('text').attr('fill', '#fff').attr('font-size', 10).attr('font-family', MONO).attr('text-anchor', 'middle');
 
+    // Persistent last-price tag on the right axis, aligned to the latest close (candle up/down color).
+    const gLast = gPlot.append('g').attr('class', 'nq-last-tag').style('display', 'none');
+    gLast.append('rect').attr('rx', 2);
+    gLast.append('text').attr('font-size', 9).attr('font-family', MONO).attr('dominant-baseline', 'middle');
+
     // interaction hit areas
     const zoomHit = gPlot.append('rect').attr('class', 'nq-hit nq-zoom-hit');
     const xHit = gPlot.append('rect').attr('class', 'nq-hit nq-x-hit');
     const yHit = gPlot.append('rect').attr('class', 'nq-hit nq-y-hit');
 
-    els = { host, svg, defs, gPlot, gClip, gx, gy, cross, gTags, gAxisLab, yLab, xLab, zoomHit, xHit, yHit };
+    els = { host, svg, defs, gPlot, gClip, gx, gy, cross, gTags, gLast, gAxisLab, yLab, xLab, zoomHit, xHit, yHit };
     buildNdxToggle();
     wireInteractions();
     return true;
@@ -202,7 +207,7 @@
   function updateBasisLabel() {
     if (!els || !els.ndxBasisLabel) return;
     els.ndxBasisLabel.textContent = (ndxMode && serverBasis && typeof serverBasis.basis === 'number')
-      ? ` −${fmtP(serverBasis.basis)}${serverBasis.source === 'live' ? '' : '*'}` : '';
+      ? ` −${Math.round(serverBasis.basis)}${serverBasis.source === 'live' ? '' : '*'}` : '';
     els.ndxBasisLabel.title = serverBasis && serverBasis.source !== 'live' ? 'held from last regular-hours close' : 'live basis';
   }
 
@@ -285,7 +290,20 @@
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH, shift };
     updateBasisLabel();
+    drawLastPriceTag();
     if (hoverIndex != null) updateCrosshair(); else showRestingTags();
+  }
+
+  // Always-on tag at the latest close on the right axis, colored like the candle (up = green,
+  // down = red), styled like the BB/EMA value tags.
+  function drawLastPriceTag() {
+    const s = els._scales; if (!s || !data.length) { els.gLast.style('display', 'none'); return; }
+    const last = data[data.length - 1];
+    const color = last.c >= last.o ? '#26a69a' : '#ef5350';
+    const ty = Math.max(7, Math.min(s.innerH - 7, s.y(last.c)));
+    els.gLast.style('display', null).attr('transform', `translate(${s.innerW},${ty})`);
+    els.gLast.select('rect').attr('x', 1).attr('y', -7).attr('width', margin.right - 2).attr('height', 14).attr('fill', color);
+    els.gLast.select('text').attr('x', 4).attr('y', 3.5).attr('fill', textOn(color)).text(fmtP(last.c - s.shift));
   }
 
   // Draw every timeframe's BB (upper/mid/lower) + 9EMA as lines mapped onto the selected axis.
