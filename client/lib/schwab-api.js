@@ -226,25 +226,42 @@ async function initializeSchwab() {
 // Test Schwab API connection
 async function testSchwabConnection() {
   console.log('Testing Schwab API connection...');
-  updateSchwabStatus('Testing...');
-  
+  updateSchwabStatus('Testing...', 'testing');
+
   try {
     // Test with a simple quote request
     const response = await fetch(`${PROXY_URL}/api/v1/marketdata/quotes?symbols=SPY`);
-    
+
     if (response.ok) {
-      const data = await response.json();
+      await response.json();
       console.log('✅ Schwab API connection successful');
-      updateSchwabStatus('Connected');
+      updateSchwabStatus('Connected', 'success');
       schwabConnected = true;
     } else {
-      console.error('❌ Schwab API connection failed:', response.status);
-      updateSchwabStatus('Error');
+      // Tell an auth/token failure apart from a generic server error by inspecting the body:
+      // the proxy surfaces token problems as "failed to update access token / schwab-authorize".
+      let detail = `HTTP ${response.status}`;
+      let isAuth = response.status === 401;
+      try {
+        const body = await response.json();
+        const msg = String((body && (body.message || body.error)) || '');
+        if (/access token|schwab-authorize|unauthorized|refresh token|invalid_grant/i.test(msg)) isAuth = true;
+        if (msg) detail = msg;
+      } catch (e) { /* non-JSON error body */ }
+      console.error('❌ Schwab API connection failed:', response.status, detail);
+      if (isAuth) {
+        updateSchwabStatus('Auth Error', 'error',
+          'Schwab token is invalid or expired (the server is up — /health is fine). Renew it with scripts/renew-schwab-token.js, update the server\'s SCHWAB_REFRESH_TOKEN, and restart. — ' + detail);
+      } else {
+        updateSchwabStatus('Error', 'error', detail);
+      }
       schwabConnected = false;
     }
   } catch (error) {
+    // fetch threw → the backend couldn't be reached at all (down / network / CORS).
     console.error('❌ Schwab API connection error:', error);
-    updateSchwabStatus('Error');
+    updateSchwabStatus('Unreachable', 'error',
+      'Could not reach the backend server — it may be down or restarting. Open /health to check. — ' + (error && error.message || ''));
     schwabConnected = false;
   }
 }
@@ -255,11 +272,12 @@ async function authenticateSchwab() {
 }
 
 // Update Schwab connection status in UI
-function updateSchwabStatus(status, type) {
+function updateSchwabStatus(status, type, detail) {
   const statusElement = document.getElementById('schwab-status');
   if (statusElement) {
     statusElement.textContent = status;
     statusElement.className = 'schwab-status';
+    if (detail) statusElement.title = detail; else statusElement.removeAttribute('title');
 
     if (type === 'success') {
       statusElement.classList.add('connected');
@@ -271,19 +289,21 @@ function updateSchwabStatus(status, type) {
 
     // On an error, surface a direct link to the server's /health so it's one click to see whether
     // the backend is up (JSON build info) or down (a CloudFront 5xx) — distinct from a token issue.
-    const isError = status === 'Error' || type === 'error';
+    const isError = type === 'error' || status === 'Error';
     let link = document.getElementById('schwab-health-link');
     if (isError) {
       if (!link) {
         link = document.createElement('a');
         link.id = 'schwab-health-link';
-        link.textContent = '(health)';
         link.target = '_blank';
         link.rel = 'noopener';
         link.style.marginLeft = '6px';
         link.style.fontSize = '12px';
         statusElement.insertAdjacentElement('afterend', link);
       }
+      // For an auth error the server is up, so point the label at that fact; otherwise it's a
+      // liveness check.
+      link.textContent = status === 'Auth Error' ? '(server ok — token issue)' : '(check /health)';
       link.href = `${PROXY_URL}/health`;
       link.style.display = 'inline';
     } else if (link) {
