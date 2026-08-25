@@ -268,6 +268,13 @@ class AnalysisLogger {
 
       await fs.writeFile(filepath, JSON.stringify(mergedData, null, 2), 'utf8');
       console.log(`📊 Saved ${mergedData.length} analysis entries to ${filename} (${data.length} new, ${existingData.length} existing)`);
+
+      // The merge above makes the on-disk file the source of truth, so drop the in-memory entries
+      // now that they're persisted. Otherwise this Map accumulates the ENTIRE day (every symbol,
+      // every past date, each entry embedding candle/indicator data) and never releases it — an
+      // unbounded leak — while every ~60s save also re-merges the whole day. After clearing, the
+      // next cycle re-adds only new entries and the next save merges just those into the file.
+      this.analysisData.delete(key);
     } catch (error) {
       console.error(`❌ Failed to save analysis data for ${key}:`, error.message);
     }
