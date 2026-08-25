@@ -158,13 +158,45 @@ try {
   // Expected in local dev — build-info.json is only generated when packaging for deploy.
 }
 
+// Memory tracking so we can tell an OOM-causing leak from a steady-state footprint without
+// digging through EB logs: /health reports current usage + the peak RSS since start, and a 60s
+// sampler keeps a short rolling trend (GET /health?mem=full to dump the samples).
+const memStartedAt = Date.now();
+let peakRss = 0;
+const MEM_SAMPLES = [];
+const MEM_SAMPLE_CAP = 480;              // ~8h at 60s cadence
+const MB = b => Math.round((b / 1048576) * 10) / 10;
+function sampleMemory() {
+  const rss = process.memoryUsage().rss;
+  if (rss > peakRss) peakRss = rss;
+  MEM_SAMPLES.push({ t: Date.now(), rss });
+  if (MEM_SAMPLES.length > MEM_SAMPLE_CAP) MEM_SAMPLES.shift();
+}
+sampleMemory();
+const memSampler = setInterval(sampleMemory, 60000);
+if (memSampler.unref) memSampler.unref();
+
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const m = process.memoryUsage();
+  const memory = {
+    rssMB: MB(m.rss),
+    heapUsedMB: MB(m.heapUsed),
+    heapTotalMB: MB(m.heapTotal),
+    externalMB: MB(m.external),
+    arrayBuffersMB: MB(m.arrayBuffers || 0),
+    peakRssMB: MB(peakRss),
+    uptimeMin: Math.round(process.uptime() / 60)
+  };
+  if (req.query.mem === 'full') {
+    memory.samples = MEM_SAMPLES.map(s => ({ min: Math.round((s.t - memStartedAt) / 60000), rssMB: MB(s.rss) }));
+  }
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     sdk: 'schwab-client-js',
     build: buildInfo,
+    memory,
     endpoints: {
       marketData: true,
       trading: true
