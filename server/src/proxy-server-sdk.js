@@ -18,6 +18,18 @@ const { marketClient } = require('./persistence/market-client');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Keep this long-running server alive through transient failures in its background loops
+// (position checks, streaming reconnects, candle-spread scheduler). In modern Node an unhandled
+// promise rejection terminates the process by default — so a single Schwab call rejecting (e.g. on
+// an expired token) would take the whole server down, which is the recurring "keeps going offline"
+// symptom. Log loudly and stay up; the loops recover on their next tick.
+process.on('unhandledRejection', (reason) => {
+  console.error(`🛑 [${new Date().toISOString()}] unhandledRejection (kept process alive):`, (reason && reason.stack) || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error(`🛑 [${new Date().toISOString()}] uncaughtException (kept process alive):`, (err && err.stack) || err);
+});
+
 // Initialize persistence manager
 const persistence = new PersistenceManager();
 
@@ -1201,23 +1213,28 @@ async function startServer() {
 
       // Manage stream connection based on time of day
       const manageStreamConnection = async () => {
-        const { isPreMarket, isAfterClose } = getETTimeInfo();
-        if (isPreMarket && !streamingCandleSource.isConnected) {
-          console.log('🌊 Pre-market: stream not connected, attempting to connect...');
-          try {
-            const initialized = await streamingCandleSource.initialize();
-            if (initialized) {
-              setTimeout(() => {
-                ['NDX', 'SPX'].forEach(sym => streamingCandleSource.subscribeSymbol(sym));
-                console.log('🌊 Pre-market: stream connected and symbols subscribed');
-              }, 2000);
+        try {
+          const { isPreMarket, isAfterClose } = getETTimeInfo();
+          if (isPreMarket && !streamingCandleSource.isConnected) {
+            console.log('🌊 Pre-market: stream not connected, attempting to connect...');
+            try {
+              const initialized = await streamingCandleSource.initialize();
+              if (initialized) {
+                setTimeout(() => {
+                  ['NDX', 'SPX'].forEach(sym => streamingCandleSource.subscribeSymbol(sym));
+                  console.log('🌊 Pre-market: stream connected and symbols subscribed');
+                }, 2000);
+              }
+            } catch (err) {
+              console.warn('🌊 Pre-market connect failed:', err.message);
             }
-          } catch (err) {
-            console.warn('🌊 Pre-market connect failed:', err.message);
+          } else if (isAfterClose && streamingCandleSource.isConnected) {
+            console.log('🌊 Market closed: disconnecting stream...');
+            await streamingCandleSource.disconnect();
           }
-        } else if (isAfterClose && streamingCandleSource.isConnected) {
-          console.log('🌊 Market closed: disconnecting stream...');
-          await streamingCandleSource.disconnect();
+        } catch (err) {
+          // Never let stream management reject into the caller's un-try/catch'd await (would crash).
+          console.warn('🌊 manageStreamConnection error (ignored):', err && err.message);
         }
       };
 
