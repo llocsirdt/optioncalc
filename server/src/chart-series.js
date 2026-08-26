@@ -6,6 +6,15 @@
  * history for futures, unlike the capped periodType:'day' form), RTH-filters intraday, aggregates
  * 60m from 30m, and computes Bollinger(20,2) + EMA(9) server-side so every timeframe shows full
  * bands (not just 1 warmup-limited bar). All analysis on the server; the client only renders.
+ *
+ * CACHING (see getChartSeries): this endpoint is DISPLAY-ONLY — its sole consumer is the NQ chart
+ * client. The trading strategy / position-manager path uses analyzeCandles, NOT this. So caching
+ * here can never feed stale data to anything critical. Even so we keep it tight: concurrent
+ * identical requests are coalesced onto ONE in-flight fetch (zero staleness — they all get the same
+ * fresh result), and a very short per-timeframe TTL (well under both the bar duration and the
+ * client's own 4s poll) serves rapid repeat/multi-tab polls. A `fresh` flag bypasses the TTL for
+ * any caller that must have a guaranteed-fresh fetch. This exists purely to stop the memory spikes
+ * from many concurrent deep priceHistory fetches — not to trade freshness for speed.
  */
 const { marketClient } = require('./persistence/market-client');
 
@@ -13,6 +22,13 @@ const INDEX = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
 const DAY_MS = 864e5;
 const MAX_BARS = 400;               // cap payload; still leaves >>20 warmup bars for full BB
 const BB_PERIOD = 20, BB_MULT = 2, EMA_PERIOD = 9;
+
+// Per-timeframe cache TTL (ms). Deliberately short — <= the client's 4s refresh and far below each
+// bar's duration, so a served result is only ever a couple seconds behind a fresh fetch (the closed
+// bars are immutable; only the forming bar could differ, and by less than one poll interval).
+const TTL_MS = { '1m': 2000, '5m': 3000, '15m': 4000, '60m': 5000, 'daily': 10000 };
+const _cache = new Map();     // key -> { at, data }   (bounded: one entry per symbol+timeframe)
+const _inflight = new Map();  // key -> Promise<data>  (coalesce concurrent identical fetches)
 
 // Per timeframe: native Schwab frequency to fetch, target bar minutes, lookback window, and the
 // aggregation factor (fetch 30m, aggregate x2 -> 60m). Lookbacks are generous so BB is warmed
@@ -68,7 +84,7 @@ function ema(cs) {
   return out;
 }
 
-async function getChartSeries(symbol, timeframe) {
+async function computeChartSeries(symbol, timeframe) {
   const cfg = TF[timeframe];
   if (!cfg) throw new Error(`unsupported timeframe '${timeframe}' (use ${Object.keys(TF).join('/')})`);
   const sym = apiSym(symbol);
@@ -99,4 +115,35 @@ async function getChartSeries(symbol, timeframe) {
   }));
 }
 
-module.exports = { getChartSeries, TIMEFRAMES: Object.keys(TF) };
+/**
+ * Cached, coalesced chart series (display-only — see file header).
+ * @param {string} symbol
+ * @param {string} timeframe
+ * @param {{fresh?: boolean}} [opts] - fresh:true bypasses the TTL cache (still coalesces onto any
+ *        in-flight fetch, which is itself always a live fetch, so this never returns stale data).
+ */
+async function getChartSeries(symbol, timeframe, opts = {}) {
+  if (!TF[timeframe]) throw new Error(`unsupported timeframe '${timeframe}' (use ${Object.keys(TF).join('/')})`);
+  const key = `${apiSym(symbol)}|${timeframe}`;
+  const ttl = opts.fresh ? 0 : (TTL_MS[timeframe] || 2000);
+
+  if (ttl > 0) {
+    const hit = _cache.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.data;   // fresh enough (< one poll old)
+  }
+  // A fetch for this exact key is already running — share its result instead of firing another
+  // deep priceHistory fetch. This is what collapses the concurrent multi-tab / multi-timeframe
+  // bursts that were spiking RSS, with zero added staleness (everyone gets the same live result).
+  const pending = _inflight.get(key);
+  if (pending) return pending;
+
+  const p = (async () => {
+    const data = await computeChartSeries(symbol, timeframe);
+    _cache.set(key, { at: Date.now(), data });
+    return data;
+  })();
+  _inflight.set(key, p);
+  try { return await p; } finally { _inflight.delete(key); }
+}
+
+module.exports = { getChartSeries, computeChartSeries, TIMEFRAMES: Object.keys(TF) };

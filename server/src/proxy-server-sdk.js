@@ -259,9 +259,10 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       const url = new URL(`http://localhost${query}`);
       const symbol = url.searchParams.get('symbol');
       const timeframe = url.searchParams.get('timeframe') || '15m';
+      const fresh = ['1', 'true'].includes(url.searchParams.get('fresh'));  // bypass the short TTL cache
       if (!symbol) throw new Error('symbol parameter is required (e.g., ?symbol=/NQ)');
-      console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})`);
-      const candles = await getChartSeries(symbol, timeframe);
+      console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})${fresh ? ' [fresh]' : ''}`);
+      const candles = await getChartSeries(symbol, timeframe, { fresh });
       // For NQ, include the held NQ↔NDX basis so the client can optionally re-label to NDX terms.
       const basis = /nq/i.test(symbol) ? await getBasis() : null;
       result = { symbol, timeframe, candles, basis };
