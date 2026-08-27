@@ -1027,6 +1027,24 @@ pre {
   border-bottom-color: #FF9800;
 }
 
+/* "Recently surfaced — best" rolling history section (top of the panel). */
+.offset-group.offset-recent-group .offset-group-header {
+  color: #b8860b;
+  border-bottom-color: #e6b800;
+}
+.offset-recent-wrap {
+  margin-bottom: 8px;
+}
+.offset-trade.offset-recent {
+  box-shadow: inset 3px 0 0 #e6b800;
+}
+.offset-recent-meta {
+  font-size: 10px;
+  color: #999;
+  padding: 2px 0 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Cards beyond a group's initial cap stay hidden until "Show more" expands it. */
 .offset-group:not(.expanded) .offset-trade.hidden-extra {
   display: none;

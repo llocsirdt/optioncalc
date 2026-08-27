@@ -6,6 +6,89 @@
 
 let portfolioRiskHedgeCandidates = [];
 
+// "Recently surfaced — best" rolling history: keeps the last few top-ranked offsets around even
+// after they drop out of the live results, so a good trade that was identified while you weren't
+// watching is still visible (timestamped with when it was last the best). Cleared when the loaded
+// positions change (see analyzePortfolioRiskUI) since older offsets no longer apply.
+const RECENT_BEST_MAX = 5;
+let recentBestOffsets = [];   // [{ key, candidate, firstSurfacedAt, lastSurfacedAt }], most-recent first
+let lastPositionsSig = null;  // signature of the legs the recent list was built against
+
+// Stable identity of a trade (its set of legs), so the same offset re-surfacing just refreshes its
+// timestamp instead of duplicating.
+function candidateKey(candidate) {
+  return (candidate.legs || []).map(l => `${l.qty}${(l.type || '').toUpperCase()}${l.strike}`).sort().join(',');
+}
+function positionsSignature(legs) {
+  return (legs || []).map(l => `${l.qty}${l.type}${l.strike}`).sort().join('|');
+}
+
+// The current "best" offer = the top-ranked candidate that isn't quality-flagged or opposing an
+// existing leg. `candidates` is already globally ranked (tier, then rankScore), so the first clean
+// one is the best. (How we define "best" is intentionally simple for now — easy to widen to top-N
+// or add a score floor later.)
+function pickBestCandidate(candidates, legs) {
+  return candidates.find(c => !getCandidateQualityFlag(c) && !candidateHasOppositeLeg(c.legs, legs)) || null;
+}
+
+function recordRecentBest(candidate) {
+  if (!candidate) return;
+  const key = candidateKey(candidate);
+  const now = Date.now();
+  const existing = recentBestOffsets.find(e => e.key === key);
+  if (existing) {
+    existing.lastSurfacedAt = now;
+    existing.candidate = candidate;   // refresh with the latest pricing/metrics
+  } else {
+    recentBestOffsets.push({ key, candidate, firstSurfacedAt: now, lastSurfacedAt: now });
+  }
+  recentBestOffsets.sort((a, b) => b.lastSurfacedAt - a.lastSurfacedAt);
+  if (recentBestOffsets.length > RECENT_BEST_MAX) recentBestOffsets.length = RECENT_BEST_MAX;
+}
+
+function formatRecentTime(ms) {
+  const t = new Date(ms).toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  const mins = Math.floor((Date.now() - ms) / 60000);
+  const age = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+  return { t, age };
+}
+
+// The "Recently surfaced — best" section, rendered at the top of the panel like the other groups.
+// Cards reuse the standard offset card, but their click/add handlers index into recentBestOffsets
+// (not the live candidates array), since these may no longer be in the live results.
+function renderRecentBestSection(positionLegs) {
+  if (!recentBestOffsets.length) return '';
+  const cards = recentBestOffsets.map((entry, i) => {
+    const { t, age } = formatRecentTime(entry.lastSurfacedAt);
+    const card = renderOffsetCandidateCard(entry.candidate, i, 'selectRecentOffsetInTable', 'loadRecentOffset', positionLegs, 'offset-recent');
+    return `<div class="offset-recent-wrap">${card}` +
+      `<div class="offset-recent-meta" title="When this trade was last the top-ranked offset">last surfaced ${t} · ${age}</div></div>`;
+  }).join('');
+  return `
+    <div class="offset-group offset-recent-group" data-group="recent">
+      <div class="offset-group-header">★ Recently surfaced — best <span class="offset-group-count">(${recentBestOffsets.length})</span></div>
+      <div class="offset-group-cards">${cards}</div>
+    </div>`;
+}
+
+function loadRecentOffset(index) {
+  const entry = recentBestOffsets[index];
+  if (!entry) return;
+  const textInput = document.getElementById('textInput');
+  if (!textInput) return;
+  const existingLegs = getCurrentPortfolioLegs();
+  const combinedLegTokens = existingLegs
+    .map(leg => `${leg.qty}${leg.type}${leg.strike}@${leg.cost}`)
+    .concat(entry.candidate.legs.map(leg => `${leg.qty}${leg.type.toLowerCase()}${leg.strike}@${leg.cost}`));
+  textInput.value = JSON.stringify({ optionArray: combinedLegTokens.join(',') }, null, 2);
+  processInput();
+}
+
+function selectRecentOffsetInTable(index, cardElement) {
+  const entry = recentBestOffsets[index];
+  if (entry) selectCandidateLegsInTable(entry.candidate, cardElement);
+}
+
 function getCurrentPortfolioLegs() {
   return (typeof fullOptionArray !== 'undefined' ? fullOptionArray : [])
     .filter(opt => opt.qty !== 0 && opt.type && opt.strike !== null)
@@ -75,10 +158,14 @@ function renderPortfolioRiskResults(analysis, positionLegs) {
   // computed in oc.js's processInput — see renderAggregateRisk there.
   const { candidates } = analysis;
 
-  let html = '';
+  // Rolling "best" history first, so recently-identified offsets stay visible even when the live
+  // search currently finds nothing.
+  let html = renderRecentBestSection(positionLegs);
 
   if (candidates.length === 0) {
-    html += '<p>No improving hedge candidates found in the current chain.</p>';
+    html += recentBestOffsets.length
+      ? '<p>No improving hedge candidates in the current chain right now.</p>'
+      : '<p>No improving hedge candidates found in the current chain.</p>';
   } else {
     // Same card layout/scoring as the "Risk Offsetting Opportunities" panel
     // (see offset-card-ui.js) so a candidate surfaced in both places is
@@ -99,6 +186,10 @@ async function analyzePortfolioRiskUI(options = {}) {
 
   try {
     const legs = getCurrentPortfolioLegs();
+    // Positions changed (e.g. a new CSV import, a manual edit, or adding a hedge) → the remembered
+    // "recently surfaced" offsets are stale, so drop them and start the rolling history fresh.
+    const sig = positionsSignature(legs);
+    if (sig !== lastPositionsSig) { recentBestOffsets = []; lastPositionsSig = sig; }
     if (legs.length === 0) {
       throw new Error('No option positions loaded — enter or import positions first.');
     }
@@ -121,6 +212,8 @@ async function analyzePortfolioRiskUI(options = {}) {
     // still shown, just deprioritized rather than reordered by score.
     const candidates = sortWithConflictsLast(merged, legs);
     portfolioRiskHedgeCandidates = candidates;
+    // Remember the current best (top-ranked, clean) offset in the rolling history before rendering.
+    recordRecentBest(pickBestCandidate(candidates, legs));
     renderPortfolioRiskResults({ baseline: analysis.baseline, candidates }, legs);
   } catch (err) {
     // On a silent auto-refresh, leave the last good results in place rather than
