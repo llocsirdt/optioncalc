@@ -331,14 +331,20 @@
       lineSpecs.push({ key: tf + 'ema9', arr: m.ema9, color: col.ema, dash: '6,4', width });
     });
     const lo = Math.max(0, i0 - 1), hi = Math.min(data.length - 1, i1 + 1);
+    // When the latest candle is on screen, extend one slot past it (index = data.length) at the
+    // last value, so the lines/bands are visible in the reserved space instead of hiding behind
+    // the candle body.
+    const lastVisible = hi === data.length - 1;
     const mkLine = arr => {
       const pts = [];
       for (let i = lo; i <= hi; i++) pts.push([i, arr[i]]);
+      if (lastVisible && arr[hi] != null) pts.push([data.length, arr[hi]]);
       return d3.line().defined(p => p[1] != null).x(p => zx(p[0])).y(p => y(p[1]))(pts);
     };
     const mkBand = (u, l) => {
       const pts = [];
       for (let i = lo; i <= hi; i++) pts.push([i, u[i], l[i]]);
+      if (lastVisible && u[hi] != null && l[hi] != null) pts.push([data.length, u[hi], l[hi]]);
       return d3.area().defined(p => p[1] != null && p[2] != null)
         .x(p => zx(p[0])).y1(p => y(p[1])).y0(p => y(p[2]))(pts);
     };
@@ -488,7 +494,10 @@
     const baseX = d3.scaleLinear().domain([-0.5, n - 0.5]).range([0, innerW]);
     const bars = Math.min(visibleBars, n);
     const k = n / bars;
-    const tx = innerW - 4 - k * baseX(n - 1);
+    // Reserve ~1 empty bar-slot to the right of the latest candle so it isn't jammed against the
+    // axis (and so the overlay lines can extend into that space — see mkLine/mkBand).
+    const slot = innerW / bars;
+    const tx = innerW - slot - k * baseX(n - 1);
     els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
   }
 
