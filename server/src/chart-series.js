@@ -20,7 +20,7 @@ const { marketClient } = require('./persistence/market-client');
 
 const INDEX = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
 const DAY_MS = 864e5;
-const MAX_BARS = 400;               // cap payload; still leaves >>20 warmup bars for full BB
+const MAX_BARS = 400;               // default per-TF bar cap; still leaves >>20 warmup bars for full BB
 const BB_PERIOD = 20, BB_MULT = 2, EMA_PERIOD = 9;
 
 // Per-timeframe cache TTL (ms). Deliberately short — <= the client's 4s refresh and far below each
@@ -33,8 +33,10 @@ const _inflight = new Map();  // key -> Promise<data>  (coalesce concurrent iden
 // Per timeframe: native Schwab frequency to fetch, target bar minutes, lookback window, and the
 // aggregation factor (fetch 30m, aggregate x2 -> 60m). Lookbacks are generous so BB is warmed
 // across the whole visible range.
+// maxBars overrides the default MAX_BARS. 1m gets 2000 so its BB/9EMA lines span the same ~2000
+// session-minutes as the 5m's 400 bars (default 400 min ≈ 6.7h was far shorter than every other TF).
 const TF = {
-  '1m':    { freq: 1,  minutes: 1,   lookbackDays: 5,   agg: 1 },
+  '1m':    { freq: 1,  minutes: 1,   lookbackDays: 5,   agg: 1, maxBars: 2000 },
   '5m':    { freq: 5,  minutes: 5,   lookbackDays: 20,  agg: 1 },
   '15m':   { freq: 15, minutes: 15,  lookbackDays: 45,  agg: 1 },
   '60m':   { freq: 30, minutes: 60,  lookbackDays: 60,  agg: 2 },
@@ -106,7 +108,8 @@ async function computeChartSeries(symbol, timeframe) {
   }
   cs.sort((a, b) => a.datetime - b.datetime);
   if (cfg.agg > 1) cs = aggregate(cs, cfg.minutes);
-  if (cs.length > MAX_BARS) cs = cs.slice(cs.length - MAX_BARS);
+  const cap = cfg.maxBars || MAX_BARS;
+  if (cs.length > cap) cs = cs.slice(cs.length - cap);
 
   const bb = bollinger(cs), e9 = ema(cs);
   return cs.map((c, i) => ({
