@@ -78,6 +78,12 @@ function buildSeries() {
 }
 
 // --- 2. Replay one day for one variant through the real engine with modeled prices --------------
+// Two fill regimes returned side by side:
+//   assumeFill = the engine's instant-fill dry-run (every cover booked) — the old, optimistic number.
+//   honest     = a cover only counts if a candle's WICK crosses the tent CENTER (the covered short
+//                strike) at/after the cover candle (the agreed resting-order rule); covers that never
+//                get a wick-through-center settle NAKED. Engine DECISIONS/cadence are unchanged
+//                (Model B) — only the fill accounting becomes honest.
 function runDayVariant(dayBars, priorBar, variant) {
   const cfg = { ...CFG_BASE, ...variant };
   const record = store.initRun(cfg, etDay(dayBars[0].datetime).replace(/\//g, '-'));
@@ -85,24 +91,50 @@ function runDayVariant(dayBars, priorBar, variant) {
   record.state = { direction: 'none', positions: [], pendingOpenId: null, realizedPnl: 0, lastCandleTime: null };
   record.events = [];
 
-  const placeOrder = () => ({ status: 'filled', filled: true });   // dry-run fill-at-limit (matches live runs)
+  const placeOrder = () => ({ status: 'filled', filled: true });   // engine-side assume-fill (matches live dry-run)
 
+  const coverAt = {};   // positionId -> candle index the engine covered it (when the resting order is placed)
   let prev = priorBar;
-  for (const candle of dayBars) {
+  for (let i = 0; i < dayBars.length; i++) {
+    const candle = dayBars[i];
     const relWidth = (candle.indicators.bollinger20_2.upper - candle.indicators.bollinger20_2.lower) / candle.close;
     const iv = bs.ivFromRelBandWidth(relWidth);
     const tau = bs.tauFromTime(candle.datetime);
     const getLeg = bs.makeSyntheticLegAccessor({ underlying: candle.close, tau, ivFn: bs.makeIvFn({ base: iv, skew: 0 }, candle.close) });
+    const before = new Set(record.state.positions.filter(p => p.covered).map(p => p.id));
     trader.processCandleClose(record, candle, prev, { getLeg, placeOrder, dryRun: true, underlying: candle.close, signalSymbol: SYMBOL, priceSymbol: SYMBOL });
+    for (const p of record.state.positions) if (p.covered && !before.has(p.id) && coverAt[p.id] == null) coverAt[p.id] = i;
     prev = candle;
   }
-  // Settle at the day's final 15m close (0DTE intrinsic).
   const settle = dayBars[dayBars.length - 1].close;
-  const term = trader.computeTerminalPnl(record.state, cfg, settle);
+  const qtyOf = p => p.quantity || cfg.quantity;
+
+  // assume-fill baseline (all covers booked) — capture before reclassifying.
+  const assumeFill = { floor: record.state.realizedPnl, terminal: trader.computeTerminalPnl(record.state, cfg, settle).total };
+
+  // Resolve honest fills: a cover fills iff a candle from its cover index onward has low<=center<=high.
+  let filledCovers = 0, restedNaked = 0;
+  for (const pos of record.state.positions.filter(p => p.filled && p.covered)) {
+    const center = pos.shortStrike;
+    const from = coverAt[pos.id] != null ? coverAt[pos.id] : 0;
+    let filled = false;
+    for (let i = from; i < dayBars.length; i++) { if (dayBars[i].low <= center && center <= dayBars[i].high) { filled = true; break; } }
+    if (filled) { filledCovers++; }
+    else { restedNaked++; pos.covered = false; pos.coverLegs = null; }   // never filled → settles naked
+  }
+  // Honest floor = guaranteed floor (width − open − cover) summed over covers that actually filled.
+  let honestFloor = 0;
+  for (const pos of record.state.positions.filter(p => p.filled && p.covered)) {
+    honestFloor = Math.round((honestFloor + (cfg.spreadWidth - pos.limit - pos.coverLimit) * 100 * qtyOf(pos)) * 100) / 100;
+  }
+  const honestTerminal = trader.computeTerminalPnl(record.state, cfg, settle).total;
+
   const P = record.state.positions.filter(p => p.filled);
   return {
-    floor: record.state.realizedPnl, terminal: term.total, settle,
-    opens: P.length, covers: P.filter(p => p.covered).length, open: P.filter(p => !p.covered).length,
+    settle, opens: P.length, coversFilled: filledCovers, coversNaked: restedNaked,
+    open: P.filter(p => !p.covered).length,
+    floor: honestFloor, terminal: honestTerminal,
+    assumeFloor: assumeFill.floor, assumeTerminal: assumeFill.terminal,
   };
 }
 
@@ -116,7 +148,6 @@ function main() {
   const days = [...byDay.keys()].sort((a, b) => new Date(a) - new Date(b));
 
   const rows = [];
-  let flatBarIndex = 0;
   for (const d of days) {
     const dayBars = byDay.get(d);
     // prior bar = the bar immediately before this day's first (gives the engine a real priorCandle
@@ -128,36 +159,41 @@ function main() {
     rows.push(res);
   }
 
-  // Per-day table
-  console.log(`STEP B — historical tent backtest (${days.length} NDX days, ${bars.length} 15m bars, modeled BS cover prices)\n`);
-  console.log('DATE         settle   O/C/open   v0/cap          v3/fixed        v1/greedy       v2/joint');
-  console.log('-'.repeat(104));
-  const totals = { v0: { f: 0, t: 0 }, v3: { f: 0, t: 0 }, v1: { f: 0, t: 0 }, v2: { f: 0, t: 0 } };
+  // Per-day table (HONEST fills: cover counts only if wick crossed the tent center)
+  console.log(`STEP B — historical tent backtest, HONEST FILLS (${days.length} NDX days, ${bars.length} 15m bars, modeled BS prices)\n`);
+  console.log('cover fill rule: a cover counts only if a candle wick crossed the tent center; else it settles naked.\n');
+  console.log('DATE         settle   opn/fill/naked  v0/cap          v3/fixed        v1/greedy       v2/joint');
+  console.log('-'.repeat(108));
+  const V4 = ['v0', 'v3', 'v1', 'v2'];
+  const totals = { v0: { f: 0, t: 0, af: 0, at: 0 }, v3: { f: 0, t: 0, af: 0, at: 0 }, v1: { f: 0, t: 0, af: 0, at: 0 }, v2: { f: 0, t: 0, af: 0, at: 0 } };
+  let coversFilled = 0, coversNaked = 0;
   let wins = { v3: 0, v1: 0, v2: 0 };
   for (const r of rows) {
     const any = r.v3;
-    const oc = `${any.opens}/${any.covers}/${any.open}`;
+    const oc = `${any.opens}/${any.coversFilled}/${any.coversNaked}`;
+    coversFilled += any.coversFilled; coversNaked += any.coversNaked;
     const cell = v => `${money(r[v].floor)}/${money(r[v].terminal)}`;
-    for (const v of ['v0', 'v3', 'v1', 'v2']) { totals[v].f += r[v].floor; totals[v].t += r[v].terminal; }
-    // honest daily winner among v3/v1/v2 by terminal
+    for (const v of V4) { totals[v].f += r[v].floor; totals[v].t += r[v].terminal; totals[v].af += r[v].assumeFloor; totals[v].at += r[v].assumeTerminal; }
     const best = ['v3', 'v1', 'v2'].reduce((a, b) => r[b].terminal > r[a].terminal ? b : a);
     wins[best]++;
-    console.log(r.date.padEnd(12) + String(Math.round(any.settle)).padEnd(9) + oc.padEnd(11) +
+    console.log(r.date.padEnd(12) + String(Math.round(any.settle)).padEnd(9) + oc.padEnd(16) +
       cell('v0').padEnd(16) + cell('v3').padEnd(16) + cell('v1').padEnd(16) + cell('v2'));
   }
-  console.log('-'.repeat(104));
-  console.log('TOTALS'.padEnd(12) + ''.padEnd(9) + ''.padEnd(11) +
-    `${money(totals.v0.f)}/${money(totals.v0.t)}`.padEnd(16) +
-    `${money(totals.v3.f)}/${money(totals.v3.t)}`.padEnd(16) +
-    `${money(totals.v1.f)}/${money(totals.v1.t)}`.padEnd(16) +
-    `${money(totals.v2.f)}/${money(totals.v2.t)}`);
+  console.log('-'.repeat(108));
+  console.log('TOTALS'.padEnd(12) + ''.padEnd(9) + ''.padEnd(16) +
+    V4.map(v => `${money(totals[v].f)}/${money(totals[v].t)}`.padEnd(16)).join('').trimEnd());
   console.log('\ncells = floor / terminal.  v0 = optimistic cap ceiling; v3 = honest fixed baseline.');
-  console.log(`honest daily wins (by terminal, among v3/v1/v2):  v3 ${wins.v3}  ·  v1 ${wins.v1}  ·  v2 ${wins.v2}`);
+  console.log(`fill rate: ${coversFilled}/${coversFilled + coversNaked} covers filled (${(100 * coversFilled / (coversFilled + coversNaked)).toFixed(0)}%), ${coversNaked} settled naked.`);
+  console.log(`honest daily wins (terminal, v3/v1/v2):  v3 ${wins.v3}  ·  v1 ${wins.v1}  ·  v2 ${wins.v2}`);
+
+  // Impact: honest terminal vs the old assume-fill terminal, per variant.
+  console.log('\nFILL-MODEL IMPACT (terminal totals):  assume-fill  →  honest-fill');
+  for (const v of V4) console.log(`  ${v}: ${money(totals[v].at)}  →  ${money(totals[v].t)}   (Δ ${money(totals[v].t - totals[v].at)})`);
 
   if (process.argv.includes('--csv')) {
     const out = path.join(__dirname, '..', '..', 'backtest-tent-results.csv');
-    const head = 'date,settle,opens,covers,open,' + ['v0', 'v3', 'v1', 'v2'].flatMap(v => [`${v}_floor`, `${v}_terminal`]).join(',');
-    const lines = rows.map(r => [r.date, Math.round(r.v3.settle), r.v3.opens, r.v3.covers, r.v3.open,
+    const head = 'date,settle,opens,coversFilled,coversNaked,open,' + ['v0', 'v3', 'v1', 'v2'].flatMap(v => [`${v}_floor`, `${v}_terminal`]).join(',');
+    const lines = rows.map(r => [r.date, Math.round(r.v3.settle), r.v3.opens, r.v3.coversFilled, r.v3.coversNaked, r.v3.open,
       ...['v0', 'v3', 'v1', 'v2'].flatMap(v => [r[v].floor, r[v].terminal])].join(','));
     fs.writeFileSync(out, [head, ...lines].join('\n'));
     console.log(`\nwrote ${out}`);
