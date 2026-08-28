@@ -52,6 +52,18 @@ function impliedVol(type, S, K, tau, price, r = 0) {
   return mid;
 }
 
+// Historical-day IV level from RELATIVE Bollinger band width (bandWidth / underlying) — the
+// price-level-invariant vol proxy chosen for the backtest. Constants calibrated by
+// scripts/candle-spread/calibrate-iv.js against the captured chains (PROVISIONAL: only 4 days so
+// far, R²≈0.2 — but cover cost is insensitive to IV level, so this is low-stakes; re-run the
+// calibrator as more live days accumulate and update these two numbers).
+const IV_REL_INTERCEPT = 0.1733;
+const IV_REL_SLOPE = 3.199;
+function ivFromRelBandWidth(relWidth) {
+  const iv = IV_REL_INTERCEPT + IV_REL_SLOPE * (relWidth || 0);
+  return Math.max(0.05, Math.min(0.60, iv));   // clamp to a sane 5–60% range
+}
+
 // Years-to-expiry for a 0DTE PM-settled (16:00 ET) option, from an epoch-ms timestamp.
 function tauFromTime(tsMs) {
   const et = new Date(new Date(tsMs).toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -103,7 +115,7 @@ function strip(q) { return { mid: q.mid, bid: q.bid, ask: q.ask }; }
 function round2(n) { return Math.round(n * 100) / 100; }
 
 module.exports = {
-  ncdf, bsPrice, impliedVol, tauFromTime,
+  ncdf, bsPrice, impliedVol, tauFromTime, ivFromRelBandWidth,
   makeIvFn, makeBidAsk, makeSyntheticLegAccessor, buildSyntheticChain,
   YEAR_MS,
 };

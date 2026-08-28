@@ -85,16 +85,21 @@ function main() {
     }
     if (!ivs.length) continue;
     // The day's characteristic IV LEVEL = mid-session base IV (median over snapshots, robust to the
-    // near-close tau noise). Band width = the run's stored Bollinger width (one reliable reading/day).
+    // near-close tau noise). RELATIVE band width = Bollinger width / price — the price-level-invariant
+    // vol proxy (band width ≈ 4·σ_price, and IV ∝ σ_price/price), so it applies across the Jan-Apr
+    // (~25.6k) and Aug (~29.2k) price regimes consistently. Absolute point-width would not.
     const bandsEvt = (j.events || []).find(e => e.bands);
+    const refUnderlying = median(snaps.map(e => e.chainSnapshot.underlying));
     const bandWidth = bandsEvt ? (bandsEvt.bands.upper - bandsEvt.bands.lower) : null;
+    const relWidth = (bandWidth != null && refUnderlying) ? bandWidth / refUnderlying : null;
     const baseIV = median(ivs);
-    dayRows.push({ date, baseIV, bandWidth, markErr: median(errs), nSnaps: snaps.length });
+    dayRows.push({ date, baseIV, bandWidth, relWidth, markErr: median(errs), nSnaps: snaps.length });
     console.log(
       `${date}  ${String(snaps.length).padEnd(5)}  ${(baseIV * 100).toFixed(1)}%` .padEnd(20) +
       `${(Math.min(...ivs) * 100).toFixed(0)}-${(Math.max(...ivs) * 100).toFixed(0)}%`.padEnd(11) +
       ` ${median(errs).toFixed(2)} / ${mean(errs).toFixed(2)}`.padEnd(22) +
-      `${bandWidth != null ? bandWidth.toFixed(0) : '?'}`.padStart(9)
+      `${bandWidth != null ? bandWidth.toFixed(0) : '?'}`.padStart(9) +
+      `  (rel ${relWidth != null ? (relWidth * 100).toFixed(3) + '%' : '?'})`
     );
   }
 
@@ -102,11 +107,11 @@ function main() {
   console.log('the modeled option prices are faithful. (Mean is higher only from near-close snapshots');
   console.log('where options are ~all-intrinsic and IV is ill-defined — irrelevant to cover pricing.)\n');
 
-  // --- BB-width -> IV level regression (per DAY) ---
-  const pts = dayRows.filter(r => r.bandWidth != null).map(r => ({ x: r.bandWidth, y: r.baseIV }));
+  // --- RELATIVE-BB-width -> IV level regression (per DAY) ---
+  const pts = dayRows.filter(r => r.relWidth != null).map(r => ({ x: r.relWidth, y: r.baseIV }));
   console.log('='.repeat(84));
-  console.log(`BB-width → IV-level mapping — per-day points (N=${pts.length}):`);
-  pts.forEach(p => console.log(`   bandWidth ${p.x.toFixed(0).padStart(4)}  →  IV ${(p.y * 100).toFixed(1)}%`));
+  console.log(`RELATIVE-BB-width → IV-level mapping — per-day points (N=${pts.length}):`);
+  pts.forEach(p => console.log(`   relWidth ${(p.x * 100).toFixed(3)}%  →  IV ${(p.y * 100).toFixed(1)}%`));
   if (pts.length >= 2) {
     const n = pts.length;
     const sx = pts.reduce((s, p) => s + p.x, 0), sy = pts.reduce((s, p) => s + p.y, 0);
@@ -115,9 +120,9 @@ function main() {
     const intercept = (sy - slope * sx) / n;
     const my = sy / n;
     const r2 = n > 2 ? 1 - pts.reduce((s, p) => s + (p.y - (intercept + slope * p.x)) ** 2, 0) / pts.reduce((s, p) => s + (p.y - my) ** 2, 0) : null;
-    console.log(`\n   PROVISIONAL mapping:  IV ≈ ${intercept.toFixed(5)} + ${slope.toExponential(3)} × bandWidth` +
+    console.log(`\n   PROVISIONAL mapping:  IV ≈ ${intercept.toFixed(4)} + ${slope.toFixed(3)} × relWidth` +
       (r2 != null ? `   (R² = ${r2.toFixed(3)})` : '   (R² n/a, only 2 pts)'));
-    console.log(`   → historical backtest default. Use these constants in backtest-tent.js.`);
+    console.log(`   (relWidth = bandWidth / underlying, a fraction.) Constants live in bs-pricer ivFromRelBandWidth().`);
   }
   console.log('\n⚠ Only ' + pts.length + ' captured days so far — this cross-day mapping is PROVISIONAL.');
   console.log('  It refines automatically as more live days accumulate (just re-run this). The pricer');
