@@ -70,6 +70,23 @@ function v6Signal(A, prior, ctx = {}) {
   const higherHigh = prior15 && prior15.high != null && high > prior15.high;
   const lowerLow = prior15 && prior15.low != null && low < prior15.low;
 
+  // ===== 5m-STEP HARNESS HOOK =====
+  // The 5m engine calls this at every 5m bar and sets ctx.isFifteen=false on intra-15m bars. There we
+  // act ONLY on a CLEAR, CONFIRMED 5m reversal against the held book — the 5m structural trend (close +
+  // 5m-9EMA vs the 5m midline) has flipped against us for TWO consecutive 5m bars (the "second confirms
+  // the first", no single-candle churn). We COVER early (lock the tent), and only FLIP if the 15m
+  // structural trend agrees. Everything marginal waits for the 15m close (full logic below). With
+  // cfg.fiveMin off (or 15m-only callers) intra-5m bars do nothing → identical to v5.
+  const isFifteen = ctx.isFifteen !== false;
+  if (!isFifteen) {
+    if (cfg.fiveMin !== true || held === 'none') return { openSide: null, cover: false, reason: 'intra-5m hold' };
+    const p5 = trendOf(prior && prior['5m']);
+    const flip = cfg.fiveMinFlip !== false;   // fiveMinFlip=false → cover-only intra-5m (no fresh opens between 15m closes)
+    if (held === 'bull' && t5.down && p5.down) return { openSide: (flip && t15.down) ? 'bear' : null, cover: true, reason: (flip && t15.down) ? '5m+15m flip→bear' : '5m early-cover (2-bar down)' };
+    if (held === 'bear' && t5.up && p5.up) return { openSide: (flip && t15.up) ? 'bull' : null, cover: true, reason: (flip && t15.up) ? '5m+15m flip→bull' : '5m early-cover (2-bar up)' };
+    return { openSide: null, cover: false, reason: 'intra-5m hold' };
+  }
+
   // (0a) FAST 5m COVER — cover-and-go-flat when the held side loses the 5m 9EMA (support/resistance).
   //      FINDING (87d): HURTS badly (ema term $105k, trend $79k vs v5 $156k) and even lowers floor —
   //      the 5m 9EMA cross is noise-frequent, so it covers immediately after opening and never lets a

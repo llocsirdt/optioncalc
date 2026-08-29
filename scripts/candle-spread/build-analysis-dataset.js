@@ -70,8 +70,13 @@ function main() {
 
   // 15m wall-clock marks present in the 1m data (every 15m bucket start that has 1m data), + one mark
   // at each bucket END so the last completed 15m candle is captured.
+  // Emit one bar per `step`-minute mark (default 15). --step 5 gives 5m-resolution bars for the
+  // 5m-step engine; each bar still carries the LAST-COMPLETED 1m/5m/15m/60m candle as of that mark,
+  // so the 15m subset (mark % 15 === 0) is identical to a 15m-only build.
+  const stepMin = (() => { const i = args.indexOf('--step'); return i >= 0 ? Number(args[i + 1]) : 15; })();
+  const stepMs = stepMin * MS;
   const marks = new Set();
-  for (const c of s1) { const b = Math.floor(c.datetime / (15 * MS)) * (15 * MS); marks.add(b + 15 * MS); }
+  for (const c of s1) { const b = Math.floor(c.datetime / stepMs) * stepMs; marks.add(b + stepMs); }
   const sortedMarks = [...marks].sort((a, b) => a - b);
 
   const byDay = new Map();
