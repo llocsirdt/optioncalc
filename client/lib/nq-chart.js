@@ -82,6 +82,7 @@
     ...(withDate ? { month: '2-digit', day: '2-digit' } : {}), hour: '2-digit', minute: '2-digit'
   });
   const etDateOnly = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit' });
+  const etDayISO = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });   // YYYY-MM-DD (matches <input type=date>)
 
   async function fetchTf(tf) {
     const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${tf}`;
@@ -179,6 +180,7 @@
 
     els = { host, svg, defs, gPlot, gClip, gx, gy, cross, gTags, gLast, gAxisLab, yLab, xLab, zoomHit, xHit, yHit };
     buildNdxToggle();
+    buildDateJump();
     wireInteractions();
     return true;
   }
@@ -194,6 +196,58 @@
     container.appendChild(lbl);
     lbl.querySelector('input').addEventListener('change', e => setNdxMode(e.target.checked));
     els.ndxBasisLabel = lbl.querySelector('.nq-ndx-basis');
+  }
+
+  // Date-jump: type/pick a date to center the view on that day's candles at the current timeframe.
+  // Panning/zooming writes the centered bar's date back into the field (unless it's focused, so we
+  // don't fight the user's typing). Mounted in the toolbar next to the timeframe buttons.
+  function buildDateJump() {
+    const bar = document.getElementById('nq-chart-toolbar');
+    if (!bar || bar.querySelector('.nq-chart-date')) return;
+    const lbl = document.createElement('label');
+    lbl.className = 'nq-date-jump';
+    lbl.title = 'Jump to a date (centers that day at the current timeframe). Deep 1m history is limited (~48d); 15m/1h/1D reach much further back.';
+    lbl.innerHTML = `<span class="nq-date-ic">📅</span><input type="date" class="nq-chart-date">`;
+    const ohlc = document.getElementById('nq-chart-ohlc');
+    if (ohlc) bar.insertBefore(lbl, ohlc); else bar.appendChild(lbl);
+    const input = lbl.querySelector('input');
+    input.addEventListener('change', () => { if (input.value) jumpToDate(input.value); });
+    els.dateInput = input;
+  }
+
+  // Nearest bar index to an ET calendar day (YYYY-MM-DD): prefer the first bar OF that day, else the
+  // bar closest in time (weekend/holiday/out-of-window dates snap to the nearest available candle).
+  function indexForDay(ymd) {
+    if (!data.length) return -1;
+    for (let i = 0; i < data.length; i++) if (etDayISO(data[i].t) === ymd) return i;
+    const target = Date.parse(ymd + 'T16:00:00Z');   // ~noon ET
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < data.length; i++) { const d = Math.abs(data[i].t - target); if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+
+  function jumpToDate(ymd) { const idx = indexForDay(ymd); if (idx >= 0) jumpToIndex(idx); }
+
+  // Center bar `idx` on screen, keeping the current zoom width (visibleBars). Mirrors resetView's
+  // transform math: zx(idx) = k·baseX(idx) + tx, solved so zx(idx) lands at innerW/2.
+  function jumpToIndex(idx) {
+    if (!els || !data.length) return;
+    const { innerW } = dims();
+    const n = data.length;
+    const bars = Math.min(Math.max(5, visibleBars), n);
+    const baseX = d3.scaleLinear().domain([-0.5, n - 0.5]).range([0, innerW]);
+    const k = n / bars;
+    const tx = innerW / 2 - k * baseX(Math.max(0, Math.min(n - 1, idx)));
+    els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
+  }
+
+  // Reflect the currently-centered bar's date back into the field (two-way), unless the user is
+  // actively editing it. Setting .value programmatically does not fire 'change', so no jump loop.
+  function syncDateField() {
+    const input = els && els.dateInput, s = els && els._scales;
+    if (!input || !s || !data.length || document.activeElement === input) return;
+    const mid = data[Math.max(0, Math.min(data.length - 1, Math.round((s.i0 + s.i1) / 2)))];
+    if (mid) input.value = etDayISO(mid.t);
   }
 
   function setNdxMode(on) {
@@ -291,6 +345,7 @@
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH, shift };
     updateBasisLabel();
     drawLastPriceTag();
+    syncDateField();
     if (hoverIndex != null) updateCrosshair(); else showRestingTags();
   }
 

@@ -278,6 +278,24 @@ pre {
   white-space: nowrap;
 }
 .nq-multi-toggle input { margin: 0; cursor: pointer; }
+.nq-date-jump {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #555;
+}
+.nq-date-jump .nq-date-ic { opacity: 0.6; font-size: 12px; }
+.nq-date-jump input {
+  font-size: 11px;
+  padding: 1px 4px;
+  color: #444;
+  background: #f1f3f5;
+  border: 1px solid #dcdfe3;
+  border-radius: 3px;
+  font-family: inherit;
+  cursor: pointer;
+}
 .nq-overlay path.nq-ol { fill: none; pointer-events: none; }
 .nq-chart-ohlc {
   margin-left: auto;
