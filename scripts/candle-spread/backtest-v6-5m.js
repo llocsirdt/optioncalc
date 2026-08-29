@@ -49,7 +49,8 @@ function load5mDays(dir) {
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
-function runDay5m(bars, cfg) {
+// signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
+function runDay5m(bars, signalFn) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   for (let i = 0; i < bars.length; i++) {
@@ -62,7 +63,7 @@ function runDay5m(bars, cfg) {
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
       }
     }
-    const sig = v6Signal(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, isFifteen: bars[i].fifteen, cfg });
+    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, isFifteen: bars[i].fifteen });
     if (sig.cover) {                                        // (c) place resting covers on all uncovered
       for (const pos of st.positions) { if (pos.covered || pos.pendingCover) continue; pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) }; }
       st.dir = 'none';
@@ -90,18 +91,23 @@ function runV5_15m(bars) {
   return eng.runDay(sub, (A, p, ctx) => v5Signal(A, p, { ...ctx, cfg: {} }));
 }
 
-const rows = load5mDays(DIR).map(d => ({ date: d.date, v6: runDay5m(d.bars, CFG), v5: runV5_15m(d.bars) }));
-console.log(`v6 5m-STEP vs FROZEN v5 (15m) — ${rows.length} NDX days`);
-console.log(`v6 cfg: ${Object.keys(CFG).length ? JSON.stringify(CFG) : '(defaults; add fiveMin=true to enable intra-5m)'}\n`);
-console.log('DATE         v6 O/F/N   v6 floor/term      v5 O/F/N   v5 floor/term');
-console.log('-'.repeat(78));
-const tot = { v6f: 0, v6t: 0, v5f: 0, v5t: 0 }; let wv6 = 0, wv5 = 0;
-for (const r of rows) {
-  tot.v6f += r.v6.floor; tot.v6t += r.v6.terminal; tot.v5f += r.v5.floor; tot.v5t += r.v5.terminal;
-  if (r.v6.terminal > r.v5.terminal) wv6++; else if (r.v5.terminal > r.v6.terminal) wv5++;
-  console.log(r.date.padEnd(12) + `${r.v6.opens}/${r.v6.filled}/${r.v6.naked}`.padEnd(11) + `${money(r.v6.floor)}/${money(r.v6.terminal)}`.padEnd(19) +
-    `${r.v5.opens}/${r.v5.filled}/${r.v5.naked}`.padEnd(11) + `${money(r.v5.floor)}/${money(r.v5.terminal)}`);
+module.exports = { runDay5m, load5mDays };
+
+if (require.main === module) {
+  const v6fn = (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: CFG });
+  const rows = load5mDays(DIR).map(d => ({ date: d.date, v6: runDay5m(d.bars, v6fn), v5: runV5_15m(d.bars) }));
+  console.log(`v6 5m-STEP vs FROZEN v5 (15m) — ${rows.length} NDX days`);
+  console.log(`v6 cfg: ${Object.keys(CFG).length ? JSON.stringify(CFG) : '(defaults; add fiveMin=true to enable intra-5m)'}\n`);
+  console.log('DATE         v6 O/F/N   v6 floor/term      v5 O/F/N   v5 floor/term');
+  console.log('-'.repeat(78));
+  const tot = { v6f: 0, v6t: 0, v5f: 0, v5t: 0 }; let wv6 = 0, wv5 = 0;
+  for (const r of rows) {
+    tot.v6f += r.v6.floor; tot.v6t += r.v6.terminal; tot.v5f += r.v5.floor; tot.v5t += r.v5.terminal;
+    if (r.v6.terminal > r.v5.terminal) wv6++; else if (r.v5.terminal > r.v6.terminal) wv5++;
+    console.log(r.date.padEnd(12) + `${r.v6.opens}/${r.v6.filled}/${r.v6.naked}`.padEnd(11) + `${money(r.v6.floor)}/${money(r.v6.terminal)}`.padEnd(19) +
+      `${r.v5.opens}/${r.v5.filled}/${r.v5.naked}`.padEnd(11) + `${money(r.v5.floor)}/${money(r.v5.terminal)}`);
+  }
+  console.log('-'.repeat(78));
+  console.log(`TOTALS      v6:  ${money(tot.v6f)} / ${money(tot.v6t)}      v5:  ${money(tot.v5f)} / ${money(tot.v5t)}`);
+  console.log(`daily terminal wins:  v6 ${wv6}  ·  v5 ${wv5}  ·  ties ${rows.length - wv6 - wv5}`);
 }
-console.log('-'.repeat(78));
-console.log(`TOTALS      v6:  ${money(tot.v6f)} / ${money(tot.v6t)}      v5:  ${money(tot.v5f)} / ${money(tot.v5t)}`);
-console.log(`daily terminal wins:  v6 ${wv6}  ·  v5 ${wv5}  ·  ties ${rows.length - wv6 - wv5}`);
