@@ -46,6 +46,14 @@ const VARIANTS = [
 const etDay = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York' });
 const etHM = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
 const money = n => n == null ? '—' : (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n));
+const round2 = n => Math.round(n * 100) / 100;
+
+// Net-debit mark of a cover spread (Σ long−short leg prices) at underlying U, via the BS pricer.
+function coverSpreadMark(coverLegs, U, tau, iv) {
+  let v = 0;
+  for (const l of coverLegs) v += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, U, l.strike, tau, iv);
+  return v;
+}
 
 // --- 1. Build one continuous 15m series with warm Bollinger bands across ALL days ---------------
 function buildSeries() {
@@ -112,15 +120,33 @@ function runDayVariant(dayBars, priorBar, variant) {
   // assume-fill baseline (all covers booked) — capture before reclassifying.
   const assumeFill = { floor: record.state.realizedPnl, terminal: trader.computeTerminalPnl(record.state, cfg, settle).total };
 
-  // Resolve honest fills: a cover fills iff a candle from its cover index onward has low<=center<=high.
+  // Resolve honest fills against the cover's actual (modeled) PRICE, not a strike proxy.
+  // Two-mode order: ideal target = width − openCost. At each candle from the cover candle onward,
+  // price the cover at the FAVORABLE wick extreme (high for a bull position's put-spread cover /
+  // low for a bear position's call-spread cover — the cheapest the cover got that bar). It fills the
+  // first bar that reaches ≤ target; fill price = min(target, closeMark+tick) → cross cheap when the
+  // cover is already below target (deep-ITM lock), else rest and fill at the target. Never ≤ target
+  // by EOD → settles naked. (Live: same, but with the real cover quote instead of the pricer.)
+  const tick = cfg.tickIncrement;
   let filledCovers = 0, restedNaked = 0;
   for (const pos of record.state.positions.filter(p => p.filled && p.covered)) {
-    const center = pos.shortStrike;
+    const target = cfg.spreadWidth - pos.limit;               // ideal rest price = other-half − open cost
+    const useHigh = pos.side === 'bull';                       // bull cover cheapens as U rises → bar high
     const from = coverAt[pos.id] != null ? coverAt[pos.id] : 0;
-    let filled = false;
-    for (let i = from; i < dayBars.length; i++) { if (dayBars[i].low <= center && center <= dayBars[i].high) { filled = true; break; } }
-    if (filled) { filledCovers++; }
-    else { restedNaked++; pos.covered = false; pos.coverLegs = null; }   // never filled → settles naked
+    let filled = false, fillPrice = null;
+    for (let i = from; i < dayBars.length; i++) {
+      const b = dayBars[i];
+      const rel = (b.indicators.bollinger20_2.upper - b.indicators.bollinger20_2.lower) / b.close;
+      const iv = bs.ivFromRelBandWidth(rel), tau = bs.tauFromTime(b.datetime);
+      const markExt = coverSpreadMark(pos.coverLegs, useHigh ? b.high : b.low, tau, iv);
+      if (markExt <= target) {
+        const markClose = coverSpreadMark(pos.coverLegs, b.close, tau, iv);
+        fillPrice = Math.max(tick, Math.round(Math.min(target, markClose + tick) / tick) * tick);
+        filled = true; break;
+      }
+    }
+    if (filled) { filledCovers++; pos.coverLimit = round2(fillPrice); }   // book at the actual fill price
+    else { restedNaked++; pos.covered = false; pos.coverLegs = null; }    // never filled → settles naked
   }
   // Honest floor = guaranteed floor (width − open − cover) summed over covers that actually filled.
   let honestFloor = 0;
@@ -168,12 +194,15 @@ function main() {
   const totals = { v0: { f: 0, t: 0, af: 0, at: 0 }, v3: { f: 0, t: 0, af: 0, at: 0 }, v1: { f: 0, t: 0, af: 0, at: 0 }, v2: { f: 0, t: 0, af: 0, at: 0 } };
   let coversFilled = 0, coversNaked = 0;
   let wins = { v3: 0, v1: 0, v2: 0 };
+  // v0 stays the assume-fill CEILING (its fixed geometry would just equal v3 under the honest pricing);
+  // v3/v1/v2 show the honest two-mode fills.
+  const cv = (r, v) => v === 'v0' ? { f: r.v0.assumeFloor, t: r.v0.assumeTerminal } : { f: r[v].floor, t: r[v].terminal };
   for (const r of rows) {
     const any = r.v3;
     const oc = `${any.opens}/${any.coversFilled}/${any.coversNaked}`;
     coversFilled += any.coversFilled; coversNaked += any.coversNaked;
-    const cell = v => `${money(r[v].floor)}/${money(r[v].terminal)}`;
-    for (const v of V4) { totals[v].f += r[v].floor; totals[v].t += r[v].terminal; totals[v].af += r[v].assumeFloor; totals[v].at += r[v].assumeTerminal; }
+    const cell = v => { const c = cv(r, v); return `${money(c.f)}/${money(c.t)}`; };
+    for (const v of V4) { const c = cv(r, v); totals[v].f += c.f; totals[v].t += c.t; totals[v].af += r[v].assumeFloor; totals[v].at += r[v].assumeTerminal; }
     const best = ['v3', 'v1', 'v2'].reduce((a, b) => r[b].terminal > r[a].terminal ? b : a);
     wins[best]++;
     console.log(r.date.padEnd(12) + String(Math.round(any.settle)).padEnd(9) + oc.padEnd(16) +
