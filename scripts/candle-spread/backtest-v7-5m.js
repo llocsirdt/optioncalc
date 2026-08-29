@@ -23,7 +23,7 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 const days = load5mDays(DIR);
 
 const sigFn = (bidir && v7Signal)
-  ? (A, p, ctx) => v7Signal(A, p, { ...ctx, cfg: { fiveMin: true } })
+  ? (A, p, ctx) => v7Signal(A, p, { ...ctx, cfg: { fiveMin: true, beWrong: true } })   // v7 "be wrong" opposite opens
   : (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: { fiveMin: true } });
 
 function summarize(riskCap) {
