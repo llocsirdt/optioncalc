@@ -67,15 +67,20 @@ function v5Signal(A, prior, ctx = {}) {
   }
 
   // (1) OVEREXTENSION REVERSAL — wick reaches the 5m band (band-width-relative), gated by REJECTION
-  //     (must close back inside). MOMENTUM-GATED (revTrendGate, optional): don't buy the dip inside a
-  //     confirmed downtrend / sell the rip inside a confirmed uptrend while momentum still persists —
-  //     the counter-trend signal is ignored while the continuing-direction signal is stronger.
+  //     (must close back inside). revTrendGate (optional, DEFAULT OFF) suppresses the counter-trend
+  //     dip-buy/rip-sell inside a confirmed trend — the user's v1-v3 "don't fight the trend" rule.
+  //     CALIBRATION (87 days): it HURTS (terminal +$111k vs +$156k, drawdown doubles). Counter to
+  //     directional intuition, because in the TENT strategy the "whipsaw" churns out COVERED tents
+  //     that lock floor, and some dips are real bottoms — suppressing the churn drops profitable
+  //     covers and misses turns. The trend-flip cover (0) already bails out the naked exposure, which
+  //     is the part that actually needed fixing. Kept as a flag; the real fix for lag on two-sided
+  //     days (e.g. 8/14) is a FASTER trend read (5m + 5m-9EMA), not suppressing entries.
   const revTrendGate = cfg.revTrendGate === true;
   if (bw5 > 0) {
     const botNorm = (c5.bblower - low) / bw5;    // >0 = low beyond the 5m lower band (in band-widths)
     const topNorm = (high - c5.bbupper) / bw5;
-    const suppressBull = revTrendGate && down && lowerLow && held === 'bear';   // downtrend still making lows
-    const suppressBear = revTrendGate && up && higherHigh && held === 'bull';   // uptrend still making highs
+    const suppressBull = revTrendGate && down;   // confirmed downtrend → don't buy the dip (let it ride / trend-flip catches the real turn)
+    const suppressBear = revTrendGate && up;     // confirmed uptrend → don't sell the rip
     if (botNorm >= revFrac && close > c5.bblower && !suppressBull) {
       return { openSide: 'bull', cover: held === 'bear', reason: `overext-bottom(${botNorm.toFixed(2)}bw, closed back in)` };
     }
