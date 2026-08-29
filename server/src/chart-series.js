@@ -86,14 +86,19 @@ function ema(cs) {
   return out;
 }
 
-async function computeChartSeries(symbol, timeframe) {
+// range: optional { startDate, endDate } (ms) for an on-demand historical window (date-jump). When
+// given, the fetch spans that window and the recent-bars cap is lifted (raised) so the whole
+// requested range is returned, not just the last MAX_BARS.
+async function computeChartSeries(symbol, timeframe, range = null) {
   const cfg = TF[timeframe];
   if (!cfg) throw new Error(`unsupported timeframe '${timeframe}' (use ${Object.keys(TF).join('/')})`);
   const sym = apiSym(symbol);
   const now = Date.now();
+  const startDate = range ? range.startDate : now - cfg.lookbackDays * DAY_MS;
+  const endDate = range ? Math.min(range.endDate, now) : now;
   const opts = cfg.daily
-    ? { periodType: 'year', period: 1, frequencyType: 'daily', frequency: 1 }
-    : { frequencyType: 'minute', frequency: cfg.freq, startDate: now - cfg.lookbackDays * DAY_MS, endDate: now };
+    ? { periodType: 'year', period: 1, frequencyType: 'daily', frequency: 1, startDate, endDate }
+    : { frequencyType: 'minute', frequency: cfg.freq, startDate, endDate };
 
   const isFutures = sym.startsWith('/');
   const resp = await marketClient.priceHistory(sym, opts);
@@ -108,7 +113,7 @@ async function computeChartSeries(symbol, timeframe) {
   }
   cs.sort((a, b) => a.datetime - b.datetime);
   if (cfg.agg > 1) cs = aggregate(cs, cfg.minutes);
-  const cap = cfg.maxBars || MAX_BARS;
+  const cap = range ? (cfg.daily ? 3000 : 6000) : (cfg.maxBars || MAX_BARS);   // ranged windows keep the whole span
   if (cs.length > cap) cs = cs.slice(cs.length - cap);
 
   const bb = bollinger(cs), e9 = ema(cs);
@@ -122,13 +127,16 @@ async function computeChartSeries(symbol, timeframe) {
  * Cached, coalesced chart series (display-only — see file header).
  * @param {string} symbol
  * @param {string} timeframe
- * @param {{fresh?: boolean}} [opts] - fresh:true bypasses the TTL cache (still coalesces onto any
- *        in-flight fetch, which is itself always a live fetch, so this never returns stale data).
+ * @param {{fresh?: boolean, range?: {startDate:number, endDate:number}}} [opts] - fresh:true bypasses
+ *        the TTL cache. range fetches a historical window (date-jump); ranged windows are past/static
+ *        so they cache under their own key with a long TTL. Both still coalesce concurrent identical
+ *        fetches, so this never returns stale data.
  */
 async function getChartSeries(symbol, timeframe, opts = {}) {
   if (!TF[timeframe]) throw new Error(`unsupported timeframe '${timeframe}' (use ${Object.keys(TF).join('/')})`);
-  const key = `${apiSym(symbol)}|${timeframe}`;
-  const ttl = opts.fresh ? 0 : (TTL_MS[timeframe] || 2000);
+  const range = opts.range || null;
+  const key = `${apiSym(symbol)}|${timeframe}` + (range ? `|${range.startDate}-${range.endDate}` : '');
+  const ttl = opts.fresh ? 0 : range ? 600000 : (TTL_MS[timeframe] || 2000);   // static past data → 10min cache
 
   if (ttl > 0) {
     const hit = _cache.get(key);
@@ -141,8 +149,9 @@ async function getChartSeries(symbol, timeframe, opts = {}) {
   if (pending) return pending;
 
   const p = (async () => {
-    const data = await computeChartSeries(symbol, timeframe);
+    const data = await computeChartSeries(symbol, timeframe, range);
     _cache.set(key, { at: Date.now(), data });
+    if (_cache.size > 60) { const oldest = [..._cache].sort((a, b) => a[1].at - b[1].at)[0]; if (oldest) _cache.delete(oldest[0]); }
     return data;
   })();
   _inflight.set(key, p);

@@ -296,9 +296,13 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       const symbol = url.searchParams.get('symbol');
       const timeframe = url.searchParams.get('timeframe') || '15m';
       const fresh = ['1', 'true'].includes(url.searchParams.get('fresh'));  // bypass the short TTL cache
+      // Optional historical window (ms epoch): fetch a deep range around a past date instead of the
+      // default recent window — the on-demand deep fetch the chart's date-jump uses. Ignored unless both parse.
+      const fromMs = Number(url.searchParams.get('from')), toMs = Number(url.searchParams.get('to'));
+      const range = (isFinite(fromMs) && isFinite(toMs) && toMs > fromMs) ? { startDate: fromMs, endDate: toMs } : null;
       if (!symbol) throw new Error('symbol parameter is required (e.g., ?symbol=/NQ)');
-      console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})${fresh ? ' [fresh]' : ''}`);
-      const candles = await getChartSeries(symbol, timeframe, { fresh });
+      console.log(`[${timestamp}] Chart series for: ${symbol} (${timeframe})${fresh ? ' [fresh]' : ''}${range ? ` [range ${new Date(fromMs).toISOString().slice(0, 10)}..${new Date(toMs).toISOString().slice(0, 10)}]` : ''}`);
+      const candles = await getChartSeries(symbol, timeframe, { fresh, range });
       // For NQ, include the held NQ↔NDX basis so the client can optionally re-label to NDX terms.
       const basis = /nq/i.test(symbol) ? await getBasis() : null;
       result = { symbol, timeframe, candles, basis };

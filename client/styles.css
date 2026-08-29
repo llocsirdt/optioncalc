@@ -296,6 +296,19 @@ pre {
   font-family: inherit;
   cursor: pointer;
 }
+.nq-date-jump input.nq-date-hist { border-color: #e0803a; background: #fff4ea; }  /* viewing a historical window */
+.nq-live-btn {
+  font-size: 10px;
+  font-weight: bold;
+  padding: 1px 6px;
+  color: #fff;
+  background: #e0803a;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+}
+.nq-live-btn:hover { background: #cf6f2c; }
 .nq-overlay path.nq-ol { fill: none; pointer-events: none; }
 .nq-chart-ohlc {
   margin-left: auto;

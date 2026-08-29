@@ -46,6 +46,10 @@
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
   let visibleBars = INIT_BARS;             // how many bars to fit on reset / timeframe change
   let refreshTimer = null;
+  // Historical (date-jump) mode: when the user jumps to a date outside the live window, we fetch a
+  // deep window around it on demand (histData, not polled), and suspend the live refresh until the
+  // user clicks LIVE. Keeps normal operation lean — see enterHistorical/exitHistorical.
+  let histMode = false, histDate = null, histData = {};
   let els = null;                          // cached selections
   let hoverIndex = null;
   let hoverY = null;                        // cursor y (px) for the price axis label
@@ -91,6 +95,15 @@
     return (j && j.candles) || [];             // chronological, flat BB/EMA fields
   }
 
+  // On-demand deep window around a historical date (date-jump). Server returns the full range with
+  // warm BB/EMA; 1m beyond ~48d comes back empty (Schwab's minute cap) — handled as no data.
+  async function fetchTfRange(tf, from, to) {
+    const url = `${apiBase()}/chartseries?symbol=${encodeURIComponent(SYMBOL)}&timeframe=${tf}&from=${from}&to=${to}`;
+    const j = await (await fetch(url)).json();
+    if (j && j.basis) serverBasis = j.basis;
+    return (j && j.candles) || [];
+  }
+
   // Fetch every timeframe (parallel) — needed for the multi-TF overlay; switching timeframes
   // then reads from this cache (no refetch).
   async function fetchAll() {
@@ -100,9 +113,12 @@
     allData = Object.fromEntries(results);
   }
 
+  // The active series source: the on-demand historical windows in date-jump mode, else the live cache.
+  const srcData = () => (histMode ? histData : allData);
+
   // Derive the selected-TF `data` from the cache and rebuild the overlay mapping.
   function rebuildSelected() {
-    data = (allData[timeframe] || []).map((c, i) => ({
+    data = (srcData()[timeframe] || []).map((c, i) => ({
       i, t: c.datetime, o: +c.open, h: +c.high, l: +c.low, c: +c.close, v: +c.volume || 0,
       bbU: num(c.bbUpper), bbM: num(c.bbMiddle), bbL: num(c.bbLower), ema9: num(c.ema9)
     }));
@@ -115,7 +131,7 @@
     overlayMapped = {};
     const times = data.map(c => c.t);
     for (const tf of TIMEFRAMES) {
-      const cs = allData[tf];
+      const cs = srcData()[tf];
       if (!cs || !cs.length) continue;
       const bbU = [], bbM = [], bbL = [], ema9 = [];
       let j = 0;
@@ -207,12 +223,15 @@
     const lbl = document.createElement('label');
     lbl.className = 'nq-date-jump';
     lbl.title = 'Jump to a date (centers that day at the current timeframe). Deep 1m history is limited (~48d); 15m/1h/1D reach much further back.';
-    lbl.innerHTML = `<span class="nq-date-ic">📅</span><input type="date" class="nq-chart-date">`;
+    lbl.innerHTML = `<span class="nq-date-ic">📅</span><input type="date" class="nq-chart-date">` +
+      `<button class="nq-live-btn" title="Return to live data" style="display:none">● LIVE</button>`;
     const ohlc = document.getElementById('nq-chart-ohlc');
     if (ohlc) bar.insertBefore(lbl, ohlc); else bar.appendChild(lbl);
     const input = lbl.querySelector('input');
     input.addEventListener('change', () => { if (input.value) jumpToDate(input.value); });
     els.dateInput = input;
+    els.liveBtn = lbl.querySelector('.nq-live-btn');
+    els.liveBtn.addEventListener('click', exitHistorical);
   }
 
   // Nearest bar index to an ET calendar day (YYYY-MM-DD): prefer the first bar OF that day, else the
@@ -226,7 +245,56 @@
     return best;
   }
 
-  function jumpToDate(ymd) { const idx = indexForDay(ymd); if (idx >= 0) jumpToIndex(idx); }
+  // Days of history to pull each side of the target date, per timeframe — enough bars for BB warmup
+  // + panning room, scaled so payloads stay modest (coarser TFs reach further for the same bar count).
+  const HIST_SIDE_DAYS = { '1m': 1, '5m': 4, '15m': 10, '60m': 30, 'daily': 150 };
+  const dayMs = ymd => Date.parse(ymd + 'T16:00:00Z');    // ~noon ET of the target day
+
+  function jumpToDate(ymd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+    const inWindow = data.length && ymd >= etDayISO(data[0].t) && ymd <= etDayISO(data[data.length - 1].t);
+    if (inWindow) { const i = indexForDay(ymd); if (i >= 0) jumpToIndex(i); return; }
+    enterHistorical(ymd);   // outside the loaded window → fetch a deep window around that date
+  }
+
+  // Fetch (once) the on-screen timeframes' deep windows around histDate into histData.
+  async function ensureHist(ymd) {
+    const D = dayMs(ymd);
+    const need = [...liveTfs()].filter(tf => !histData[tf]);
+    const got = await Promise.all(need.map(async tf => {
+      const side = (HIST_SIDE_DAYS[tf] || 10) * 864e5;
+      try { return [tf, await fetchTfRange(tf, D - side, Math.min(D + side, Date.now()))]; }
+      catch (e) { return [tf, []]; }
+    }));
+    for (const [tf, cs] of got) histData[tf] = cs;
+  }
+
+  async function enterHistorical(ymd) {
+    if (histDate !== ymd) { histData = {}; histDate = ymd; }
+    histMode = true;
+    stopRefresh();                 // don't let the live poll overwrite the historical window
+    updateHistUI();
+    await ensureHist(ymd);
+    rebuildSelected();
+    lastSig = null;
+    const idx = indexForDay(ymd);
+    if (data.length && idx >= 0) jumpToIndex(idx); else render();   // empty (e.g. 1m too old) → blank but recoverable
+    if (hoverIndex == null && data.length) updateReadout(data[data.length - 1]);
+  }
+
+  function exitHistorical() {
+    if (!histMode) return;
+    histMode = false; histDate = null; histData = {};
+    updateHistUI();
+    load(true);                    // back to the live window + reset view
+    startRefresh();
+  }
+
+  // Show/hide the LIVE (return-to-now) button + flag the date field as historical.
+  function updateHistUI() {
+    if (els && els.liveBtn) els.liveBtn.style.display = histMode ? '' : 'none';
+    if (els && els.dateInput) els.dateInput.classList.toggle('nq-date-hist', histMode);
+  }
 
   // Center bar `idx` on screen, keeping the current zoom width (visibleBars). Mirrors resetView's
   // transform math: zx(idx) = k·baseX(idx) + tx, solved so zx(idx) lands at innerW/2.
@@ -589,12 +657,14 @@
     const allc = document.querySelector('#nq-chart-tf-buttons .nq-all-lines');
     if (allc) allc.checked = lineTfs.size === TIMEFRAMES.length;
     savePrefs();
+    if (histMode && on) { ensureHist(histDate).then(() => { buildOverlayMapped(); render(); }); return; }  // fetch the newly-shown TF's window
     render();
   }
   function toggleAllLines(on) {
     lineTfs = on ? new Set(TIMEFRAMES) : new Set();
     savePrefs();
     buildToolbar();
+    if (histMode && on) { ensureHist(histDate).then(() => { buildOverlayMapped(); render(); }); return; }
     render();
   }
 
@@ -626,6 +696,7 @@
 
   // Fast poll: refetch only the on-screen timeframes (not all 5 every tick) and redraw if changed.
   async function refreshTick() {
+    if (histMode) return;               // frozen on a historical window until the user clicks LIVE
     try {
       const tfs = [...liveTfs()];
       const results = await Promise.all(tfs.map(async tf => {
@@ -646,6 +717,7 @@
     lineTfs.add(tf);            // selecting a timeframe also turns on its band/EMA lines
     savePrefs();
     buildToolbar();
+    if (histMode) { enterHistorical(histDate); return; }   // pull this TF's historical window, re-center on the date
     if (allData[tf] && allData[tf].length) {
       rebuildSelected(); lastSig = null; resetView();
       if (hoverIndex == null) updateReadout(data[data.length - 1]);
