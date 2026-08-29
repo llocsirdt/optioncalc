@@ -53,8 +53,15 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 // opts.riskCap (v7 "be patient"): $ cap on UNCOVERED debit — pause opening new positions once the sum
 //   of open debits on not-yet-covered positions would exceed it; covers free risk and re-enable opens.
 // opts.bidirectional (v7 "be wrong"): allow opening the opposite side while holding the other.
+// v8 opts: proactiveCoverFrac (place a resting cover on any uncovered position whose OPENING spread
+//   marks >= frac*WIDTH = deep ITM → locks the leader, and it stops counting toward the soft cap);
+//   softCap = "churn cap" on AT-RISK (uncovered AND not-deep-ITM) debit — freed as leaders go deep ITM;
+//   hardCap = absolute backstop on TOTAL uncovered debit (deep-ITM included). Any cap default Infinity.
 function runDay5m(bars, signalFn, opts = {}) {
-  const riskCap = opts.riskCap != null ? opts.riskCap : Infinity;
+  const riskCap = opts.riskCap != null ? opts.riskCap : Infinity;   // legacy single cap (v7)
+  const softCap = opts.softCap != null ? opts.softCap : Infinity;   // v8 churn cap (at-risk only)
+  const hardCap = opts.hardCap != null ? opts.hardCap : Infinity;   // v8 backstop (total uncovered)
+  const pFrac = opts.proactiveCoverFrac != null ? opts.proactiveCoverFrac : null;
   const bidir = opts.bidirectional === true;
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
@@ -62,6 +69,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   let capBlocked = 0, capBlockedTrend = 0;   // diagnostic: opens the cap refused (and how many were same-dir stacking)
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
+    const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * WIDTH;
+    // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
+    if (pFrac != null) {
+      for (const pos of st.positions) {
+        if (pos.covered || pos.pendingCover) continue;
+        if (legsMark(pos.legs, S, tau, iv) >= pFrac * WIDTH) pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) };
+      }
+    }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? c5.high : c5.low;
@@ -82,13 +97,22 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
-    if (sig.openSide && dirOk) {                            // (d) open (subject to the risk cap)
+    if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
       const o = buildOpen(sig.openSide, S, tau, iv);
-      if (uncoveredRisk() + o.limit * 100 * QTY <= riskCap) {   // "be patient": pause opens over the cap
+      const nd = o.limit * 100 * QTY;
+      // soft cap counts only AT-RISK debit (uncovered & NOT deep-ITM); hard cap + legacy count ALL uncovered.
+      const totalUncov = uncoveredRisk();
+      const atRisk = st.positions.reduce((s, p) => s + ((p.covered || isDeep(p)) ? 0 : p.limit * 100 * QTY), 0);
+      // exemptTrendStack (v8): if every uncovered position is the SAME side as this open, we're stacking a
+      // trend, not churning chop → skip the soft cap (only the hard ceiling limits a trend run).
+      const stacking = st.positions.filter(p => !p.covered).every(p => p.side === sig.openSide);
+      const softOk = (opts.exemptTrendStack && stacking) ? true : (atRisk + nd <= softCap);
+      const ok = (totalUncov + nd <= riskCap) && softOk && (totalUncov + nd <= hardCap);
+      if (ok) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
         st.dir = sig.openSide;
       } else {
-        capBlocked++;   // cap refused this open; was it a same-direction (trend-stacking) add?
+        capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
     }
