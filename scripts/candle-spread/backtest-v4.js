@@ -131,7 +131,9 @@ function main() {
       .filter(x => new Date(x.datetime).getMinutes() % 15 === 0)   // 15m closes
       .map(x => ({ dt: x.datetime, analysis: x.analysis }));
     if (bars.length < 5) continue;
-    rows.push({ date: etDay(bars[0].dt), v4: runDay(bars, v4Signal), classic: runDay(bars, classicSignal) });
+    const rf = process.argv.includes('--revFrac') ? Number(process.argv[process.argv.indexOf('--revFrac') + 1]) : null;
+    const v4fn = rf != null ? (A, p, ctx) => v4Signal(A, p, { ...ctx, cfg: { reversalFrac: rf } }) : v4Signal;
+    rows.push({ date: etDay(bars[0].dt), v4: runDay(bars, v4fn), classic: runDay(bars, classicSignal) });
   }
 
   console.log(`v4 BACKTEST — ${rows.length} NDX days (15m closes, same tent+resting-fill+BS pricing; only the SIGNAL differs)\n`);

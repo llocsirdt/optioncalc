@@ -23,7 +23,11 @@ const conf = require('./confluence');
 // ctx = { heldDir: 'bull'|'bear'|'none', cfg }.  Returns { openSide:'bull'|'bear'|null, cover:bool, reason }.
 function v4Signal(A, prior, ctx = {}) {
   const cfg = ctx.cfg || {};
-  const T_rev = cfg.reversalStab != null ? cfg.reversalStab : 15;    // pts the wick must stab beyond the 5m band
+  // VOLATILITY-RELATIVE reversal trigger: the wick must reach within `revFrac` of a 5m-BAND-WIDTH of
+  // the 5m band (or beyond), so "well beyond" scales with the regime instead of a fixed point gap
+  // that only fits one volatility. Calibrated on the 49 days: ~−0.1 to 0 band-widths discriminates
+  // reversals ~1.7× baseline; the signal is the wick REACHING the band, not stabbing far past it.
+  const revFrac = cfg.reversalFrac != null ? cfg.reversalFrac : -0.15;
   const pausePts = cfg.pausePts != null ? cfg.pausePts : 8;          // pts to a strong opposing cluster → pause opens
   const held = ctx.heldDir || 'none';
 
@@ -33,19 +37,20 @@ function v4Signal(A, prior, ctx = {}) {
   const green = close >= (open != null ? open : close);
 
   const c5 = A['5m'];
-  const b5 = conf.beyondBand(low, high, A, '5m');
-  const bot = b5.lowBeyond;    // >0 = 15m low stabbed below the 5m lower band  (bottom extreme)
-  const top = b5.highBeyond;   // >0 = 15m high stabbed above the 5m upper band (top extreme)
+  const bw5 = (c5 && c5.bbupper != null && c5.bblower != null) ? (c5.bbupper - c5.bblower) : null;
 
-  // (1) OVEREXTENSION REVERSAL — the validated wick-beyond trigger, gated by REJECTION: the wick
-  // must stab beyond the 5m band AND the candle must CLOSE BACK INSIDE it (a long-wick rejection).
-  // A stab that CLOSES beyond the band is continuation, not a reversal — this filter kills the
-  // every-bar whipsaw the raw stab produced in a strong move.
-  if (c5 && c5.bblower != null && bot != null && bot >= T_rev && close > c5.bblower) {
-    return { openSide: 'bull', cover: held === 'bear', reason: `overext-bottom(+${bot} beyond 5m, closed back in)` };
-  }
-  if (c5 && c5.bbupper != null && top != null && top >= T_rev && close < c5.bbupper) {
-    return { openSide: 'bear', cover: held === 'bull', reason: `overext-top(+${top} beyond 5m, closed back in)` };
+  // (1) OVEREXTENSION REVERSAL — wick reaches the 5m band (band-width-relative), gated by REJECTION:
+  // the candle must CLOSE BACK INSIDE the band (a long-wick rejection). A stab that CLOSES beyond the
+  // band is continuation, not a reversal — this filter kills the every-bar whipsaw of a raw stab.
+  if (bw5 > 0) {
+    const botNorm = (c5.bblower - low) / bw5;    // >0 = low beyond the 5m lower band (in band-widths)
+    const topNorm = (high - c5.bbupper) / bw5;
+    if (botNorm >= revFrac && close > c5.bblower) {
+      return { openSide: 'bull', cover: held === 'bear', reason: `overext-bottom(${botNorm.toFixed(2)}bw, closed back in)` };
+    }
+    if (topNorm >= revFrac && close < c5.bbupper) {
+      return { openSide: 'bear', cover: held === 'bull', reason: `overext-top(${topNorm.toFixed(2)}bw, closed back in)` };
+    }
   }
 
   // (2) GATED TREND CONTINUATION. Trend = price AND 9EMA on the same side of the 15m midline.
