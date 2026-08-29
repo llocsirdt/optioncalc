@@ -50,9 +50,15 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
-function runDay5m(bars, signalFn) {
+// opts.riskCap (v7 "be patient"): $ cap on UNCOVERED debit — pause opening new positions once the sum
+//   of open debits on not-yet-covered positions would exceed it; covers free risk and re-enable opens.
+// opts.bidirectional (v7 "be wrong"): allow opening the opposite side while holding the other.
+function runDay5m(bars, signalFn, opts = {}) {
+  const riskCap = opts.riskCap != null ? opts.riskCap : Infinity;
+  const bidir = opts.bidirectional === true;
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
+  const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
@@ -68,10 +74,13 @@ function runDay5m(bars, signalFn) {
       for (const pos of st.positions) { if (pos.covered || pos.pendingCover) continue; pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) }; }
       st.dir = 'none';
     }
-    if (sig.openSide && (st.dir === 'none' || st.dir === sig.openSide)) {   // (d) open
+    const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
+    if (sig.openSide && dirOk) {                            // (d) open (subject to the risk cap)
       const o = buildOpen(sig.openSide, S, tau, iv);
-      st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
-      st.dir = sig.openSide;
+      if (uncoveredRisk() + o.limit * 100 * QTY <= riskCap) {   // "be patient": pause opens over the cap
+        st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
+        st.dir = sig.openSide;
+      }
     }
   }
   const settle = bars[bars.length - 1].analysis['5m'].close;
