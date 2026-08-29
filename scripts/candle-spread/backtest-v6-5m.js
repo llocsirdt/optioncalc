@@ -69,10 +69,16 @@ function runDay5m(bars, signalFn, opts = {}) {
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
       }
     }
-    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, isFifteen: bars[i].fifteen });
-    if (sig.cover) {                                        // (c) place resting covers on all uncovered
-      for (const pos of st.positions) { if (pos.covered || pos.pendingCover) continue; pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) }; }
-      st.dir = 'none';
+    // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
+    const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
+    const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
+    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen });
+    // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
+    //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
+    const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
+    if (coverSet.length) {
+      for (const pos of st.positions) { if (pos.covered || pos.pendingCover || !coverSet.includes(pos.side)) continue; pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) }; }
+      if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
     if (sig.openSide && dirOk) {                            // (d) open (subject to the risk cap)
