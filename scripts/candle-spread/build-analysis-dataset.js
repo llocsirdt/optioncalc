@@ -21,7 +21,7 @@ const { resample, withIndicators } = require('../signal-lab/indicators');
 const args = process.argv.slice(2);
 const symbol = (args.find(a => !a.startsWith('--')) || 'NDX').toUpperCase();
 const outDir = (() => { const i = args.indexOf('--out'); return i >= 0 ? args[i + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-v2'); })();
-const RAW1 = path.join(__dirname, '..', '..', 'signal-lab-data', 'raw-1m');
+const RAW1 = (() => { const i = args.indexOf('--raw'); return i >= 0 ? args[i + 1] : path.join(__dirname, '..', '..', 'signal-lab-data', 'raw-1m'); })();
 const MS = 60 * 1000;
 const etDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
 
