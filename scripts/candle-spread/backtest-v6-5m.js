@@ -63,6 +63,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   const hardCap = opts.hardCap != null ? opts.hardCap : Infinity;   // v8 backstop (total uncovered)
   const pFrac = opts.proactiveCoverFrac != null ? opts.proactiveCoverFrac : null;
   const bidir = opts.bidirectional === true;
+  const dirWindow = opts.dirWindow || 12;   // rolling-directionality window (5m bars); ~1h at 12
+  // directionality at bar i = |net move over the window| / (window high-low range). ~1 = trending, ~0 = chop.
+  const directionalityAt = i => {
+    const j0 = Math.max(0, i - dirWindow); if (i - j0 < 3) return 1;
+    let hi = -Infinity, lo = Infinity;
+    for (let j = j0; j <= i; j++) { const x = bars[j].analysis['5m']; hi = Math.max(hi, x.high); lo = Math.min(lo, x.low); }
+    const rng = hi - lo; if (!(rng > 0)) return 1;
+    return Math.abs(bars[i].analysis['5m'].close - bars[j0].analysis['5m'].close) / rng;
+  };
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
@@ -88,7 +97,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
-    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen });
+    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen, directionality: directionalityAt(i) });
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);

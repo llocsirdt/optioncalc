@@ -117,11 +117,14 @@ function v7Signal(A, prior, ctx = {}) {
   //        and/or 15m BB midline (20-SMA) against the held side — the user's "crossed a key support
   //        band and closed on the other side" read.
   // beWrongStrong (chop filter): require the reversal to DECISIVELY break — close beyond the 5m
-  //   centerline (20-SMA) against the held side — so chop wiggles that don't cross the midline don't
-  //   trigger an opposite open. Targets be-wrong's chop-day bleed (−$207k) while keeping trend days.
+  //   centerline (20-SMA) against the held side. TESTED, OFF (5m centerline too noisy in chop).
   const bwStrong = cfg.beWrongStrong === true;
   const c5mid = c5 && c5.bbmiddle;
-  if (cfg.beWrong && anyHeld) {
+  // beWrongDirMin (ROLLING-DIRECTIONALITY chop filter): suppress the opposite (be-wrong) open when the
+  //   recent window is CHOPPY — directionality (net move / range, from the engine) below the threshold.
+  //   Targets be-wrong's chop-day bleed (−$207k) while leaving trend days (high directionality) alone.
+  const dirOkBW = cfg.beWrongDirMin == null || (ctx.directionality != null && ctx.directionality >= cfg.beWrongDirMin);
+  if (cfg.beWrong && anyHeld && dirOkBW) {
     if (heldBull && lowerLow && pat.bearishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close < c5mid))) return { openSide: 'bear', coverSide: null, reason: 'be-wrong→bear (breaking lows + bearish candle)' };
     if (heldBear && higherHigh && pat.bullishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close > c5mid))) return { openSide: 'bull', coverSide: null, reason: 'be-wrong→bull (breaking highs + bullish candle)' };
     const clx = cfg.centerlineCross;
