@@ -86,13 +86,16 @@ function classicSignal(A, prior, ctx) {
 }
 
 // --- run one day for one signal mode ---
-function runDay(bars, signalFn) {
+// onBar(evt) — optional per-bar trace callback (debugging one day; see trace-day.js). No-op by default.
+function runDay(bars, signalFn, onBar) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   let coversPlaced = 0;
 
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, S = A['15m'].close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
+    const heldBefore = st.dir;
+    const filledThisBar = [];
 
     // (a) resolve resting covers against THIS bar (fill when the cover marks ≤ target at the favorable wick extreme)
     for (const pos of st.positions) {
@@ -106,6 +109,7 @@ function runDay(bars, signalFn) {
         pos.coverLimit = roundTick(Math.min(pc.target, markClose + TICK));
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
         pos.coverFillPrice = ext;   // price extreme at fill → how deep ITM the short strike was (Q3 credit-cover choice)
+        filledThisBar.push(pos.side);
       }
     }
 
@@ -113,20 +117,29 @@ function runDay(bars, signalFn) {
     const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir });
 
     // (c) cover (reversal): place resting covers on all uncovered positions
+    let placedThisBar = 0;
     if (sig.cover) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
         pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) };
-        coversPlaced++;
+        coversPlaced++; placedThisBar++;
       }
       st.dir = 'none';
     }
     // (d) open
+    let openedThisBar = null;
     if (sig.openSide && (st.dir === 'none' || st.dir === sig.openSide)) {
       const o = buildOpen(sig.openSide, S, tau, iv);
       st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
-      st.dir = sig.openSide;
+      st.dir = sig.openSide; openedThisBar = sig.openSide;
     }
+
+    if (onBar) onBar({
+      i, dt: bars[i].dt, A, S, heldBefore, heldAfter: st.dir, sig,
+      filledThisBar, placedThisBar, openedThisBar,
+      naked: st.positions.filter(p => !p.covered && !p.pendingCover).length,
+      resting: st.positions.filter(p => p.pendingCover).length,
+    });
   }
 
   // settle at day's final 15m close
