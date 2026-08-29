@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
 require('dotenv').config({ path: '../.env' });
 
@@ -176,6 +177,38 @@ sampleMemory();
 const memSampler = setInterval(sampleMemory, 60000);
 if (memSampler.unref) memSampler.unref();
 
+// Disk tracking so we can tell a /tmp-fill (the leading suspect for the 2026-08-28 deploy hang)
+// from a memory problem without shell access. Filesystem free/used for / and /tmp, plus the size of
+// the candle-spread run store (the most likely thing to grow over uptime). Cached ~30s so EB's
+// frequent health pings don't re-stat the dir every time.
+const CANDLE_RUNS_DIR = process.env.CANDLE_SPREAD_RUNS_DIR || '/tmp/candle-spread-runs';
+let diskCache = null, diskCacheAt = 0;
+function fsUsage(p) {
+  try {
+    if (typeof fs.statfsSync !== 'function') return null;   // Node < 18.15 — feature unavailable
+    const s = fs.statfsSync(p);
+    const total = s.blocks * s.bsize, avail = s.bavail * s.bsize;
+    return { totalMB: MB(total), freeMB: MB(avail), usedPct: total ? Math.round((1 - avail / total) * 100) : null };
+  } catch (e) { return null; }
+}
+function dirStats(dir) {
+  try {
+    const files = fs.readdirSync(dir);
+    let bytes = 0, count = 0;
+    for (const f of files) {
+      try { const st = fs.statSync(dir + '/' + f); if (st.isFile()) { bytes += st.size; count++; } } catch (e) { /* skip */ }
+    }
+    return { files: count, sizeMB: MB(bytes) };
+  } catch (e) { return null; }   // dir doesn't exist (e.g. local dev)
+}
+function diskUsage() {
+  const now = Date.now();
+  if (diskCache && now - diskCacheAt < 30000) return diskCache;
+  diskCache = { root: fsUsage('/'), tmp: fsUsage('/tmp'), candleRuns: dirStats(CANDLE_RUNS_DIR) };
+  diskCacheAt = now;
+  return diskCache;
+}
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   const m = process.memoryUsage();
@@ -197,6 +230,7 @@ app.get('/health', (req, res) => {
     sdk: 'schwab-client-js',
     build: buildInfo,
     memory,
+    disk: diskUsage(),
     endpoints: {
       marketData: true,
       trading: true
