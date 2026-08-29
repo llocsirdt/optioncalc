@@ -18,6 +18,23 @@ const { v4Signal } = require('./v4-signals');
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data');
 const TFS = ['1m', '5m', '15m', '60m'];
+
+// v4 cfg from the CLI: --revFrac X (shortcut) and/or --cfg key=val,key=val (general). Numeric values
+// are coerced; anything set here is passed straight into v4Signal's cfg (grind/candle/active-cover gates).
+function parseCfg() {
+  const cfg = {};
+  const ri = process.argv.indexOf('--revFrac');
+  if (ri >= 0) cfg.reversalFrac = Number(process.argv[ri + 1]);
+  const ci = process.argv.indexOf('--cfg');
+  if (ci >= 0 && process.argv[ci + 1]) {
+    for (const kv of process.argv[ci + 1].split(',')) {
+      const [k, v] = kv.split('=');
+      if (k) cfg[k.trim()] = v === undefined ? true : (isNaN(Number(v)) ? v : Number(v));
+    }
+  }
+  return cfg;
+}
+const CFG = parseCfg();
 const WIDTH = 20, INCR = 10, TICK = 0.05, QTY = 1;
 const round2 = n => Math.round(n * 100) / 100;
 const roundTick = p => Math.max(TICK, Math.round(p / TICK) * TICK);
@@ -131,12 +148,12 @@ function main() {
       .filter(x => new Date(x.datetime).getMinutes() % 15 === 0)   // 15m closes
       .map(x => ({ dt: x.datetime, analysis: x.analysis }));
     if (bars.length < 5) continue;
-    const rf = process.argv.includes('--revFrac') ? Number(process.argv[process.argv.indexOf('--revFrac') + 1]) : null;
-    const v4fn = rf != null ? (A, p, ctx) => v4Signal(A, p, { ...ctx, cfg: { reversalFrac: rf } }) : v4Signal;
+    const v4fn = (A, p, ctx) => v4Signal(A, p, { ...ctx, cfg: CFG });
     rows.push({ date: etDay(bars[0].dt), v4: runDay(bars, v4fn), classic: runDay(bars, classicSignal) });
   }
 
-  console.log(`v4 BACKTEST — ${rows.length} NDX days (15m closes, same tent+resting-fill+BS pricing; only the SIGNAL differs)\n`);
+  console.log(`v4 BACKTEST — ${rows.length} NDX days (15m closes, same tent+resting-fill+BS pricing; only the SIGNAL differs)`);
+  console.log(`cfg: ${Object.keys(CFG).length ? JSON.stringify(CFG) : '(defaults)'}\n`);
   console.log('DATE         settle   v4 O/F/N   v4 floor/term      classic O/F/N  classic floor/term');
   console.log('-'.repeat(96));
   const tot = { v4: { f: 0, t: 0 }, classic: { f: 0, t: 0 } };

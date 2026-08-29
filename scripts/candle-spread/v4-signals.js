@@ -5,43 +5,46 @@
  * confluence.js) and returns an open/cover decision, replacing v0-v3's single-timeframe
  * green-breaks-high / any-reversal rules.
  *
- * v1 scope (the validated core):
- *   • OVEREXTENSION REVERSAL (primary, calibrated): the candle wick stabs beyond the slower-timeframe
- *     (5m) band → reverse. Low beyond 5m lower ⇒ bottom → open bull (+ cover held bears); high beyond
- *     5m upper ⇒ top → open bear (+ cover held bulls). Threshold from calibration (~15-40pt beyond).
- *   • GATED TREND CONTINUATION: in a confirmed trend (price + 9EMA vs the 15m midline), open with the
- *     trend on a same-color candle — UNLESS price is right into a strong opposing confluence zone
- *     (≥3 timeframes) → pause. This is the key difference from v0-v3, which open blindly every trend
- *     candle and cover on every reversal; v4 HOLDS through minor pullbacks and only covers at the
- *     opposite overextension.
+ * SIGNALS (evaluated in priority order):
+ *   (1) OVEREXTENSION REVERSAL (primary, calibrated): the wick stabs to/through the slower-TF (5m)
+ *       band AND closes back inside (rejection) → reverse. Volatility-relative via `reversalFrac`.
+ *   (2) GRIND top/bottom: in a grind the 5m band rises WITH price so the wick never stabs beyond.
+ *       Detect the turn via the 1m band pushing beyond the slower channel (volatility expansion),
+ *       CONFIRMED by a reversal candle formation. Gated by `widenFrac`.
+ *   (3) CANDLE-AT-CONFLUENCE reversal: a bearish (top) / bullish (bottom) reversal candle right at a
+ *       strong opposing confluence zone — catches grind tops that just stall at a line cluster.
+ *       Gated by `candleConfluenceRadius`.
+ *   (4) ACTIVE COVERING: lock the tent when a HELD trend runs into a strong opposing confluence,
+ *       without a full reversal (cover all held, go flat, re-engage next signal). Gated by
+ *       `activeCoverRadius`. This is what the user does discretionarily — cover uncovered positions
+ *       as the trend hits overhead resistance, rather than only at the rare opposite extreme.
+ *   (5) GATED TREND CONTINUATION: open with the trend on a same-color candle, unless right into a
+ *       strong opposing confluence (pause).
  *
- * Not yet (later passes): intra-candle 5m early reads, breakout-continuation on close-through,
- * 9EMA-as-S/R sizing, confluence-strength position sizing, 60m gating.
+ * Signals (2)-(4) are OFF unless their cfg gate is set, so the calibrated (1)+(5) baseline is
+ * unchanged and each new trigger can be A/B'd independently in the backtest.
  */
 const conf = require('./confluence');
+const pat = require('./candle-patterns');
 
 // ctx = { heldDir: 'bull'|'bear'|'none', cfg }.  Returns { openSide:'bull'|'bear'|null, cover:bool, reason }.
 function v4Signal(A, prior, ctx = {}) {
   const cfg = ctx.cfg || {};
-  // VOLATILITY-RELATIVE reversal trigger: the wick must reach within `revFrac` of a 5m-BAND-WIDTH of
-  // the 5m band (or beyond), so "well beyond" scales with the regime instead of a fixed point gap
-  // that only fits one volatility. Calibrated on the 49 days: ~−0.1 to 0 band-widths discriminates
-  // reversals ~1.7× baseline; the signal is the wick REACHING the band, not stabbing far past it.
   const revFrac = cfg.reversalFrac != null ? cfg.reversalFrac : -0.15;
   const pausePts = cfg.pausePts != null ? cfg.pausePts : 8;          // pts to a strong opposing cluster → pause opens
   const held = ctx.heldDir || 'none';
 
   const c15 = A && A['15m'];
   if (!c15 || c15.bbmiddle == null || c15.close == null) return { openSide: null, cover: false, reason: 'no-15m' };
-  const { close, low, high, bbmiddle: mid, ema, open } = c15;
-  const green = close >= (open != null ? open : close);
+  const { close, low, high, bbmiddle: mid, ema } = c15;
+  const green = close >= (c15.open != null ? c15.open : close);
+  const prior15 = prior && prior['15m'];
 
   const c5 = A['5m'];
   const bw5 = (c5 && c5.bbupper != null && c5.bblower != null) ? (c5.bbupper - c5.bblower) : null;
 
-  // (1) OVEREXTENSION REVERSAL — wick reaches the 5m band (band-width-relative), gated by REJECTION:
-  // the candle must CLOSE BACK INSIDE the band (a long-wick rejection). A stab that CLOSES beyond the
-  // band is continuation, not a reversal — this filter kills the every-bar whipsaw of a raw stab.
+  // (1) OVEREXTENSION REVERSAL — wick reaches the 5m band (band-width-relative), gated by REJECTION
+  //     (must close back inside; a close BEYOND the band is continuation, not a reversal).
   if (bw5 > 0) {
     const botNorm = (c5.bblower - low) / bw5;    // >0 = low beyond the 5m lower band (in band-widths)
     const topNorm = (high - c5.bbupper) / bw5;
@@ -53,7 +56,55 @@ function v4Signal(A, prior, ctx = {}) {
     }
   }
 
-  // (2) GATED TREND CONTINUATION. Trend = price AND 9EMA on the same side of the 15m midline.
+  // (2) GRIND top/bottom — the 1m band pushes beyond the slower channel (as a % of its own width) AND
+  //     a reversal candle prints, while price is on the extended side of the 15m midline. Default 0.10
+  //     (1m band 10% of its own width beyond the 5m/15m band) — calibrated on the 49 days: raises the
+  //     guaranteed floor ~$10k (catches the grind tops the wick-stab reversal misses) at ~flat terminal.
+  const widenFrac = cfg.widenFrac != null ? cfg.widenFrac : 0.10;
+  if (widenFrac != null) {
+    const ext = conf.bandExtension(A);
+    const upPct = (tf) => (ext.upper[tf] && ext.upper[tf].pctOfOneWidth != null) ? ext.upper[tf].pctOfOneWidth / 100 : -Infinity;
+    const dnPct = (tf) => (ext.lower[tf] && ext.lower[tf].pctOfOneWidth != null) ? ext.lower[tf].pctOfOneWidth / 100 : -Infinity;
+    const upExt = Math.max(upPct('5m'), upPct('15m'));
+    const dnExt = Math.max(dnPct('5m'), dnPct('15m'));
+    if (upExt >= widenFrac && close > mid && pat.bearishReversalCandle(c15, prior15)) {
+      return { openSide: 'bear', cover: held === 'bull', reason: `grind-top(1mUpExt ${(upExt * 100).toFixed(0)}%, bearish candle)` };
+    }
+    if (dnExt >= widenFrac && close < mid && pat.bullishReversalCandle(c15, prior15)) {
+      return { openSide: 'bull', cover: held === 'bear', reason: `grind-bottom(1mDnExt ${(dnExt * 100).toFixed(0)}%, bullish candle)` };
+    }
+  }
+
+  // (3) CANDLE-AT-CONFLUENCE reversal — a reversal candle right at a strong (≥3-TF) opposing cluster.
+  const ccRadius = cfg.candleConfluenceRadius != null ? cfg.candleConfluenceRadius : null;
+  if (ccRadius != null) {
+    if (close > mid && pat.bearishReversalCandle(c15, prior15)) {
+      const res = conf.strongestClusterNear(A, high, { radius: ccRadius, minTf: 3 });
+      if (res && res.mid >= close) return { openSide: 'bear', cover: held === 'bull', reason: `candle-top @cluster ${res.mid}` };
+    }
+    if (close < mid && pat.bullishReversalCandle(c15, prior15)) {
+      const sup = conf.strongestClusterNear(A, low, { radius: ccRadius, minTf: 3 });
+      if (sup && sup.mid <= close) return { openSide: 'bull', cover: held === 'bear', reason: `candle-bottom @cluster ${sup.mid}` };
+    }
+  }
+
+  // (4) ACTIVE COVERING — a held trend runs into a strong opposing confluence: cover all, go flat.
+  //     Default radius 8pt — calibrated on the 49 days: the single biggest win, improving BOTH floor
+  //     (+$9k) and terminal (+$4k) by locking the tent when price sits on overhead resistance (the
+  //     short spread is deep-ITM there, so the cover is cheap — "let the move fund the offset").
+  const acRadius = cfg.activeCoverRadius != null ? cfg.activeCoverRadius : 8;
+  if (acRadius != null && held !== 'none') {
+    if (held === 'bull' && close > mid) {
+      const res = conf.strongestClusterNear(A, close, { radius: acRadius, minTf: 3 });
+      if (res && res.mid > close && res.mid - close <= acRadius) return { openSide: null, cover: true, reason: `active-cover into resistance @${res.mid}` };
+    }
+    if (held === 'bear' && close < mid) {
+      const sup = conf.strongestClusterNear(A, close, { radius: acRadius, minTf: 3 });
+      if (sup && sup.mid < close && close - sup.mid <= acRadius) return { openSide: null, cover: true, reason: `active-cover into support @${sup.mid}` };
+    }
+  }
+
+  // (5) GATED TREND CONTINUATION. Trend = price AND 9EMA on the same side of the 15m midline.
   const up = close > mid && ema != null && ema >= mid;
   const down = close < mid && ema != null && ema <= mid;
   if (up && green && (held === 'bull' || held === 'none')) {
