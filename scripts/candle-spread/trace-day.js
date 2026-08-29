@@ -14,7 +14,9 @@ const eng = require('./backtest-v4');
 const conf = require('./confluence');
 
 const dateArg = process.argv[2];
-if (!dateArg) { console.error('usage: trace-day.js <date> [--dataDir D]'); process.exit(1); }
+if (!dateArg) { console.error('usage: trace-day.js <date> [--dataDir D] [--v5]'); process.exit(1); }
+const useV5 = process.argv.includes('--v5');
+const signalFn = useV5 ? require('./v5-signals').v5Signal : eng.v4Signal;
 const di = process.argv.indexOf('--dataDir');
 const dirs = di >= 0 ? [process.argv[di + 1]]
   : [eng.DATA_DIR, path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-v2')];
@@ -37,12 +39,12 @@ const hhmm = ms => new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America
 const f0 = n => (n == null ? ' -- ' : String(Math.round(n)));
 const f2 = n => (n == null ? ' -- ' : n.toFixed(2));
 
-console.log(`TRACE ${want}  (${path.basename(found.dir)})  — v4 defaults\n`);
+console.log(`TRACE ${want}  (${path.basename(found.dir)})  — ${useV5 ? 'v5' : 'v4'} defaults\n`);
 console.log('time   15m O/H/L/C            col  5m[lo..up]        botNorm topNorm  in?  1mExtUp/Dn   held  → decision                       action');
 console.log('-'.repeat(150));
 
-const v4fn = (A, p, ctx) => eng.v4Signal(A, p, { ...ctx, cfg: eng.CFG });
-const r = eng.runDay(found.d.bars, v4fn, evt => {
+const sigfn = (A, p, ctx) => signalFn(A, p, { ...ctx, cfg: useV5 ? {} : eng.CFG });
+const r = eng.runDay(found.d.bars, sigfn, evt => {
   const A = evt.A, c = A['15m'], c5 = A['5m'];
   const col = c.close >= c.open ? 'grn' : 'red';
   const bw5 = c5 && c5.bbupper != null ? c5.bbupper - c5.bblower : null;
