@@ -87,10 +87,33 @@ function wickBeyond(analysis, tf) {
   return { lowBeyond, highBeyond };
 }
 
+// How far a given price extreme (a candle's low/high) stabs BEYOND timeframe `tf`'s band — the
+// validated overextension trigger (calibration 2026-08-29: the wick reaching/exceeding the SLOWER
+// timeframe's band marks reversals, unlike the 1m-vs-5m band comparison).
+//   lowBeyond  > 0  ⇒ the low stabbed BELOW tf's lower band (bottom extreme)
+//   highBeyond > 0  ⇒ the high stabbed ABOVE tf's upper band (top extreme)
+function beyondBand(low, high, analysis, tf) {
+  const A = analysis && analysis[tf];
+  if (!A) return { lowBeyond: null, highBeyond: null };
+  return {
+    lowBeyond: (num(low) != null && num(A.bblower) != null) ? round2(A.bblower - low) : null,
+    highBeyond: (num(high) != null && num(A.bbupper) != null) ? round2(high - A.bbupper) : null,
+  };
+}
+
+// Strongest confluence cluster within ±radius of `price` (a support/resistance zone or retest
+// target). Returns the cluster with the most distinct timeframes (ties → most lines), or null.
+function strongestClusterNear(analysis, price, { radius = 25, gapPts = 12, minTf = 2 } = {}) {
+  const clusters = clusterLines(extractLines(analysis), gapPts)
+    .filter(c => c.tfCount >= minTf && Math.abs(c.mid - price) <= radius);
+  if (!clusters.length) return null;
+  return clusters.sort((a, b) => (b.tfCount - a.tfCount) || (b.count - a.count))[0];
+}
+
 // Convenience: full line-state at one candle (lines + clusters + extension), for inspection/logging.
 function lineState(analysis, { gapPts = 12 } = {}) {
   const lines = extractLines(analysis);
   return { lines, clusters: clusterLines(lines, gapPts), extension: bandExtension(analysis) };
 }
 
-module.exports = { TFS, extractLines, clusterLines, bandExtension, wickBeyond, lineState };
+module.exports = { TFS, extractLines, clusterLines, bandExtension, wickBeyond, beyondBand, strongestClusterNear, lineState };
