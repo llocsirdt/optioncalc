@@ -192,14 +192,16 @@ function fsUsage(p) {
   } catch (e) { return null; }
 }
 function dirStats(dir) {
+  // Always report the PATH (so /health confirms whether the run store is on the root disk vs /tmp
+  // — i.e. that the relocation took effect); files/sizeMB are null until the dir exists.
   try {
     const files = fs.readdirSync(dir);
     let bytes = 0, count = 0;
     for (const f of files) {
       try { const st = fs.statSync(dir + '/' + f); if (st.isFile()) { bytes += st.size; count++; } } catch (e) { /* skip */ }
     }
-    return { files: count, sizeMB: MB(bytes) };
-  } catch (e) { return null; }   // dir doesn't exist (e.g. local dev)
+    return { path: dir, files: count, sizeMB: MB(bytes) };
+  } catch (e) { return { path: dir, files: null, sizeMB: null }; }   // dir not created yet
 }
 function diskUsage() {
   const now = Date.now();
