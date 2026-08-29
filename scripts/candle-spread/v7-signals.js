@@ -40,6 +40,17 @@ function trendOf(c) {
   return { up: c.close > c.bbmiddle && c.ema >= c.bbmiddle, down: c.close < c.bbmiddle && c.ema <= c.bbmiddle };
 }
 
+// Centerline (BB midline / 20-SMA) CROSS: did this candle CLOSE across the midline vs the prior candle?
+// crossedDown = was at/above the midline last bar, now closed below (bearish); crossedUp = mirror.
+function crossedDown(cur, prv) {
+  if (!cur || !prv || cur.bbmiddle == null || prv.bbmiddle == null) return false;
+  return prv.close >= prv.bbmiddle && cur.close < cur.bbmiddle;
+}
+function crossedUp(cur, prv) {
+  if (!cur || !prv || cur.bbmiddle == null || prv.bbmiddle == null) return false;
+  return prv.close <= prv.bbmiddle && cur.close > cur.bbmiddle;
+}
+
 // ctx = { heldDir: 'bull'|'bear'|'none', cfg }.  Returns { openSide:'bull'|'bear'|null, cover:bool, reason }.
 function v7Signal(A, prior, ctx = {}) {
   const cfg = ctx.cfg || {};
@@ -100,10 +111,23 @@ function v7Signal(A, prior, ctx = {}) {
   }
 
   // (0b) BE WRONG (v7) — open the OPPOSITE side EARLY (before the full flip) on a confirmed opposite
-  //      reversal candle + breaking the prior high/low, WITHOUT covering the underwater side (hedge).
+  //      signal, WITHOUT covering the underwater side (hedge). Triggers (any fires):
+  //      • reversal candle + breaking the prior high/low
+  //      • ADDITIONAL (cfg.centerlineCross='5m'|'15m'|'both'|'either'): price CLOSING across the 5m
+  //        and/or 15m BB midline (20-SMA) against the held side — the user's "crossed a key support
+  //        band and closed on the other side" read.
   if (cfg.beWrong && anyHeld) {
     if (heldBull && lowerLow && pat.bearishReversalCandle(c15, prior15)) return { openSide: 'bear', coverSide: null, reason: 'be-wrong→bear (breaking lows + bearish candle)' };
     if (heldBear && higherHigh && pat.bullishReversalCandle(c15, prior15)) return { openSide: 'bull', coverSide: null, reason: 'be-wrong→bull (breaking highs + bullish candle)' };
+    const clx = cfg.centerlineCross;
+    if (clx) {
+      const p5 = prior && prior['5m'];
+      const dn5 = crossedDown(c5, p5), dn15 = crossedDown(c15, prior15), up5c = crossedUp(c5, p5), up15c = crossedUp(c15, prior15);
+      const bearCross = clx === '5m' ? dn5 : clx === '15m' ? dn15 : clx === 'both' ? (dn5 && dn15) : (dn5 || dn15);
+      const bullCross = clx === '5m' ? up5c : clx === '15m' ? up15c : clx === 'both' ? (up5c && up15c) : (up5c || up15c);
+      if (heldBull && bearCross) return { openSide: 'bear', coverSide: null, reason: `be-wrong→bear (centerline cross ${clx})` };
+      if (heldBear && bullCross) return { openSide: 'bull', coverSide: null, reason: `be-wrong→bull (centerline cross ${clx})` };
+    }
   }
 
   // (1) OVEREXTENSION REVERSAL — wick reaches the 5m band + closes back inside → open, covering the
