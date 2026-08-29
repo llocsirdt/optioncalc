@@ -16,7 +16,7 @@ const path = require('path');
 const bs = require('../../server/src/candle-spread/bs-pricer');
 const { v4Signal } = require('./v4-signals');
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data');
+const DATA_DIR = (() => { const i = process.argv.indexOf('--dataDir'); return i >= 0 ? process.argv[i + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data'); })();
 const TFS = ['1m', '5m', '15m', '60m'];
 
 // v4 cfg from the CLI: --revFrac X (shortcut) and/or --cfg key=val,key=val (general). Numeric values
