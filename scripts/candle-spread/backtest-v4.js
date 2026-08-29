@@ -89,6 +89,7 @@ function classicSignal(A, prior, ctx) {
 function runDay(bars, signalFn) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
+  let coversPlaced = 0;
 
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, S = A['15m'].close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
@@ -104,6 +105,7 @@ function runDay(bars, signalFn) {
         const markClose = legsMark(pc.legs, S, tau, iv);
         pos.coverLimit = roundTick(Math.min(pc.target, markClose + TICK));
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
+        pos.coverFillPrice = ext;   // price extreme at fill → how deep ITM the short strike was (Q3 credit-cover choice)
       }
     }
 
@@ -115,6 +117,7 @@ function runDay(bars, signalFn) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
         pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) };
+        coversPlaced++;
       }
       st.dir = 'none';
     }
@@ -129,28 +132,49 @@ function runDay(bars, signalFn) {
   // settle at day's final 15m close
   const settle = bars[bars.length - 1].analysis['15m'].close;
   let floor = 0, terminal = 0, opens = 0, filled = 0, naked = 0;
+  let openCap = 0, coverCap = 0;   // debit capital deployed (× multiplier); nothing closes intraday so this is the day's peak
+  const ledger = [];               // per-position detail (Q3 credit-cover + Q4 regime analysis)
   for (const pos of st.positions) {
     opens++;
+    openCap = round2(openCap + pos.limit * 100 * QTY);
     let value = legsPayoff(pos.legs, settle), cost = pos.limit;
-    if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; }
-    else naked++;
+    const rec = { side: pos.side, shortStrike: pos.shortStrike, openLimit: pos.limit, covered: false, coverLimit: null, coverITM: null };
+    if (pos.covered && pos.coverLegs) {
+      value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit;
+      coverCap = round2(coverCap + pos.coverLimit * 100 * QTY);
+      floor = round2(floor + (WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++;
+      rec.covered = true; rec.coverLimit = pos.coverLimit;
+      // how deep ITM the short strike was when the cover filled (bull: fillPrice-shortStrike, bear: mirror)
+      rec.coverITM = pos.coverFillPrice != null ? round2(pos.side === 'bull' ? pos.coverFillPrice - pos.shortStrike : pos.shortStrike - pos.coverFillPrice) : null;
+    } else naked++;
     terminal = round2(terminal + (value - cost) * 100 * QTY);
+    ledger.push(rec);
   }
-  return { floor, terminal, opens, filled, naked, settle };
+  // orders = spread tickets (each is 2 legs); contracts = option contracts traded (2 per spread).
+  const orders = opens + filled, contracts = orders * 2 * QTY, capital = round2(openCap + coverCap);
+  return { floor, terminal, opens, filled, naked, coversPlaced, settle, openCap, coverCap, capital, orders, contracts, ledger };
 }
 
-function main() {
-  const files = fs.readdirSync(DATA_DIR).filter(f => /^backtest-NDX-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
-  const rows = [];
+// Load each day-file in `dir` as { date, bars:[{dt,analysis}] } at 15m closes (shared by analysis scripts).
+function loadDays(dir = DATA_DIR) {
+  const files = fs.readdirSync(dir).filter(f => /^backtest-NDX-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const out = [];
   for (const f of files) {
-    const arr = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+    const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
     const bars = arr.filter(x => warm(x.analysis) && x.datetime != null)
       .filter(x => new Date(x.datetime).getMinutes() % 15 === 0)   // 15m closes
       .map(x => ({ dt: x.datetime, analysis: x.analysis }));
     if (bars.length < 5) continue;
-    const v4fn = (A, p, ctx) => v4Signal(A, p, { ...ctx, cfg: CFG });
-    rows.push({ date: etDay(bars[0].dt), v4: runDay(bars, v4fn), classic: runDay(bars, classicSignal) });
+    out.push({ date: etDay(bars[0].dt), bars });
   }
+  return out;
+}
+
+function main() {
+  const rows = loadDays().map(d => {
+    const v4fn = (A, p, ctx) => v4Signal(A, p, { ...ctx, cfg: CFG });
+    return { date: d.date, v4: runDay(d.bars, v4fn), classic: runDay(d.bars, classicSignal) };
+  });
 
   console.log(`v4 BACKTEST — ${rows.length} NDX days (15m closes, same tent+resting-fill+BS pricing; only the SIGNAL differs)`);
   console.log(`cfg: ${Object.keys(CFG).length ? JSON.stringify(CFG) : '(defaults)'}\n`);
@@ -171,4 +195,9 @@ function main() {
   console.log(`daily terminal wins:  v4 ${winsV4}  ·  classic ${winsClassic}`);
 }
 
-main();
+module.exports = {
+  runDay, buildOpen, coverLegs, legsPayoff, legsMark, classicSignal, loadDays,
+  WIDTH, INCR, TICK, QTY, DATA_DIR, CFG, v4Signal, bs, round2, roundTick, etDay,
+};
+
+if (require.main === module) main();
