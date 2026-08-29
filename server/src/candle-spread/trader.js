@@ -137,23 +137,35 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // 'fixed' = current tent | 'greedy' = best per-position candidate | 'joint' = basket
   // optimization). This is the seam the 3 shadow variants differ on; everything else is shared.
   if (coverSignal) {
-    const uncovered = st.positions.filter(p => p.filled && !p.covered);
+    // Exclude positions that already have a resting cover working (don't re-select them).
+    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover);
     const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
     for (const plan of plans) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
       const pos = uncovered.find(p => p.id === plan.positionId);
-      const placed = deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
-      pos.covered = true;
-      pos.coverId = nextId('cov');
-      pos.coverLimit = plan.limit;
-      pos.coverLegs = plan.legs;      // kept for EOD terminal-settlement P/L + offline replay
-      pos.coverStatus = placed.status;
-      pos.coverGeometry = plan.geometry;
-      // Running LOCKED P&L uses the candidate's guaranteed floor (width − open − cover),
-      // valid for every candidate since value >= width everywhere. Retained upside
-      // (plan.peakExtra) is tracked separately, not counted in the locked figure.
-      st.realizedPnl = round2(st.realizedPnl + plan.floor);
-      decisions.push({ action: 'cover', positionId: pos.id, coverId: pos.coverId, legs: plan.legs, mark: plan.mark, limit: plan.limit, geometry: plan.geometry, longStrike: plan.longStrike, peakExtra: plan.peakExtra, lockedFloor: plan.floor });
+      if (cfg.coverFillModel === 'resting') {
+        // RESTING model: place the cover as a working order at the ideal target (= width − openCost)
+        // — DON'T book it or lock the floor yet. resolveRestingCovers (below, run each candle) fills
+        // it when the cover's real mark reaches the target: cross cheap when already below (deep-ITM
+        // lock), else fill at the resting target; unfilled by EOD → the position settles naked.
+        pos.pendingCover = { legs: plan.legs, target: round2(cfg.spreadWidth - pos.limit), geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
+        pos.coverStatus = 'resting';
+        decisions.push({ action: 'cover-rest', positionId: pos.id, target: pos.pendingCover.target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike });
+      } else {
+        // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
+        const placed = deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
+        pos.covered = true;
+        pos.coverId = nextId('cov');
+        pos.coverLimit = plan.limit;
+        pos.coverLegs = plan.legs;      // kept for EOD terminal-settlement P/L + offline replay
+        pos.coverStatus = placed.status;
+        pos.coverGeometry = plan.geometry;
+        // Running LOCKED P&L uses the candidate's guaranteed floor (width − open − cover),
+        // valid for every candidate since value >= width everywhere. Retained upside
+        // (plan.peakExtra) is tracked separately, not counted in the locked figure.
+        st.realizedPnl = round2(st.realizedPnl + plan.floor);
+        decisions.push({ action: 'cover', positionId: pos.id, coverId: pos.coverId, legs: plan.legs, mark: plan.mark, limit: plan.limit, geometry: plan.geometry, longStrike: plan.longStrike, peakExtra: plan.peakExtra, lockedFloor: plan.floor });
+      }
     }
     // Cover-only reversal leaves us flat unless step 4 opens a new side below.
     st.direction = 'none';
@@ -197,6 +209,11 @@ function processCandleClose(record, candle, priorCandle, deps) {
   // PLACEHOLDER: coverTiming === 'each-candle' — cover the prior uncovered position on every
   // candle (not just reversals). Exact semantics (which side, continuing vs reversing) TBD.
   // if (cfg.coverTiming === 'each-candle') { ... }
+
+  // Resolve any RESTING cover orders against THIS candle's chain (fills a working cover once its real
+  // mark reaches its target). Runs after the cover/open steps so a cover placed this candle can also
+  // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
+  if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions);
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
@@ -432,6 +449,43 @@ function computeTerminalPnl(state, cfg, settle) {
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }
+
+// Net-debit mark of a cover leg-set from the CURRENT chain (null if any leg is unquoted).
+function coverMarkNow(legs, getLeg) {
+  let v = 0;
+  for (const l of legs) {
+    const q = getLeg(l.type, l.strike);
+    if (!q || q.mid == null) return null;
+    v += (l.side === 'long' ? 1 : -1) * q.mid;
+  }
+  return round2(v);
+}
+
+// RESTING-cover fill model (see the cover step): a working cover fills when its real mark reaches
+// its target (= width − openCost). Fill price = min(target, mark + tick) → cross cheap when the
+// cover is already below target (deep-ITM lock), else fill at the resting target. Books the locked
+// floor (width − open − fill) at the actual fill price. Live analog of the backtest's two-mode fill;
+// here the fill check uses the real per-candle chain mark instead of the pricer/wick.
+function resolveRestingCovers(st, cfg, getLeg, decisions) {
+  const tick = cfg.tickIncrement;
+  for (const pos of st.positions) {
+    if (!pos.filled || !pos.pendingCover) continue;
+    const pc = pos.pendingCover;
+    const mark = coverMarkNow(pc.legs, getLeg);
+    if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
+    const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
+    pos.covered = true;
+    pos.coverId = nextId('cov');
+    pos.coverLegs = pc.legs;          // kept for EOD terminal-settlement P/L
+    pos.coverLimit = fill;
+    pos.coverGeometry = pc.geometry;
+    pos.coverStatus = 'filled';
+    const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
+    st.realizedPnl = round2(st.realizedPnl + floor);
+    pos.pendingCover = null;
+    decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark, target: pc.target, geometry: pc.geometry, lockedFloor: floor });
+  }
+}
 
 module.exports = {
   processCandleClose,

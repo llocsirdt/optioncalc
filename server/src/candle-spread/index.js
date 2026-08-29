@@ -34,11 +34,14 @@ const BASE_RUNS = [
 //                   so v3 vs v1/v2 is an apples-to-apples (all mark-priced) geometry comparison.
 //   v1 greedy     = phase-1 best-per-position candidate cover (skew-aware pricing).
 //   v2 joint      = phase-2 joint basket optimization over the covering stack.
+// coverFillModel: 'resting' = honest two-mode fill (cover works at target = width−open, fills when
+// its real mark reaches it; else settles naked). v0 stays on the default assume-fill as the
+// optimistic ceiling/control. See trader.resolveRestingCovers.
 const VARIANTS = [
   { variant: 'v0', variantLabel: 'fixed-cap',  coverSelector: 'fixed' },
-  { variant: 'v3', variantLabel: 'fixed-mark', coverSelector: 'fixed-mark' },
-  { variant: 'v1', variantLabel: 'greedy',     coverSelector: 'greedy' },
-  { variant: 'v2', variantLabel: 'joint',      coverSelector: 'joint' }
+  { variant: 'v3', variantLabel: 'fixed-mark', coverSelector: 'fixed-mark', coverFillModel: 'resting' },
+  { variant: 'v1', variantLabel: 'greedy',     coverSelector: 'greedy',     coverFillModel: 'resting' },
+  { variant: 'v2', variantLabel: 'joint',      coverSelector: 'joint',      coverFillModel: 'resting' }
 ];
 
 // Expand base runs × variants into the concrete run list.
