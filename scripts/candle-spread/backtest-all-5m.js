@@ -15,34 +15,40 @@ const eng = require('./backtest-v4');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { v5Signal } = require('./v5-signals');
 const { v6Signal } = require('./v6-signals');
+const { v7Signal } = require('./v7-signals');
 
 const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : eng.DATA_DIR;
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
 
-// act only at 15m closes (for the pre-5m signals); v6 acts every 5m.
+// act only at 15m closes (for the pre-5m signals); v6/v7 act every 5m. Each variant = { fn, opts }.
 const at15 = fn => (A, p, ctx) => ctx.isFifteen === false ? { openSide: null, cover: false } : fn(A, p, { ...ctx, cfg: {} });
 const variants = {
-  classic: at15((A, p, ctx) => eng.classicSignal(A, p, ctx)),
-  v4: at15((A, p, ctx) => eng.v4Signal(A, p, ctx)),
-  v5: at15((A, p, ctx) => v5Signal(A, p, ctx)),
-  'v6 (5m)': (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: { fiveMin: true } }),
+  classic: { fn: at15((A, p, ctx) => eng.classicSignal(A, p, ctx)) },
+  v4: { fn: at15((A, p, ctx) => eng.v4Signal(A, p, ctx)) },
+  v5: { fn: at15((A, p, ctx) => v5Signal(A, p, ctx)) },
+  'v6 (5m)': { fn: (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: { fiveMin: true } }) },
+  // v7 "be wrong" — the bidirectional variant, kept TRACKED (not deleted): its uncapped ceiling is
+  // the high-return / high-drawdown target we're developing toward (~$262k / big DD). SHELVED as a
+  // default (loses risk-adjusted to v6) but stays in the table so we never lose sight of it.
+  'v7 be-wrong': { fn: (A, p, ctx) => v7Signal(A, p, { ...ctx, cfg: { fiveMin: true, beWrong: true } }), opts: { bidirectional: true } },
 };
 
 const days = load5mDays(DIR);
-console.log(`APPLES-TO-APPLES — ${days.length} NDX days, one 5m engine (realistic per-5m fills), QTY=1\n`);
-console.log('variant'.padEnd(12) + 'floor'.padEnd(13) + 'terminal'.padEnd(13) + 'avg/day'.padEnd(11) + 'maxDD'.padEnd(12) + 'worst day'.padEnd(12) + 'neg days');
-console.log('-'.repeat(82));
-for (const [name, fn] of Object.entries(variants)) {
+console.log(`APPLES-TO-APPLES — ${days.length} NDX days, one 5m engine (realistic per-5m fills), QTY=1, uncapped\n`);
+console.log('variant'.padEnd(14) + 'floor'.padEnd(13) + 'terminal'.padEnd(13) + 'avg/day'.padEnd(11) + 'maxDD'.padEnd(12) + 'worst day'.padEnd(12) + 'neg days');
+console.log('-'.repeat(84));
+for (const [name, v] of Object.entries(variants)) {
   let floor = 0, terminal = 0, cum = 0, peak = 0, mdd = 0, worst = Infinity, neg = 0;
   for (const d of days) {
-    const r = runDay5m(d.bars, fn);
+    const r = runDay5m(d.bars, v.fn, v.opts || {});
     floor += r.floor; terminal += r.terminal;
     cum += r.terminal; peak = Math.max(peak, cum); mdd = Math.max(mdd, peak - cum);
     worst = Math.min(worst, r.terminal); if (r.terminal < 0) neg++;
   }
-  console.log(name.padEnd(12) + usd(floor).padEnd(13) + usd(terminal).padEnd(13) +
+  console.log(name.padEnd(14) + usd(floor).padEnd(13) + usd(terminal).padEnd(13) +
     usd(terminal / days.length).padEnd(11) + usd(mdd).padEnd(12) + usd(worst).padEnd(12) + `${neg}/${days.length}`);
 }
-console.log('-'.repeat(82));
+console.log('-'.repeat(84));
 console.log('floor = guaranteed locked; terminal = actual at settle; maxDD = peak-to-trough of cumulative terminal.');
+console.log('NOTE: v7 be-wrong is the high-ceiling target (uncapped); shelved as default but tracked. Risk layers (v7 cap, v8 two-cap) are separate — see backtest-v7-5m / backtest-v8-5m.');
