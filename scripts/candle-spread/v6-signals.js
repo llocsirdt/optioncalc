@@ -70,6 +70,21 @@ function v6Signal(A, prior, ctx = {}) {
   const higherHigh = prior15 && prior15.high != null && high > prior15.high;
   const lowerLow = prior15 && prior15.low != null && low < prior15.low;
 
+  // (0a) FAST 5m COVER — cover-and-go-flat when the held side loses the 5m 9EMA (support/resistance).
+  //      FINDING (87d): HURTS badly (ema term $105k, trend $79k vs v5 $156k) and even lowers floor —
+  //      the 5m 9EMA cross is noise-frequent, so it covers immediately after opening and never lets a
+  //      position develop. ROOT CAUSE: at a 15m close the snapshot holds only the ONE 5m candle aligned
+  //      with that close — the other 2 of every 3 5m candles (and any mid-window 5m signal) are invisible.
+  //      So no 15m-cadence rule can truly "watch the 5m". OFF by default; kept for reference. → 5m-step harness.
+  const fastCover5m = cfg.fastCover5m;
+  const e5 = c5 && c5.ema;
+  if (fastCover5m && held !== 'none') {
+    const lostBull = fastCover5m === 'trend' ? t5.down : (e5 != null && c5.close < e5);
+    const lostBear = fastCover5m === 'trend' ? t5.up : (e5 != null && c5.close > e5);
+    if (held === 'bull' && lostBull) return { openSide: null, cover: true, reason: `fast-cover (5m ${fastCover5m === 'trend' ? 'turned down' : 'lost 9EMA'})` };
+    if (held === 'bear' && lostBear) return { openSide: null, cover: true, reason: `fast-cover (5m ${fastCover5m === 'trend' ? 'turned up' : 'reclaimed 9EMA'})` };
+  }
+
   // (0) TREND-FLIP COVER — when we hold AGAINST a now-confirmed opposite structural trend, cover the
   //     whole book (and take the new side) WITHOUT waiting for an opposite overextension. This is the
   //     exit v4 lacked (3/26 stuck-bull, 8/14 bears-into-a-rising-close).
