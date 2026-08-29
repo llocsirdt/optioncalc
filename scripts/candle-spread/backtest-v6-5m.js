@@ -59,6 +59,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
+  let capBlocked = 0, capBlockedTrend = 0;   // diagnostic: opens the cap refused (and how many were same-dir stacking)
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
@@ -86,6 +87,9 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (uncoveredRisk() + o.limit * 100 * QTY <= riskCap) {   // "be patient": pause opens over the cap
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
         st.dir = sig.openSide;
+      } else {
+        capBlocked++;   // cap refused this open; was it a same-direction (trend-stacking) add?
+        if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
     }
   }
@@ -96,7 +100,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
     terminal = round2(terminal + (value - cost) * 100 * QTY);
   }
-  return { floor, terminal, opens, filled, naked, settle };
+  return { floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend };
 }
 
 // frozen v5 on the 15m-close subset of the same data (via the frozen engine)
