@@ -187,5 +187,9 @@ Thumbs.db
 # Local cache of fetched candle-spread runs (durability backup; may be large)
 candle-spread-archive/
 
-# Signal-lab historical dataset (fetched from Schwab; large, regenerable)
-signal-lab-data/
+# Signal-lab data fetched from Schwab. The raw 1m candles (raw-1m/) are the IRREPLACEABLE master —
+# Schwab serves 1m only ~48 days back, so aged-out dates can't be re-fetched → keep them in git for
+# safekeeping. Everything else under signal-lab-data (derived raw-5m/15m, built datasets, outputs)
+# is regenerable from raw-1m + code → stays ignored.
+signal-lab-data/*
+!signal-lab-data/raw-1m/
