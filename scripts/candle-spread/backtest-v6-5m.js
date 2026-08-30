@@ -72,18 +72,20 @@ function runDay5m(bars, signalFn, opts = {}) {
     const rng = hi - lo; if (!(rng > 0)) return 1;
     return Math.abs(bars[i].analysis['5m'].close - bars[j0].analysis['5m'].close) / rng;
   };
+  // GEOMETRY (opts.geo) — spread WIDTH + strike selection + tent covers. Default = the $20 ATM geometry.
+  const G = { WIDTH: (opts.geo && opts.geo.WIDTH) || WIDTH, buildOpen: (opts.geo && opts.geo.buildOpen) || buildOpen, coverLegs: (opts.geo && opts.geo.coverLegs) || coverLegs };
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
   let capBlocked = 0, capBlockedTrend = 0;   // diagnostic: opens the cap refused (and how many were same-dir stacking)
   for (let i = 0; i < bars.length; i++) {
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
-    const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * WIDTH;
+    const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
     if (pFrac != null) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
-        if (legsMark(pos.legs, S, tau, iv) >= pFrac * WIDTH) pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) };
+        if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit) };
       }
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
@@ -102,12 +104,12 @@ function runDay5m(bars, signalFn, opts = {}) {
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
     if (coverSet.length) {
-      for (const pos of st.positions) { if (pos.covered || pos.pendingCover || !coverSet.includes(pos.side)) continue; pos.pendingCover = { legs: coverLegs(pos.side, pos.shortStrike), target: round2(WIDTH - pos.limit) }; }
+      for (const pos of st.positions) { if (pos.covered || pos.pendingCover || !coverSet.includes(pos.side)) continue; pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit) }; }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
     if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
-      const o = buildOpen(sig.openSide, S, tau, iv);
+      const o = G.buildOpen(sig.openSide, S, tau, iv);
       const nd = o.limit * 100 * QTY;
       // soft cap counts only AT-RISK debit (uncovered & NOT deep-ITM); hard cap + legacy count ALL uncovered.
       const totalUncov = uncoveredRisk();
@@ -130,7 +132,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let floor = 0, terminal = 0, opens = 0, filled = 0, naked = 0;
   for (const pos of st.positions) {
     opens++; let value = legsPayoff(pos.legs, settle), cost = pos.limit;
-    if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
+    if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (G.WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
     terminal = round2(terminal + (value - cost) * 100 * QTY);
   }
   return { floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend };
