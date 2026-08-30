@@ -12,6 +12,7 @@
 const fs = require('fs');
 const eng = require('./backtest-v4');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
+const { runDay9 } = require('./backtest-v9-5m');
 const { v5Signal } = require('./v5-signals');
 const { v6Signal } = require('./v6-signals');
 const { v7Signal } = require('./v7-signals');
@@ -22,14 +23,16 @@ const oi = process.argv.indexOf('--out');
 const OUT = oi >= 0 ? process.argv[oi + 1] : 'strategy-per-date-comparison.csv';
 
 const at15 = fn => (A, p, ctx) => ctx.isFifteen === false ? { openSide: null, cover: false } : fn(A, p, { ...ctx, cfg: {} });
-// column order + how each variant runs
+// each variant: name + a run(d) → { term, floor, opens, filled }. v9 uses its own engine (runDay9).
+const norm = r => ({ term: r.terminal, floor: r.floor || 0, opens: r.opens, filled: r.filled || 0 });
 const variants = [
-  ['classic', { fn: at15((A, p, c) => eng.classicSignal(A, p, c)) }],
-  ['v4', { fn: at15((A, p, c) => eng.v4Signal(A, p, c)) }],
-  ['v5', { fn: at15((A, p, c) => v5Signal(A, p, c)) }],
-  ['v6', { fn: (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }) }],
-  ['v7-be-wrong', { fn: (A, p, c) => v7Signal(A, p, { ...c, cfg: { fiveMin: true, beWrong: true } }), opts: { bidirectional: true } }],
-  ['v8-cap(soft3k/hard9k)', { fn: (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), opts: { softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true } }],
+  ['classic', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.classicSignal(A, p, c)), {}))],
+  ['v4', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.v4Signal(A, p, c)), {}))],
+  ['v5', d => norm(runDay5m(d.bars, at15((A, p, c) => v5Signal(A, p, c)), {}))],
+  ['v6', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), {}))],
+  ['v7-be-wrong', d => norm(runDay5m(d.bars, (A, p, c) => v7Signal(A, p, { ...c, cfg: { fiveMin: true, beWrong: true } }), { bidirectional: true }))],
+  ['v8-cap(soft3k/hard9k)', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), { softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true }))],
+  ['v9-meanrev(imb5)', d => norm(runDay9(d.bars, { maxImbalance: 5 }))],
 ];
 
 const days = load5mDays(DIR);
@@ -37,29 +40,34 @@ const ymd = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/
 
 // per-variant per-day results
 const results = {};   // name -> [{date, term, floor, opens, filled}]
-for (const [name, v] of variants) {
-  results[name] = days.map(d => {
-    const r = runDay5m(d.bars, v.fn, v.opts || {});
-    return { date: ymd(d.bars[0].dt), term: r.terminal, floor: r.floor, opens: r.opens, filled: r.filled };
-  });
+for (const [name, run] of variants) {
+  results[name] = days.map(d => ({ date: ymd(d.bars[0].dt), ...run(d) }));
 }
+// ALL-PARALLEL = sum across every strategy for each day (winners offset losers).
+const stratNames = variants.map(([n]) => n);
+results['ALL-PARALLEL(sum)'] = days.map((d, i) => {
+  let term = 0, floor = 0, opens = 0, filled = 0;
+  for (const n of stratNames) { term += results[n][i].term; floor += results[n][i].floor; opens += results[n][i].opens; filled += results[n][i].filled; }
+  return { date: ymd(d.bars[0].dt), term, floor, opens, filled };
+});
 
-// summary stats per variant (incl. the max-drawdown STRETCH)
+// summary stats per column (incl. the max-drawdown STRETCH + best/worst DATES)
 function summarize(rows) {
-  let total = 0, floor = 0, best = -Infinity, worst = Infinity;
+  let total = 0, floor = 0, best = -Infinity, worst = Infinity, bestDate = '', worstDate = '';
   let cum = 0, peak = 0, peakDate = rows[0].date, mdd = 0, ddPeakDate = '', ddTroughDate = '';
   for (const r of rows) {
-    total += r.term; floor += r.floor; best = Math.max(best, r.term); worst = Math.min(worst, r.term);
+    total += r.term; floor += r.floor;
+    if (r.term > best) { best = r.term; bestDate = r.date; }
+    if (r.term < worst) { worst = r.term; worstDate = r.date; }
     cum += r.term;
     if (cum > peak) { peak = cum; peakDate = r.date; }
     if (peak - cum > mdd) { mdd = peak - cum; ddPeakDate = peakDate; ddTroughDate = r.date; }
   }
-  return { total, floor, avg: total / rows.length, best, worst, mdd, ddPeakDate, ddTroughDate };
+  return { total, floor, avg: total / rows.length, best, bestDate, worst, worstDate, mdd, ddPeakDate, ddTroughDate };
 }
-const sums = Object.fromEntries(variants.map(([n]) => [n, summarize(results[n])]));
-
 // --- build CSV ---
-const names = variants.map(([n]) => n);
+const names = [...stratNames, 'ALL-PARALLEL(sum)'];
+const sums = Object.fromEntries(names.map(n => [n, summarize(results[n])]));
 const R2 = n => Math.round(n);
 const lines = [];
 lines.push(['', ...names].join(','));   // header (metric col blank, then variant names)
@@ -67,8 +75,8 @@ const sRow = (label, fn) => lines.push([label, ...names.map(n => fn(sums[n]))].j
 sRow('TOTAL terminal $', s => R2(s.total));
 sRow('TOTAL floor (locked) $', s => R2(s.floor));
 sRow('AVG terminal/day $', s => R2(s.avg));
-sRow('BEST single day $', s => R2(s.best));
-sRow('WORST single day $', s => R2(s.worst));
+sRow('BEST single day $ (date)', s => `"${R2(s.best)} (${s.bestDate})"`);
+sRow('WORST single day $ (date)', s => `"${R2(s.worst)} (${s.worstDate})"`);
 sRow('MAX DRAWDOWN (peak-to-trough) $', s => R2(s.mdd));
 sRow('  drawdown span (peak->trough)', s => `"${s.ddPeakDate}..${s.ddTroughDate}"`);
 lines.push('');   // blank separator
