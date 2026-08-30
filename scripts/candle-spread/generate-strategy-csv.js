@@ -13,6 +13,7 @@ const fs = require('fs');
 const eng = require('./backtest-v4');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { runDay9 } = require('./backtest-v9-5m');
+const { makeGeo } = require('./backtest-width');
 const { v5Signal } = require('./v5-signals');
 const { v6Signal } = require('./v6-signals');
 const { v7Signal } = require('./v7-signals');
@@ -21,17 +22,22 @@ const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : eng.DATA_DIR;
 const oi = process.argv.indexOf('--out');
 const OUT = oi >= 0 ? process.argv[oi + 1] : 'strategy-per-date-comparison.csv';
+// --geo "width,shift" (e.g. "40,20" = $40 spreads, short-ATM) applies a wider geometry to all
+// runDay5m variants (v9 stays $20 — different engine). Default: the $20 ATM geometry.
+const gi = process.argv.indexOf('--geo');
+const GEO = gi >= 0 ? (() => { const [w, s] = process.argv[gi + 1].split(',').map(Number); return makeGeo({ width: w, shift: s || 0 }); })() : null;
+const GO = GEO ? { geo: GEO } : {};
 
 const at15 = fn => (A, p, ctx) => ctx.isFifteen === false ? { openSide: null, cover: false } : fn(A, p, { ...ctx, cfg: {} });
 // each variant: name + a run(d) → { term, floor, opens, filled }. v9 uses its own engine (runDay9).
 const norm = r => ({ term: r.terminal, floor: r.floor || 0, opens: r.opens, filled: r.filled || 0 });
 const variants = [
-  ['classic', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.classicSignal(A, p, c)), {}))],
-  ['v4', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.v4Signal(A, p, c)), {}))],
-  ['v5', d => norm(runDay5m(d.bars, at15((A, p, c) => v5Signal(A, p, c)), {}))],
-  ['v6', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), {}))],
-  ['v7-be-wrong', d => norm(runDay5m(d.bars, (A, p, c) => v7Signal(A, p, { ...c, cfg: { fiveMin: true, beWrong: true } }), { bidirectional: true }))],
-  ['v8-cap(soft3k/hard9k)', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), { softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true }))],
+  ['classic', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.classicSignal(A, p, c)), { ...GO }))],
+  ['v4', d => norm(runDay5m(d.bars, at15((A, p, c) => eng.v4Signal(A, p, c)), { ...GO }))],
+  ['v5', d => norm(runDay5m(d.bars, at15((A, p, c) => v5Signal(A, p, c)), { ...GO }))],
+  ['v6', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), { ...GO }))],
+  ['v7-be-wrong', d => norm(runDay5m(d.bars, (A, p, c) => v7Signal(A, p, { ...c, cfg: { fiveMin: true, beWrong: true } }), { bidirectional: true, ...GO }))],
+  ['v8-cap(soft3k/hard9k)', d => norm(runDay5m(d.bars, (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } }), { softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...GO }))],
   ['v9-meanrev(imb5)', d => norm(runDay9(d.bars, { maxImbalance: 5 }))],
 ];
 

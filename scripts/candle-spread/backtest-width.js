@@ -47,22 +47,26 @@ function avgDebit(geo) {   // sample the ATM open debit across days (first bar o
 }
 function stat(arr) { let t = 0, cum = 0, pk = 0, dd = 0, w = 1e9; for (const x of arr) { t += x; cum += x; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); w = Math.min(w, x); } return { t, dd, w, ret: dd > 0 ? t / dd : 0 }; }
 
-const geos = [
-  ['$20 ATM (baseline)', makeGeo({ width: 20, shift: 0, capFrac: 0.525 })],
-  ['$40 ATM-centered', makeGeo({ width: 40, shift: 0 })],
-  ['$40 short-slightly-ITM (+10)', makeGeo({ width: 40, shift: 10 })],
-  ['$40 short-ATM (+20)', makeGeo({ width: 40, shift: 20 })],
-];
-console.log(`SPREAD-WIDTH EXPERIMENT — ${days.length} days, 5m engine, QTY=1\n`);
-for (const sig of [['v6', v6], ['be-wrong', bw]]) {
-  console.log(`=== ${sig[0]} ===`);
-  console.log('geometry'.padEnd(30) + 'avgDebit'.padEnd(18) + 'total'.padEnd(13) + 'maxDD'.padEnd(12) + 'worstDay'.padEnd(12) + 'ret/maxDD');
-  for (const [label, geo] of geos) {
-    const opts = { geo };
-    if (sig[0] === 'be-wrong') opts.bidirectional = true;
-    const arr = days.map(d => runDay5m(d.bars, sig[1], opts).terminal), s = stat(arr);
-    const dbt = avgDebit(geo);
-    console.log(label.padEnd(30) + `$${dbt.toFixed(1)} (${Math.round(dbt / geo.WIDTH * 100)}% of $${geo.WIDTH})`.padEnd(18) + usd(s.t).padEnd(13) + usd(s.dd).padEnd(12) + usd(s.w).padEnd(12) + s.ret.toFixed(1));
+module.exports = { makeGeo };
+
+if (require.main === module) {
+  const geos = [
+    ['$20 ATM (baseline)', makeGeo({ width: 20, shift: 0, capFrac: 0.525 })],
+    ['$40 ATM-centered', makeGeo({ width: 40, shift: 0 })],
+    ['$40 short-slightly-ITM (+10)', makeGeo({ width: 40, shift: 10 })],
+    ['$40 short-ATM (+20)', makeGeo({ width: 40, shift: 20 })],
+  ];
+  console.log(`SPREAD-WIDTH EXPERIMENT — ${days.length} days, 5m engine, QTY=1\n`);
+  for (const sig of [['v6', v6], ['be-wrong', bw]]) {
+    console.log(`=== ${sig[0]} ===`);
+    console.log('geometry'.padEnd(30) + 'avgDebit'.padEnd(18) + 'total'.padEnd(13) + 'maxDD'.padEnd(12) + 'worstDay'.padEnd(12) + 'ret/maxDD');
+    for (const [label, geo] of geos) {
+      const opts = { geo };
+      if (sig[0] === 'be-wrong') opts.bidirectional = true;
+      const arr = days.map(d => runDay5m(d.bars, sig[1], opts).terminal), s = stat(arr);
+      const dbt = avgDebit(geo);
+      console.log(label.padEnd(30) + `$${dbt.toFixed(1)} (${Math.round(dbt / geo.WIDTH * 100)}% of $${geo.WIDTH})`.padEnd(18) + usd(s.t).padEnd(13) + usd(s.dd).padEnd(12) + usd(s.w).padEnd(12) + s.ret.toFixed(1));
+    }
+    console.log();
   }
-  console.log();
 }
