@@ -1325,11 +1325,16 @@ function getCachedSymbols() {
 }
 
 // Deep raw 1m candles for the candle-spread analysis-builder (v4-v9 live signals). Fetches ~`days`
-// days of 1-minute bars via Schwab priceHistory, drops zero candles, and filters to RTH (9:30-16:00
-// ET) by default. RTH-filtering matters for FUTURES too (e.g. /NQ): the strategy trades NDX 0DTE
-// options during RTH and the NQ backtest datasets are RTH-only (390 bars/day), so a 24h NQ series
-// here would give different 15m/60m bands than the backtest → the live signal must see the SAME RTH
-// window. Returns oldest-first, untruncated (unlike analyzeCandles, which caps at CANDLE_LIMIT).
+// days of 1-minute bars via Schwab priceHistory, drops zero candles, and OPTIONALLY filters to RTH
+// (9:30-16:00 ET) per the caller's {rth}. Returns oldest-first, untruncated (unlike analyzeCandles,
+// which caps at CANDLE_LIMIT).
+//
+// HOURS — the caller decides. The LIVE NQ signal uses 24h (rth:false, driven by the run's signalRth)
+// because v6's 762-day out-of-sample validation was on 24h (ETH+RTH) NQ: the overnight session is
+// part of the multi-timeframe bands and acts as real S/R. RTH filtering stays available for
+// index/RTH-only uses. (Trading still fires RTH-only via the scheduler and executes on NDX, whatever
+// hours the signal uses.) NOTE: a separate ~30-day Schwab NQ cache happens to be RTH-only — that is
+// NOT the reference; the 24h Kaggle set is.
 const RTH_INDEX_SYMBOLS = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
 async function getRaw1m(symbol, { days = 5, endDate = Date.now(), rth = true } = {}) {
   const bare = symbol.replace(/^\$/, '');
