@@ -1,5 +1,5 @@
 #!/bin/bash
-# Recurring 1m (+5m/15m) NDX capture for the growing v4 out-of-sample dataset.
+# Recurring capture: NDX 1m/5m/15m (out-of-sample dataset) + /NQ 1m 24h (the live signal instrument).
 # Schwab only serves 1m data ~48 days back, so this must run at least every few weeks to avoid gaps
 # (scheduled daily on weekdays via com.optioncalc.ndx-capture LaunchAgent). fetch-history.js only
 # writes NEW day-files, so re-runs are cheap/idempotent. Requires a live SCHWAB_REFRESH_TOKEN in .env
@@ -28,6 +28,11 @@ done
 
 echo "--- rebuild v4 analysis dataset ---" >>"$LOG"
 "$NODE" scripts/candle-spread/build-analysis-dataset.js NDX >>"$LOG" 2>&1
+
+# /NQ 1m for the LIVE signal (v4-v9). MUST be the futures form (leading slash) so it's fetched 24h
+# (ETH+RTH) — the signal bands require the full Globex session, NOT RTH. See getRaw1m / fetch-history.
+echo "--- fetch /NQ 1m (24h signal data) ---" >>"$LOG"
+"$NODE" scripts/signal-lab/fetch-history.js /NQ --freq 1 --days 45 >>"$LOG" 2>&1
 
 echo "===== $(date '+%F %T %Z') capture done =====" >>"$LOG"
 # Keep the log from growing without bound (last ~2000 lines).
