@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const eng = require('./backtest-v4');                         // geometry + pricing + frozen v5 runner
+const trader = require('../../server/src/candle-spread/trader'); // server COVER selectors (pure; BS getLeg)
 const { v6Signal } = require('./v6-signals');
 const { v5Signal } = require('./v5-signals');
 const bs = eng.bs, { WIDTH, INCR, TICK, QTY } = eng;
@@ -70,6 +71,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   // OFF = the legacy 24h-action behavior (the pure-NQ signal validation).
   const rthOnly = opts.rthActionOnly === true;
   const inRth = ms => { const m = etMinute(ms); return m >= 575 && m <= 955; };   // 9:35 .. 15:55 action window
+  // coverSelector (v1/v2/v3): pick the cover GEOMETRY via the server's pure selectors (greedy/joint/
+  // fixed-mark) using a BS getLeg, instead of the fixed tent. undefined = fixed tent (v0/default).
+  const coverSel = opts.coverSelector || null;
   const dirWindow = opts.dirWindow || 12;   // rolling-directionality window (5m bars); ~1h at 12
   // directionality at bar i = |net move over the window| / (window high-low range). ~1 = trending, ~0 = chop.
   const directionalityAt = i => {
@@ -114,7 +118,20 @@ function runDay5m(bars, signalFn, opts = {}) {
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
     if (coverSet.length) {
-      for (const pos of st.positions) { if (pos.covered || pos.pendingCover || !coverSet.includes(pos.side)) continue; pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit) }; }
+      const toCover = st.positions.filter(p => !p.covered && !p.pendingCover && coverSet.includes(p.side));
+      let plans = null;
+      if (coverSel) {   // v1/v2/v3: reuse the server cover selectors with a BS getLeg (single source of truth)
+        const getLeg = (type, k) => ({ mid: bs.bsPrice(type, S, k, tau, iv), symbol: `x${type}${k}`, bid: 0, ask: 0 });
+        const cfgLike = { spreadWidth: G.WIDTH, strikeIncrement: INCR, tickIncrement: TICK, quantity: QTY, coverSelector: coverSel, coverKCap: 5 };
+        const withId = toCover.map((p, k) => ({ ...p, id: 'c' + k, quantity: QTY }));
+        plans = trader.selectCovers(withId, cfgLike, getLeg, { underlying: S, reversedDir: sig.openSide || (coverSet[0] === 'bull' ? 'bear' : 'bull'), bbOverride: false });
+      }
+      for (let k = 0; k < toCover.length; k++) {
+        const pos = toCover[k];
+        let legs = G.coverLegs(pos.side, pos.shortStrike);
+        if (plans) { const pl = plans.find(x => x.positionId === 'c' + k); if (pl && !pl.error && pl.legs) legs = pl.legs; }
+        pos.pendingCover = { legs, target: round2(G.WIDTH - pos.limit) };
+      }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;

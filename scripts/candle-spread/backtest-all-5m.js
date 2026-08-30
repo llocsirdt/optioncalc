@@ -35,13 +35,18 @@ const variants = {
 };
 
 const days = load5mDays(DIR);
-console.log(`APPLES-TO-APPLES — ${days.length} NDX days, one 5m engine (realistic per-5m fills), QTY=1, uncapped\n`);
+// NQ/24h data (has overnight bars) auto-enables rthActionOnly: 24h signal bands, RTH-only action —
+// the faithful live model. NDX (RTH-only) has no overnight bars → no-op.
+const etMin = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
+const is24h = days.length && days[0].bars.some(b => { const m = etMin(b.dt); return m < 570 || m >= 960; });
+const RO = is24h ? { rthActionOnly: true } : {};
+console.log(`APPLES-TO-APPLES — ${days.length} ${is24h ? 'NQ 24h→RTH-action' : 'NDX'} days, one 5m engine (realistic per-5m fills), QTY=1, uncapped\n`);
 console.log('variant'.padEnd(14) + 'floor'.padEnd(13) + 'terminal'.padEnd(13) + 'avg/day'.padEnd(11) + 'maxDD'.padEnd(12) + 'worst day'.padEnd(12) + 'neg days');
 console.log('-'.repeat(84));
 for (const [name, v] of Object.entries(variants)) {
   let floor = 0, terminal = 0, cum = 0, peak = 0, mdd = 0, worst = Infinity, neg = 0;
   for (const d of days) {
-    const r = runDay5m(d.bars, v.fn, v.opts || {});
+    const r = runDay5m(d.bars, v.fn, { ...RO, ...(v.opts || {}) });
     floor += r.floor; terminal += r.terminal;
     cum += r.terminal; peak = Math.max(peak, cum); mdd = Math.max(mdd, peak - cum);
     worst = Math.min(worst, r.terminal); if (r.terminal < 0) neg++;
