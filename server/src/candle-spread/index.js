@@ -53,7 +53,10 @@ const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 const VARIANTS = [
   { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { variant: 'v5', variantLabel: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
-  { variant: 'v6', variantLabel: '5m-harness',      signalFn: v6Signal, signalCfg: { fiveMin: true }, ...PORTED_COVER },
+  // dryRun:'test' → when ARMED on prod (CANDLE_SPREAD_LIVE=true), v6 sends REAL orders at an
+  // UNFILLABLE price + auto-cancels ~60s later (paper-validate the live pipe, no execution risk).
+  // INERT until all three gates are on: isProd + CANDLE_SPREAD_LIVE=true + this dryRun:'test'.
+  { variant: 'v6', variantLabel: '5m-harness',      signalFn: v6Signal, signalCfg: { fiveMin: true }, dryRun: 'test', ...PORTED_COVER },
   { variant: 'v7', variantLabel: 'be-wrong',        signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
   // v8 = v6 signal + risk caps: proactively cover deep-ITM leaders (frac×width), a soft "churn" cap
   // on at-risk debit (exempt for a same-side trend stack), and a hard total-uncovered backstop.
