@@ -29,6 +29,7 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 // the "keep the stabs balanced" thesis, so a one-sided TREND day stops adding losing fades.
 function runDay9(bars, opts = {}) {
   const maxImb = opts.maxImbalance != null ? opts.maxImbalance : Infinity;
+  const openFn = (opts.geo && opts.geo.buildOpen) || buildOpen;   // $40 geometry support (opts.geo)
   const positions = [];
   const last = {};   // per-TF signature of the last-seen candle (detect a NEW candle)
   let bullStabs = 0, bearStabs = 0, nBull = 0, nBear = 0;
@@ -41,8 +42,8 @@ function runDay9(bars, opts = {}) {
       const sig = `${c.open}|${c.high}|${c.low}|${c.close}`;
       if (sig === last[tf]) continue;   // same candle we already evaluated → skip
       last[tf] = sig;
-      if (c.low < c.bblower && (nBull - nBear) < maxImb) { const o = buildOpen('bull', S, tau, iv); positions.push({ legs: o.legs, limit: o.limit }); bullStabs++; nBull++; }
-      if (c.high > c.bbupper && (nBear - nBull) < maxImb) { const o = buildOpen('bear', S, tau, iv); positions.push({ legs: o.legs, limit: o.limit }); bearStabs++; nBear++; }
+      if (c.low < c.bblower && (nBull - nBear) < maxImb) { const o = openFn('bull', S, tau, iv); positions.push({ legs: o.legs, limit: o.limit }); bullStabs++; nBull++; }
+      if (c.high > c.bbupper && (nBear - nBull) < maxImb) { const o = openFn('bear', S, tau, iv); positions.push({ legs: o.legs, limit: o.limit }); bearStabs++; nBear++; }
     }
   }
   const settle = bars[bars.length - 1].analysis['5m'].close;
