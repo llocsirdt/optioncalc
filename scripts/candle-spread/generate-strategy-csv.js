@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Per-date comparison CSV of the FULL strategy lineage v0-v10 at TWO spread widths ($20 and $40
- * short-ATM), on one 5m engine (realistic fills, QTY=1). Each row = a date; each column =
- * variant×width; cell = terminal P/L with (opens/covered). Summary rows at the top; the variant
- * summaries ($20 vs $40 side by side) are printed to the console.
+ * Per-date comparison CSV of the FULL strategy lineage v0-v10 across a MATRIX of spread geometries
+ * (width × positioning), on one 5m engine (realistic fills, QTY=1). Each row = a date; each column =
+ * variant×geometry; cell = terminal P/L with (opens/covered). Comprehensive summary rows at the top:
+ * total, avg/day, MAX DRAWDOWN (+ peak→trough span), MAX RUN-UP (+ trough→peak span = the inverse),
+ * WORST day (+ date), BEST day (+ date), opens/day, neg-days, ret/maxDD.
  *
  * VARIANTS: v0-v3 = CLASSIC signal, cover geometry varies (v0 fixed tent, v1 greedy, v2 joint, v3
- * fixed-mark — via the server's pure cover selectors). v4-v6 = signal lineage (multiTF → trend-flip →
- * 5m-harness). v7 = be-wrong (bidirectional). v8 = v6 + risk caps. v9 = v7 + risk caps (the tamed
- * be-wrong). v10 = mean-reversion (separate engine). Plus ALL-PARALLEL (sum) per width.
+ * fixed-mark). v4-v6 = signal lineage (multiTF → trend-flip → 5m-harness). v7 = be-wrong. v8 = v6 +
+ * caps. v9 = v7 + caps (tamed be-wrong). v10 = mean-reversion. Plus ALL-PARALLEL (sum) per geometry.
+ *
+ * GEOMETRY: --geos "W:SHIFT|MODE[:capFrac],..." or --matrix "10,20,40,60" (expands each width × the 4
+ * positioning MODES). MODES: otm (long toward underlying, cheaper), atm (straddle), itm (short ~ATM),
+ * deep (short a couple strikes ITM). Width 10 uses a 5-pt grid (ATM is off a 10-grid).
  *
  * NQ (24h) data auto-enables rthActionOnly: 24h bands, RTH-only action — the faithful live model.
- * Usage: node scripts/candle-spread/generate-strategy-csv.js --dataDir <5m dir> [--out file.csv]
+ * Usage: node .../generate-strategy-csv.js --dataDir <5m dir> [--out f.csv] [--matrix "10,20,40,60"]
  */
 const fs = require('fs');
 const eng = require('./backtest-v4');
@@ -27,11 +31,9 @@ const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? proce
 const DIR = arg('--dataDir', eng.DATA_DIR);
 const OUT = arg('--out', 'strategy-per-date-comparison.csv');
 
-// Risk-cap layers, TUNED on the 922-day Kaggle NQ set (24h→RTH; see the sweep in the commit).
-// v8 = aggressive caps on the v6 base (soft $3k/hard $9k — illustrates hard throttling).
-// v9 = the caps on the v7 "be-wrong" base, tuned to KEEP the ceiling while bounding the tail: a hard
-//   $40k single-day uncovered backstop + proactive deep-ITM covering (0.8×width), NO soft cap (a soft
-//   cap gutted v7 — $2.66M→$0.96M). Result ≈ v6's risk-efficiency (~27.7 ret/maxDD) at ~2× the scale.
+// Risk-cap layers, TUNED on the 922-day Kaggle NQ set (24h→RTH). v8 = aggressive caps on the v6 base;
+// v9 = caps on the v7 "be-wrong" base tuned to keep the ceiling (hard $40k backstop + proactive
+// deep-ITM cover, no soft cap — a soft cap gutted v7).
 const V8CAPS = { softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true };
 const V9CAPS = { hardCap: 40000, proactiveCoverFrac: 0.80 };
 
@@ -49,7 +51,6 @@ const v4 = (A, p, c) => eng.v4Signal(A, p, c);
 const v6fn = (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } });
 const v7fn = (A, p, c) => v7Signal(A, p, { ...c, cfg: { fiveMin: true, beWrong: true } });
 
-// [name, signalFn, non-geo opts]. v10 (mean-rev) is a separate engine, handled below.
 const specs = [
   ['v0-classic', at15(classic), {}],
   ['v1-greedy', at15(classic), { coverSelector: 'greedy' }],
@@ -62,19 +63,29 @@ const specs = [
   ['v8-v6caps', v6fn, V8CAPS],
   ['v9-v7caps', v7fn, { bidirectional: true, ...V9CAPS }],
 ];
-// GEOMETRIES to compare: --geos "W:SHIFT[:capFrac],..." (default 20 ATM + 40 short-ATM). SHIFT is the
-// positioning axis: <0 OTM, 0 ATM, W/2 short-ATM/just-ITM, >W/2 deeper-ITM. Widths 10/20/40/60 etc.
-// $20 ATM uses the built-in engine geometry (preserves validated numbers); everything else via makeGeo.
-const geosArg = arg('--geos', '20:0,40:20');
-const GEOS = geosArg.split(',').filter(Boolean).map(spec => {
-  const [w, sh, cf] = spec.split(':').map(Number);
-  const shift = sh || 0;
-  const label = `$${w}${shift ? (shift > 0 ? `+${shift}` : `${shift}`) : ''}`;
-  const opts = (w === 20 && shift === 0) ? {} : { geo: makeGeo({ width: w, shift, capFrac: Number.isFinite(cf) ? cf : undefined }) };
-  return { label, opts };
-});
 const baseNames = [...specs.map(s => s[0]), 'v10-meanrev'];
 
+// --- geometry parsing: named positioning MODES (grid-aware) or numeric shift ---
+const incrOf = w => (w === 10 ? 5 : 10);
+const MODES = { otm: (w) => -incrOf(w), atm: () => 0, itm: (w) => w / 2, deep: (w) => w / 2 + 2 * incrOf(w) };
+function geoFromSpec(spec) {
+  const parts = String(spec).split(':');
+  const w = Number(parts[0]);
+  const incr = incrOf(w);
+  let shift, label;
+  if (MODES[parts[1]]) { shift = MODES[parts[1]](w); label = `$${w}-${parts[1]}`; }
+  else { shift = Number(parts[1]) || 0; label = `$${w}${shift ? (shift > 0 ? `+${shift}` : `${shift}`) : ''}`; }
+  const cf = parts[2] != null && parts[2] !== '' ? Number(parts[2]) : undefined;
+  const opts = (w === 20 && shift === 0) ? {} : { geo: makeGeo({ width: w, incr, shift, capFrac: Number.isFinite(cf) ? cf : undefined }) };
+  return { label, opts };
+}
+const matrixArg = arg('--matrix', null);
+const specStrings = matrixArg
+  ? matrixArg.split(',').flatMap(w => ['otm', 'atm', 'itm', 'deep'].map(m => `${w}:${m}`))
+  : arg('--geos', '20:0,40:20').split(',');
+const GEOS = specStrings.filter(Boolean).map(geoFromSpec);
+
+// --- run every variant × geometry ---
 const results = {}, colNames = [];
 for (const [name, sig, extra] of specs) {
   for (const g of GEOS) {
@@ -86,7 +97,6 @@ for (const g of GEOS) {
   const col = `v10-meanrev ${g.label}`; colNames.push(col);
   results[col] = days.map(d => { const b = is24h ? d.bars.filter(x => inRth(x.dt)) : d.bars; return { date: ymd(d.bars[0].dt), ...(b.length ? norm(runDay9(b, { maxImbalance: 5, ...g.opts })) : { term: 0, floor: 0, opens: 0, filled: 0 }) }; });
 }
-// ALL-PARALLEL per geometry = sum across variants of that geometry.
 for (const g of GEOS) {
   const col = `ALL-PARALLEL ${g.label}`; colNames.push(col);
   results[col] = days.map((d, i) => {
@@ -96,25 +106,40 @@ for (const g of GEOS) {
   });
 }
 
+// --- comprehensive per-column stats ---
 function summarize(rows) {
-  let total = 0, worst = Infinity, cum = 0, peak = 0, mdd = 0, neg = 0, opens = 0;
+  let total = 0, worst = Infinity, worstDate = '', best = -Infinity, bestDate = '', neg = 0, opens = 0;
+  let cum = 0, peak = 0, peakDate = '(start)', mdd = 0, ddPeakDate = '', ddTroughDate = '';
+  let trough = 0, troughDate = '(start)', runup = 0, ruTroughDate = '', ruPeakDate = '';
   for (const r of rows) {
     total += r.term; opens += r.opens; if (r.term < 0) neg++;
-    if (r.term < worst) worst = r.term;
-    cum += r.term; if (cum > peak) peak = cum; if (peak - cum > mdd) mdd = peak - cum;
+    if (r.term < worst) { worst = r.term; worstDate = r.date; }
+    if (r.term > best) { best = r.term; bestDate = r.date; }
+    cum += r.term;
+    if (cum > peak) { peak = cum; peakDate = r.date; }                          // drawdown = peak→trough
+    if (peak - cum > mdd) { mdd = peak - cum; ddPeakDate = peakDate; ddTroughDate = r.date; }
+    if (cum < trough) { trough = cum; troughDate = r.date; }                     // run-up = trough→peak (inverse)
+    if (cum - trough > runup) { runup = cum - trough; ruTroughDate = troughDate; ruPeakDate = r.date; }
   }
-  return { total, avg: total / rows.length, worst, mdd, neg, opens };
+  return { total, avg: total / rows.length, worst, worstDate, best, bestDate, mdd, ddPeakDate, ddTroughDate, runup, ruTroughDate, ruPeakDate, neg, opens };
 }
 const sums = Object.fromEntries(colNames.map(n => [n, summarize(results[n])]));
 
-// --- CSV: summary rows on top, then per-date ---
+// --- CSV: comprehensive summary rows on top, then per-date ---
 const R2 = Math.round;
 const lines = [['', ...colNames].join(',')];
 const sRow = (label, fn) => lines.push([label, ...colNames.map(n => fn(sums[n]))].join(','));
 sRow('TOTAL terminal $', s => R2(s.total));
 sRow('AVG terminal/day $', s => R2(s.avg));
+sRow('ret/maxDD', s => s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '');
 sRow('MAX DRAWDOWN $', s => R2(s.mdd));
+sRow('  DD span (peak->trough)', s => `"${s.ddPeakDate}..${s.ddTroughDate}"`);
+sRow('MAX RUN-UP $ (inverse)', s => R2(s.runup));
+sRow('  run-up span (trough->peak)', s => `"${s.ruTroughDate}..${s.ruPeakDate}"`);
 sRow('WORST day $', s => R2(s.worst));
+sRow('  worst day DATE', s => s.worstDate);
+sRow('BEST day $', s => R2(s.best));
+sRow('  best day DATE', s => s.bestDate);
 sRow('opens/day', s => (s.opens / days.length).toFixed(1));
 sRow('NEG days', s => `${s.neg}/${days.length}`);
 lines.push('');
@@ -125,16 +150,18 @@ for (let i = 0; i < days.length; i++) {
 }
 fs.writeFileSync(OUT, lines.join('\n'));
 
-// --- console: one table per geometry (scales to any --geos list) ---
+// --- console: one comprehensive table per geometry (dates compact YY-MM-DD) ---
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+const dt = d => (d && d.length >= 8 ? d.slice(2) : d);   // 2024-08-05 -> 24-08-05
 console.log(`\nwrote ${OUT} — ${days.length} dates × ${colNames.length} cols  [${is24h ? 'NQ 24h→RTH-action' : 'RTH data'}]`);
 for (const g of GEOS) {
   console.log(`\n=== geometry ${g.label} ===`);
-  console.log('VARIANT'.padEnd(16) + 'total'.padEnd(13) + 'avg/day'.padEnd(10) + 'maxDD'.padEnd(12) + 'worstDay'.padEnd(12) + 'ret/maxDD'.padEnd(11) + 'opens/d');
-  console.log('-'.repeat(84));
+  console.log('VARIANT'.padEnd(15) + 'total'.padEnd(12) + 'maxDD'.padEnd(11) + 'runup'.padEnd(12) + 'worst (date)'.padEnd(21) + 'best (date)'.padEnd(21) + 'r/DD'.padEnd(6) + 'op/d');
+  console.log('-'.repeat(103));
   for (const bn of [...baseNames, 'ALL-PARALLEL']) {
     const s = sums[`${bn} ${g.label}`];
-    console.log(bn.padEnd(16) + usd(s.total).padEnd(13) + usd(s.avg).padEnd(10) + usd(s.mdd).padEnd(12) + usd(s.worst).padEnd(12)
-      + (s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '—').padEnd(11) + (s.opens / days.length).toFixed(1));
+    console.log(bn.padEnd(15) + usd(s.total).padEnd(12) + usd(s.mdd).padEnd(11) + usd(s.runup).padEnd(12)
+      + `${usd(s.worst)} (${dt(s.worstDate)})`.padEnd(21) + `${usd(s.best)} (${dt(s.bestDate)})`.padEnd(21)
+      + (s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '—').padEnd(6) + (s.opens / days.length).toFixed(1));
   }
 }
