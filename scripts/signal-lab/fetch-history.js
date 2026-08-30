@@ -39,13 +39,15 @@ function etMinute(ms) {
   const [h, m] = s.split(':').map(Number);
   return h * 60 + m;
 }
-// Group a chunk's candles into ET trading days, RTH only (09:30-16:00), zeros dropped, sorted.
-function groupByEtDayRth(candles) {
+// Group a chunk's candles into ET trading days, zeros dropped, sorted. FUTURES keep the full 24h
+// Globex session (drop only the 17:00-18:00 ET maintenance break) — an RTH-truncated NQ series would
+// corrupt the multi-timeframe signal bands; index/equity are RTH only (09:30-16:00).
+function groupByEtDay(candles) {
   const byDate = new Map();
   for (const c of candles) {
     if (!(c.open || c.high || c.low || c.close)) continue;
     const mn = etMinute(c.datetime);
-    if (mn < 570 || mn >= 960) continue;
+    if (isFutures ? (mn >= 1020 && mn < 1080) : (mn < 570 || mn >= 960)) continue;
     const dt = etDate(c.datetime);
     if (!byDate.has(dt)) byDate.set(dt, []);
     byDate.get(dt).push(c);
@@ -72,7 +74,7 @@ const cachedCount = () => (fs.existsSync(RAW) ? fs.readdirSync(RAW).filter(f => 
     const endDate = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate(), 23, 59, 59, 999).getTime();
     try {
       const resp = await client.priceHistory(apiSymbol, { frequencyType: 'minute', frequency: freq, startDate, endDate });
-      const byDate = groupByEtDayRth((resp && resp.candles) || []);
+      const byDate = groupByEtDay((resp && resp.candles) || []);
       if (byDate.size === 0) { emptyStreak++; continue; }
       emptyStreak = 0;
       for (const [date, arr] of [...byDate].sort((a, b) => (a[0] < b[0] ? 1 : -1))) {

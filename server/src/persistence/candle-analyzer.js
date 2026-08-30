@@ -1336,20 +1336,25 @@ function getCachedSymbols() {
 // hours the signal uses.) NOTE: a separate ~30-day Schwab NQ cache happens to be RTH-only — that is
 // NOT the reference; the 24h Kaggle set is.
 const RTH_INDEX_SYMBOLS = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
-async function getRaw1m(symbol, { days = 5, endDate = Date.now(), rth = true } = {}) {
-  const bare = symbol.replace(/^\$/, '');
-  const apiSymbol = symbol.startsWith('$') ? symbol : (RTH_INDEX_SYMBOLS.has(bare) ? `$${bare}` : symbol);
-  const data = await marketClient.priceHistory(apiSymbol, {
-    periodType: 'day', period: days, frequencyType: 'minute', frequency: 1, endDate
-  });
-  let candles = (data.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
-  if (rth) {
-    candles = candles.filter(c => {
-      const est = new Date(new Date(c.datetime).toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const m = est.getHours() * 60 + est.getMinutes();
-      return m >= 570 && m < 960; // 9:30 (inclusive) .. 16:00 (exclusive)
-    });
-  }
+const RAW1M_DAY_MS = 24 * 60 * 60 * 1000;
+function etMinOfDay(ms) {
+  const est = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  return est.getHours() * 60 + est.getMinutes();
+}
+async function getRaw1m(symbol, { days = 7, endDate = Date.now(), rth } = {}) {
+  const bare = symbol.replace(/^[$/]/, '');
+  const isFutures = symbol.startsWith('/');
+  const apiSymbol = (symbol.startsWith('$') || isFutures) ? symbol : (RTH_INDEX_SYMBOLS.has(bare) ? `$${bare}` : symbol);
+  // Use the start/end RANGE form (NOT periodType:'day'): it returns the FULL 24h Globex session for
+  // futures, whereas the periodType:'day' form is regular-hours/capped. Matches chart-series.
+  const startDate = endDate - days * RAW1M_DAY_MS;
+  const data = await marketClient.priceHistory(apiSymbol, { frequencyType: 'minute', frequency: 1, startDate, endDate });
+  let candles = (data.candles || []).filter(c => c.open || c.high || c.low || c.close);
+  // FUTURES ARE ALWAYS 24h — an RTH-truncated NQ series would corrupt the multi-TF signal bands.
+  // Keep the whole Globex session, dropping only the 17:00-18:00 ET maintenance break. Index/equity
+  // default to RTH (9:30-16:00). `rth` overrides (rth:false = 24h, rth:true = RTH).
+  const useRth = rth != null ? rth : !isFutures;
+  candles = candles.filter(c => { const m = etMinOfDay(c.datetime); return useRth ? (m >= 570 && m < 960) : (m < 1020 || m >= 1080); });
   candles.sort((a, b) => a.datetime - b.datetime);
   return candles;
 }
