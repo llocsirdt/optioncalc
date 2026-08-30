@@ -16,7 +16,17 @@ const { v6Signal } = require('./v6-signals');
 const { v7Signal } = require('./v7-signals');
 const legsMark = eng.legsMark, round2 = eng.round2, roundTick = eng.roundTick, TICK = eng.TICK;
 
-function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.8 }) {
+// General spread geometry: any WIDTH (10/20/40/60...) × any SHIFT (the positioning axis):
+//   shift < 0     → OTM  (spread skewed toward/past the underlying; long leg less ITM → cheaper)
+//   shift = 0     → ATM straddle (long ITM by width/2, short OTM by width/2 — the classic)
+//   shift = W/2   → just ITM (short leg ~ATM, long leg W deep ITM — the "$40" selection)
+//   shift > W/2   → deeper ITM (short leg ITM by shift−W/2, long even deeper)
+// capFrac (debit ceiling as a fraction of width) auto-derives from how ITM the spread sits, so the
+// real mark binds (never suppressed) for ITM geometries while ATM keeps the legacy 0.525 ceiling.
+// Grid note: legs land on the `incr` grid only when W/2 and shift are multiples of incr (e.g. $10 ATM
+// is off a 10-grid → use a shift or incr:5; $20/$40/$60 ATM are fine).
+function makeGeo({ width, incr = 10, shift = 0, capFrac }) {
+  const cf = capFrac != null ? capFrac : Math.min(0.95, 0.525 + Math.max(0, shift) / width);
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
     let lo, hi;
@@ -25,7 +35,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.8 }) {
     const legs = side === 'bull'
       ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
       : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
-    const limit = round2(Math.min(width * capFrac, roundTick(legsMark(legs, S, tau, iv))));
+    const limit = round2(Math.min(width * cf, roundTick(legsMark(legs, S, tau, iv))));
     return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, limit) };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'

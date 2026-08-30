@@ -62,26 +62,36 @@ const specs = [
   ['v8-v6caps', v6fn, V8CAPS],
   ['v9-v7caps', v7fn, { bidirectional: true, ...V9CAPS }],
 ];
-const WIDTHS = [['$20', {}], ['$40', { geo: makeGeo({ width: 40, shift: 20 }) }]];
+// GEOMETRIES to compare: --geos "W:SHIFT[:capFrac],..." (default 20 ATM + 40 short-ATM). SHIFT is the
+// positioning axis: <0 OTM, 0 ATM, W/2 short-ATM/just-ITM, >W/2 deeper-ITM. Widths 10/20/40/60 etc.
+// $20 ATM uses the built-in engine geometry (preserves validated numbers); everything else via makeGeo.
+const geosArg = arg('--geos', '20:0,40:20');
+const GEOS = geosArg.split(',').filter(Boolean).map(spec => {
+  const [w, sh, cf] = spec.split(':').map(Number);
+  const shift = sh || 0;
+  const label = `$${w}${shift ? (shift > 0 ? `+${shift}` : `${shift}`) : ''}`;
+  const opts = (w === 20 && shift === 0) ? {} : { geo: makeGeo({ width: w, shift, capFrac: Number.isFinite(cf) ? cf : undefined }) };
+  return { label, opts };
+});
 const baseNames = [...specs.map(s => s[0]), 'v10-meanrev'];
 
 const results = {}, colNames = [];
 for (const [name, sig, extra] of specs) {
-  for (const [wl, wgeo] of WIDTHS) {
-    const col = `${name} ${wl}`; colNames.push(col);
-    results[col] = days.map(d => ({ date: ymd(d.bars[0].dt), ...norm(runDay5m(d.bars, sig, { ...BASE, ...extra, ...wgeo })) }));
+  for (const g of GEOS) {
+    const col = `${name} ${g.label}`; colNames.push(col);
+    results[col] = days.map(d => ({ date: ymd(d.bars[0].dt), ...norm(runDay5m(d.bars, sig, { ...BASE, ...extra, ...g.opts })) }));
   }
 }
-for (const [wl, wgeo] of WIDTHS) {
-  const col = `v10-meanrev ${wl}`; colNames.push(col);
-  results[col] = days.map(d => { const b = is24h ? d.bars.filter(x => inRth(x.dt)) : d.bars; return { date: ymd(d.bars[0].dt), ...(b.length ? norm(runDay9(b, { maxImbalance: 5, ...wgeo })) : { term: 0, floor: 0, opens: 0, filled: 0 }) }; });
+for (const g of GEOS) {
+  const col = `v10-meanrev ${g.label}`; colNames.push(col);
+  results[col] = days.map(d => { const b = is24h ? d.bars.filter(x => inRth(x.dt)) : d.bars; return { date: ymd(d.bars[0].dt), ...(b.length ? norm(runDay9(b, { maxImbalance: 5, ...g.opts })) : { term: 0, floor: 0, opens: 0, filled: 0 }) }; });
 }
-// ALL-PARALLEL per width = sum across variants of that width.
-for (const [wl] of WIDTHS) {
-  const col = `ALL-PARALLEL ${wl}`; colNames.push(col);
+// ALL-PARALLEL per geometry = sum across variants of that geometry.
+for (const g of GEOS) {
+  const col = `ALL-PARALLEL ${g.label}`; colNames.push(col);
   results[col] = days.map((d, i) => {
     let term = 0, floor = 0, opens = 0, filled = 0;
-    for (const bn of baseNames) { const r = results[`${bn} ${wl}`][i]; term += r.term; floor += r.floor; opens += r.opens; filled += r.filled; }
+    for (const bn of baseNames) { const r = results[`${bn} ${g.label}`][i]; term += r.term; floor += r.floor; opens += r.opens; filled += r.filled; }
     return { date: ymd(d.bars[0].dt), term, floor, opens, filled };
   });
 }
@@ -115,14 +125,16 @@ for (let i = 0; i < days.length; i++) {
 }
 fs.writeFileSync(OUT, lines.join('\n'));
 
-// --- console: $20 vs $40 side by side per variant ---
+// --- console: one table per geometry (scales to any --geos list) ---
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
-console.log(`\nwrote ${OUT} — ${days.length} dates × ${colNames.length} cols  [${is24h ? 'NQ 24h→RTH-action' : 'RTH data'}]\n`);
-console.log('VARIANT'.padEnd(15) + '| $20 total'.padEnd(13) + 'maxDD'.padEnd(11) + 'worst'.padEnd(11) + '| $40 total'.padEnd(13) + 'maxDD'.padEnd(11) + 'worst'.padEnd(11) + 'opens20/40');
-console.log('-'.repeat(96));
-for (const bn of [...baseNames, 'ALL-PARALLEL']) {
-  const a = sums[`${bn} $20`], b = sums[`${bn} $40`];
-  console.log(bn.padEnd(15) + ('| ' + usd(a.total)).padEnd(13) + usd(a.mdd).padEnd(11) + usd(a.worst).padEnd(11)
-    + ('| ' + usd(b.total)).padEnd(13) + usd(b.mdd).padEnd(11) + usd(b.worst).padEnd(11)
-    + `${(a.opens / days.length).toFixed(0)}/${(b.opens / days.length).toFixed(0)}`);
+console.log(`\nwrote ${OUT} — ${days.length} dates × ${colNames.length} cols  [${is24h ? 'NQ 24h→RTH-action' : 'RTH data'}]`);
+for (const g of GEOS) {
+  console.log(`\n=== geometry ${g.label} ===`);
+  console.log('VARIANT'.padEnd(16) + 'total'.padEnd(13) + 'avg/day'.padEnd(10) + 'maxDD'.padEnd(12) + 'worstDay'.padEnd(12) + 'ret/maxDD'.padEnd(11) + 'opens/d');
+  console.log('-'.repeat(84));
+  for (const bn of [...baseNames, 'ALL-PARALLEL']) {
+    const s = sums[`${bn} ${g.label}`];
+    console.log(bn.padEnd(16) + usd(s.total).padEnd(13) + usd(s.avg).padEnd(10) + usd(s.mdd).padEnd(12) + usd(s.worst).padEnd(12)
+      + (s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '—').padEnd(11) + (s.opens / days.length).toFixed(1));
+  }
 }
