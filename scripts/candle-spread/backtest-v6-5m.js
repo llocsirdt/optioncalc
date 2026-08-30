@@ -34,7 +34,7 @@ const isFive = a => ['1m', '5m', '15m', '60m'].every(tf => a[tf] && a[tf].bbuppe
 
 // Load ALL 5m bars per day (not just 15m closes). Returns { date, bars:[{dt,analysis,fifteen}] }.
 function load5mDays(dir) {
-  const files = fs.readdirSync(dir).filter(f => /^backtest-NDX-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const files = fs.readdirSync(dir).filter(f => /^backtest-[A-Z]+-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
   const out = [];
   for (const f of files) {
     const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));

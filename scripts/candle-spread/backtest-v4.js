@@ -170,7 +170,7 @@ function runDay(bars, signalFn, onBar) {
 
 // Load each day-file in `dir` as { date, bars:[{dt,analysis}] } at 15m closes (shared by analysis scripts).
 function loadDays(dir = DATA_DIR) {
-  const files = fs.readdirSync(dir).filter(f => /^backtest-NDX-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  const files = fs.readdirSync(dir).filter(f => /^backtest-[A-Z]+-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
   const out = [];
   for (const f of files) {
     const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
