@@ -234,9 +234,11 @@ async function processGroup(runs, kind) {
   const cur = ab.analysisAt(series, T);
   if (!cur.warm) return { pending: 'analysis-not-warm' };    // retry: 1m/5m/15m/60m not all warm yet
   const A = cur.A;
-  // priorA = the prior 5m bar's A (null on the day's first action bar → matches runDay5m's per-day
-  // reset; the signal reads prior['15m'] which correctly resolves to the prior 15m candle).
-  const priorA = kind === 'first' ? null : ab.analysisAt(series, T - STEP_MS).A;
+  // priorA = the PRIOR 5m bar's A — TRUE CONTINUITY. The NQ signal is built from the continuous 24h
+  // Globex series, so even the day's first RTH mark (9:35) has a real prior bar (9:30); we do NOT
+  // null it. Falls back to null only if there's genuinely no warm prior (thin/just-started data).
+  const prev = ab.analysisAt(series, T - STEP_MS);
+  const priorA = prev.warm ? prev.A : null;
 
   // PRICING underlying (strike centering). Single-instrument: A's own 5m close. Split (signal≠price):
   // the price instrument's just-closed 5m close.

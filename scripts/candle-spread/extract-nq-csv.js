@@ -3,8 +3,10 @@
 /**
  * Convert the Kaggle NQ 1-min CSV (columns: "timestamp ET,open,high,low,close,volume,Vwap_RTH,Vwap_ETH"
  * — ET wall-clock, back-adjusted continuous contract, ETH+RTH) into raw-1m day-files that
- * build-analysis-dataset.js can consume. RTH-filters to 9:30–16:00 ET (390 bars/day, matching the NDX
- * datasets), converts ET→real-UTC ms (DST-aware) so the downstream ET-day/resample logic is correct.
+ * build-analysis-dataset.js can consume. NQ is a FUTURES signal instrument → keep the full 24h Globex
+ * session (drop only the 17:00-18:00 ET maintenance break); an RTH-truncated NQ series would corrupt
+ * the multi-TF signal bands. Converts ET→real-UTC ms (DST-aware) so the downstream ET-day/resample
+ * logic is correct.
  *
  * Usage: node scripts/candle-spread/extract-nq-csv.js <in.csv> <outRawDir> [SYMBOL=NQ]
  */
@@ -33,7 +35,7 @@ for (let i = 1; i < lines.length; i++) {
   if (!m) { skipped++; continue; }
   const mo = +m[1], d = +m[2], y = +m[3], hh = +m[4], mm = +m[5];
   const min = hh * 60 + mm;
-  if (min < 570 || min >= 960) { skipped++; continue; }   // RTH only: 9:30 (570) .. 15:59 (<960)
+  if (min >= 1020 && min < 1080) { skipped++; continue; }   // futures: keep 24h Globex, drop only 17:00-18:00 ET maintenance
   const o = +p[1], h = +p[2], lo = +p[3], c = +p[4], v = +p[5] || 0;
   if (!(o > 0 && h > 0 && lo > 0 && c > 0)) { skipped++; continue; }
   const key = ymd(y, mo, d);
@@ -49,6 +51,6 @@ for (const [date, candles] of byDay) {
   fs.writeFileSync(path.join(out, `${sym}-${date}.json`), JSON.stringify({ symbol: sym, date, freq: 1, candles }));
   files++;
 }
-console.log(`extracted ${kept} RTH 1m bars (skipped ${skipped} non-RTH/bad) → ${files} day-files in ${out}`);
+console.log(`extracted ${kept} 24h 1m bars (skipped ${skipped} maintenance-hr/bad) → ${files} day-files in ${out}`);
 const dates = [...byDay.keys()].sort();
 console.log(`date range: ${dates[0]} .. ${dates[dates.length - 1]}`);

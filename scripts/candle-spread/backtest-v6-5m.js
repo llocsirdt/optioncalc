@@ -30,6 +30,7 @@ const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-v2');
 const money = n => (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n));
 const etDay = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+const etMinute = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
 const isFive = a => ['1m', '5m', '15m', '60m'].every(tf => a[tf] && a[tf].bbupper != null && a[tf].bblower != null && a[tf].ema != null);
 
 // Load ALL 5m bars per day (not just 15m closes). Returns { date, bars:[{dt,analysis,fifteen}] }.
@@ -63,6 +64,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   const hardCap = opts.hardCap != null ? opts.hardCap : Infinity;   // v8 backstop (total uncovered)
   const pFrac = opts.proactiveCoverFrac != null ? opts.proactiveCoverFrac : null;
   const bidir = opts.bidirectional === true;
+  // rthActionOnly: model LIVE faithfully — the multi-TF `A` is still built from the 24h series (so the
+  // bands carry the overnight session), but we only ACT (open/cover/settle) during RTH, since NDX 0DTE
+  // options only trade 9:30-16:00. Overnight bars stay in the loop purely for prior continuity. Default
+  // OFF = the legacy 24h-action behavior (the pure-NQ signal validation).
+  const rthOnly = opts.rthActionOnly === true;
+  const inRth = ms => { const m = etMinute(ms); return m >= 575 && m <= 955; };   // 9:35 .. 15:55 action window
   const dirWindow = opts.dirWindow || 12;   // rolling-directionality window (5m bars); ~1h at 12
   // directionality at bar i = |net move over the window| / (window high-low range). ~1 = trending, ~0 = chop.
   const directionalityAt = i => {
@@ -79,6 +86,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
   let capBlocked = 0, capBlockedTrend = 0;   // diagnostic: opens the cap refused (and how many were same-dir stacking)
   for (let i = 0; i < bars.length; i++) {
+    // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
+    // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
+    if (rthOnly && !inRth(bars[i].dt)) continue;
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
@@ -128,7 +138,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
     }
   }
-  const settle = bars[bars.length - 1].analysis['5m'].close;
+  // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
+  // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
+  let settleBar = bars[bars.length - 1];
+  if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
+  const settle = settleBar.analysis['5m'].close;
   let floor = 0, terminal = 0, opens = 0, filled = 0, naked = 0;
   for (const pos of st.positions) {
     opens++; let value = legsPayoff(pos.legs, settle), cost = pos.limit;
