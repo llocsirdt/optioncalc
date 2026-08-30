@@ -26,6 +26,9 @@ const BASE_RUNS = [
   {
     symbol: 'NDX',             // PRICING instrument: strikes/chain/mark (options settle on NDX)
     signalSymbol: '/NQ',       // SIGNAL instrument: direction/Bollinger/reversal off NQ futures
+    signalRth: false,          // build the NQ `A` from 24h (ETH+RTH) — matches v6's 762-day
+                               // out-of-sample validation (overnight NQ acts as real S/R). Trading
+                               // still only fires at RTH marks (the scheduler), on NDX.
     // expiration is set to "today" (0DTE) at start; overridden per environment if needed.
     expiration: null,
     spreadWidth: 20,
@@ -220,7 +223,8 @@ async function processGroup(runs, kind) {
   // the same `A` they were validated on. PARITY NOTE: the builder is parity-proven on NDX RTH data;
   // a /NQ (24h futures) signal instrument needs its own parity fixture before arming.
   let raw1m;
-  try { raw1m = await DEPS.getRaw1m(signalSymbol); }
+  // signalRth:false → 24h (ETH+RTH) NQ for the `A` bands (matches the validation); default RTH.
+  try { raw1m = await DEPS.getRaw1m(signalSymbol, { rth: sample.signalRth !== false }); }
   catch (e) { console.error('[candle-spread] getRaw1m failed:', e && e.message); return { pending: 'raw1m-fetch-failed' }; }
   if (!raw1m || raw1m.length < 100) return { pending: 'raw1m-insufficient' };
   const series = ab.buildSeries(raw1m);
