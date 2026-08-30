@@ -106,22 +106,31 @@ for (const g of GEOS) {
   });
 }
 
-// --- comprehensive per-column stats ---
+// --- per-column stats. RISK LENS: SHORT-TERM declines (what can hurt an account in days/weeks), not
+// the multi-month peak-to-trough. We report the longest consecutive LOSING-day streak (+its $), the
+// longest consecutive WINNING-day streak (the "run of profitable days"), and the worst rolling 5-day
+// (~1wk) and 10-day (~2wk) losses. True max DD is kept only as a de-emphasized context column.
 function summarize(rows) {
+  const T = rows.map(r => r.term);
   let total = 0, worst = Infinity, worstDate = '', best = -Infinity, bestDate = '', neg = 0, opens = 0;
-  let cum = 0, peak = 0, peakDate = '(start)', mdd = 0, ddPeakDate = '', ddTroughDate = '';
-  let trough = 0, troughDate = '(start)', runup = 0, ruTroughDate = '', ruPeakDate = '';
-  for (const r of rows) {
-    total += r.term; opens += r.opens; if (r.term < 0) neg++;
-    if (r.term < worst) { worst = r.term; worstDate = r.date; }
-    if (r.term > best) { best = r.term; bestDate = r.date; }
-    cum += r.term;
-    if (cum > peak) { peak = cum; peakDate = r.date; }                          // drawdown = peak→trough
-    if (peak - cum > mdd) { mdd = peak - cum; ddPeakDate = peakDate; ddTroughDate = r.date; }
-    if (cum < trough) { trough = cum; troughDate = r.date; }                     // run-up = trough→peak (inverse)
-    if (cum - trough > runup) { runup = cum - trough; ruTroughDate = troughDate; ruPeakDate = r.date; }
+  let cl = 0, cl$ = 0, lossDays = 0, lossDays$ = 0, lossEnd = '';
+  let cw = 0, cw$ = 0, winDays = 0, winDays$ = 0, winEnd = '';
+  let cum = 0, peak = 0, mdd = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const t = T[i], date = rows[i].date;
+    total += t; opens += rows[i].opens; if (t < 0) neg++;
+    if (t < worst) { worst = t; worstDate = date; }
+    if (t > best) { best = t; bestDate = date; }
+    if (t < 0) { cl++; cl$ += t; if (cl > lossDays) { lossDays = cl; lossDays$ = cl$; lossEnd = date; } cw = 0; cw$ = 0; }
+    else if (t > 0) { cw++; cw$ += t; if (cw > winDays) { winDays = cw; winDays$ = cw$; winEnd = date; } cl = 0; cl$ = 0; }
+    else { cl = 0; cl$ = 0; cw = 0; cw$ = 0; }
+    cum += t; if (cum > peak) peak = cum; if (peak - cum > mdd) mdd = peak - cum;   // context only
   }
-  return { total, avg: total / rows.length, worst, worstDate, best, bestDate, mdd, ddPeakDate, ddTroughDate, runup, ruTroughDate, ruPeakDate, neg, opens };
+  // worst rolling K-day loss (sliding sum over any K consecutive days) — captures a sharp drop even if
+  // a small green day interrupts the streak (the "$18k in a week or two" concern).
+  const worstRoll = k => { if (T.length < k) return { v: 0, d: '' }; let w = Infinity, wd = '', s = 0; for (let i = 0; i < T.length; i++) { s += T[i]; if (i >= k) s -= T[i - k]; if (i >= k - 1 && s < w) { w = s; wd = rows[i].date; } } return { v: w, d: wd }; };
+  return { total, avg: total / rows.length, worst, worstDate, best, bestDate, neg, opens,
+    lossDays, lossDays$, lossEnd, winDays, winDays$, winEnd, w5: worstRoll(5), w10: worstRoll(10), mdd };
 }
 const sums = Object.fromEntries(colNames.map(n => [n, summarize(results[n])]));
 
@@ -131,17 +140,23 @@ const lines = [['', ...colNames].join(',')];
 const sRow = (label, fn) => lines.push([label, ...colNames.map(n => fn(sums[n]))].join(','));
 sRow('TOTAL terminal $', s => R2(s.total));
 sRow('AVG terminal/day $', s => R2(s.avg));
-sRow('ret/maxDD', s => s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '');
-sRow('MAX DRAWDOWN $', s => R2(s.mdd));
-sRow('  DD span (peak->trough)', s => `"${s.ddPeakDate}..${s.ddTroughDate}"`);
-sRow('MAX RUN-UP $ (inverse)', s => R2(s.runup));
-sRow('  run-up span (trough->peak)', s => `"${s.ruTroughDate}..${s.ruPeakDate}"`);
-sRow('WORST day $', s => R2(s.worst));
+sRow('RETURN / worst-10day-loss', s => s.w10.v < 0 ? (s.total / -s.w10.v).toFixed(1) : '');   // short-term risk-reward
+sRow('WORST 5-day loss $ (~1wk)', s => R2(s.w5.v));
+sRow('  worst 5-day END date', s => s.w5.d);
+sRow('WORST 10-day loss $ (~2wk)', s => R2(s.w10.v));
+sRow('  worst 10-day END date', s => s.w10.d);
+sRow('MAX LOSING STREAK (days)', s => s.lossDays);
+sRow('  losing-streak $', s => R2(s.lossDays$));
+sRow('  losing-streak END date', s => s.lossEnd);
+sRow('MAX WINNING STREAK (days)', s => s.winDays);
+sRow('  winning-streak $', s => R2(s.winDays$));
+sRow('WORST single day $', s => R2(s.worst));
 sRow('  worst day DATE', s => s.worstDate);
-sRow('BEST day $', s => R2(s.best));
+sRow('BEST single day $', s => R2(s.best));
 sRow('  best day DATE', s => s.bestDate);
 sRow('opens/day', s => (s.opens / days.length).toFixed(1));
 sRow('NEG days', s => `${s.neg}/${days.length}`);
+sRow('(context) true MAX DRAWDOWN $', s => R2(s.mdd));
 lines.push('');
 lines.push(['DATE', ...colNames].join(','));
 for (let i = 0; i < days.length; i++) {
@@ -150,18 +165,17 @@ for (let i = 0; i < days.length; i++) {
 }
 fs.writeFileSync(OUT, lines.join('\n'));
 
-// --- console: one comprehensive table per geometry (dates compact YY-MM-DD) ---
+// --- console: one table per geometry, SHORT-TERM risk lens ---
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
-const dt = d => (d && d.length >= 8 ? d.slice(2) : d);   // 2024-08-05 -> 24-08-05
 console.log(`\nwrote ${OUT} — ${days.length} dates × ${colNames.length} cols  [${is24h ? 'NQ 24h→RTH-action' : 'RTH data'}]`);
 for (const g of GEOS) {
   console.log(`\n=== geometry ${g.label} ===`);
-  console.log('VARIANT'.padEnd(15) + 'total'.padEnd(12) + 'maxDD'.padEnd(11) + 'runup'.padEnd(12) + 'worst (date)'.padEnd(21) + 'best (date)'.padEnd(21) + 'r/DD'.padEnd(6) + 'op/d');
-  console.log('-'.repeat(103));
+  console.log('VARIANT'.padEnd(15) + 'total'.padEnd(12) + 'loseStrk'.padEnd(14) + 'worst5d'.padEnd(11) + 'worst10d'.padEnd(11) + 'winStrk'.padEnd(14) + 'worstDay'.padEnd(11) + 'ret/w10');
+  console.log('-'.repeat(98));
   for (const bn of [...baseNames, 'ALL-PARALLEL']) {
     const s = sums[`${bn} ${g.label}`];
-    console.log(bn.padEnd(15) + usd(s.total).padEnd(12) + usd(s.mdd).padEnd(11) + usd(s.runup).padEnd(12)
-      + `${usd(s.worst)} (${dt(s.worstDate)})`.padEnd(21) + `${usd(s.best)} (${dt(s.bestDate)})`.padEnd(21)
-      + (s.mdd > 0 ? (s.total / s.mdd).toFixed(1) : '—').padEnd(6) + (s.opens / days.length).toFixed(1));
+    console.log(bn.padEnd(15) + usd(s.total).padEnd(12) + `${s.lossDays}d/${usd(s.lossDays$)}`.padEnd(14)
+      + usd(s.w5.v).padEnd(11) + usd(s.w10.v).padEnd(11) + `${s.winDays}d/${usd(s.winDays$)}`.padEnd(14)
+      + usd(s.worst).padEnd(11) + (s.w10.v < 0 ? (s.total / -s.w10.v).toFixed(1) : '—'));
   }
 }
