@@ -90,6 +90,16 @@ function spreadStrikes(center, spreadWidth) {
   return { lower: center - half, upper: center + half };
 }
 
+// Strike selection with an optional ITM SHIFT (the $40 short-ATM geometry). shift=0 is
+// ATM-centered (== spreadStrikes). For a BULL the spread moves DOWN by `shift` (short leg toward
+// ATM, long leg deeper ITM); mirror for a BEAR. shift must also be a grid multiple. Matches
+// backtest-width.makeGeo, so a $40 short-ATM ported run selects the same strikes as the backtest.
+function spreadStrikesShifted(center, spreadWidth, shift, side) {
+  const half = spreadWidth / 2;
+  if (side === 'bull') { const upper = center + half - shift; return { lower: upper - spreadWidth, upper }; }
+  const lower = center - half + shift; return { lower, upper: lower + spreadWidth };
+}
+
 // Legs of an OPENING spread. Bull = call debit (long lower / short upper); bear = put
 // debit (long upper / short lower). Each leg: { side:'long'|'short', type:'C'|'P', strike }.
 function openLegs(direction, lower, upper) {
@@ -211,10 +221,10 @@ function coverLimitFromMark(mark, spreadWidth, tick) {
 //   cap   = spreadWidth/2 * 1.05
 //   limit = min(cap, mark), rounded to the chain's tick, and never allowed to exceed the cap.
 // Returns { mark, cap, limit }. Caller should treat limit <= 0 as invalid (bad quotes).
-function debitLimit(longMid, shortMid, spreadWidth, tick) {
+function debitLimit(longMid, shortMid, spreadWidth, tick, capFrac = 0.525) {
   const mark = round2(longMid - shortMid);
-  const cap = round2((spreadWidth / 2) * 1.05);
-  let limit = roundToTick(Math.min(cap, mark), tick);
+  const cap = round2(spreadWidth * capFrac);   // 0.525 == width/2 × 1.05 (back-compat for $20 ATM);
+  let limit = roundToTick(Math.min(cap, mark), tick); // $40 short-ATM uses ~0.8 (deeper-ITM long costs more)
   if (limit > cap) limit = Math.floor(cap / tick) * tick; // never exceed the cap
   return { mark, cap, limit: round2(limit) };
 }
@@ -237,6 +247,7 @@ module.exports = {
   shouldCover,
   centerStrike,
   spreadStrikes,
+  spreadStrikesShifted,
   openLegs,
   shortStrikeOf,
   coverLegs,

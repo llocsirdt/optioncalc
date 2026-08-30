@@ -341,11 +341,13 @@ function bandsFor(candle) {
 
 function buildOpen(side, underlying, cfg, getLeg) {
   const center = L.centerStrike(underlying, cfg.strikeIncrement);
-  const { lower, upper } = L.spreadStrikes(center, cfg.spreadWidth);
+  // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac
+  // (default 0.525 = the $20 ATM cap) rises for wider/deeper spreads whose long leg costs more.
+  const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
-  const { mark, cap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement);
+  const { mark, cap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
     mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
