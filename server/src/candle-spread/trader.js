@@ -74,8 +74,9 @@ function resolveLegs(legs, getLeg) {
 }
 
 // --- Core per-tick sequence (testable) ------------------------------------
-// deps: { getLeg(type,strike), placeOrder(payload, meta)->{status,filled}, dryRun }
-function processCandleClose(record, candle, priorCandle, deps) {
+// deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
+// async because placeOrder may send a real order to Schwab (awaited network call).
+async function processCandleClose(record, candle, priorCandle, deps) {
   const cfg = record.config;
   const st = record.state;
   const decisions = [];
@@ -148,12 +149,28 @@ function processCandleClose(record, candle, priorCandle, deps) {
         // — DON'T book it or lock the floor yet. resolveRestingCovers (below, run each candle) fills
         // it when the cover's real mark reaches the target: cross cheap when already below (deep-ITM
         // lock), else fill at the resting target; unfilled by EOD → the position settles naked.
-        pos.pendingCover = { legs: plan.legs, target: round2(cfg.spreadWidth - pos.limit), geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
+        const target = round2(cfg.spreadWidth - pos.limit);
+        pos.pendingCover = { legs: plan.legs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
         pos.coverStatus = 'resting';
-        decisions.push({ action: 'cover-rest', positionId: pos.id, target: pos.pendingCover.target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike });
+        // Send the cover as a REAL resting BUY limit at `target` (live/test). A resting debit limit
+        // fills at market once the ask reaches target — possibly immediately for a cheap deep-ITM
+        // cover — which is exactly resolveRestingCovers' mark<=target rule. In dry-run this only
+        // logs. The state machine still books the fill via resolveRestingCovers (decoupled); the
+        // poller reports the real order's actual broker fill.
+        let restOrderId = null;
+        if (target > 0) {
+          const rl = resolveLegs(plan.legs, deps.getLeg);
+          if (!rl.error) {
+            const payload = buildOrderPayload(rl.resolved, L.roundToTick(target, cfg.tickIncrement), cfg.quantity, 'DEBIT');
+            const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: plan.legs, limit: target, mark: plan.mark });
+            restOrderId = (placed && placed.orderId) || null;
+          }
+        }
+        pos.pendingCover.orderId = restOrderId;
+        decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId });
       } else {
         // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
-        const placed = deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
+        const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
         pos.covered = true;
         pos.coverId = nextId('cov');
         pos.coverLimit = plan.limit;
@@ -187,7 +204,7 @@ function processCandleClose(record, candle, priorCandle, deps) {
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
     } else {
-      const placed = deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
+      const placed = await deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
       const pos = {
         id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,
         shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,

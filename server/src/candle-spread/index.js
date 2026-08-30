@@ -6,6 +6,8 @@
  */
 const store = require('./store');
 const trader = require('./trader');
+const om = require('./order-manager');
+const summary = require('./summary');
 
 // Base run config(s), keyed by (symbol, expiration). NDX 0DTE first. Each base run is
 // fanned out into one shadow run PER VARIANT (see VARIANTS) that share the same live candle
@@ -58,6 +60,7 @@ let DEPS = null;         // { analyzeCandles, getOrFetchChainData, tradingClient
 let RUNS = [];
 let started = false;
 let schedTimer = null;
+let orderPollTimer = null;
 
 function todayEST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
@@ -94,27 +97,76 @@ function msToNextBoundary(now = Date.now()) {
   return Math.ceil((now + 1) / period) * period - now;
 }
 
+// Master live-arm switch. Real orders NEVER go to Schwab unless this env var is the exact
+// string 'true'. It is the deliberate "turn it on" toggle — the full send path below is wired
+// and ready, but stays dormant until this is set. Off by default so deploying this code does
+// not, by itself, start trading real money.
+const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
+
+// Test-mode knobs. In dryRun:'test' a REAL order is sent but at an intentionally unfillable price
+// (so you can watch it hit Schwab and stick without any execution risk), then the poller cancels
+// it after TEST_CANCEL_MS. TEST_FRAC = the debit fraction (0.1 => a $10.50 debit is sent at $1.05);
+// credit orders invert it (see order-manager.unfillablePrice).
+const TEST_FRAC = Number(process.env.CANDLE_SPREAD_TEST_FRAC) || 0.1;
+const TEST_CANCEL_MS = Number(process.env.CANDLE_SPREAD_TEST_CANCEL_MS) || 60000;
+const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
+
 // The order placer.
 //
-// HARD SAFETY RULE: real orders are sent ONLY in production (DEPS.isProd) AND only when
-// this run's dryRun flag is off. DEV MODE NEVER SENDS, regardless of dryRun — otherwise a
-// local dev server running alongside the prod server would place DUPLICATE orders to
-// Schwab. Anything that isn't a real send is simulated: logged and ASSUMED filled at its
-// limit so the day's state machine advances.
+// dryRun is TRI-STATE:
+//   true    -> SIMULATE: build + log the order, assume filled at limit (no Schwab contact). Default.
+//   'test'  -> REAL SEND at an UNFILLABLE price + auto-cancel (paper-validate the pipe, no fills).
+//   false   -> REAL SEND at the real limit (actual trading).
+//
+// HARD SAFETY RULE: a real order ('test' or false) reaches Schwab ONLY when ALL of:
+//   1. DEPS.isProd === true   — prod process only (dev NEVER sends → no duplicate orders).
+//   2. LIVE_ARMED === true    — the master CANDLE_SPREAD_LIVE switch is deliberately on.
+//   3. tradingClient + accountHash present.
+// Anything short of that is SIMULATED (assumed filled) so the strategy still plays out for review.
+//
+// DECOUPLING: even on a real send we return filled:true so the state machine keeps simulating the
+// INTENDED strategy (the run record stays complete). What actually happens at the broker is tracked
+// separately by the order-manager poller (real fills, test cancels). See order-manager.js.
 function makePlaceOrder(run, record) {
-  return function placeOrder(payload, meta) {
-    const canSendReal = DEPS && DEPS.isProd === true && run.dryRun === false;
-    if (!canSendReal) {
-      const why = !(DEPS && DEPS.isProd) ? 'dev-mode' : 'dryRun';
+  const mode = run.dryRun;                        // true | 'test' | false
+  const wantsRealSend = mode === false || mode === 'test';
+  return async function placeOrder(payload, meta) {
+    const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
+      && DEPS.tradingClient && DEPS.accountHash;
+    if (!canSend) {
+      const why = mode === true ? 'dryRun'
+        : !(DEPS && DEPS.isProd) ? 'dev-mode'
+        : !LIVE_ARMED ? 'disarmed'
+        : 'no-client';
       store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `not sent (${why}); assumed filled at limit` });
+      console.log(`[candle-spread] ${run.variant} ${summary.orderLine(meta, payload, `SIM:${why}`)}`);
       return { status: `simulated:${why}`, filled: true };
     }
-    // PROD + dryRun off = the REAL send path. Still STOPPED SHORT for now: the internal
-    // tradingClient.placeOrderByAcct(...) call is intentionally not wired yet — enable it
-    // here (and make placeOrder async) when ready to go live.
-    // e.g. return DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, payload)...
-    store.appendEvent(record, { type: 'order_real_pending', meta, payload, note: 'PROD real-send path reached — actual send not yet wired' });
-    return { status: 'real-not-enabled', filled: false };
+    // Real send. In test mode, rewrite the price to something that can't fill.
+    const isTest = mode === 'test';
+    const sendPayload = isTest
+      ? { ...payload, price: om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) }
+      : payload;
+    try {
+      const resp = await DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, sendPayload);
+      const orderId = resp && resp.orderId ? resp.orderId : null;
+      om.trackOrder(record, {
+        orderId, kind: meta.kind, positionId: meta.of || meta.positionId || null,
+        net: payload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
+        testMode: isTest, legs: meta.legs, placedAt: Date.now()
+      });
+      store.appendEvent(record, {
+        type: 'order_sent', meta, payload: sendPayload, orderId, testMode: isTest,
+        note: isTest ? `TEST send at unfillable ${sendPayload.price} (real ${payload.price})` : `LIVE send at ${sendPayload.price}`
+      });
+      console.log(`[candle-spread] ${run.variant} ${summary.orderLine(meta, sendPayload, `${isTest ? 'TEST' : 'LIVE'}#${orderId || '?'}`)}`);
+      return { status: isTest ? 'test-sent' : 'sent', filled: true, orderId };
+    } catch (e) {
+      store.appendEvent(record, { type: 'order_error', meta, payload: sendPayload, testMode: isTest, note: `Schwab send failed: ${e && e.message}` });
+      console.error(`[candle-spread] ${run.variant} ORDER SEND FAILED: ${e && e.message}`);
+      // Keep simulating the intended strategy (decoupled) despite the send failure.
+      return { status: 'error', filled: true, error: e && e.message };
+    }
   };
 }
 
@@ -174,7 +226,7 @@ async function processGroup(runs, kind) {
       const record = store.initRun(cfg, tradeDate);
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
-      trader.processCandleClose(record, sig.candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun, underlying, signalSymbol, priceSymbol });
+      await trader.processCandleClose(record, sig.candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun, underlying, signalSymbol, priceSymbol });
     } catch (e) {
       console.error(`[candle-spread] variant ${run.variant} error:`, e && e.message);
     }
@@ -194,6 +246,28 @@ function attemptTick(kind, retriesLeft) {
       }
     })
     .catch(err => console.error('[candle-spread] tick error:', err && err.message));
+}
+
+// --- Real order poller ----------------------------------------------------
+// Reconciles every live/test run's outstanding Schwab orders on a fixed interval: records real
+// fills, and cancels test-mode orders (after TEST_CANCEL_MS) and stale working OPENs. Inert
+// unless armed + prod + a run is actually sending real orders (dryRun 'test' | false). Costs
+// nothing in dry-run (no liveOrders to poll).
+async function runOrderPoll() {
+  if (!(LIVE_ARMED && DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return;
+  const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
+  for (const run of RUNS) {
+    if (!(run.dryRun === false || run.dryRun === 'test')) continue;
+    const cfg = { ...run, expiration: run.expiration || todayEST() };
+    const record = store.initRun(cfg, todayEST());
+    const outstanding = (record.state.liveOrders || []).some(o => !om.isTerminal(o));
+    if (!outstanding) continue;
+    try {
+      await om.reconcile(record, deps, { testCancelAfterMs: TEST_CANCEL_MS });
+    } catch (e) {
+      console.error(`[candle-spread] order poll error (${run.variant}):`, e && e.message);
+    }
+  }
 }
 
 // EOD (16:00): book each run's TERMINAL settlement P/L — the fair cross-variant metric,
@@ -226,6 +300,14 @@ async function eodSettlement() {
         type: 'eod_settlement', variant: run.variant, settle: px,
         terminalPnl: term.total, floorPnl: term.floor, positions: term.positions
       });
+      // Concise, at-a-glance day summary (orders/time/strikes/price + real broker outcomes),
+      // persisted as its own event AND printed to the log so the day is reviewable without
+      // scrolling the full JSON. Built from the record, so it's identical in dry-run and live.
+      try {
+        const daySummary = summary.buildDaySummary(record);
+        store.appendEvent(record, { type: 'eod_summary', variant: run.variant, summary: daySummary });
+        console.log('\n' + summary.renderText(daySummary) + '\n');
+      } catch (e) { console.error('[candle-spread] EOD summary failed:', e && e.message); }
     }
   }
 }
@@ -256,7 +338,20 @@ function start(deps) {
   RUNS = buildRuns();
   started = true;
   scheduleNext();
-  console.log(`[candle-spread] started (dry-run) — ${RUNS.length} run(s):`,
+  // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).
+  // Harmless when disarmed/dry-run: runOrderPoll early-returns and there are no liveOrders.
+  orderPollTimer = setInterval(() => { runOrderPoll().catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);
+  if (orderPollTimer.unref) orderPollTimer.unref();
+  // Live-send status. Real orders require prod + CANDLE_SPREAD_LIVE=true + a run with
+  // dryRun:false (real) or dryRun:'test' (unfillable paper send).
+  const liveRuns = RUNS.filter(r => r.dryRun === false);
+  const testRuns = RUNS.filter(r => r.dryRun === 'test');
+  const liveState = !(deps && deps.isProd) ? 'DEV (never sends)'
+    : !LIVE_ARMED ? 'DISARMED (CANDLE_SPREAD_LIVE not set — no real orders)'
+    : liveRuns.length ? `*** LIVE-ARMED — real orders WILL be sent for: ${liveRuns.map(r => r.variant).join(',')} ***`
+    : testRuns.length ? `ARMED, TEST-ONLY — unfillable paper orders for: ${testRuns.map(r => r.variant).join(',')}`
+    : 'ARMED but all runs dryRun:true (no real orders)';
+  console.log(`[candle-spread] started — ${RUNS.length} run(s) [${liveState}]:`,
     RUNS.map(r => `${r.symbol}/${r.variant}(${r.coverSelector})`).join(', '));
 }
 

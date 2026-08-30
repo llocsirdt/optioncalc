@@ -92,7 +92,7 @@ function buildSeries() {
 //                strike) at/after the cover candle (the agreed resting-order rule); covers that never
 //                get a wick-through-center settle NAKED. Engine DECISIONS/cadence are unchanged
 //                (Model B) — only the fill accounting becomes honest.
-function runDayVariant(dayBars, priorBar, variant) {
+async function runDayVariant(dayBars, priorBar, variant) {
   const cfg = { ...CFG_BASE, ...variant };
   const record = store.initRun(cfg, etDay(dayBars[0].datetime).replace(/\//g, '-'));
   // reset state (initRun may have returned a stale record from the temp dir on a same-name reuse)
@@ -110,7 +110,7 @@ function runDayVariant(dayBars, priorBar, variant) {
     const tau = bs.tauFromTime(candle.datetime);
     const getLeg = bs.makeSyntheticLegAccessor({ underlying: candle.close, tau, ivFn: bs.makeIvFn({ base: iv, skew: 0 }, candle.close) });
     const before = new Set(record.state.positions.filter(p => p.covered).map(p => p.id));
-    trader.processCandleClose(record, candle, prev, { getLeg, placeOrder, dryRun: true, underlying: candle.close, signalSymbol: SYMBOL, priceSymbol: SYMBOL });
+    await trader.processCandleClose(record, candle, prev, { getLeg, placeOrder, dryRun: true, underlying: candle.close, signalSymbol: SYMBOL, priceSymbol: SYMBOL });
     for (const p of record.state.positions) if (p.covered && !before.has(p.id) && coverAt[p.id] == null) coverAt[p.id] = i;
     prev = candle;
   }
@@ -165,7 +165,7 @@ function runDayVariant(dayBars, priorBar, variant) {
 }
 
 // --- 3. Main: group bars by day, replay every variant, aggregate --------------------------------
-function main() {
+async function main() {
   const bars = buildSeries();
   // group into trading days (preserving a prior-bar handoff so day 1 bar isn't treated as first-of-day
   // unless it truly is — the engine's first-of-day path uses the Bollinger gate, which is fine).
@@ -181,7 +181,7 @@ function main() {
     const firstIdx = bars.indexOf(dayBars[0]);
     const priorBar = firstIdx > 0 ? bars[firstIdx - 1] : null;
     const res = { date: d };
-    for (const v of VARIANTS) res[v.variant] = runDayVariant(dayBars, priorBar, v);
+    for (const v of VARIANTS) res[v.variant] = await runDayVariant(dayBars, priorBar, v);
     rows.push(res);
   }
 
@@ -229,4 +229,4 @@ function main() {
   }
 }
 
-main();
+main();   // async; top-level fire-and-forget (script exits when the promise chain settles)
