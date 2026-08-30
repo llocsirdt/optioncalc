@@ -72,16 +72,20 @@ for (let i = 26; i < days.length; i++) {
 
 // --- report: per regime feature, each strategy's avg P/L per bucket + the winner ---
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+// Per regime bucket, per strategy: avg P/L AND win-rate (% positive days) — the risk-relevant pair for
+// scattered (non-consecutive) days, since rolling-window/streak metrics don't apply within a bucket.
+// Also flags the best by avg and, separately, the most consistent (win-rate).
 function report(title, keyFn, order) {
   const groups = new Map();
   for (const r of rows) { const k = keyFn(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
-  console.log(`\n${title}`);
-  console.log('  ' + 'regime'.padEnd(14) + 'days'.padEnd(6) + stratNames.map(n => `avg ${n}`.padEnd(11)).join('') + 'BEST');
+  console.log(`\n${title}   [cell = avg/win% ; BEST-avg | BEST-win]`);
+  console.log('  ' + 'regime'.padEnd(13) + 'days'.padEnd(6) + stratNames.map(n => n.padEnd(15)).join('') + 'BEST');
   for (const k of order.filter(k => groups.has(k))) {
     const g = groups.get(k), n = g.length;
-    const avgs = stratNames.map(s => g.reduce((a, r) => a + r.terms[s], 0) / n);
-    const best = stratNames[avgs.indexOf(Math.max(...avgs))];
-    console.log('  ' + k.padEnd(14) + String(n).padEnd(6) + avgs.map(a => usd(a).padEnd(11)).join('') + best);
+    const cells = stratNames.map(s => ({ s, avg: g.reduce((a, r) => a + r.terms[s], 0) / n, win: Math.round(100 * g.filter(r => r.terms[s] > 0).length / n) }));
+    const bestAvg = cells.reduce((a, b) => b.avg > a.avg ? b : a).s;
+    const bestWin = cells.reduce((a, b) => b.win > a.win ? b : a).s;
+    console.log('  ' + k.padEnd(13) + String(n).padEnd(6) + cells.map(c => `${usd(c.avg)}/${c.win}%`.padEnd(15)).join('') + `${bestAvg} | ${bestWin}`);
   }
 }
 
