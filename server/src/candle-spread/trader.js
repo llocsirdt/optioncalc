@@ -87,10 +87,35 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   st.lastCandleTime = candleTime;
 
   const firstOfDay = !priorCandle;
-  const bands = firstOfDay ? bandsFor(candle) : null;
-  const priorBands = priorCandle ? bandsFor(priorCandle) : null; // for the cover over-extension override
+  const ported = typeof deps.signalFn === 'function';
+  const bands = (!ported && firstOfDay) ? bandsFor(candle) : null;
+  const priorBands = (!ported && priorCandle) ? bandsFor(priorCandle) : null; // classic cover override
   const simpleDir = L.simpleDirection(candle);
-  const openSide = L.classifyOpen(candle, priorCandle, bands);
+
+  // DECISION SOURCE.
+  //   CLASSIC (v0-v3): close-vs-open + Bollinger/high-low break, via spread-logic.classifyOpen /
+  //     shouldCover on the single 15m `candle`.
+  //   PORTED (v4-v9): the multi-timeframe signal fn drives openSide + which side(s) to cover, off the
+  //     live `A` object (deps.A / deps.priorA from analysis-builder). Mirrors backtest-v6-5m.runDay5m:
+  //     per-side held state in, { openSide, cover | coverSide } out. Everything below (open/cover/
+  //     resting-fill machinery) is SHARED. See [[project_candle_spread_live_order_wiring]].
+  let openSide = null, coverSet = [], portedSig = null;
+  if (ported) {
+    const heldBull = st.positions.some(p => p.filled && p.side === 'bull' && !p.covered);
+    const heldBear = st.positions.some(p => p.filled && p.side === 'bear' && !p.covered);
+    portedSig = deps.signalFn(deps.A, deps.priorA, {
+      heldDir: st.direction, heldBull, heldBear,
+      isFifteen: deps.isFifteen !== false, directionality: deps.directionality,
+      cfg: deps.signalCfg || {}
+    }) || {};
+    openSide = portedSig.openSide || null;
+    // coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy cover:true = both.
+    coverSet = portedSig.coverSide
+      ? (portedSig.coverSide === 'both' ? ['bull', 'bear'] : [portedSig.coverSide])
+      : (portedSig.cover ? ['bull', 'bear'] : []);
+  } else {
+    openSide = L.classifyOpen(candle, priorCandle, bands);
+  }
 
   // SIGNAL vs PRICING split: `candle` is the SIGNAL instrument (e.g. NQ futures) that drives
   // direction / Bollinger gates / reversal detection; `underlying` is the PRICING instrument's
@@ -114,20 +139,22 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // Cover evaluation + context (logged so run analysis can show WHY we covered or held:
   // whether the reversal candle broke the prior extreme, and whether the Bollinger override
   // fired). Only meaningful while we hold a position.
-  const coverSignal = L.shouldCover(st.direction, candle, priorCandle, priorBands);
-  const coverContext = st.direction === 'none' ? null : {
-    heldDirection: st.direction,
-    reversalDir: simpleDir,
-    prior: priorCandle ? { high: priorCandle.high, low: priorCandle.low, close: priorCandle.close } : null,
-    priorBands: priorBands ? { upper: priorBands.upper, lower: priorBands.lower } : null,
-    brokeNewHigh: priorCandle ? candle.high > priorCandle.high : null,
-    brokeNewLow: priorCandle ? candle.low < priorCandle.low : null,
-    bbOverride: !!(priorCandle && priorBands && (
-      (st.direction === 'bull' && priorBands.upper != null && priorCandle.close > priorBands.upper) ||
-      (st.direction === 'bear' && priorBands.lower != null && priorCandle.close < priorBands.lower)
-    )),
-    covered: coverSignal
-  };
+  const coverSignal = ported ? coverSet.length > 0 : L.shouldCover(st.direction, candle, priorCandle, priorBands);
+  const coverContext = ported
+    ? (coverSet.length ? { heldDirection: st.direction, coverSide: portedSig.coverSide || (portedSig.cover ? 'both' : null), reason: portedSig.reason, covered: true } : null)
+    : (st.direction === 'none' ? null : {
+      heldDirection: st.direction,
+      reversalDir: simpleDir,
+      prior: priorCandle ? { high: priorCandle.high, low: priorCandle.low, close: priorCandle.close } : null,
+      priorBands: priorBands ? { upper: priorBands.upper, lower: priorBands.lower } : null,
+      brokeNewHigh: priorCandle ? candle.high > priorCandle.high : null,
+      brokeNewLow: priorCandle ? candle.low < priorCandle.low : null,
+      bbOverride: !!(priorCandle && priorBands && (
+        (st.direction === 'bull' && priorBands.upper != null && priorCandle.close > priorBands.upper) ||
+        (st.direction === 'bear' && priorBands.lower != null && priorCandle.close < priorBands.lower)
+      )),
+      covered: coverSignal
+    });
 
   // (3) COVER — only on a CONFIRMED reversal (see spread-logic.shouldCover): a candle
   // closing opposite our held direction that FAILED to extend the prior candle's extreme
@@ -138,8 +165,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // 'fixed' = current tent | 'greedy' = best per-position candidate | 'joint' = basket
   // optimization). This is the seam the 3 shadow variants differ on; everything else is shared.
   if (coverSignal) {
-    // Exclude positions that already have a resting cover working (don't re-select them).
-    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover);
+    // Exclude positions that already have a resting cover working (don't re-select them). In ported
+    // mode cover ONLY the side(s) the signal targeted (v7 per-side coverSide); classic covers all.
+    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover && (!ported || coverSet.includes(p.side)));
     const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
     for (const plan of plans) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
@@ -184,8 +212,12 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         decisions.push({ action: 'cover', positionId: pos.id, coverId: pos.coverId, legs: plan.legs, mark: plan.mark, limit: plan.limit, geometry: plan.geometry, longStrike: plan.longStrike, peakExtra: plan.peakExtra, lockedFloor: plan.floor });
       }
     }
-    // Cover-only reversal leaves us flat unless step 4 opens a new side below.
-    st.direction = 'none';
+    // Reset the held stance so a flip's opposite open can proceed. Classic always goes flat.
+    // Ported mirrors runDay5m: reset only when covering everything / both / the currently-held side
+    // (a partial cover of the OTHER side leaves our stance intact).
+    if (!ported || portedSig.cover || portedSig.coverSide === 'both' || portedSig.coverSide === st.direction) {
+      st.direction = 'none';
+    }
   }
 
   // (4) OPEN — if the candle strictly qualifies. Neutral (openSide === null) intentionally
@@ -194,8 +226,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // Conflict guard: with the confirmed-reversal cover rule, a candle can signal the OPPOSITE
   // side while we still hold an uncovered position (because the reversal wasn't confirmed, so
   // step 3 didn't cover). In that case stay in the trend — don't open a counter-position. A
-  // real flip only happens after a cover (which sets direction to 'none').
-  if (openSide && openSide !== st.direction && st.direction !== 'none') {
+  // real flip only happens after a cover (which sets direction to 'none'). Ported bidirectional
+  // runs (v7 "be wrong") deliberately bypass this to open the opposite side while holding.
+  const bidir = ported && deps.bidirectional === true;
+  if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
     const res = buildOpen(openSide, underlying, cfg, deps.getLeg);
@@ -248,6 +282,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     bands,
     coverContext,
     classification: { simpleDir, openSide, firstOfDay },
+    // Ported (v4-v9) provenance: which signal fired and the 5m/15m cadence flag.
+    signal: ported ? { variant: cfg.variant, reason: portedSig.reason, isFifteen: deps.isFifteen !== false, directionality: deps.directionality } : null,
     direction: st.direction,
     realizedPnl: st.realizedPnl,
     decisions,
