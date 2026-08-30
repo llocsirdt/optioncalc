@@ -73,6 +73,50 @@ function resolveLegs(legs, getLeg) {
   return { resolved, longMid, shortMid };
 }
 
+// Place a cover as a REAL resting BUY limit at target (= width − openCost) and mark it pending.
+// A resting debit limit fills at market once the ask reaches target (immediately for a cheap
+// deep-ITM cover) — the live analog of resolveRestingCovers' mark<=target rule. Shared by the
+// reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
+// machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
+async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note) {
+  const target = round2(cfg.spreadWidth - pos.limit);
+  pos.pendingCover = { legs: plan.legs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
+  pos.coverStatus = 'resting';
+  let restOrderId = null;
+  if (target > 0) {
+    const rl = resolveLegs(plan.legs, deps.getLeg);
+    if (!rl.error) {
+      const payload = buildOrderPayload(rl.resolved, L.roundToTick(target, cfg.tickIncrement), cfg.quantity, 'DEBIT');
+      const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: plan.legs, limit: target, mark: plan.mark });
+      restOrderId = (placed && placed.orderId) || null;
+    }
+  }
+  pos.pendingCover.orderId = restOrderId;
+  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, note });
+}
+
+// v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
+// the run's caps; false (and logs 'open-skip-cap') if it would breach one:
+//   riskCap  — legacy total-uncovered-debit ceiling.
+//   softCap  — "churn" cap on AT-RISK debit (uncovered AND not deep-ITM). exemptTrendStack skips it
+//              when every uncovered position is the SAME side (a trend stack, not chop churn).
+//   hardCap  — absolute ceiling on TOTAL uncovered debit (deep-ITM included).
+// Marks come from the real chain (coverMarkNow); deep-ITM = mark >= proactiveCoverFrac × width.
+function capAllowsOpen(st, res, openSide, cfg, deps, decisions) {
+  if (deps.riskCap == null && deps.softCap == null && deps.hardCap == null) return true;
+  const nd = res.limit * 100 * cfg.quantity;
+  const deepFrac = deps.proactiveCoverFrac;
+  const isDeep = pos => deepFrac != null && !pos.covered && (coverMarkNow(pos.legs, deps.getLeg) || 0) >= deepFrac * cfg.spreadWidth;
+  const uncov = st.positions.filter(p => p.filled && !p.covered);
+  let totalUncov = 0, atRisk = 0;
+  for (const p of uncov) { const d = p.limit * 100 * (p.quantity || cfg.quantity); totalUncov += d; if (!isDeep(p)) atRisk += d; }
+  const stacking = uncov.length > 0 && uncov.every(p => p.side === openSide);
+  const softOk = (deps.exemptTrendStack && stacking) ? true : (atRisk + nd <= (deps.softCap != null ? deps.softCap : Infinity));
+  const ok = (totalUncov + nd <= (deps.riskCap != null ? deps.riskCap : Infinity)) && softOk && (totalUncov + nd <= (deps.hardCap != null ? deps.hardCap : Infinity));
+  if (!ok) decisions.push({ action: 'open-skip-cap', side: openSide, addDebit: round2(nd), totalUncov: round2(totalUncov), atRisk: round2(atRisk) });
+  return ok;
+}
+
 // --- Core per-tick sequence (testable) ------------------------------------
 // deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
 // async because placeOrder may send a real order to Schwab (awaited network call).
@@ -173,29 +217,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
       const pos = uncovered.find(p => p.id === plan.positionId);
       if (cfg.coverFillModel === 'resting') {
-        // RESTING model: place the cover as a working order at the ideal target (= width − openCost)
-        // — DON'T book it or lock the floor yet. resolveRestingCovers (below, run each candle) fills
-        // it when the cover's real mark reaches the target: cross cheap when already below (deep-ITM
-        // lock), else fill at the resting target; unfilled by EOD → the position settles naked.
-        const target = round2(cfg.spreadWidth - pos.limit);
-        pos.pendingCover = { legs: plan.legs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
-        pos.coverStatus = 'resting';
-        // Send the cover as a REAL resting BUY limit at `target` (live/test). A resting debit limit
-        // fills at market once the ask reaches target — possibly immediately for a cheap deep-ITM
-        // cover — which is exactly resolveRestingCovers' mark<=target rule. In dry-run this only
-        // logs. The state machine still books the fill via resolveRestingCovers (decoupled); the
-        // poller reports the real order's actual broker fill.
-        let restOrderId = null;
-        if (target > 0) {
-          const rl = resolveLegs(plan.legs, deps.getLeg);
-          if (!rl.error) {
-            const payload = buildOrderPayload(rl.resolved, L.roundToTick(target, cfg.tickIncrement), cfg.quantity, 'DEBIT');
-            const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: plan.legs, limit: target, mark: plan.mark });
-            restOrderId = (placed && placed.orderId) || null;
-          }
-        }
-        pos.pendingCover.orderId = restOrderId;
-        decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId });
+        // RESTING model: place a working cover at the ideal target (= width − openCost); don't book
+        // the floor yet — resolveRestingCovers fills it when the real mark reaches target.
+        await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions);
       } else {
         // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
         const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
@@ -220,6 +244,20 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     }
   }
 
+  // (3b) v8 PROACTIVE DEEP-ITM COVER (ported, opts.proactiveCoverFrac): rest a tent cover on any
+  // uncovered leader whose spread now marks >= frac×width (deep ITM → a good tent locks cheaply).
+  // This locks winners and, via the cap logic below, stops them counting toward the at-risk churn cap.
+  if (ported && deps.proactiveCoverFrac != null) {
+    for (const pos of st.positions) {
+      if (!pos.filled || pos.covered || pos.pendingCover) continue;
+      const m = coverMarkNow(pos.legs, deps.getLeg);
+      if (m != null && m >= deps.proactiveCoverFrac * cfg.spreadWidth) {
+        const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);
+        if (!plan.error && cfg.coverFillModel === 'resting') await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'proactive-deep-itm');
+      }
+    }
+  }
+
   // (4) OPEN — if the candle strictly qualifies. Neutral (openSide === null) intentionally
   // does nothing for now; this is the isolated branch to extend later.
   //
@@ -237,6 +275,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
+    } else if (ported && !capAllowsOpen(st, res, openSide, cfg, deps, decisions)) {
+      // v8 caps blocked this open (see capAllowsOpen — logs an 'open-skip-cap' decision).
     } else {
       const placed = await deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
       const pos = {

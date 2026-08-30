@@ -51,7 +51,10 @@ const VARIANTS = [
   { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { variant: 'v5', variantLabel: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
   { variant: 'v6', variantLabel: '5m-harness',      signalFn: v6Signal, signalCfg: { fiveMin: true }, ...PORTED_COVER },
-  { variant: 'v7', variantLabel: 'be-wrong',        signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER }
+  { variant: 'v7', variantLabel: 'be-wrong',        signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
+  // v8 = v6 signal + risk caps: proactively cover deep-ITM leaders (frac×width), a soft "churn" cap
+  // on at-risk debit (exempt for a same-side trend stack), and a hard total-uncovered backstop.
+  { variant: 'v8', variantLabel: 'risk-capped',     signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER }
 ];
 
 // Expand base runs × variants into the concrete run list.
@@ -265,6 +268,9 @@ async function processGroup(runs, kind) {
       await trader.processCandleClose(record, candle, null, {
         getLeg, placeOrder, dryRun: run.dryRun,
         signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
+        // v8 risk-cap opts (undefined for other variants → cap logic inert)
+        riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
+        proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
     } catch (e) {
