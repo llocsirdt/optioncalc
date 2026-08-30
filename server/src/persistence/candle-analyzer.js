@@ -1324,8 +1324,34 @@ function getCachedSymbols() {
   return Array.from(symbols);
 }
 
+// Deep raw 1m candles for the candle-spread analysis-builder (v4-v9 live signals). Fetches ~`days`
+// days of 1-minute bars via Schwab priceHistory, drops zero candles, and — for index symbols, which
+// trade RTH only — filters to 9:30-16:00 ET, matching the raw 1m the backtest dataset was built from
+// so the live analysis-builder reproduces the backtested `A`. Returns oldest-first, untruncated
+// (unlike analyzeCandles, which caps at CANDLE_LIMIT). Futures (e.g. /NQ) are returned as-is (24h).
+const RTH_INDEX_SYMBOLS = new Set(['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX']);
+async function getRaw1m(symbol, { days = 5, endDate = Date.now() } = {}) {
+  const bare = symbol.replace(/^\$/, '');
+  const isIndex = RTH_INDEX_SYMBOLS.has(bare);
+  const apiSymbol = symbol.startsWith('$') ? symbol : (isIndex ? `$${bare}` : symbol);
+  const data = await marketClient.priceHistory(apiSymbol, {
+    periodType: 'day', period: days, frequencyType: 'minute', frequency: 1, endDate
+  });
+  let candles = (data.candles || []).filter(c => c.open !== 0 || c.high !== 0 || c.low !== 0 || c.close !== 0);
+  if (isIndex) {
+    candles = candles.filter(c => {
+      const est = new Date(new Date(c.datetime).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const m = est.getHours() * 60 + est.getMinutes();
+      return m >= 570 && m < 960; // 9:30 (inclusive) .. 16:00 (exclusive)
+    });
+  }
+  candles.sort((a, b) => a.datetime - b.datetime);
+  return candles;
+}
+
 module.exports = {
   analyzeCandles,
+  getRaw1m,
   createWorkingData,
   populateBaseCache,
   hasBaseCache,

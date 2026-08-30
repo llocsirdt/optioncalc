@@ -8,6 +8,15 @@ const store = require('./store');
 const trader = require('./trader');
 const om = require('./order-manager');
 const summary = require('./summary');
+const ab = require('./analysis-builder');
+const { v4Signal } = require('./signals/v4-signals');
+const { v5Signal } = require('./signals/v5-signals');
+const { v6Signal } = require('./signals/v6-signals');
+const { v7Signal } = require('./signals/v7-signals');
+
+// Gate a signal to 15m closes only (classic/v4/v5 act at 15m; v6/v7 act every 5m). Mirrors the
+// backtest's at15 wrapper: on intra-15m bars it returns a no-op decision.
+const at15 = fn => (A, p, ctx) => ctx.isFifteen === false ? { openSide: null, cover: false } : fn(A, p, ctx);
 
 // Base run config(s), keyed by (symbol, expiration). NDX 0DTE first. Each base run is
 // fanned out into one shadow run PER VARIANT (see VARIANTS) that share the same live candle
@@ -29,21 +38,20 @@ const BASE_RUNS = [
   }
 ];
 
-// The parallel shadow strategies. coverSelector is the only behavioral difference.
-//   v0 fixed      = original behavior (tent cover, 0.525×width CAP pricing) — kept UNCHANGED
-//                   as the optimistic-instant-fill reference for future realistic fill tracking.
-//   v3 fixed-mark = same tent geometry as v0 but priced at the real mark (mark+tick, no cap),
-//                   so v3 vs v1/v2 is an apples-to-apples (all mark-priced) geometry comparison.
-//   v1 greedy     = phase-1 best-per-position candidate cover (skew-aware pricing).
-//   v2 joint      = phase-2 joint basket optimization over the covering stack.
-// coverFillModel: 'resting' = honest two-mode fill (cover works at target = width−open, fills when
-// its real mark reaches it; else settles naked). v0 stays on the default assume-fill as the
-// optimistic ceiling/control. See trader.resolveRestingCovers.
+// The ported SIGNAL lineage (v4-v9). Each variant is the multi-timeframe signal fn (off the live
+// `A` object; see analysis-builder + signals/) plus its cfg and cadence. All share the realistic
+// TENT cover: coverSelector 'fixed-mark' (mark-priced tent) + coverFillModel 'resting' (works at
+// target = width−open, fills when the real mark reaches it) — matching backtest-v6-5m.runDay5m.
+//   v4/v5 act on 15m closes only (at15); v6/v7 act every 5m (fiveMin).
+//   v7 = v6 signal + "be wrong" bidirectional opens (opposite side while holding).
+// dryRun defaults true (simulate); flip a single variant to 'test'/false to send. v8 (risk caps) and
+// v9 (separate mean-reversion engine) still TODO — see [[project_candle_spread_live_order_wiring]].
+const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 const VARIANTS = [
-  { variant: 'v0', variantLabel: 'fixed-cap',  coverSelector: 'fixed' },
-  { variant: 'v3', variantLabel: 'fixed-mark', coverSelector: 'fixed-mark', coverFillModel: 'resting' },
-  { variant: 'v1', variantLabel: 'greedy',     coverSelector: 'greedy',     coverFillModel: 'resting' },
-  { variant: 'v2', variantLabel: 'joint',      coverSelector: 'joint',      coverFillModel: 'resting' }
+  { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
+  { variant: 'v5', variantLabel: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
+  { variant: 'v6', variantLabel: '5m-harness',      signalFn: v6Signal, signalCfg: { fiveMin: true }, ...PORTED_COVER },
+  { variant: 'v7', variantLabel: 'be-wrong',        signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER }
 ];
 
 // Expand base runs × variants into the concrete run list.
@@ -76,16 +84,18 @@ function etParts(date = new Date()) {
 }
 
 const RTH_WEEKDAYS = new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
-const FIRST_ACTION_MIN = 9 * 60 + 45;   // 9:45 close of the first (9:30-9:45) candle
-const LAST_ACTION_MIN = 15 * 60 + 45;   // 15:45 last normal action
-const EOD_MIN = 16 * 60;                 // 16:00 close -> EOD placeholder
+const STEP_MS = 5 * 60 * 1000;           // the engine now steps every 5m (v6/v7 act intra-15m)
+const FIRST_ACTION_MIN = 9 * 60 + 35;   // 9:35 close of the first (9:30-9:35) 5m candle
+const LAST_ACTION_MIN = 15 * 60 + 55;   // 15:55 last normal action before the 16:00 settle
+const EOD_MIN = 16 * 60;                 // 16:00 close -> EOD settlement + summary
 
-// Classify a 15-min boundary (by its ET wall-clock). Returns 'action' | 'first' | 'eod' | null.
+// Classify a 5-min boundary (by its ET wall-clock). Returns 'action' | 'first' | 'eod' | null.
+// 'first' (9:35) is the day's first action bar → priorA=null (no intra-day prior yet).
 function classifyBoundary(date) {
   const { weekday, hour, minute } = etParts(date);
   if (!RTH_WEEKDAYS.has(weekday)) return null;
   const t = hour * 60 + minute;
-  if (t % 15 !== 0) return null;
+  if (t % 5 !== 0) return null;
   if (t === EOD_MIN) return 'eod';
   if (t === FIRST_ACTION_MIN) return 'first';
   if (t > FIRST_ACTION_MIN && t <= LAST_ACTION_MIN) return 'action';
@@ -93,9 +103,13 @@ function classifyBoundary(date) {
 }
 
 function msToNextBoundary(now = Date.now()) {
-  const period = 15 * 60 * 1000;
-  return Math.ceil((now + 1) / period) * period - now;
+  return Math.ceil((now + 1) / STEP_MS) * STEP_MS - now;
 }
+
+// The 5m mark we just passed (epoch ms): now floored to the 5m grid. The scheduler fires ~5s after
+// a boundary, so this is that boundary. isFifteen = the mark is also a 15m close.
+function currentMark(now = Date.now()) { return Math.floor(now / STEP_MS) * STEP_MS; }
+function markIsFifteen(mark) { return new Date(mark).getMinutes() % 15 === 0; }
 
 // Master live-arm switch. Real orders NEVER go to Schwab unless this env var is the exact
 // string 'true'. It is the deliberate "turn it on" toggle — the full send path below is wired
@@ -170,15 +184,14 @@ function makePlaceOrder(run, record) {
   };
 }
 
-// Find the just-closed 15m candle (and its prior) from newest-first 15m candles.
-// A candle is "closed" when its open time + 15min <= now. NOTE: assumes candle.datetime
-// is the candle's OPEN time in epoch ms — verify against live Schwab data when enabling.
-function pickJustClosed(candles, now = Date.now()) {
-  const FIFTEEN = 15 * 60 * 1000;
+// Find the just-closed candle (and its prior) from newest-first candles of the given period.
+// A candle is "closed" when its open time + periodMs <= now. NOTE: assumes candle.datetime is the
+// candle's OPEN time in epoch ms — verify against live Schwab data when enabling.
+function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
   for (let i = 0; i < candles.length; i++) {
     const dt = typeof candles[i].datetime === 'number' ? candles[i].datetime : null;
     if (dt == null) continue;
-    if (dt + FIFTEEN <= now + 2000) { // small skew tolerance
+    if (dt + periodMs <= now + 2000) { // small skew tolerance
       return { candle: candles[i], prior: candles[i + 1] || null };
     }
   }
@@ -186,47 +199,74 @@ function pickJustClosed(candles, now = Date.now()) {
 }
 
 // Group runs that share live data (candles + chain) so we fetch ONCE per (symbol, expiration)
-// per tick instead of once per variant — 3 variants must not triple the Schwab load.
+// per tick instead of once per variant — the variants must not multiply the Schwab load.
 function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`; }
 
 async function processGroup(runs, kind) {
   const sample = runs[0];
   const expiration = sample.expiration || todayEST(); // 0DTE default
   const tradeDate = todayEST();
-  const priceSymbol = sample.symbol;                       // NDX (strikes/chain)
-  const signalSymbol = sample.signalSymbol || priceSymbol; // /NQ (direction/BB), else same
+  const priceSymbol = sample.symbol;                        // NDX (strikes/chain)
+  const signalSymbol = sample.signalSymbol || priceSymbol;  // instrument the `A` object is built from
 
-  // SIGNAL candles (direction/Bollinger/reversal) — from the signal instrument.
-  const sigAnalysis = await DEPS.analyzeCandles(signalSymbol, { timeframe: '15m' });
-  const sigCandles = sigAnalysis?.candleData?.['15m']?.candles || [];
-  const sig = pickJustClosed(sigCandles);
-  if (!sig.candle) return { pending: 'signal-candle-not-available' };
+  const T = currentMark();
+  const isFifteen = markIsFifteen(T);
 
-  // PRICING underlying (strike centering) — the price instrument's just-closed close (NDX).
-  // When signal == price we reuse the signal candle (single-instrument mode, no extra fetch).
-  let underlying = sig.candle.close;
+  // Build the live multi-timeframe `A` from the SIGNAL instrument's deep raw 1m — same
+  // resample + indicators + slotting as the backtest (analysis-builder), so the ported signals see
+  // the same `A` they were validated on. PARITY NOTE: the builder is parity-proven on NDX RTH data;
+  // a /NQ (24h futures) signal instrument needs its own parity fixture before arming.
+  let raw1m;
+  try { raw1m = await DEPS.getRaw1m(signalSymbol); }
+  catch (e) { console.error('[candle-spread] getRaw1m failed:', e && e.message); return { pending: 'raw1m-fetch-failed' }; }
+  if (!raw1m || raw1m.length < 100) return { pending: 'raw1m-insufficient' };
+  const series = ab.buildSeries(raw1m);
+  const cur = ab.analysisAt(series, T);
+  if (!cur.warm) return { pending: 'analysis-not-warm' };    // retry: 1m/5m/15m/60m not all warm yet
+  const A = cur.A;
+  // priorA = the prior 5m bar's A (null on the day's first action bar → matches runDay5m's per-day
+  // reset; the signal reads prior['15m'] which correctly resolves to the prior 15m candle).
+  const priorA = kind === 'first' ? null : ab.analysisAt(series, T - STEP_MS).A;
+
+  // PRICING underlying (strike centering). Single-instrument: A's own 5m close. Split (signal≠price):
+  // the price instrument's just-closed 5m close.
+  let underlying = A['5m'] && A['5m'].close;
   if (signalSymbol !== priceSymbol) {
-    const pxAnalysis = await DEPS.analyzeCandles(priceSymbol, { timeframe: '15m' });
-    const px = pickJustClosed(pxAnalysis?.candleData?.['15m']?.candles || []);
-    if (!px.candle) return { pending: 'price-candle-not-available' };
-    underlying = px.candle.close;
+    try {
+      const pxAnalysis = await DEPS.analyzeCandles(priceSymbol, { timeframe: '5m' });
+      const px = pickJustClosed(pxAnalysis?.candleData?.['5m']?.candles || [], STEP_MS);
+      if (!px.candle) return { pending: 'price-candle-not-available' };
+      underlying = px.candle.close;
+    } catch (e) { console.error('[candle-spread] price fetch failed:', e && e.message); return { pending: 'price-fetch-failed' }; }
   }
+  if (!(underlying > 0)) return { pending: 'no-underlying' };
 
   // Option chain for pricing — the price instrument (NDX).
   const chainData = await DEPS.getOrFetchChainData(priceSymbol, expiration);
 
-  // First candle of the day uses the Bollinger gate: pass prior=null so classifyOpen takes
-  // the first-candle branch even though a prior-session candle exists in the data.
-  const priorForLogic = kind === 'first' ? null : sig.prior;
+  // Synthetic 5m candle for the engine's plumbing (de-dupe key, event log, classic simpleDir field).
+  // Decisions come from the signal fn off `A`, NOT from this candle. Compact "MM/DD HH:MM" ET time
+  // (matches the classic convention + the summary's TIME column; unique per 5m mark).
+  const tp = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date(T)).map(p => [p.type, p.value]));
+  const markTimeEST = `${tp.month}/${tp.day} ${tp.hour === '24' ? '00' : tp.hour}:${tp.minute}`;
+  const c5 = A['5m'];
+  const candle = { timeEST: markTimeEST, open: c5.open, high: c5.high, low: c5.low, close: c5.close };
 
-  // Feed every variant the SAME signal candle + underlying + chain (apples-to-apples).
+  // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
     try {
       const cfg = { ...run, expiration };
+      delete cfg.signalFn;   // functions don't serialize; keep the persisted run config JSON-clean
       const record = store.initRun(cfg, tradeDate);
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
-      await trader.processCandleClose(record, sig.candle, priorForLogic, { getLeg, placeOrder, dryRun: run.dryRun, underlying, signalSymbol, priceSymbol });
+      await trader.processCandleClose(record, candle, null, {
+        getLeg, placeOrder, dryRun: run.dryRun,
+        signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
+        A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
+      });
     } catch (e) {
       console.error(`[candle-spread] variant ${run.variant} error:`, e && e.message);
     }

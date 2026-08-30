@@ -10,7 +10,7 @@ const PersistenceManager = require('./persistence/persistence');
 // Import shared handlers and market client
 const { handleChainsRequest } = require('./persistence/chains-handler');
 const { handlePriceHistoryRequest } = require('./persistence/price-history-handler');
-const { analyzeCandles, streamingCandleSource } = require('./persistence/candle-analyzer');
+const { analyzeCandles, getRaw1m, streamingCandleSource } = require('./persistence/candle-analyzer');
 const { getChartSeries } = require('./chart-series');
 const { getBasis } = require('./nq-ndx-basis');
 const candleSpread = require('./candle-spread');
@@ -1199,6 +1199,7 @@ async function startServer() {
     // paper-sim position-manager. Orders are built + logged but NOT sent while dryRun.
     candleSpread.start({
       analyzeCandles,
+      getRaw1m,   // deep raw 1m for the v4-v9 live analysis-builder (5m cadence)
       getOrFetchChainData: (symbol, expiration) => persistence.getOrFetchChainData(symbol, expiration),
       tradingClient,
       accountHash: process.env.ACCOUNT_HASH,
