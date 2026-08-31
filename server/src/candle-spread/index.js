@@ -78,14 +78,15 @@ const VARIANTS = [
     coverToStack: true, coverToStackMinFrac: 0.65,
     dryRun: true, ...PORTED_COVER
   },
-  // v6 $20 + CAPITAL RECAPTURE, PURE PAPER: alternate debit/credit OPENS every 3 (parity-equivalent, so
-  // P&L is byte-identical to v6 — see capital-legs) to keep net cash oscillating. Watches the live cash
-  // ledger (peakCashDeployed) to confirm the ~$75k→~$37k funding drop holds on real fills before it's
-  // ever enabled for real. dryRun:true = never sends. Phase 1 (opens); ITM-credit covers are phase 2.
+  // v6 $20 + CAPITAL RECAPTURE, PURE PAPER: alternate debit/credit OPENS every 3 + CREDIT covers on
+  // deep-ITM winners (creditCoverFrac 0.65) — both parity-equivalent, so P&L is byte-identical to v6
+  // (see capital-legs). Keeps net cash oscillating low; watches the live cash ledger (peakCashDeployed)
+  // to confirm the ~$75k→~$28k funding drop holds on real fills before it's ever enabled for real.
+  // dryRun:true = never sends. Phases 1 (opens) + 2 (ITM-credit covers) both on.
   {
     variant: 'v6-recap-paper', variantLabel: 'v6 $20 capital-recapture (paper)',
     signalFn: v6Signal, signalCfg: { fiveMin: true },
-    capitalRecapture: true, openAlternateEvery: 3,
+    capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
     dryRun: true, ...PORTED_COVER
   }
 ];
@@ -308,7 +309,7 @@ async function processGroup(runs, kind) {
         riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
         proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
         coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
-        capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery,
+        capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
     } catch (e) {

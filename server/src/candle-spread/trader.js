@@ -83,8 +83,27 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const target = round2(cfg.spreadWidth - pos.limit);
   pos.pendingCover = { legs: plan.legs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
   pos.coverStatus = 'resting';
-  let restOrderId = null;
-  if (target > 0) {
+  // CAPITAL RECAPTURE phase 2 (deps.capitalRecapture): on a deep-ITM WINNER, SEND the parity CREDIT cover
+  // (sell the offsetting spread → reclaim ~width cash) instead of the debit tent. Booking stays debit-
+  // canonical (pendingCover.legs → resolveRestingCovers) so the locked floor + settlement P&L are
+  // byte-identical; only the sent order + the cover cash ledger differ. creditCoverFrac (default 0.65) is
+  // the ITM depth (canonical spread mark ≥ frac×width) that marks it a winner worth reclaiming cash on.
+  let restOrderId = null, sentNet = 'DEBIT', sentCredit = null;
+  if (deps.capitalRecapture === true) {
+    const itmMark = coverMarkNow(pos.legs, deps.getLeg);
+    if (itmMark != null && itmMark >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * cfg.spreadWidth) {
+      const clegs = CL.coverLegsFor(pos.side, pos.shortStrike, cfg.spreadWidth, 'credit');
+      const rl = resolveLegs(clegs, deps.getLeg);
+      const credit = rl.error ? 0 : round2(rl.shortMid - rl.longMid);
+      if (!rl.error && credit > 0) {
+        const price = L.roundToTick(Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), credit), cfg.tickIncrement);
+        const payload = buildOrderPayload(rl.resolved, price, cfg.quantity, 'CREDIT');
+        const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: clegs, limit: price, net: 'CREDIT', mark: plan.mark });
+        restOrderId = (placed && placed.orderId) || null; sentNet = 'CREDIT'; sentCredit = price;
+      }
+    }
+  }
+  if (sentNet === 'DEBIT' && target > 0) {              // default: send the debit cover (unchanged)
     const rl = resolveLegs(plan.legs, deps.getLeg);
     if (!rl.error) {
       const payload = buildOrderPayload(rl.resolved, L.roundToTick(target, cfg.tickIncrement), cfg.quantity, 'DEBIT');
@@ -93,7 +112,9 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     }
   }
   pos.pendingCover.orderId = restOrderId;
-  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, note });
+  pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
+  pos.pendingCover.sentCredit = sentCredit;             // credit reclaimed (booked to the cash ledger at fill)
+  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, note });
 }
 
 // v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
@@ -662,8 +683,15 @@ function resolveRestingCovers(st, cfg, getLeg, decisions) {
     pos.coverStatus = 'filled';
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
     st.realizedPnl = round2(st.realizedPnl + floor);
+    // Signed cash ledger: a credit cover RECLAIMS ~width cash (-), a debit cover PAYS the fill (+). Does
+    // not touch P&L — the floor above is booked from the debit-canonical target either way.
+    const q = pos.quantity || cfg.quantity;
+    const cashDelta = pc.sentNet === 'CREDIT' ? -(pc.sentCredit || 0) * 100 * q : fill * 100 * q;
+    st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
+    st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+    pos.coverSentNet = pc.sentNet;
     pos.pendingCover = null;
-    decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark, target: pc.target, geometry: pc.geometry, lockedFloor: floor });
+    decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
   }
 }
 
