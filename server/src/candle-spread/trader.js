@@ -213,6 +213,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions) {
     shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
     orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
     openedAt: new Date().toISOString(),
+    openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     sentNet, sentLimit, sentLegs: sentNet === 'CREDIT' ? sentLegs : undefined   // what actually hit the broker
   };
   st.positions.push(pos);
@@ -337,6 +338,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         pos.coverLimit = plan.limit;
         pos.coverLegs = plan.legs;      // kept for EOD terminal-settlement P/L + offline replay
         pos.coverStatus = placed.status;
+        pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (NQ-chart plotting)
         pos.coverGeometry = plan.geometry;
         // Running LOCKED P&L uses the candidate's guaranteed floor (width − open − cover),
         // valid for every candidate since value >= width everywhere. Retained upside
@@ -681,6 +683,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions) {
     pos.coverLimit = fill;
     pos.coverGeometry = pc.geometry;
     pos.coverStatus = 'filled';
+    pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
     st.realizedPnl = round2(st.realizedPnl + floor);
     // Signed cash ledger: a credit cover RECLAIMS ~width cash (-), a debit cover PAYS the fill (+). Does
