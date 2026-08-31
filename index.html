@@ -35,7 +35,7 @@
 
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.0</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.1</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
   </div>
   
@@ -71,6 +71,7 @@
         <select id="ps-variant-select" title="which strategy variant's book"><option value="v6">v6</option></select>
         <button type="button" onclick="pullStrategyPositions()">⟳ Pull</button>
         <label class="ps-auto"><input type="checkbox" id="ps-autorefresh"> auto</label>
+        <label class="ps-auto" title="plot open/cover markers on the NQ chart"><input type="checkbox" id="ps-chart-markers" checked> chart</label>
         <span id="ps-last-pulled" class="ps-muted"></span>
       </span>
     </div>

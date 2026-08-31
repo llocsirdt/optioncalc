@@ -40,6 +40,8 @@
   let allData = {};                        // tf -> raw server candles (for the multi-TF overlay)
   let overlayMapped = {};                  // tf -> {bbU,bbM,bbL,ema9} arrays indexed by selected candle
   let lineTfs = new Set(['15m']);          // which timeframes' BB + 9EMA lines are drawn
+  let trades = [];                         // strategy trade markers: {epoch, side:'bull'|'bear', type:'open'|'cover'}
+  let showTrades = true;                   // toggle for the open/cover markers
   let ndxMode = false;                      // show values skewed to NDX terms (subtract the basis)
   let serverBasis = null;                   // { basis, source, asOf, ndx, nq } from the server
   let transform = d3.zoomIdentity;
@@ -163,6 +165,7 @@
     gClip.append('path').attr('class', 'nq-ema');
     gClip.append('g').attr('class', 'nq-overlay');   // multi-TF BB/EMA lines (behind candles)
     gClip.append('g').attr('class', 'nq-candles');
+    gClip.append('g').attr('class', 'nq-trades');    // strategy open/cover markers (on top of candles)
 
     const gx = gPlot.append('g').attr('class', 'nq-axis nq-x-axis');
     const gy = gPlot.append('g').attr('class', 'nq-axis nq-y-axis');
@@ -411,11 +414,70 @@
     els.gy.call(yAxis);
 
     els._scales = { zx, y, i0, i1, baseX, innerW, innerH, shift };
+    drawTrades(zx, y, i0, i1);
     updateBasisLabel();
     drawLastPriceTag();
     syncDateField();
     if (hoverIndex != null) updateCrosshair(); else showRestingTags();
   }
+
+  // Strategy open/cover markers: place each trade on the NQ candle whose epoch matches its 5m mark
+  // (openEpoch/coverEpoch from the run). Opens = filled triangles just outside the bar (bull ▲ below,
+  // bear ▼ above); covers = hollow diamonds one notch further out. Same-candle/side/type trades are
+  // aggregated with a count so a busy 5m bar shows one marker, not 25. Positioned in raw NQ price (no
+  // basis shift needed — it's relative to the candle's own high/low).
+  function drawTrades(zx, y, i0, i1) {
+    const layer = els.gClip.select('.nq-trades');
+    if (!showTrades || !trades.length || !data.length) { layer.selectAll('*').remove(); return; }
+    const epochs = data.map(d => d.t);
+    const TOL = 5 * 60 * 1000;   // a trade must land within one 5m bar of a candle
+    const nearest = (e) => {
+      let lo = 0, hi = epochs.length - 1;
+      if (e <= epochs[0]) return 0;
+      if (e >= epochs[hi]) return hi;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (epochs[m] === e) return m; if (epochs[m] < e) lo = m + 1; else hi = m - 1; }
+      return (Math.abs(epochs[lo] - e) < Math.abs(epochs[hi] - e)) ? lo : hi;
+    };
+    const groups = new Map();
+    for (const t of trades) {
+      if (t.epoch == null) continue;
+      const idx = nearest(t.epoch);
+      if (Math.abs(epochs[idx] - t.epoch) > TOL) continue;   // outside the loaded range
+      if (idx < i0 - 1 || idx > i1 + 1) continue;            // offscreen
+      const key = `${idx}|${t.type}|${t.side}`;
+      const g = groups.get(key) || { key, idx, type: t.type, side: t.side, n: 0 };
+      g.n++; groups.set(key, g);
+    }
+    const sel = layer.selectAll('g.nq-trade').data([...groups.values()], d => d.key);
+    sel.exit().remove();
+    const ent = sel.enter().append('g').attr('class', 'nq-trade');
+    ent.append('path');
+    ent.append('text').attr('class', 'nq-trade-n').attr('font-size', 8).attr('font-family', 'ui-monospace, Menlo, monospace').attr('text-anchor', 'middle');
+    const merged = ent.merge(sel).attr('transform', (d) => {
+      const c = data[d.idx];
+      const out = d.type === 'cover' ? 20 : 9;   // covers sit one notch further from the bar
+      const yy = d.side === 'bull' ? y(c.l) + out : y(c.h) - out;
+      return `translate(${zx(d.idx)},${yy})`;
+    });
+    merged.select('path')
+      .attr('d', (d) => d.type === 'open'
+        ? (d.side === 'bull' ? 'M0,-7 L-5,1 L5,1 Z' : 'M0,7 L-5,-1 L5,-1 Z')   // filled triangle toward the bar
+        : 'M0,-4.5 L4.5,0 L0,4.5 L-4.5,0 Z')                                    // cover diamond (hollow)
+      .attr('fill', (d) => d.type === 'cover' ? 'none' : (d.side === 'bull' ? '#26a69a' : '#ef5350'))
+      .attr('stroke', (d) => d.side === 'bull' ? '#26a69a' : '#ef5350')
+      .attr('stroke-width', (d) => d.type === 'cover' ? 1.5 : 0);
+    merged.select('text')
+      .attr('y', (d) => d.side === 'bull' ? 13 : -8)
+      .attr('fill', (d) => d.side === 'bull' ? '#1b8a7e' : '#c62828')
+      .text((d) => d.n > 1 ? d.n : '');
+  }
+
+  // Public: set the strategy trade markers (from the Strategy positions pull) and redraw.
+  function setTrades(list) {
+    trades = Array.isArray(list) ? list.filter(t => t && t.epoch != null) : [];
+    if (els) render();
+  }
+  function setShowTrades(on) { showTrades = !!on; if (els) render(); }
 
   // Always-on tag at the latest close on the right axis, colored like the candle (up = green,
   // down = red), styled like the BB/EMA value tags.
@@ -744,7 +806,7 @@
     window.addEventListener('resize', () => render());
   }
 
-  window.NQChart = { init, setTimeframe, refresh: () => load(false) };
+  window.NQChart = { init, setTimeframe, refresh: () => load(false), setTrades, setShowTrades };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

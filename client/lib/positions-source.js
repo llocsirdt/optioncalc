@@ -38,6 +38,20 @@
     try { return JSON.parse(localStorage.getItem(metaKey(sym, exp, v)) || 'null'); } catch (e) { return null; }
   }
 
+  // Push open/cover markers to the NQ chart. Each covered position contributes an open AND a cover marker,
+  // each keyed by the 5m-mark epoch so it lands on the exact NQ candle. Empty list clears the markers.
+  function applyTradesToChart(positions) {
+    if (!(window.NQChart && window.NQChart.setTrades)) return;
+    const box = el('ps-chart-markers');
+    if (box && !box.checked) { window.NQChart.setTrades([]); return; }
+    const trades = [];
+    for (const p of positions || []) {
+      if (p.openEpoch) trades.push({ epoch: p.openEpoch, side: p.side, type: 'open' });
+      if (p.covered && p.coverEpoch) trades.push({ epoch: p.coverEpoch, side: p.side, type: 'cover' });
+    }
+    window.NQChart.setTrades(trades);
+  }
+
   // --- tabs + affordances ---
   function renderTabs() {
     const bar = el('positions-source-tabs');
@@ -59,6 +73,11 @@
     renderTabs();
     // Swap the displayed dataset: load this source's cached positions for the current symbol+expiration.
     if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());
+    // Chart markers are strategy-specific: show the cached book's trades on Strategy, clear otherwise.
+    if (source === 'strategy') {
+      const m = getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant());
+      applyTradesToChart(m ? m.positions : []);
+    } else applyTradesToChart([]);
   }
 
   // --- Strategy pull ---
@@ -99,6 +118,7 @@
       const textInput = el('textInput');
       if (textInput) { textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2); if (typeof processInput === 'function') processInput(); }
       saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
+      applyTradesToChart(result.positions);
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastPulled(`${result.count} pos · ${t}`, false);
     } catch (e) {
@@ -120,8 +140,18 @@
     if (bar) bar.querySelectorAll('.ps-tab').forEach((btn) => btn.addEventListener('click', () => selectSource(btn.dataset.source)));
     const box = el('ps-autorefresh');
     if (box) box.addEventListener('change', updateAutoRefresh);
+    const markers = el('ps-chart-markers');
+    if (markers) markers.addEventListener('change', () => {
+      if (window.NQChart && window.NQChart.setShowTrades) window.NQChart.setShowTrades(markers.checked);
+      const m = markers.checked ? getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant()) : null;
+      applyTradesToChart(m ? m.positions : []);
+    });
     const varSel = el('ps-variant-select');
-    if (varSel) varSel.addEventListener('change', () => { varSel.dataset.loaded = '1'; if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration()); });
+    if (varSel) varSel.addEventListener('change', () => {
+      varSel.dataset.loaded = '1';
+      if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());
+      if (getPositionsSource() === 'strategy') { const m = getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant()); applyTradesToChart(m ? m.positions : []); }
+    });
     renderTabs();
   }
 

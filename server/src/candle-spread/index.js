@@ -292,7 +292,9 @@ async function processGroup(runs, kind) {
   }).formatToParts(new Date(T)).map(p => [p.type, p.value]));
   const markTimeEST = `${tp.month}/${tp.day} ${tp.hour === '24' ? '00' : tp.hour}:${tp.minute}`;
   const c5 = A['5m'];
-  const candle = { timeEST: markTimeEST, open: c5.open, high: c5.high, low: c5.low, close: c5.close };
+  // datetime = the 5m mark epoch (ms) — the SAME grid /chartseries uses, so trade markers land on the
+  // exact NQ candle without parsing the human timeEST. timeEST stays for the log/summary TIME column.
+  const candle = { timeEST: markTimeEST, datetime: T, open: c5.open, high: c5.high, low: c5.low, close: c5.close };
 
   // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {

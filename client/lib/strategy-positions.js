@@ -44,7 +44,8 @@
       allLegs.push(...legs);
       positions.push({
         id: pos.id, side: pos.side, covered: !!pos.covered, shortStrike: pos.shortStrike,
-        openTime: pos.openTime || null, coverTime: pos.coverTime || null,   // CANDLE times, for the NQ-chart overlay
+        openTime: pos.openTime || null, coverTime: pos.coverTime || null,      // human CANDLE times (log/tooltip)
+        openEpoch: pos.openEpoch || null, coverEpoch: pos.coverEpoch || null,   // 5m-mark epoch ms → exact NQ-chart bar
         openLimit: pos.limit, coverLimit: pos.covered ? pos.coverLimit : null, legs,
       });
     }
