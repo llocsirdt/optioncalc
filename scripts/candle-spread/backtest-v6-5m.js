@@ -62,7 +62,11 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 function runDay5m(bars, signalFn, opts = {}) {
   const riskCap = opts.riskCap != null ? opts.riskCap : Infinity;   // legacy single cap (v7)
   const softCap = opts.softCap != null ? opts.softCap : Infinity;   // v8 churn cap (at-risk only)
-  const hardCap = opts.hardCap != null ? opts.hardCap : Infinity;   // v8 backstop (total uncovered)
+  const hardCap = opts.hardCap != null ? opts.hardCap : Infinity;   // STRATEGY RISK backstop (v8/v9 risk/reward tuning)
+  // ACCOUNT capital ceiling — how much at-risk (uncovered) capital the account can hold. SEPARATE and
+  // distinct in purpose from the strategy risk caps above (this is buying power, not risk appetite);
+  // whichever is tighter throttles. Tracked separately so its skips can be isolated.
+  const capCeiling = opts.capitalCeiling != null ? opts.capitalCeiling : Infinity;
   const pFrac = opts.proactiveCoverFrac != null ? opts.proactiveCoverFrac : null;
   const bidir = opts.bidirectional === true;
   // rthActionOnly: model LIVE faithfully — the multi-TF `A` is still built from the 24h series (so the
@@ -88,7 +92,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
-  let capBlocked = 0, capBlockedTrend = 0;   // diagnostic: opens the cap refused (and how many were same-dir stacking)
+  let capBlocked = 0, capBlockedTrend = 0, capSkipCeiling = 0;   // capSkipCeiling = opens refused ONLY by the account ceiling
   // CAPITAL accounting (opts.trackCapital) — cash deployed through the day; does NOT touch P&L. Two
   // cover rules tracked in parallel: all-DEBIT (pay every cover) vs CREDIT-cover-on-ITM (a cover on a
   // position marking >= creditFrac×width is done as a credit spread → reclaims ~(width−coverLimit) cash
@@ -97,16 +101,11 @@ function runDay5m(bars, signalFn, opts = {}) {
   const trackCap = opts.trackCapital === true;
   const creditFrac = opts.creditCoverFrac != null ? opts.creditCoverFrac : 0.65;
   const altEvery = opts.openAlternateEvery || 3;   // alternate open type debit/credit every N opens
-  // depD/peakD = all-debit CASH. depC/peakC = CASH with credit-cover-on-ITM. depA/peakA = CASH with
-  // ALTERNATING opens (N debit, N credit, ...) + ITM credit covers. peakUncov = peak simultaneous
-  // UNCOVERED risk (the MARGIN-account view — covered tents are ~riskless so free their margin).
+  // CASH views: depD/peakD = all-debit. depC/peakC = credit-cover-on-ITM. depA/peakA = user's CONTINUOUS
+  // ALTERNATING opens (N debit, N credit, ...) + ITM credit covers → keeps cash oscillating low all day,
+  // decoupled from any ceiling. peakUncov = peak UNCOVERED at-risk (the margin view; = what the account
+  // capital ceiling caps). Cash management (alternating) is independent of the at-risk ceiling.
   let depD = 0, peakD = 0, depC = 0, peakC = 0, depA = 0, peakA = 0, peakUncov = 0, nCredit = 0, nDebitCov = 0, openN = 0;
-  // GOVERNED cash (opts.capitalCeiling): default DEBIT (better fills); switch an open to CREDIT only
-  // when a debit would push deployed cash over the ceiling (credit opens are P&L-identical at 0DTE but
-  // bring cash in) → caps cash at the ceiling with NO missed trades. The at-risk/margin HARD cap is the
-  // existing hardCap (throttles opens when uncovered risk would exceed it). Together = the governor.
-  const ceiling = opts.capitalCeiling || null;
-  let depG = 0, peakG = 0, nCreditForced = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -130,9 +129,9 @@ function runDay5m(bars, signalFn, opts = {}) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
           const itm = legsMark(pos.legs, S, tau, iv) >= creditFrac * G.WIDTH;   // ITM enough → credit cover reclaims cash
-          if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; depG -= back; nCredit++; }
-          else { depC += cd; depA += cd; depG += cd; nDebitCov++; }
-          peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA); peakG = Math.max(peakG, depG);
+          if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }
+          else { depC += cd; depA += cd; nDebitCov++; }
+          peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA);
         }
       }
     }
@@ -172,8 +171,9 @@ function runDay5m(bars, signalFn, opts = {}) {
       // trend, not churning chop → skip the soft cap (only the hard ceiling limits a trend run).
       const stacking = st.positions.filter(p => !p.covered).every(p => p.side === sig.openSide);
       const softOk = (opts.exemptTrendStack && stacking) ? true : (atRisk + nd <= softCap);
-      const ok = (totalUncov + nd <= riskCap) && softOk && (totalUncov + nd <= hardCap);
-      if (ok) {
+      const strategyOk = (totalUncov + nd <= riskCap) && softOk && (totalUncov + nd <= hardCap);   // strategy RISK caps
+      const ceilingOk = totalUncov + nd <= capCeiling;                                             // ACCOUNT capital ceiling (separate)
+      if (strategyOk && ceilingOk) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
         st.dir = sig.openSide;
         if (trackCap) {
@@ -182,12 +182,10 @@ function runDay5m(bars, signalFn, opts = {}) {
           // ATM by parity), repeat → net cash oscillates instead of draining.
           const creditOpen = Math.floor(openN / altEvery) % 2 === 1;
           depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
-          // governed credit-on-demand: credit this open only if a debit would breach the cash ceiling.
-          if (ceiling && depG + nd > ceiling) { depG -= (G.WIDTH * 100 * QTY - nd); nCreditForced++; } else depG += nd;
-          peakG = Math.max(peakG, depG);
         }
       } else {
         capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
+        if (strategyOk && !ceilingOk) capSkipCeiling++;   // refused ONLY by the account ceiling (would've passed the strategy risk cap)
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
     }
@@ -204,8 +202,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     terminal = round2(terminal + (value - cost) * 100 * QTY);
   }
   return {
-    floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakGoverned: peakG, peakUncov, nCreditForced, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
+    floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling,
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakUncov, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
   };
 }
 
