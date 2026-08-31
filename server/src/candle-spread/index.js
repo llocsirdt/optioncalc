@@ -422,10 +422,74 @@ function getRun(symbol, expiration, date, variant) {
   return store.readRun(store.makeRunId(symbol, expiration, tradeDate, variant));
 }
 
+// Count today's decisions on a run record (for the status endpoint).
+function tallyRun(rec) {
+  const t = { opens: 0, covers: 0, coverFills: 0, cancels: 0 };
+  for (const ev of (rec.events || [])) {
+    if (ev.type !== 'candle_close') continue;
+    for (const d of (ev.decisions || [])) {
+      if (d.action === 'open') t.opens++;
+      else if (d.action === 'cover' || d.action === 'cover-rest') t.covers++;
+      else if (d.action === 'cover-fill') t.coverFills++;
+      else if (d.action === 'cancel-open') t.cancels++;
+    }
+  }
+  return t;
+}
+
+// Compact live status for the UI to poll — confirms mode/gates and what each strategy is doing today,
+// so you can validate the server is behaving as expected (esp. the prod test-mode session).
+function status() {
+  const gates = {
+    isProd: !!(DEPS && DEPS.isProd === true),
+    liveArmed: LIVE_ARMED,                                   // CANDLE_SPREAD_LIVE === 'true'
+    hasTradingClient: !!(DEPS && DEPS.tradingClient),
+    hasAccountHash: !!(DEPS && DEPS.accountHash)
+  };
+  const liveV = RUNS.filter(r => r.dryRun === false).map(r => r.variant);
+  const testV = RUNS.filter(r => r.dryRun === 'test').map(r => r.variant);
+  const mode = !gates.isProd ? 'DEV (never sends)'
+    : !gates.liveArmed ? 'DISARMED (CANDLE_SPREAD_LIVE not set)'
+    : liveV.length ? `LIVE-ARMED (real orders: ${liveV.join(',')})`
+    : testV.length ? `TEST-ARMED (unfillable paper orders: ${testV.join(',')})`
+    : 'ARMED (all dry-run)';
+  const tradeDate = todayEST();
+  const runs = RUNS.map(run => {
+    const rec = store.readRun(store.makeRunId(run.symbol, run.expiration || tradeDate, tradeDate, run.variant));
+    const st = rec && rec.state;
+    const lo = (st && st.liveOrders) || [];
+    const t = rec ? tallyRun(rec) : { opens: 0, covers: 0, coverFills: 0, cancels: 0 };
+    return {
+      variant: run.variant, symbol: run.symbol, signalSymbol: run.signalSymbol || run.symbol,
+      mode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
+      width: run.spreadWidth || 20, shift: run.spreadShift || 0,
+      positions: st ? st.positions.length : 0,
+      covered: st ? st.positions.filter(p => p.covered).length : 0,
+      realizedPnl: st ? Math.round(st.realizedPnl) : 0,
+      ...t,
+      realOrders: {
+        sent: lo.length,
+        working: lo.filter(o => o.status === 'working').length,
+        filled: lo.filter(o => o.status === 'filled').length,
+        canceled: lo.filter(o => o.status === 'canceled').length,
+        lastAt: lo.length ? lo[lo.length - 1].placedAtEST : null
+      },
+      lastCandle: st ? st.lastCandleTime : null,
+      updatedAt: rec ? rec.updatedAt : null
+    };
+  });
+  return {
+    mode, gates, armedVariants: { live: liveV, test: testV },
+    testConfig: { unfillableFrac: TEST_FRAC, cancelAfterMs: TEST_CANCEL_MS, pollMs: ORDER_POLL_MS },
+    tradeDate, started, msToNextTick: msToNextBoundary(), runs, serverTime: new Date().toISOString()
+  };
+}
+
 module.exports = {
   start,
   listRuns,
   getRun,
+  status,
   buildRuns,
   VARIANTS,
   // exported for tests

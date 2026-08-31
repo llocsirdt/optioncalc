@@ -1020,6 +1020,16 @@ app.get('/api/v1/candle-spread/runs', (req, res) => {
   }
 });
 
+// Compact live status for the UI to poll (mode/gates + per-strategy activity today) — lets you
+// validate at a glance that the server is doing what's expected (esp. the prod test-mode session).
+app.get('/api/v1/candle-spread/status', (req, res) => {
+  try {
+    res.json(candleSpread.status());
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read candle-spread status', message: error.message });
+  }
+});
+
 // ?date= defaults to the expiration (0DTE). ?variant=v0|v1|v2 selects a shadow strategy;
 // omit it to read a pre-variant (single-strategy) run.
 app.get('/api/v1/candle-spread/runs/:symbol/:expiration', (req, res) => {
