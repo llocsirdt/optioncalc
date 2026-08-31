@@ -2459,20 +2459,22 @@ function restoreAppropriateInput(symbol, expiration) {
   }
   
   if (symbol && expiration) {
-    // Try to get symbol+expiration specific input (case-insensitive)
-    const symbolExpirationKey = `${symbol.toUpperCase()}-${expiration}`;
-    const specificInput = localStorage.getItem(symbolExpirationKey);
-    
-    // console.log(`🔍 Checking specific key: ${symbolExpirationKey}`);
-    // console.log(`🔍 Found specific input: ${specificInput ? 'YES' : 'NO'}`);
-    
+    // Source-scoped key (Manual | Fidelity CSV | Strategy) so the datasets don't comingle; falls back to
+    // the legacy `${SYMBOL}-${expiration}` key for Manual so pre-existing saves aren't lost.
+    const src = (typeof getPositionsSource === 'function') ? getPositionsSource(symbol) : 'manual';
+    const key = (typeof positionsCacheKey === 'function') ? positionsCacheKey(symbol, expiration) : `${symbol.toUpperCase()}-${expiration}`;
+    let specificInput = localStorage.getItem(key);
+    if (!specificInput && src === 'manual') specificInput = localStorage.getItem(`${symbol.toUpperCase()}-${expiration}`);
+
     if (specificInput) {
       textInput.value = specificInput;
-      // console.log(`📥 Restored specific input for ${symbol} ${expiration} from key: ${symbolExpirationKey}`);
       return;
     }
+    // A non-Manual source with nothing cached yet (e.g. Strategy before a Pull, or an un-imported
+    // Fidelity tab): show blank rather than another source's positions — import/pull to populate.
+    if (src !== 'manual') { textInput.value = ''; return; }
   }
-  
+
   // Fallback to default saved input
   const defaultInput = localStorage.getItem('savedOptionInput');
   // console.log(`🔍 Checking default key: savedOptionInput`);
@@ -2534,16 +2536,16 @@ function processInput() {
   // Clear previous output
   outputDiv.innerHTML = '';
   
-  // Store the input in local storage with default key
-  localStorage.setItem('savedOptionInput', inputText);
-  
-  // Also store with symbol+expiration key if applicable
+  // Store with the source-scoped symbol+expiration key (Manual | Fidelity CSV | Strategy) so datasets
+  // don't comingle. Only the Manual source updates the global cross-symbol default, so a pulled Strategy
+  // book doesn't become the default you see next session.
   const symbol = document.getElementById('symbol-input')?.value.trim();
   const expiration = document.getElementById('expiration-dropdown')?.value;
+  const src = (typeof getPositionsSource === 'function') ? getPositionsSource(symbol) : 'manual';
+  if (src === 'manual') localStorage.setItem('savedOptionInput', inputText);
   if (symbol && expiration) {
-    const symbolExpirationKey = `${symbol.toUpperCase()}-${expiration}`;
-    localStorage.setItem(symbolExpirationKey, inputText);
-    // console.log(`💾 Saved input for ${symbol} ${expiration} with key: ${symbolExpirationKey}`);
+    const key = (typeof positionsCacheKey === 'function') ? positionsCacheKey(symbol, expiration) : `${symbol.toUpperCase()}-${expiration}`;
+    localStorage.setItem(key, inputText);
   }
 
   // Reset API call tracking since positions changed

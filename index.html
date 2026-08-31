@@ -21,6 +21,8 @@
   <script src="client/lib/candle-analysis.js"></script>
   <script src="client/lib/broker-import.js"></script>
   <script src="client/lib/broker-parsers/fidelity.js"></script>
+  <script src="client/lib/strategy-positions.js"></script>
+  <script src="client/lib/positions-source.js"></script>
   <script src="client/lib/offset-card-ui.js"></script>
   <script src="client/lib/portfolio-risk-analyzer.js"></script>
   <script src="client/lib/hedge-strategy-ui.js"></script>
@@ -33,7 +35,7 @@
 
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.7.0</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.0</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
   </div>
   
@@ -52,9 +54,25 @@
   <div id="container-col1">
     <textarea id="textInput" placeholder="Enter option positions"></textarea>
 
-    <div id="import-row">
-      <input type="file" id="broker-csv-file" accept=".csv">
-      <button onclick="importBrokerCsv()">Import CSV</button>
+    <div id="positions-source-bar">
+      <span class="ps-label">Positions:</span>
+      <span id="positions-source-tabs" role="tablist">
+        <button class="ps-tab" data-source="manual" role="tab" type="button">Manual</button>
+        <button class="ps-tab" data-source="fidelity" role="tab" type="button">Fidelity CSV</button>
+        <button class="ps-tab" data-source="strategy" role="tab" type="button">Strategy</button>
+      </span>
+      <span id="ps-affordance-manual" class="ps-affordance ps-muted">hand-enter positions below</span>
+      <span id="ps-affordance-fidelity" class="ps-affordance" style="display:none">
+        <input type="file" id="broker-csv-file" accept=".csv">
+        <button type="button" onclick="importBrokerCsv()">Import CSV</button>
+        <button type="button" class="ps-more" onclick="toggleBrokerImportPanel()" title="paste CSV / format options">⋯</button>
+      </span>
+      <span id="ps-affordance-strategy" class="ps-affordance" style="display:none">
+        <select id="ps-variant-select" title="which strategy variant's book"><option value="v6">v6</option></select>
+        <button type="button" onclick="pullStrategyPositions()">⟳ Pull</button>
+        <label class="ps-auto"><input type="checkbox" id="ps-autorefresh"> auto</label>
+        <span id="ps-last-pulled" class="ps-muted"></span>
+      </span>
     </div>
 
     <div id="broker-import-container" style="display: none;">
