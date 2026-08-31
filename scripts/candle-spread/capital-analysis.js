@@ -15,13 +15,14 @@ const { v6Signal } = require('./v6-signals');
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
 const DIR = arg('--dataDir', 'tests/backtest/backtest-data-5m-nq');
 const creditFrac = Number(arg('--creditFrac', '0.65'));
+const altEvery = Number(arg('--altEvery', '3'));
 const days = load5mDays(DIR);
 const v6 = (A, p, c) => v6Signal(A, p, { ...c, cfg: { fiveMin: true } });
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
 const ymd = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 const rows = days.map(d => {
-  const r = runDay5m(d.bars, v6, { rthActionOnly: true, trackCapital: true, creditCoverFrac: creditFrac });
+  const r = runDay5m(d.bars, v6, { rthActionOnly: true, trackCapital: true, creditCoverFrac: creditFrac, openAlternateEvery: altEvery });
   return { date: ymd(d.bars[0].dt), opens: r.opens, filled: r.filled, ...r.capital };
 });
 const pctile = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
@@ -33,14 +34,17 @@ const stat = key => ({
   maxDate: rows.reduce((a, r) => r[key] > a[key] ? r : a).date
 });
 
-const sD = stat('peakDebit'), sC = stat('peakCredit');
-console.log(`\nCAPITAL NEED — v6 @ $20-ATM, ${days.length} NQ days (24h→RTH), QTY=1. PEAK cash deployed intraday = account size needed.\n`);
-console.log('rule'.padEnd(22) + 'avg day'.padEnd(12) + 'median'.padEnd(12) + 'busy (P95)'.padEnd(13) + 'worst day'.padEnd(13) + 'worst date');
-console.log('-'.repeat(84));
-console.log('all-DEBIT covers'.padEnd(22) + usd(sD.avg).padEnd(12) + usd(sD.p50).padEnd(12) + usd(sD.p95).padEnd(13) + usd(sD.max).padEnd(13) + sD.maxDate);
-console.log(`credit-cover ITM≥${creditFrac}w`.padEnd(22) + usd(sC.avg).padEnd(12) + usd(sC.p50).padEnd(12) + usd(sC.p95).padEnd(13) + usd(sC.max).padEnd(13) + sC.maxDate);
+const row = (label, key) => { const s = stat(key); console.log(label.padEnd(30) + usd(s.avg).padEnd(12) + usd(s.p50).padEnd(12) + usd(s.p95).padEnd(13) + usd(s.max).padEnd(13) + s.maxDate); };
+console.log(`\nCAPITAL NEED — v6 @ $20-ATM, ${days.length} NQ days (24h→RTH), QTY=1. PEAK intraday = account size needed.\n`);
+console.log('metric'.padEnd(30) + 'avg day'.padEnd(12) + 'median'.padEnd(12) + 'busy (P95)'.padEnd(13) + 'worst day'.padEnd(13) + 'worst date');
+console.log('-'.repeat(92));
+console.log('— CASH deployed (cash-account view) —');
+row('all-DEBIT', 'peakDebit');
+row(`credit-cover ITM≥${creditFrac}w`, 'peakCredit');
+row(`ALT opens every ${altEvery} + ITM covers`, 'peakAlt');
+console.log('— MARGIN / at-risk (margin-account view) —');
+row('peak UNCOVERED risk', 'peakUncov');
 const avgOpens = rows.reduce((a, r) => a + r.opens, 0) / rows.length;
-const avgCredit = rows.reduce((a, r) => a + r.nCredit, 0) / rows.length;
-const avgDebitCov = rows.reduce((a, r) => a + r.nDebitCov, 0) / rows.length;
-console.log(`\ncontext: ${avgOpens.toFixed(1)} opens/day · covers ${(avgCredit + avgDebitCov).toFixed(1)}/day (${avgCredit.toFixed(1)} credit ITM, ${avgDebitCov.toFixed(1)} debit)`);
-console.log(`reduction from credit covers: worst day ${usd(sD.max)} → ${usd(sC.max)} (${Math.round(100 * (1 - sC.max / sD.max))}% less), avg ${usd(sD.avg)} → ${usd(sC.avg)}`);
+console.log(`\ncontext: ${avgOpens.toFixed(1)} opens/day · ${(rows.reduce((a, r) => a + r.nCredit, 0) / rows.length).toFixed(1)} ITM(credit) + ${(rows.reduce((a, r) => a + r.nDebitCov, 0) / rows.length).toFixed(1)} debit covers/day`);
+console.log('NOTE: covered tents are ~riskless (guaranteed floor) so they free their MARGIN; but the DEBIT paid');
+console.log('is cash out until settle. Which constraint binds (cash vs margin) is broker-specific → validate live.');

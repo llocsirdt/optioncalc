@@ -96,7 +96,11 @@ function runDay5m(bars, signalFn, opts = {}) {
   // simultaneous deployment = the account size needed for the day.
   const trackCap = opts.trackCapital === true;
   const creditFrac = opts.creditCoverFrac != null ? opts.creditCoverFrac : 0.65;
-  let depD = 0, peakD = 0, depC = 0, peakC = 0, nCredit = 0, nDebitCov = 0;
+  const altEvery = opts.openAlternateEvery || 3;   // alternate open type debit/credit every N opens
+  // depD/peakD = all-debit CASH. depC/peakC = CASH with credit-cover-on-ITM. depA/peakA = CASH with
+  // ALTERNATING opens (N debit, N credit, ...) + ITM credit covers. peakUncov = peak simultaneous
+  // UNCOVERED risk (the MARGIN-account view — covered tents are ~riskless so free their margin).
+  let depD = 0, peakD = 0, depC = 0, peakC = 0, depA = 0, peakA = 0, peakUncov = 0, nCredit = 0, nDebitCov = 0, openN = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -120,11 +124,13 @@ function runDay5m(bars, signalFn, opts = {}) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
           const itm = legsMark(pos.legs, S, tau, iv) >= creditFrac * G.WIDTH;   // ITM enough → credit cover reclaims cash
-          if (itm) { depC -= (G.WIDTH - pos.coverLimit) * 100 * QTY; nCredit++; } else { depC += cd; nDebitCov++; }
-          peakC = Math.max(peakC, depC);
+          if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }
+          else { depC += cd; depA += cd; nDebitCov++; }
+          peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA);
         }
       }
     }
+    if (trackCap) peakUncov = Math.max(peakUncov, uncoveredRisk());   // margin view: at-risk uncovered $ right now
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
@@ -164,7 +170,13 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (ok) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
         st.dir = sig.openSide;
-        if (trackCap) { depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC); }
+        if (trackCap) {
+          depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
+          // ALTERNATING opens: first N debit (pay), next N credit (receive ~the debit-equivalent at
+          // ATM by parity), repeat → net cash oscillates instead of draining.
+          const creditOpen = Math.floor(openN / altEvery) % 2 === 1;
+          depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
+        }
       } else {
         capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
@@ -184,7 +196,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakUncov, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
   };
 }
 
