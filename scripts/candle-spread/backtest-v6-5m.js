@@ -169,14 +169,18 @@ function runDay5m(bars, signalFn, opts = {}) {
       // at-risk from the budget — rather than skipping the trade. Only locks positions marking >=
       // coverToStackMinFrac×width (real winners → cheap covers, positive floor), deepest first, just
       // enough to fit the new open. Changes P&L (covers a winner sooner) — that's the trade-off.
-      if (opts.coverToStack && capCeiling < Infinity && uncoveredRisk() + nd > capCeiling) {
+      // The cap cover-to-stack recycles against: the account ceiling always, and — when
+      // opts.coverToStackVsRisk — the STRATEGY risk cap too (user's "if risk hits the cap, cover to
+      // enable more"). Effective trigger = the tightest active cap it's allowed to recycle against.
+      const ctsCap = Math.min(capCeiling, opts.coverToStackVsRisk ? Math.min(riskCap, hardCap) : Infinity);
+      if (opts.coverToStack && ctsCap < Infinity && uncoveredRisk() + nd > ctsCap) {
         const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
         const cands = st.positions.filter(p => !p.covered && !p.pendingCover)
           .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
           .filter(x => x.mark >= lockMin)
           .sort((a, b) => b.mark - a.mark);                 // deepest ITM first: cheapest cover, biggest lock
         for (const { p } of cands) {
-          if (uncoveredRisk() + nd <= capCeiling) break;    // freed enough room
+          if (uncoveredRisk() + nd <= ctsCap) break;        // freed enough room under the binding cap
           const cl = G.coverLegs(p.side, p.shortStrike);
           p.coverLegs = cl; p.coverLimit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
           p.covered = true; p.pendingCover = null; nCoverToStack++;
