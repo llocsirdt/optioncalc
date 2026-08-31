@@ -92,7 +92,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const st = { dir: 'none', positions: [] };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
-  let capBlocked = 0, capBlockedTrend = 0, capSkipCeiling = 0;   // capSkipCeiling = opens refused ONLY by the account ceiling
+  let capBlocked = 0, capBlockedTrend = 0, capSkipCeiling = 0, nCoverToStack = 0;   // capSkipCeiling = opens refused ONLY by the account ceiling
   // CAPITAL accounting (opts.trackCapital) — cash deployed through the day; does NOT touch P&L. Two
   // cover rules tracked in parallel: all-DEBIT (pay every cover) vs CREDIT-cover-on-ITM (a cover on a
   // position marking >= creditFrac×width is done as a credit spread → reclaims ~(width−coverLimit) cash
@@ -164,6 +164,25 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
       const o = G.buildOpen(sig.openSide, S, tau, iv);
       const nd = o.limit * 100 * QTY;
+      // COVER-TO-CONTINUE-STACKING (opts.coverToStack): if a new open would breach the ACCOUNT ceiling
+      // mid-trend, LOCK the deepest-ITM winner(s) first — a covered tent is riskless, so it frees its
+      // at-risk from the budget — rather than skipping the trade. Only locks positions marking >=
+      // coverToStackMinFrac×width (real winners → cheap covers, positive floor), deepest first, just
+      // enough to fit the new open. Changes P&L (covers a winner sooner) — that's the trade-off.
+      if (opts.coverToStack && capCeiling < Infinity && uncoveredRisk() + nd > capCeiling) {
+        const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
+        const cands = st.positions.filter(p => !p.covered && !p.pendingCover)
+          .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
+          .filter(x => x.mark >= lockMin)
+          .sort((a, b) => b.mark - a.mark);                 // deepest ITM first: cheapest cover, biggest lock
+        for (const { p } of cands) {
+          if (uncoveredRisk() + nd <= capCeiling) break;    // freed enough room
+          const cl = G.coverLegs(p.side, p.shortStrike);
+          p.coverLegs = cl; p.coverLimit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
+          p.covered = true; p.pendingCover = null; nCoverToStack++;
+          if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
+        }
+      }
       // soft cap counts only AT-RISK debit (uncovered & NOT deep-ITM); hard cap + legacy count ALL uncovered.
       const totalUncov = uncoveredRisk();
       const atRisk = st.positions.reduce((s, p) => s + ((p.covered || isDeep(p)) ? 0 : p.limit * 100 * QTY), 0);
@@ -202,7 +221,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     terminal = round2(terminal + (value - cost) * 100 * QTY);
   }
   return {
-    floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling,
+    floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakUncov, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
   };
 }
