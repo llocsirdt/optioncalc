@@ -893,6 +893,8 @@ function clearExpirationCache() {
 // (HEAVY_ANALYSIS_GAP_MS) than the ~2s price loop so they stop blocking the main thread
 // every tick. See client-perf notes.
 let _lastRenderedPrice = null;
+let _lastRenderedExpiration = null;   // guards the change-detection gate: expiration is also an input,
+                                      // so a date change must refetch the chain even if price is static
 let _lastHeavyAnalysisAt = 0;
 const HEAVY_ANALYSIS_GAP_MS = 15000;
 
@@ -923,9 +925,12 @@ async function updateCalculatorWithLiveData(symbol) {
       const lastPrice = quote[quoteSymbol].quote.lastPrice;
       // console.log('💰 Last price:', lastPrice);
       updateUnderlyingPrice(lastPrice); // cheap: price text + chart price line only
-      // (a) Change-detection gate: nothing moved -> skip everything expensive below.
-      if (_lastRenderedPrice !== null && lastPrice === _lastRenderedPrice) return;
+      // (a) Change-detection gate: skip the expensive chain fetch + searches below ONLY when nothing
+      // that affects them changed — i.e. BOTH the price AND the selected expiration are unchanged.
+      // (Previously price-only, which swallowed expiration-dropdown changes while the price was static.)
+      if (_lastRenderedPrice !== null && lastPrice === _lastRenderedPrice && selectedExpiration === _lastRenderedExpiration) return;
       _lastRenderedPrice = lastPrice;
+      _lastRenderedExpiration = selectedExpiration;
       // (b) Decouple: only let the four searches run once per HEAVY_ANALYSIS_GAP_MS.
       runHeavy = (Date.now() - _lastHeavyAnalysisAt) >= HEAVY_ANALYSIS_GAP_MS;
       if (runHeavy) _lastHeavyAnalysisAt = Date.now();
