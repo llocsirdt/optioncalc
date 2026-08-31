@@ -101,6 +101,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   // ALTERNATING opens (N debit, N credit, ...) + ITM credit covers. peakUncov = peak simultaneous
   // UNCOVERED risk (the MARGIN-account view — covered tents are ~riskless so free their margin).
   let depD = 0, peakD = 0, depC = 0, peakC = 0, depA = 0, peakA = 0, peakUncov = 0, nCredit = 0, nDebitCov = 0, openN = 0;
+  // GOVERNED cash (opts.capitalCeiling): default DEBIT (better fills); switch an open to CREDIT only
+  // when a debit would push deployed cash over the ceiling (credit opens are P&L-identical at 0DTE but
+  // bring cash in) → caps cash at the ceiling with NO missed trades. The at-risk/margin HARD cap is the
+  // existing hardCap (throttles opens when uncovered risk would exceed it). Together = the governor.
+  const ceiling = opts.capitalCeiling || null;
+  let depG = 0, peakG = 0, nCreditForced = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -124,9 +130,9 @@ function runDay5m(bars, signalFn, opts = {}) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
           const itm = legsMark(pos.legs, S, tau, iv) >= creditFrac * G.WIDTH;   // ITM enough → credit cover reclaims cash
-          if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }
-          else { depC += cd; depA += cd; nDebitCov++; }
-          peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA);
+          if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; depG -= back; nCredit++; }
+          else { depC += cd; depA += cd; depG += cd; nDebitCov++; }
+          peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA); peakG = Math.max(peakG, depG);
         }
       }
     }
@@ -176,6 +182,9 @@ function runDay5m(bars, signalFn, opts = {}) {
           // ATM by parity), repeat → net cash oscillates instead of draining.
           const creditOpen = Math.floor(openN / altEvery) % 2 === 1;
           depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
+          // governed credit-on-demand: credit this open only if a debit would breach the cash ceiling.
+          if (ceiling && depG + nd > ceiling) { depG -= (G.WIDTH * 100 * QTY - nd); nCreditForced++; } else depG += nd;
+          peakG = Math.max(peakG, depG);
         }
       } else {
         capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
@@ -196,7 +205,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakUncov, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakGoverned: peakG, peakUncov, nCreditForced, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
   };
 }
 
