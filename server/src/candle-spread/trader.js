@@ -15,6 +15,7 @@
  * deliberate future step (see placeOrder()).
  */
 const L = require('./spread-logic');
+const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const store = require('./store');
 
 let nextPositionSeq = 1;
@@ -157,19 +158,51 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
   return locked;
 }
 
+// Build the P&L-equivalent CREDIT open order (parity twin of the debit vertical at the same strikes):
+// bull → sell the bull put spread, bear → sell the bear call spread. NET_CREDIT priced at the mid credit
+// (short leg richer than long). Used only for capital recapture; returns { legs, limit, credit, payload }.
+function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
+  const legs = CL.openLegsFor(side, lower, upper, 'credit');
+  const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
+  if (error) return { error };
+  const credit = round2(shortMid - longMid);
+  if (!(credit > 0)) return { error: `non-positive credit (${credit}) — bad quotes` };
+  const limit = Math.max(cfg.tickIncrement, Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), credit));
+  return { legs, limit, credit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'CREDIT') };
+}
+
 // Book a filled/assumed open into state (shared by the normal path and the cover-to-stack rescue path).
+// CAPITAL RECAPTURE (deps.capitalRecapture): every openAlternateEvery opens we flip the ORDER SENT between
+// the debit vertical and its parity CREDIT twin, so net cash oscillates instead of draining. The position
+// RECORD stays debit-CANONICAL (legs/limit) so floor/settlement/cover/cap logic is byte-identical and P&L
+// is provably unchanged (see capital-legs parity test); only the actual sent order + the signed cash
+// ledger differ. sentNet/sentLegs record what really went to the broker for fill reconciliation.
 async function openPosition(st, res, openSide, cfg, deps, decisions) {
-  const placed = await deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
+  const altEvery = deps.openAlternateEvery || 3;
+  const creditTurn = deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1;
+  let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
+  if (creditTurn) {
+    const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg);
+    if (!c.error) { payload = c.payload; sentNet = 'CREDIT'; sentLegs = c.legs; sentLimit = c.limit; }
+    else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // bad credit quotes → send debit
+  }
+  const placed = await deps.placeOrder(payload, { kind: 'open', side: openSide, legs: sentLegs, limit: sentLimit, net: sentNet, mark: res.mark });
   const pos = {
-    id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,
+    id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
     shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
     orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
-    openedAt: new Date().toISOString()
+    openedAt: new Date().toISOString(),
+    sentNet, sentLimit, sentLegs: sentNet === 'CREDIT' ? sentLegs : undefined   // what actually hit the broker
   };
   st.positions.push(pos);
   st.pendingOpenId = pos.filled ? null : pos.id;
   st.direction = openSide;
-  decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled });
+  st.openN = (st.openN || 0) + 1;
+  // Signed cash ledger (+paid debit, -received credit). Does NOT touch P&L — pure capital view.
+  const cashDelta = (sentNet === 'CREDIT' ? -sentLimit : res.limit) * 100 * cfg.quantity;
+  st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
+  st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+  decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed });
 }
 
 // --- Core per-tick sequence (testable) ------------------------------------

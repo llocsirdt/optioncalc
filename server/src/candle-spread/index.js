@@ -77,6 +77,16 @@ const VARIANTS = [
     hardCap: 15000, proactiveCoverFrac: 0.80,
     coverToStack: true, coverToStackMinFrac: 0.65,
     dryRun: true, ...PORTED_COVER
+  },
+  // v6 $20 + CAPITAL RECAPTURE, PURE PAPER: alternate debit/credit OPENS every 3 (parity-equivalent, so
+  // P&L is byte-identical to v6 — see capital-legs) to keep net cash oscillating. Watches the live cash
+  // ledger (peakCashDeployed) to confirm the ~$75k→~$37k funding drop holds on real fills before it's
+  // ever enabled for real. dryRun:true = never sends. Phase 1 (opens); ITM-credit covers are phase 2.
+  {
+    variant: 'v6-recap-paper', variantLabel: 'v6 $20 capital-recapture (paper)',
+    signalFn: v6Signal, signalCfg: { fiveMin: true },
+    capitalRecapture: true, openAlternateEvery: 3,
+    dryRun: true, ...PORTED_COVER
   }
 ];
 
@@ -298,6 +308,7 @@ async function processGroup(runs, kind) {
         riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
         proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
         coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
+        capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
     } catch (e) {
@@ -481,6 +492,9 @@ function status() {
       positions: st ? st.positions.length : 0,
       covered: st ? st.positions.filter(p => p.covered).length : 0,
       realizedPnl: st ? Math.round(st.realizedPnl) : 0,
+      // capital view (recap variants): net cash currently deployed + the day's peak (= funding needed).
+      cashDeployed: st && st.cashDeployed != null ? Math.round(st.cashDeployed) : null,
+      peakCash: st && st.peakCashDeployed != null ? Math.round(st.peakCashDeployed) : null,
       ...t,
       realOrders: {
         sent: lo.length,
