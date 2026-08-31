@@ -47,8 +47,8 @@ const BASE_RUNS = [
 // target = width−open, fills when the real mark reaches it) — matching backtest-v6-5m.runDay5m.
 //   v4/v5 act on 15m closes only (at15); v6/v7 act every 5m (fiveMin).
 //   v7 = v6 signal + "be wrong" bidirectional opens (opposite side while holding).
-// dryRun defaults true (simulate); flip a single variant to 'test'/false to send. v8 (risk caps) and
-// v9 (separate mean-reversion engine) still TODO — see [[project_candle_spread_live_order_wiring]].
+// dryRun defaults true (simulate); flip a single variant to 'test'/false to send. v9 = v7 (be-wrong)
+// + risk caps; the v9-40-paper run below is a PURE-PAPER $40 cover-to-stack fill study (never sends).
 const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 const VARIANTS = [
   { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
@@ -63,7 +63,21 @@ const VARIANTS = [
   { variant: 'v8', variantLabel: 'risk-capped',     signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
   // v6 at the $40 short-ATM sizing the user also trades: WIDTH 40, short leg ~ATM (shift = width/2),
   // long leg deeper ITM; capFrac 0.8 (~$22-23 real-world debit). Same v6 signal + tent cover.
-  { variant: 'v6-40', variantLabel: '5m $40 short-ATM', signalFn: v6Signal, signalCfg: { fiveMin: true }, spreadWidth: 40, spreadShift: 20, capFrac: 0.8, ...PORTED_COVER }
+  { variant: 'v6-40', variantLabel: '5m $40 short-ATM', signalFn: v6Signal, signalCfg: { fiveMin: true }, spreadWidth: 40, spreadShift: 20, capFrac: 0.8, ...PORTED_COVER },
+  // v9 $40 + COVER-TO-STACK, PURE PAPER (dryRun:true → builds/logs, sends NOTHING, assumes fills). A
+  // fill-realism STUDY: v9 (be-wrong) squeezed to a $15k budget cap so cover-to-stack fires heavily on
+  // $40 wings; every open + cover logs the REAL chain mark/bid/ask so we can compare the backtest's
+  // BS-mark fill assumption to reality over ~a week. NOT armed and NOT arm-able (dryRun:true never sends,
+  // even under CANDLE_SPREAD_LIVE — the live-send filter requires dryRun 'test'/false). v9 breaches the
+  // ~$5-10k/day tolerance for REAL trading → this stays paper pending the go/no-go. See experiments log.
+  {
+    variant: 'v9-40-paper', variantLabel: 'v9 $40 cover-to-stack (paper fill study)',
+    signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true,
+    spreadWidth: 40, spreadShift: 20, capFrac: 0.8,
+    hardCap: 15000, proactiveCoverFrac: 0.80,
+    coverToStack: true, coverToStackMinFrac: 0.65,
+    dryRun: true, ...PORTED_COVER
+  }
 ];
 
 // Expand base runs × variants into the concrete run list.
@@ -283,6 +297,7 @@ async function processGroup(runs, kind) {
         // v8 risk-cap opts (undefined for other variants → cap logic inert)
         riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
         proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
+        coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
     } catch (e) {

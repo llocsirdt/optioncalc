@@ -102,19 +102,74 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
 //              when every uncovered position is the SAME side (a trend stack, not chop churn).
 //   hardCap  — absolute ceiling on TOTAL uncovered debit (deep-ITM included).
 // Marks come from the real chain (coverMarkNow); deep-ITM = mark >= proactiveCoverFrac × width.
-function capAllowsOpen(st, res, openSide, cfg, deps, decisions) {
-  if (deps.riskCap == null && deps.softCap == null && deps.hardCap == null) return true;
+// Pure cap evaluation → { ok, nd, totalUncov, atRisk }. Positions flagged `stackLocked` (a cover-to-stack
+// lock in progress, see coverToStackFreeBudget) are treated as freed — a deep-ITM cover fills ~immediately
+// so its at-risk no longer counts against the budget for THIS candle's open.
+function capState(st, res, openSide, cfg, deps) {
   const nd = res.limit * 100 * cfg.quantity;
   const deepFrac = deps.proactiveCoverFrac;
   const isDeep = pos => deepFrac != null && !pos.covered && (coverMarkNow(pos.legs, deps.getLeg) || 0) >= deepFrac * cfg.spreadWidth;
-  const uncov = st.positions.filter(p => p.filled && !p.covered);
+  const uncov = st.positions.filter(p => p.filled && !p.covered && !p.stackLocked);
   let totalUncov = 0, atRisk = 0;
   for (const p of uncov) { const d = p.limit * 100 * (p.quantity || cfg.quantity); totalUncov += d; if (!isDeep(p)) atRisk += d; }
   const stacking = uncov.length > 0 && uncov.every(p => p.side === openSide);
   const softOk = (deps.exemptTrendStack && stacking) ? true : (atRisk + nd <= (deps.softCap != null ? deps.softCap : Infinity));
   const ok = (totalUncov + nd <= (deps.riskCap != null ? deps.riskCap : Infinity)) && softOk && (totalUncov + nd <= (deps.hardCap != null ? deps.hardCap : Infinity));
-  if (!ok) decisions.push({ action: 'open-skip-cap', side: openSide, addDebit: round2(nd), totalUncov: round2(totalUncov), atRisk: round2(atRisk) });
-  return ok;
+  return { ok, nd, totalUncov, atRisk };
+}
+function capAllowsOpen(st, res, openSide, cfg, deps, decisions) {
+  if (deps.riskCap == null && deps.softCap == null && deps.hardCap == null) return true;
+  const s = capState(st, res, openSide, cfg, deps);
+  if (!s.ok) decisions.push({ action: 'open-skip-cap', side: openSide, addDebit: round2(s.nd), totalUncov: round2(s.totalUncov), atRisk: round2(s.atRisk) });
+  return s.ok;
+}
+
+// COVER-TO-CONTINUE-STACKING (deps.coverToStack): when a cap would block a new open, LOCK the deepest-ITM
+// uncovered winner(s) (mark >= coverToStackMinFrac×width, default 0.65) with a resting cover — freeing
+// their at-risk from the budget — so the stack continues instead of skipping the open. Mirrors
+// backtest-v6-5m's cover-to-stack. The resting cover logs the REAL chain mark (the fill-realism data this
+// paper study collects); `stackLocked` frees the budget for THIS candle (a cheap deep-ITM cover fills
+// ~immediately — resolveRestingCovers books it later this same candle). Returns how many it locked.
+async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime) {
+  const minFrac = deps.coverToStackMinFrac != null ? deps.coverToStackMinFrac : 0.65;
+  const lockMin = minFrac * cfg.spreadWidth;
+  const tried = new Set();
+  let locked = 0;
+  while (!capState(st, res, openSide, cfg, deps).ok) {
+    const cands = st.positions
+      .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked && !tried.has(p.id))
+      .map(p => ({ p, mark: coverMarkNow(p.legs, deps.getLeg) }))
+      .filter(x => x.mark != null && x.mark >= lockMin)
+      .sort((a, b) => b.mark - a.mark);              // deepest ITM first: cheapest cover, biggest lock
+    if (!cands.length) break;                        // no winner deep enough → the open will be skipped
+    const { p } = cands[0];
+    const plan = selectCoverFixedMark(p, cfg, deps.getLeg);
+    if (plan.error) { tried.add(p.id); continue; }   // can't price its cover right now; don't retry it
+    if (cfg.coverFillModel === 'resting') {
+      await placeRestingCover(p, plan, cfg, deps, candleTime, decisions, 'cover-to-stack');
+    } else {
+      await deps.placeOrder(plan.payload, { kind: 'cover', of: p.id, legs: plan.legs, limit: plan.limit, mark: plan.mark, note: 'cover-to-stack' });
+      p.covered = true; p.coverId = nextId('cov'); p.coverLimit = plan.limit; p.coverLegs = plan.legs;
+    }
+    p.stackLocked = true; locked++;
+  }
+  if (locked) decisions.push({ action: 'cover-to-stack', locked, forOpen: openSide, minMark: round2(lockMin) });
+  return locked;
+}
+
+// Book a filled/assumed open into state (shared by the normal path and the cover-to-stack rescue path).
+async function openPosition(st, res, openSide, cfg, deps, decisions) {
+  const placed = await deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
+  const pos = {
+    id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,
+    shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
+    orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
+    openedAt: new Date().toISOString()
+  };
+  st.positions.push(pos);
+  st.pendingOpenId = pos.filled ? null : pos.id;
+  st.direction = openSide;
+  decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled });
 }
 
 // --- Core per-tick sequence (testable) ------------------------------------
@@ -275,22 +330,19 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
-    } else if (ported && !capAllowsOpen(st, res, openSide, cfg, deps, decisions)) {
-      // v8 caps blocked this open (see capAllowsOpen — logs an 'open-skip-cap' decision).
+    } else if (ported && !capState(st, res, openSide, cfg, deps).ok) {
+      // A cap blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM winner
+      // and open anyway; else skip (existing v8 behavior). capAllowsOpen logs the FINAL 'open-skip-cap'.
+      let opened = false;
+      if (deps.coverToStack) {
+        await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
+        if (capState(st, res, openSide, cfg, deps).ok) { await openPosition(st, res, openSide, cfg, deps, decisions); opened = true; }
+      }
+      if (!opened) capAllowsOpen(st, res, openSide, cfg, deps, decisions);   // logs 'open-skip-cap'
     } else {
-      const placed = await deps.placeOrder(res.payload, { kind: 'open', side: openSide, legs: res.legs, limit: res.limit, mark: res.mark });
-      const pos = {
-        id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,
-        shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
-        orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
-        openedAt: new Date().toISOString()
-      };
-      st.positions.push(pos);
-      // In dry-run we assume the fill; a filled open is NOT pending-cancel. If a real
-      // (future) fill hasn't happened, it stays pending so the next candle cancels it.
-      st.pendingOpenId = pos.filled ? null : pos.id;
-      st.direction = openSide;
-      decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled });
+      // In dry-run/paper we assume the fill; a filled open is NOT pending-cancel. If a real (future)
+      // fill hasn't happened, it stays pending so the next candle cancels it (see openPosition).
+      await openPosition(st, res, openSide, cfg, deps, decisions);
     }
   } else {
     // PLACEHOLDER: neutral candle handling — no trade today; likely to add logic here.
