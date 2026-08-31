@@ -49,6 +49,7 @@ function load5mDays(dir) {
 }
 
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
+const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -106,11 +107,17 @@ function runDay5m(bars, signalFn, opts = {}) {
   // decoupled from any ceiling. peakUncov = peak UNCOVERED at-risk (the margin view; = what the account
   // capital ceiling caps). Cash management (alternating) is independent of the at-risk ceiling.
   let depD = 0, peakD = 0, depC = 0, peakC = 0, depA = 0, peakA = 0, peakUncov = 0, nCredit = 0, nDebitCov = 0, openN = 0;
+  // depR/peakR = the ACCURATE cash curve for the shipping policy (alternate debit/credit opens every
+  // altEvery + credit cover on ITM winners), priced from the REAL legs actually traded via capital-legs
+  // (not the ~width approximation of depA/depC). depR += entryMark(legsTraded): +debit deploys, -credit
+  // reclaims. peakR = worst simultaneous cash = the account funding this policy actually needs.
+  let depR = 0, peakR = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
     const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
+    const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
     if (pFrac != null) {
@@ -132,6 +139,9 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }
           else { depC += cd; depA += cd; nDebitCov++; }
           peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA);
+          // depR: same policy priced from the REAL legs (credit cover on ITM else the debit cover).
+          const covLegsR = itm ? CL.coverLegsFor(pos.side, pos.shortStrike, G.WIDTH, 'credit') : pos.coverLegs;
+          depR += CL.entryMark(covLegsR, capMark) * 100 * QTY; peakR = Math.max(peakR, depR);
         }
       }
     }
@@ -205,6 +215,10 @@ function runDay5m(bars, signalFn, opts = {}) {
           // ATM by parity), repeat → net cash oscillates instead of draining.
           const creditOpen = Math.floor(openN / altEvery) % 2 === 1;
           depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
+          // depR: real-legs cash — on a credit turn, the parity credit spread (+cash); else the debit (-cash).
+          const oStrikes = o.legs.map(l => l.strike), oLo = Math.min(...oStrikes), oHi = Math.max(...oStrikes);
+          const openLegsR = creditOpen ? CL.openLegsFor(sig.openSide, oLo, oHi, 'credit') : o.legs;
+          depR += CL.entryMark(openLegsR, capMark) * 100 * QTY; peakR = Math.max(peakR, depR);
         }
       } else {
         capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
@@ -226,7 +240,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakUncov, eodDebit: depD, eodCredit: depC, nCredit, nDebitCov } : null
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null
   };
 }
 
