@@ -30,23 +30,33 @@
     if (!s.gates.hasAccountHash) gatesOff.push('no accountHash');
     const armed = /LIVE-ARMED|TEST-ARMED/.test(s.mode);
     const active = s.runs.filter(r => r.mode !== 'simulate');
-    const shown = active.length ? active : s.runs;
-    const rows = shown.map(r => {
-      const ro = r.realOrders || {};
-      const orderStr = (r.mode !== 'simulate')
-        ? ` · orders ${ro.sent || 0} sent/${ro.canceled || 0} cxl/${ro.filled || 0} fill${ro.lastAt ? ' @' + String(ro.lastAt).split(',').pop().trim() : ''}`
-        : '';
-      const geo = `$${r.width}${r.shift ? '+' + r.shift : ''}`;
-      return `<div style="font:11px monospace;color:#444">`
-        + `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · `
-        + `${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov) · ${money(r.realizedPnl)}${orderStr}</div>`;
-    }).join('');
     const tickMin = Math.max(0, Math.round((s.msToNextTick || 0) / 60000));
+
+    // COMPACT inline line: badge + (armed) a short activity rollup + tick. Full per-strategy detail
+    // lives in the hover tooltip so it never adds height to the header.
+    let inline = '';
+    if (active.length) {
+      inline = active.map(r => {
+        const ro = r.realOrders || {};
+        return `${r.variant} ${r.opens}o/${r.covers}c · ord ${ro.sent || 0}/${ro.canceled || 0}cxl/${ro.filled || 0}f`;
+      }).join(' | ');
+    } else if (gatesOff.length && !armed) {
+      inline = `gates off: ${gatesOff.join(', ')}`;
+    }
+
+    // tooltip = full detail
+    const detail = s.runs.map(r => {
+      const ro = r.realOrders || {};
+      const geo = `$${r.width}${r.shift ? '+' + r.shift : ''}`;
+      const ord = r.mode !== 'simulate' ? ` · orders ${ro.sent || 0} sent/${ro.canceled || 0} cxl/${ro.filled || 0} fill${ro.lastAt ? ' @' + String(ro.lastAt).split(',').pop().trim() : ''}` : '';
+      return `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · ${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov) · ${money(r.realizedPnl)}${ord}`;
+    }).join('\n');
+    c.title = `${s.mode}   (next tick ~${tickMin}m · ${s.tradeDate})\ngates: prod=${s.gates.isProd} armed=${s.gates.liveArmed} client=${s.gates.hasTradingClient} acct=${s.gates.hasAccountHash}\n\n${detail}`;
+
     c.innerHTML =
       `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`
-      + (gatesOff.length && !armed ? `<span style="font:11px monospace;color:#999"> gates off: ${gatesOff.join(', ')}</span>` : '')
-      + `<span style="font:11px monospace;color:#999"> · next tick ~${tickMin}m · ${s.tradeDate}</span>`
-      + rows;
+      + (inline ? `<span style="font:11px monospace;color:#999"> ${inline}</span>` : '')
+      + `<span style="font:11px monospace;color:#bbb"> · ~${tickMin}m</span>`;
   }
 
   async function poll() {
