@@ -12,6 +12,16 @@
 
   function fmtLeg(leg) { return `${leg.qty}${leg.type}${leg.strike}@${leg.cost}`; }
 
+  // Fallback for runs recorded before openEpoch existed: an open's wall-clock (openedAt) floored to the
+  // 5m grid equals the candle mark (the engine fires a few seconds after each 5m boundary), so it lands
+  // on the correct NQ chart candle. Opens only — old positions carry no cover timestamp to salvage.
+  const FIVE_MIN = 5 * 60 * 1000;
+  function epochFrom5m(iso) {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? Math.floor(t / FIVE_MIN) * FIVE_MIN : null;
+  }
+
   // pos.legs / pos.coverLegs entries are { side:'long'|'short', type:'C'|'P', strike }. Emit optionArray
   // legs { qty (signed × quantity), type ('c'|'p'), strike, cost (dollars, net on the long leg) }.
   function spreadToLegs(spreadLegs, netLimit, qty) {
@@ -44,8 +54,10 @@
       allLegs.push(...legs);
       positions.push({
         id: pos.id, side: pos.side, covered: !!pos.covered, shortStrike: pos.shortStrike,
-        openTime: pos.openTime || null, coverTime: pos.coverTime || null,      // human CANDLE times (log/tooltip)
-        openEpoch: pos.openEpoch || null, coverEpoch: pos.coverEpoch || null,   // 5m-mark epoch ms → exact NQ-chart bar
+        openTime: pos.openTime || null, coverTime: pos.coverTime || null,       // human CANDLE times (log/tooltip)
+        // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
+        // runs (opens only; old covers have no timestamp to recover).
+        openEpoch: pos.openEpoch || epochFrom5m(pos.openedAt), coverEpoch: pos.coverEpoch || null,
         openLimit: pos.limit, coverLimit: pos.covered ? pos.coverLimit : null, legs,
       });
     }
