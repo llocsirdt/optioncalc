@@ -51,6 +51,7 @@ function load5mDays(dir) {
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
+const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -123,6 +124,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   const recapAlt = opts.recaptureAlternate === true;
   const ledger = LL.makeLegLedger();
   let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverWing = 0, legCoverSkip = 0, shiftSum = 0, legOpenN = 0;
+  // RISK-HARVEST (opts.riskHarvest): spend a sliver of the profit peak on far-side hedges to negate the
+  // reachable loss zone when a ≥ratio hedge is available (ratio-gated, not clock-gated). Off by default.
+  const harvest = opts.riskHarvest === true;
+  const hvRatio = opts.harvestRatio != null ? opts.harvestRatio : 3;
+  const hvBandSig = opts.harvestBandSigmas != null ? opts.harvestBandSigmas : 1.5;
+  const hvTrigger = opts.harvestTrigger != null ? opts.harvestTrigger : -1000;   // only act if reachable loss worse than this
+  const hvBudget = opts.harvestDayBudget != null ? opts.harvestDayBudget : Infinity;
+  let hvSpent = 0, hvCount = 0, hvDays = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -270,6 +279,22 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       }   // end if(!legSkip1)
     }
+    // RISK-HARVEST (opts.riskHarvest): after opens/covers, if a REACHABLE loss exists (worse than
+    // hvTrigger over ±band = spot·iv·√tau·sigmas) and a ≥hvRatio far-side hedge is available, buy it to lift
+    // the reachable floor toward 0 — spending a sliver of the peak. Ratio-gated (fires when lopsided, any
+    // time of day), per-day budget. Hedges are held to settle. Off by default → baselines byte-identical.
+    if (harvest) {
+      const band = Math.round(S * iv * Math.sqrt(tau) * hvBandSig);
+      const hvMaxPerDay = opts.harvestMaxPerDay != null ? opts.harvestMaxPerDay : Infinity;   // cap churn
+      if (band > 0 && hvSpent < hvBudget && hvCount < hvMaxPerDay && RH.reachableFloor(st.positions, S, band, 10) < hvTrigger) {
+        const mark = (type, strike) => bs.bsPrice(type, S, strike, tau, iv);
+        const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5 });
+        for (const h of plan.hedges) {
+          st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true });
+          hvSpent += h.cost; hvCount++;
+        }
+      }
+    }
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
@@ -285,7 +310,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
-    legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null
+    legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
+    harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null
   };
 }
 
