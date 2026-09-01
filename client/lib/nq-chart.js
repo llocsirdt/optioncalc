@@ -312,6 +312,29 @@
     els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
   }
 
+  // The [left, right] TIMES currently visible — captured before a timeframe change so we can restore the
+  // same window (center + span) afterward instead of snapping back to the latest candle.
+  function visibleTimeRange() {
+    const s = els && els._scales;
+    if (!s || !data.length) return null;
+    const lo = data[Math.max(0, Math.min(data.length - 1, s.i0))];
+    const hi = data[Math.max(0, Math.min(data.length - 1, s.i1))];
+    return (lo && hi) ? [lo.t, hi.t] : null;
+  }
+  // Fit the [tL, tR] time window into the viewport (nearest candles in the current data). Mirrors
+  // jumpToIndex's transform math; used to preserve the view across a timeframe change.
+  function fitTimeRange(tL, tR) {
+    if (!els || !data.length || tL == null || tR == null) return false;
+    const near = (t) => { let b = 0, bd = Infinity; for (let i = 0; i < data.length; i++) { const dd = Math.abs(data[i].t - t); if (dd < bd) { bd = dd; b = i; } } return b; };
+    const lo = Math.min(near(tL), near(tR)), hi = Math.max(near(tL), near(tR));
+    const { innerW } = dims(), n = data.length;
+    const bars = Math.min(Math.max(5, (hi - lo) + 1), n);
+    const baseX = d3.scaleLinear().domain([-0.5, n - 0.5]).range([0, innerW]);
+    const k = n / bars, tx = innerW / 2 - k * baseX((lo + hi) / 2);
+    els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
+    return true;
+  }
+
   // Reflect the currently-centered bar's date back into the field (two-way), unless the user is
   // actively editing it. Setting .value programmatically does not fire 'change', so no jump loop.
   function syncDateField() {
@@ -796,13 +819,15 @@
   // Switching timeframe reads from the already-fetched cache (no refetch) — instant.
   function setTimeframe(tf) {
     if (!TIMEFRAMES.includes(tf) || tf === timeframe) return;
+    const keep = visibleTimeRange();   // remember the current window so the TF change doesn't snap to latest
     timeframe = tf;
     lineTfs.add(tf);            // selecting a timeframe also turns on its band/EMA lines
     savePrefs();
     buildToolbar();
     if (histMode) { enterHistorical(histDate); return; }   // pull this TF's historical window, re-center on the date
     if (allData[tf] && allData[tf].length) {
-      rebuildSelected(); lastSig = null; resetView();
+      rebuildSelected(); lastSig = null;
+      if (!(keep && fitTimeRange(keep[0], keep[1]))) resetView();   // preserve the viewed time window, else default
       if (hoverIndex == null) updateReadout(data[data.length - 1]);
     } else {
       load(true);
