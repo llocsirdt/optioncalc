@@ -118,8 +118,11 @@ function runDay5m(bars, signalFn, opts = {}) {
   // conflict the resolver prefers the parity twin at the SAME strikes (keeps geometry + P&L), else shifts.
   const enforceLegs = opts.enforceLegUniqueness === true;
   const legIncr = opts.legIncr || 10;
+  // recaptureAlternate: the resolver PREFERS the debit/credit style the recapture alternation would send
+  // (every altEvery opens), so opens spread across both option ladders → fewer leg conflicts / shifts.
+  const recapAlt = opts.recaptureAlternate === true;
   const ledger = LL.makeLegLedger();
-  let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverSkip = 0, shiftSum = 0;
+  let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverSkip = 0, shiftSum = 0, legOpenN = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -138,9 +141,15 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? c5.high : c5.low;
       if (legsMark(pc.legs, ext, tau, iv) <= pc.target) {
+        if (enforceLegs) {
+          // Resolve the cover: debit tent → credit twin (same strikes, other ladder) → skip (leave naked).
+          const rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit' });
+          if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
+          if (rc.resolution === 'twin') legCoverTwin++;
+          ledger.record(rc.legs);        // actual (style-specific) cover legs; P&L stays debit-canonical (parity)
+        }
         pos.coverLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK));
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
-        if (enforceLegs) ledger.record(pc.legs);   // covers consume legs too — record so opens respect them
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
@@ -188,7 +197,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       let resolvedLegs = o.legs, legSkip1 = false;
       if (enforceLegs) {
         const _s = o.legs.map(l => l.strike), _lo = Math.min(..._s), _hi = Math.max(..._s);
-        const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: 'debit' });
+        const preferStyle = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
+        const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle });
         if (res.resolution === 'skip') { legSkip++; legSkip1 = true; }
         else {
           if (res.resolution === 'shift') { legShift++; shiftSum += Math.abs(res.shift); o = G.buildOpen(sig.openSide, S + res.shift * legIncr, tau, iv); }
@@ -233,7 +243,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const ceilingOk = totalUncov + nd <= capCeiling;                                             // ACCOUNT capital ceiling (separate)
       if (strategyOk && ceilingOk) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
-        if (enforceLegs) ledger.record(resolvedLegs);   // the actual played legs (ideal / twin / shifted)
+        if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
         st.dir = sig.openSide;
         if (trackCap) {
           depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
