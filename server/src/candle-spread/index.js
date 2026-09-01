@@ -9,6 +9,7 @@ const trader = require('./trader');
 const om = require('./order-manager');
 const summary = require('./summary');
 const ab = require('./analysis-builder');
+const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
 const { v5Signal } = require('./signals/v5-signals');
 const { v6Signal } = require('./signals/v6-signals');
@@ -51,6 +52,13 @@ const BASE_RUNS = [
 // + risk caps; the v9-40-paper run below is a PURE-PAPER $40 cover-to-stack fill study (never sends).
 const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 const VARIANTS = [
+  // v0-v3 = CLASSIC signal (15m price-action breakout/reversal), cover geometry varies. Paper shadows for
+  // diversification (the classic family's worst days fall on DIFFERENT dates than the multi-TF lineage).
+  // Same signal; only the cover selector differs (fixed tent / greedy / joint / fixed-mark).
+  { variant: 'v0', variantLabel: 'classic fixed-tent', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting' },
+  { variant: 'v1', variantLabel: 'classic greedy',     signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'greedy', coverFillModel: 'resting' },
+  { variant: 'v2', variantLabel: 'classic joint',      signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'joint', coverFillModel: 'resting' },
+  { variant: 'v3', variantLabel: 'classic fixed-mark', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed-mark', coverFillModel: 'resting' },
   { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { variant: 'v5', variantLabel: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
   // dryRun:'test' → when ARMED on prod (CANDLE_SPREAD_LIVE=true), v6 sends REAL orders at an
