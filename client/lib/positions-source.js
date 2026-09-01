@@ -40,7 +40,7 @@
 
   // Push open/cover markers to the NQ chart. Each covered position contributes an open AND a cover marker,
   // each keyed by the 5m-mark epoch so it lands on the exact NQ candle. Empty list clears the markers.
-  function applyTradesToChart(positions) {
+  function applyTradesToChart(positions, focus) {
     if (!(window.NQChart && window.NQChart.setTrades)) return;
     const box = el('ps-chart-markers');
     if (box && !box.checked) { window.NQChart.setTrades([]); return; }
@@ -49,7 +49,7 @@
       if (p.openEpoch) trades.push({ epoch: p.openEpoch, side: p.side, type: 'open' });
       if (p.covered && p.coverEpoch) trades.push({ epoch: p.coverEpoch, side: p.side, type: 'cover' });
     }
-    window.NQChart.setTrades(trades);
+    window.NQChart.setTrades(trades, { focus: !!focus });   // focus pans the chart to the trades (Pull / tab switch)
   }
 
   // --- tabs + affordances ---
@@ -76,7 +76,7 @@
     // Chart markers are strategy-specific: show the cached book's trades on Strategy, clear otherwise.
     if (source === 'strategy') {
       const m = getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant());
-      applyTradesToChart(m ? m.positions : []);
+      applyTradesToChart(m ? m.positions : [], true);
     } else applyTradesToChart([]);
   }
 
@@ -104,7 +104,8 @@
     if (s) { s.textContent = text; s.classList.toggle('ps-error', !!isError); }
   }
 
-  async function pullStrategyPositions() {
+  async function pullStrategyPositions(focus) {
+    const doFocus = focus !== false;   // explicit Pull (no arg) focuses the chart; auto-refresh passes false
     const symbol = currentSymbol(), expiration = currentExpiration(), variant = currentVariant();
     if (!symbol || !expiration) { setLastPulled('pick a symbol + expiration', true); return; }
     setLastPulled('pulling…', false);
@@ -118,7 +119,7 @@
       const textInput = el('textInput');
       if (textInput) { textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2); if (typeof processInput === 'function') processInput(); }
       saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
-      applyTradesToChart(result.positions);
+      applyTradesToChart(result.positions, doFocus);
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastPulled(`${result.count} pos · ${t}`, false);
     } catch (e) {
@@ -132,7 +133,7 @@
     const box = el('ps-autorefresh');
     const on = getPositionsSource() === 'strategy' && box && box.checked;
     if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-    if (on) autoTimer = setInterval(() => { if (typeof isMarketHours !== 'function' || isMarketHours()) pullStrategyPositions(); }, 45000);
+    if (on) autoTimer = setInterval(() => { if (typeof isMarketHours !== 'function' || isMarketHours()) pullStrategyPositions(false); }, 45000);
   }
 
   function init() {

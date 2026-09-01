@@ -472,10 +472,31 @@
       .text((d) => d.n > 1 ? d.n : '');
   }
 
-  // Public: set the strategy trade markers (from the Strategy positions pull) and redraw.
-  function setTrades(list) {
+  // Pan/zoom the view to fit the trade markers (so they're visible even if the default view is on the
+  // most-recent/after-hours bars while the trades are in the RTH session). Mirrors jumpToIndex's math.
+  function focusTrades() {
+    if (!els || !data.length || !trades.length) return;
+    const epochs = data.map(d => d.t), TOL = 5 * 60 * 1000, idxs = [];
+    for (const t of trades) {
+      if (t.epoch == null) continue;
+      let best = -1, bestD = Infinity;
+      for (let i = 0; i < epochs.length; i++) { const dd = Math.abs(epochs[i] - t.epoch); if (dd < bestD) { bestD = dd; best = i; } }
+      if (best >= 0 && bestD <= TOL) idxs.push(best);
+    }
+    if (!idxs.length) return;
+    const i0 = Math.min(...idxs), i1 = Math.max(...idxs);
+    const { innerW } = dims(), n = data.length;
+    const bars = Math.min(Math.max(5, (i1 - i0) + 8), n);   // trade span + padding
+    const baseX = d3.scaleLinear().domain([-0.5, n - 0.5]).range([0, innerW]);
+    const k = n / bars, tx = innerW / 2 - k * baseX((i0 + i1) / 2);
+    els.zoomHit.call(zoom.transform, d3.zoomIdentity.translate(tx, 0).scale(k));
+  }
+
+  // Public: set the strategy trade markers (from the Strategy positions pull) and redraw. opts.focus
+  // pans the view to the trades (used on an explicit Pull / tab switch, not on the 45s auto-refresh).
+  function setTrades(list, opts) {
     trades = Array.isArray(list) ? list.filter(t => t && t.epoch != null) : [];
-    if (els) render();
+    if (els) { render(); if (opts && opts.focus && trades.length) focusTrades(); }
   }
   function setShowTrades(on) { showTrades = !!on; if (els) render(); }
 
