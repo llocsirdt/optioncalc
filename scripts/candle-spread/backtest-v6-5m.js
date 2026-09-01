@@ -50,6 +50,7 @@ function load5mDays(dir) {
 
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
+const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -112,6 +113,13 @@ function runDay5m(bars, signalFn, opts = {}) {
   // (not the ~width approximation of depA/depC). depR += entryMark(legsTraded): +debit deploys, -credit
   // reclaims. peakR = worst simultaneous cash = the account funding this policy actually needs.
   let depR = 0, peakR = 0;
+  // LEG-UNIQUENESS (opts.enforceLegUniqueness): a per-day ledger of which side each (type,strike) leg was
+  // traded, so a leg is never both bought- and sold-to-open (the broker nets same-symbol positions). On a
+  // conflict the resolver prefers the parity twin at the SAME strikes (keeps geometry + P&L), else shifts.
+  const enforceLegs = opts.enforceLegUniqueness === true;
+  const legIncr = opts.legIncr || 10;
+  const ledger = LL.makeLegLedger();
+  let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverSkip = 0, shiftSum = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -132,6 +140,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (legsMark(pc.legs, ext, tau, iv) <= pc.target) {
         pos.coverLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK));
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
+        if (enforceLegs) ledger.record(pc.legs);   // covers consume legs too — record so opens respect them
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
@@ -172,7 +181,22 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
     if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
-      const o = G.buildOpen(sig.openSide, S, tau, iv);
+      let o = G.buildOpen(sig.openSide, S, tau, iv);
+      // LEG-UNIQUENESS: resolve the ideal spread against the day's ledger — ideal → parity twin (same
+      // strikes) → shift → skip. P&L stays on the debit-canonical spread at the RESOLVED strikes; the
+      // ledger records the actual (style-specific) legs on commit. `resolvedLegs` = what to record.
+      let resolvedLegs = o.legs, legSkip1 = false;
+      if (enforceLegs) {
+        const _s = o.legs.map(l => l.strike), _lo = Math.min(..._s), _hi = Math.max(..._s);
+        const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: 'debit' });
+        if (res.resolution === 'skip') { legSkip++; legSkip1 = true; }
+        else {
+          if (res.resolution === 'shift') { legShift++; shiftSum += Math.abs(res.shift); o = G.buildOpen(sig.openSide, S + res.shift * legIncr, tau, iv); }
+          else if (res.resolution === 'twin') legTwin++; else legIdeal++;
+          resolvedLegs = res.legs;
+        }
+      }
+      if (!legSkip1) {
       const nd = o.limit * 100 * QTY;
       // COVER-TO-CONTINUE-STACKING (opts.coverToStack): if a new open would breach the ACCOUNT ceiling
       // mid-trend, LOCK the deepest-ITM winner(s) first — a covered tent is riskless, so it frees its
@@ -193,6 +217,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (uncoveredRisk() + nd <= ctsCap) break;        // freed enough room under the binding cap
           const cl = G.coverLegs(p.side, p.shortStrike);
           p.coverLegs = cl; p.coverLimit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
+          if (enforceLegs) ledger.record(cl);
           p.covered = true; p.pendingCover = null; nCoverToStack++;
           if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
         }
@@ -208,6 +233,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const ceilingOk = totalUncov + nd <= capCeiling;                                             // ACCOUNT capital ceiling (separate)
       if (strategyOk && ceilingOk) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
+        if (enforceLegs) ledger.record(resolvedLegs);   // the actual played legs (ideal / twin / shifted)
         st.dir = sig.openSide;
         if (trackCap) {
           depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
@@ -225,6 +251,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (strategyOk && !ceilingOk) capSkipCeiling++;   // refused ONLY by the account ceiling (would've passed the strategy risk cap)
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
+      }   // end if(!legSkip1)
     }
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
@@ -240,7 +267,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
+    legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null
   };
 }
 
