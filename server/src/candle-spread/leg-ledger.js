@@ -12,17 +12,19 @@ const CL = require('./capital-legs');
 
 // A per-day ledger. key = "<TYPE><strike>" e.g. "C29300". First use of a leg fixes its side; same-side
 // re-use is fine (stacking / adding to the position). conflicts() = any leg would trade the opposite side.
-function makeLegLedger() {
-  const sides = new Map();
+// Backed by a plain object (`backing`) so it can live on the run state (JSON-serializable) and survive a
+// restart mid-day; call makeLegLedger(state.legLedger || (state.legLedger = {})).
+function makeLegLedger(backing) {
+  const sides = backing || {};
   const key = (type, strike) => `${String(type).toUpperCase()}${strike}`;
   return {
     conflicts(legs) {
-      for (const l of legs) { const s = sides.get(key(l.type, l.strike)); if (s && s !== l.side) return true; }
+      for (const l of legs) { const s = sides[key(l.type, l.strike)]; if (s && s !== l.side) return true; }
       return false;
     },
-    record(legs) { for (const l of legs) { const k = key(l.type, l.strike); if (!sides.has(k)) sides.set(k, l.side); } },
-    sideOf(type, strike) { return sides.get(key(type, strike)) || null; },
-    size() { return sides.size; },
+    record(legs) { for (const l of legs) { const k = key(l.type, l.strike); if (!(k in sides)) sides[k] = l.side; } },
+    sideOf(type, strike) { return sides[key(type, strike)] || null; },
+    size() { return Object.keys(sides).length; },
   };
 }
 

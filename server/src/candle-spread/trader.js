@@ -16,6 +16,7 @@
  */
 const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
+const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const store = require('./store');
 
 let nextPositionSeq = 1;
@@ -80,41 +81,48 @@ function resolveLegs(legs, getLeg) {
 // reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
 // machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
 async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note) {
-  const target = round2(cfg.spreadWidth - pos.limit);
-  pos.pendingCover = { legs: plan.legs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
-  pos.coverStatus = 'resting';
-  // CAPITAL RECAPTURE phase 2 (deps.capitalRecapture): on a deep-ITM WINNER, SEND the parity CREDIT cover
-  // (sell the offsetting spread → reclaim ~width cash) instead of the debit tent. Booking stays debit-
-  // canonical (pendingCover.legs → resolveRestingCovers) so the locked floor + settlement P&L are
-  // byte-identical; only the sent order + the cover cash ledger differ. creditCoverFrac (default 0.65) is
-  // the ITM depth (canonical spread mark ≥ frac×width) that marks it a winner worth reclaiming cash on.
-  let restOrderId = null, sentNet = 'DEBIT', sentCredit = null;
+  const W = cfg.spreadWidth, tick = cfg.tickIncrement;
+  // CAPITAL RECAPTURE: prefer a CREDIT cover on a deep-ITM winner (reclaim ~width cash). LEG-UNIQUENESS:
+  // resolve so no cover leg is traded the wrong way — ideal → credit twin (same strikes) → WING-SHIFT
+  // (anchor cover: long wing out to a free strike) → skip (leave uncovered). The resting-fill BOOKING stays
+  // debit-canonical (pendingCover.legs) so the floor + settlement P&L are right for the position's own
+  // style; only the SENT order + the cash ledger differ. Wing-shift books/settles at the wider wing.
+  let style = 'debit', wing = W;
   if (deps.capitalRecapture === true) {
-    const itmMark = coverMarkNow(pos.legs, deps.getLeg);
-    if (itmMark != null && itmMark >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * cfg.spreadWidth) {
-      const clegs = CL.coverLegsFor(pos.side, pos.shortStrike, cfg.spreadWidth, 'credit');
-      const rl = resolveLegs(clegs, deps.getLeg);
-      const credit = rl.error ? 0 : round2(rl.shortMid - rl.longMid);
-      if (!rl.error && credit > 0) {
-        const price = L.roundToTick(Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), credit), cfg.tickIncrement);
-        const payload = buildOrderPayload(rl.resolved, price, cfg.quantity, 'CREDIT');
-        const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: clegs, limit: price, net: 'CREDIT', mark: plan.mark });
-        restOrderId = (placed && placed.orderId) || null; sentNet = 'CREDIT'; sentCredit = price;
-      }
-    }
+    const m = coverMarkNow(pos.legs, deps.getLeg);
+    if (m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W) style = 'credit';
   }
-  if (sentNet === 'DEBIT' && target > 0) {              // default: send the debit cover (unchanged)
-    const rl = resolveLegs(plan.legs, deps.getLeg);
-    if (!rl.error) {
-      const payload = buildOrderPayload(rl.resolved, L.roundToTick(target, cfg.tickIncrement), cfg.quantity, 'DEBIT');
-      const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: plan.legs, limit: target, mark: plan.mark });
+  if (deps.enforceLegUniqueness && deps._ledger) {
+    const rc = LL.resolveCover(pos.side, pos.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
+    if (rc.resolution === 'skip') { decisions.push({ action: 'cover-skip-leg', positionId: pos.id }); return; }   // can't place — stays uncovered
+    style = rc.style; wing = rc.wing;
+    deps._ledger.record(rc.legs);
+  }
+  // BOOK debit-canonical at the resolved wing (parity for the position's own economics).
+  const bookLegs = (wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, 'debit');
+  const brl = resolveLegs(bookLegs, deps.getLeg);
+  const bookMark = brl.error ? null : round2(brl.longMid - brl.shortMid);
+  const target = (wing === W) ? round2(W - pos.limit) : (bookMark != null ? round2(Math.max(tick, bookMark)) : round2(W - pos.limit));
+  pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
+  pos.coverStatus = 'resting';
+  // SEND the resolved cover (debit or credit) at the resolved wing.
+  const sendLegs = (style === 'debit' && wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, style);
+  const srl = resolveLegs(sendLegs, deps.getLeg);
+  let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
+  if (!srl.error) {
+    if (style === 'credit') { const cr = round2(srl.shortMid - srl.longMid); if (cr > 0) { sentNet = 'CREDIT'; price = sentCredit = L.roundToTick(Math.min(round2(W - tick), cr), tick); } }
+    else { price = (wing === W) ? L.roundToTick(round2(W - pos.limit), tick)   // ideal debit: rest at the floor target (unchanged)
+                                : L.roundToTick(Math.max(tick, round2(srl.longMid - srl.shortMid)), tick); }   // wing-shift: the wider cover's mark
+    if (price > 0) {
+      const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
+      const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: sendLegs, limit: price, net: sentNet, mark: plan.mark });
       restOrderId = (placed && placed.orderId) || null;
     }
   }
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
-  pos.pendingCover.sentCredit = sentCredit;             // credit reclaimed (booked to the cash ledger at fill)
-  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: plan.legs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, note });
+  pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
+  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, wing: wing !== W ? wing : undefined, note });
 }
 
 // v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
@@ -198,14 +206,17 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
 // RECORD stays debit-CANONICAL (legs/limit) so floor/settlement/cover/cap logic is byte-identical and P&L
 // is provably unchanged (see capital-legs parity test); only the actual sent order + the signed cash
 // ledger differ. sentNet/sentLegs record what really went to the broker for fill reconciliation.
-async function openPosition(st, res, openSide, cfg, deps, decisions) {
+async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   const altEvery = deps.openAlternateEvery || 3;
-  const creditTurn = deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1;
+  // Send style: the leg-uniqueness resolver's choice when enforcing (it took the recapture preference but
+  // may have flipped to the twin); otherwise the recapture alternation; otherwise debit.
+  const style = legStyle || ((deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
   let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
-  if (creditTurn) {
+  if (style === 'credit') {
     const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg);
     if (!c.error) { payload = c.payload; sentNet = 'CREDIT'; sentLegs = c.legs; sentLimit = c.limit; }
-    else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // bad credit quotes → send debit
+    else if (legStyle) { decisions.push({ action: 'open-skip-leg', side: openSide, error: 'twin credit unquotable' }); return; }  // forced twin: can't fall back to a conflicting debit
+    else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // recapture-only: fall back to debit
   }
   const placed = await deps.placeOrder(payload, { kind: 'open', side: openSide, legs: sentLegs, limit: sentLimit, net: sentNet, mark: res.mark });
   const pos = {
@@ -218,6 +229,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions) {
     sentNet, sentLimit, sentLegs: sentNet === 'CREDIT' ? sentLegs : undefined   // what actually hit the broker
   };
   st.positions.push(pos);
+  if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(sentLegs);   // record the actual played legs
   st.pendingOpenId = pos.filled ? null : pos.id;
   st.direction = openSide;
   st.openN = (st.openN || 0) + 1;
@@ -241,6 +253,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (st.lastCandleTime === candleTime) return { skipped: 'already-processed' };
   st.lastCandleTime = candleTime;
   st.lastCandleEpoch = (typeof candle.datetime === 'number') ? candle.datetime : null;   // 5m-mark epoch, matches /chartseries
+  // LEG-UNIQUENESS (deps.enforceLegUniqueness): a per-day ledger of each leg's traded side, persisted on
+  // run state (this run record IS one trade day) so a leg is never both bought- and sold-to-open.
+  if (deps.enforceLegUniqueness) { if (!st.legLedger) st.legLedger = {}; deps._ledger = LL.makeLegLedger(st.legLedger); }
 
   const firstOfDay = !priorCandle;
   const ported = typeof deps.signalFn === 'function';
@@ -384,8 +399,19 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
-    const res = buildOpen(openSide, underlying, cfg, deps.getLeg);
-    if (res.error) {
+    let res = buildOpen(openSide, underlying, cfg, deps.getLeg);
+    // LEG-UNIQUENESS: resolve strikes + style BEFORE the caps/send so a shifted spread is capped
+    // correctly. ideal → parity twin (same strikes) → shift → skip. legStyle drives the actual send.
+    let legStyle = null, legSkipped = false;
+    if (deps.enforceLegUniqueness && deps._ledger && !res.error && res.limit > 0) {
+      const wantCredit = deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1;
+      const rr = LL.resolveOpen(openSide, res.lower, res.upper, deps._ledger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCredit ? 'credit' : 'debit' });
+      if (rr.resolution === 'skip') { decisions.push({ action: 'open-skip-leg', side: openSide, lower: res.lower, upper: res.upper }); legSkipped = true; }
+      else { if (rr.resolution === 'shift') { res = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg); } legStyle = rr.style; }
+    }
+    if (legSkipped) {
+      // already logged; the leg constraint blocked every placement
+    } else if (res.error) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
@@ -395,13 +421,13 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       let opened = false;
       if (deps.coverToStack) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
-        if (capState(st, res, openSide, cfg, deps).ok) { await openPosition(st, res, openSide, cfg, deps, decisions); opened = true; }
+        if (capState(st, res, openSide, cfg, deps).ok) { await openPosition(st, res, openSide, cfg, deps, decisions, legStyle); opened = true; }
       }
       if (!opened) capAllowsOpen(st, res, openSide, cfg, deps, decisions);   // logs 'open-skip-cap'
     } else {
       // In dry-run/paper we assume the fill; a filled open is NOT pending-cancel. If a real (future)
       // fill hasn't happened, it stays pending so the next candle cancels it (see openPosition).
-      await openPosition(st, res, openSide, cfg, deps, decisions);
+      await openPosition(st, res, openSide, cfg, deps, decisions, legStyle);
     }
   } else {
     // PLACEHOLDER: neutral candle handling — no trade today; likely to add logic here.
@@ -455,6 +481,11 @@ function buildOpen(side, underlying, cfg, getLeg) {
   // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac
   // (default 0.525 = the $20 ATM cap) rises for wider/deeper spreads whose long leg costs more.
   const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
+  return buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
+}
+
+// Build a debit-canonical open at EXPLICIT strikes (used by leg-uniqueness to reprice a shifted spread).
+function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };

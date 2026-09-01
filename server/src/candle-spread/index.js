@@ -84,9 +84,13 @@ const VARIANTS = [
   // to confirm the ~$75k→~$28k funding drop holds on real fills before it's ever enabled for real.
   // dryRun:true = never sends. Phases 1 (opens) + 2 (ITM-credit covers) both on.
   {
-    variant: 'v6-recap-paper', variantLabel: 'v6 $20 capital-recapture (paper)',
+    variant: 'v6-recap-paper', variantLabel: 'v6 $20 capital-recapture + leg-uniqueness (paper)',
     signalFn: v6Signal, signalCfg: { fiveMin: true },
     capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
+    // LEG-UNIQUENESS: never trade a leg both ways (broker nets same-symbol positions) — resolve to the
+    // parity twin / a strike shift / an anchor cover. Backtest: recapture + this costs only ~0.6% (the
+    // rest was fictional netting-impossible legs). Runs WITH recapture, the realistic live combo.
+    enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8,
     dryRun: true, ...PORTED_COVER
   }
 ];
@@ -312,6 +316,7 @@ async function processGroup(runs, kind) {
         proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
         coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
         capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
+        enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
     } catch (e) {
