@@ -391,8 +391,10 @@ async function eodSettlement() {
       const record = store.initRun(cfg, todayEST());
       let px = settle;
       if (px == null) {
-        const lastCC = [...record.events].reverse().find(ev => ev.type === 'candle_close');
-        px = lastCC ? Number(lastCC.candle.close) : null;
+        // Settle on the PRICING instrument (NDX underlying) — NOT candle.close (the NQ signal instrument,
+        // ~54 pts off). Prefer the persisted last underlying, else the last candle_close's underlying.
+        px = record.state && record.state.lastUnderlying != null ? Number(record.state.lastUnderlying) : null;
+        if (px == null) { const lastCC = [...record.events].reverse().find(ev => ev.type === 'candle_close'); px = lastCC ? Number(lastCC.underlying != null ? lastCC.underlying : lastCC.candle.close) : null; }
       }
       if (px == null) { store.appendEvent(record, { type: 'eod_settlement', variant: run.variant, note: 'no settle price available' }); continue; }
       const term = trader.computeTerminalPnl(record.state, cfg, px);
@@ -501,13 +503,21 @@ function status() {
     const st = rec && rec.state;
     const lo = (st && st.liveOrders) || [];
     const t = rec ? tallyRun(rec) : { opens: 0, covers: 0, coverFills: 0, cancels: 0 };
+    // TERMINAL (mark-to-market) P&L: value EVERY position (covered + uncovered) at the current NDX
+    // underlying — the true P&L (what the UI shows). realizedPnl below is only the covered tents' locked
+    // FLOOR (always ~positive; ignores uncovered legs), kept as the conservative lower bound.
+    let terminalPnl = null;
+    if (st && st.lastUnderlying != null && st.positions && st.positions.length) {
+      try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying).total); } catch (e) { /* leave null */ }
+    }
     return {
       variant: run.variant, symbol: run.symbol, signalSymbol: run.signalSymbol || run.symbol,
       mode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
       width: run.spreadWidth || 20, shift: run.spreadShift || 0,
       positions: st ? st.positions.length : 0,
       covered: st ? st.positions.filter(p => p.covered).length : 0,
-      realizedPnl: st ? Math.round(st.realizedPnl) : 0,
+      terminalPnl,                                    // the real P&L (mark-to-market at the NDX underlying)
+      realizedPnl: st ? Math.round(st.realizedPnl) : 0,   // conservative FLOOR (covered tents only)
       // capital view (recap variants): net cash currently deployed + the day's peak (= funding needed).
       cashDeployed: st && st.cashDeployed != null ? Math.round(st.cashDeployed) : null,
       peakCash: st && st.peakCashDeployed != null ? Math.round(st.peakCashDeployed) : null,

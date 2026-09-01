@@ -293,6 +293,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // level (e.g. cash NDX) used for STRIKE placement, since the options we trade settle on NDX.
   // Defaults to candle.close (single-instrument mode) when deps.underlying isn't supplied.
   const underlying = deps.underlying != null ? deps.underlying : candle.close;
+  st.lastUnderlying = underlying;   // NDX (pricing instrument) — for mark-to-market terminal P&L in status/EOD
 
   // (1) Cancel any unfilled prior OPEN order before doing anything else.
   if (st.pendingOpenId) {
