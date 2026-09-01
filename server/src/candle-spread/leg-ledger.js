@@ -50,15 +50,26 @@ function resolveOpen(side, lo, hi, ledger, opts) {
   return { resolution: 'skip' };
 }
 
-// Resolve a COVER. Covers are anchored at the position's shortStrike (the tent floor), so we only flip
-// debit↔credit (same strikes, other ladder) — shifting would change the locked structure. Returns
-// { legs, style, resolution: 'ideal'|'twin' } or { resolution: 'skip' } (leave uncovered).
+// Resolve a COVER. The short leg stays at the position's shortStrike (that's the tent floor); we try the
+// ideal tent-width wing in both styles (parity-neutral pair) first, then WING-SHIFT — move the long wing
+// out to a free strike (an "anchor cover", already in the strategy's geometry). Returns { legs, style,
+// wing, resolution: 'ideal'|'twin'|'wingShift' } or { resolution: 'skip' }. wing !== width means the P&L
+// must be repriced from the actual legs. maxWingShift bounds how far the wing may move (in incr).
 function resolveCover(coveredSide, shortStrike, width, ledger, opts) {
-  const prefer = (opts && opts.preferStyle) || 'debit';
+  opts = opts || {};
+  const prefer = opts.preferStyle || 'debit';
+  const incr = opts.incr || 10;
+  const maxWing = opts.maxWingShift != null ? opts.maxWingShift : 8;
   const styles = prefer === 'credit' ? ['credit', 'debit'] : ['debit', 'credit'];
-  for (const style of styles) {
+  for (const style of styles) {   // ideal / twin: tent-width wing
     const legs = CL.coverLegsFor(coveredSide, shortStrike, width, style);
-    if (!ledger.conflicts(legs)) return { legs, style, resolution: style === prefer ? 'ideal' : 'twin' };
+    if (!ledger.conflicts(legs)) return { legs, style, wing: width, resolution: style === prefer ? 'ideal' : 'twin' };
+  }
+  for (let w = width + incr; w <= width + maxWing * incr; w += incr) {   // wing-shift out to a free strike
+    for (const style of styles) {
+      const legs = CL.coverLegsFor(coveredSide, shortStrike, w, style);
+      if (!ledger.conflicts(legs)) return { legs, style, wing: w, resolution: 'wingShift' };
+    }
   }
   return { resolution: 'skip' };
 }

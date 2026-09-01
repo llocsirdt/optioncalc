@@ -122,7 +122,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // (every altEvery opens), so opens spread across both option ladders → fewer leg conflicts / shifts.
   const recapAlt = opts.recaptureAlternate === true;
   const ledger = LL.makeLegLedger();
-  let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverSkip = 0, shiftSum = 0, legOpenN = 0;
+  let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverWing = 0, legCoverSkip = 0, shiftSum = 0, legOpenN = 0;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -142,11 +142,18 @@ function runDay5m(bars, signalFn, opts = {}) {
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? c5.high : c5.low;
       if (legsMark(pc.legs, ext, tau, iv) <= pc.target) {
         if (enforceLegs) {
-          // Resolve the cover: debit tent → credit twin (same strikes, other ladder) → skip (leave naked).
-          const rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit' });
+          // Resolve the cover: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip.
+          const rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
           if (rc.resolution === 'twin') legCoverTwin++;
-          ledger.record(rc.legs);        // actual (style-specific) cover legs; P&L stays debit-canonical (parity)
+          else if (rc.resolution === 'wingShift') legCoverWing++;
+          ledger.record(rc.legs);
+          if (rc.wing !== G.WIDTH) {
+            // Anchor cover (wider wing): P&L uses the ACTUAL legs (debit-canonical at the shifted wing).
+            const pnlLegs = CL.coverLegsFor(pos.side, pos.shortStrike, rc.wing, 'debit');
+            pos.coverLegs = pnlLegs; pos.coverLimit = roundTick(legsMark(pnlLegs, S, tau, iv) + TICK);
+            pos.covered = true; pos.pendingCover = null; continue;
+          }
         }
         pos.coverLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK));
         pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
@@ -278,7 +285,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
-    legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null
+    legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null
   };
 }
 
