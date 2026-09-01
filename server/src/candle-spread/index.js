@@ -9,6 +9,8 @@ const trader = require('./trader');
 const om = require('./order-manager');
 const summary = require('./summary');
 const ab = require('./analysis-builder');
+const bs = require('./bs-pricer');
+const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
 const { v5Signal } = require('./signals/v5-signals');
@@ -308,6 +310,10 @@ async function processGroup(runs, kind) {
   // exact NQ candle without parsing the human timeEST. timeEST stays for the log/summary TIME column.
   const candle = { timeEST: markTimeEST, datetime: T, open: c5.open, high: c5.high, low: c5.low, close: c5.close };
 
+  // Time-to-expiry + IV for the read-only harvest observer's reachable band (spot·iv·√tau·σ).
+  let harvestTau = 0, harvestIv = 0;
+  try { harvestTau = bs.tauFromTime(candle.datetime); const c5 = A['5m']; harvestIv = bs.ivFromRelBandWidth((c5.bbupper - c5.bblower) / c5.close); } catch (e) { /* leave 0 → observer skips */ }
+
   // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
     try {
@@ -327,6 +333,26 @@ async function processGroup(runs, kind) {
         enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
       });
+      // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
+      // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs
+      // marketable)? Records onto state — NEVER trades, never affects the strategy. Answers: how early it
+      // shows up, how often, and whether NDX OTM spreads fill near mid (the slippage question). See v11 research.
+      try {
+        const st = record.state;
+        if (harvestTau > 0 && harvestIv > 0 && st.positions && st.positions.length) {
+          const obs = RH.observe(st.positions, getLeg, underlying, harvestTau, harvestIv, { bandSigmas: 2.0, minRatio: 3, trigger: -500 });
+          if (obs) {
+            if (!st.harvestObs) st.harvestObs = { count: 0, firstLopsidedTime: null, worstFloor: 0, samples: [] };
+            if (obs.lopsided) {
+              st.harvestObs.count++;
+              if (!st.harvestObs.firstLopsidedTime) st.harvestObs.firstLopsidedTime = candle.timeEST;
+              if (obs.reachableFloor < st.harvestObs.worstFloor) st.harvestObs.worstFloor = obs.reachableFloor;
+              if (st.harvestObs.samples.length < 150) st.harvestObs.samples.push({ time: candle.timeEST, epoch: candle.datetime, spot: obs.spot, floor: obs.reachableFloor, hedge: obs.hedge || null });
+            }
+            st.lastHarvestObs = obs;
+          }
+        }
+      } catch (e) { /* observer must never break the tick */ }
     } catch (e) {
       console.error(`[candle-spread] variant ${run.variant} error:`, e && e.message);
     }
@@ -526,6 +552,11 @@ function status() {
       // capital view (recap variants): net cash currently deployed + the day's peak (= funding needed).
       cashDeployed: st && st.cashDeployed != null ? Math.round(st.cashDeployed) : null,
       peakCash: st && st.peakCashDeployed != null ? Math.round(st.peakCashDeployed) : null,
+      // read-only risk-harvest observer: when/how-often the book went lopsided + the latest real-chain hedge.
+      harvest: st && st.harvestObs ? {
+        lopsidedCount: st.harvestObs.count, firstLopsidedTime: st.harvestObs.firstLopsidedTime, worstReachableFloor: st.harvestObs.worstFloor,
+        now: st.lastHarvestObs ? { lopsided: st.lastHarvestObs.lopsided, reachableFloor: st.lastHarvestObs.reachableFloor, hedge: st.lastHarvestObs.hedge || null } : null
+      } : null,
       ...t,
       realOrders: {
         sent: lo.length,

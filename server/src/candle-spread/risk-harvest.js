@@ -98,4 +98,30 @@ function harvestPlan(positions, mark, spot, opts) {
   return { hedges, spent: Math.round(spent), oldFloor: Math.round(oldFloor), finalFloor: Math.round(reachableFloor(book, spot, o.band, step)), book };
 }
 
-module.exports = { reachableFloor, candidateHedges, legsDebit, bestHedge, harvestPlan };
+// LIVE OBSERVER (read-only): given the book + the REAL chain (chain(type,strike) → {mid,bid,ask}) + spot/
+// tau/iv, report whether risk is lopsided and, if so, the best mid-priced hedge AND its true MARKETABLE cost
+// (buy longs @ ask, sell shorts @ bid). midCost vs realCost = the actual slippage on THIS product at THIS
+// moment — the empirical answer to "do NDX OTM spreads fill near mid?". Never trades; just measures.
+function observe(positions, chain, spot, tau, iv, opts) {
+  const o = opts || {};
+  const band = Math.round(spot * iv * Math.sqrt(tau) * (o.bandSigmas != null ? o.bandSigmas : 2.0));
+  const trigger = o.trigger != null ? o.trigger : -500;
+  if (!(band > 0)) return null;
+  const oldFloor = reachableFloor(positions, spot, band, 10);
+  const base = { spot: Math.round(spot), band, reachableFloor: Math.round(oldFloor), lopsided: oldFloor < trigger };
+  if (!base.lopsided) return base;
+  const mid = (type, strike) => { const q = chain(type, strike); return q ? q.mid : null; };
+  const h = bestHedge(positions, mid, spot, { band, step: 10, incr: o.incr || 10, widths: o.widths || [20, 40, 60], depth: o.depth != null ? o.depth : 8, minRatio: o.minRatio != null ? o.minRatio : 3, slip: 0 });
+  if (!h) return base;
+  let realCost = 0, priced = true;   // marketable: longs @ ask, shorts @ bid
+  for (const l of h.legs) { const q = chain(l.type, l.strike); if (!q || q.ask == null || q.bid == null) { priced = false; break; } realCost += (l.side === 'long' ? q.ask : -q.bid); }
+  realCost = priced ? Math.round(realCost * 100) : null;
+  base.hedge = {
+    legs: h.legs, side: h.side, floorLift: h.riskReduced, ratioMid: h.ratio,
+    midCost: h.cost, realCost, slip: realCost != null ? realCost - h.cost : null,
+    ratioReal: realCost != null && realCost > 0 ? Math.round(h.riskReduced / realCost * 100) / 100 : null
+  };
+  return base;
+}
+
+module.exports = { reachableFloor, candidateHedges, legsDebit, bestHedge, harvestPlan, observe };
