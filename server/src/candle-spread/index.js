@@ -378,13 +378,18 @@ async function eodSettlement() {
   const bySymbol = {};
   for (const run of RUNS) { (bySymbol[run.symbol] = bySymbol[run.symbol] || []).push(run); }
   for (const [symbol, runs] of Object.entries(bySymbol)) {
-    // Settle price = newest 15m candle close (~4pm print); fall back to a run's last logged close.
-    let settle = null;
-    try {
-      const analysis = await DEPS.analyzeCandles(symbol, { timeframe: '15m' });
-      const candles = analysis?.candleData?.['15m']?.candles || [];
-      if (candles.length && candles[0].close != null) settle = Number(candles[0].close);
-    } catch (e) { console.error('[candle-spread] EOD candle fetch failed:', e && e.message); }
+    // Settle price = the OFFICIAL index 4:00 CLOSE (the $NDX quote lastPrice) — the actual 0DTE settlement
+    // value. NOT the last 5m/15m candle mark (~9 pts off) and NOT `closePrice` (Schwab's prior-day close).
+    let settle = null, settleSource = null;
+    try { settle = DEPS.getSettlementPrice ? await DEPS.getSettlementPrice(symbol) : null; if (settle != null) settleSource = 'index-close'; }
+    catch (e) { console.error('[candle-spread] EOD settlement quote failed:', e && e.message); }
+    if (settle == null) {   // fallback: newest 15m candle close
+      try {
+        const analysis = await DEPS.analyzeCandles(symbol, { timeframe: '15m' });
+        const candles = analysis?.candleData?.['15m']?.candles || [];
+        if (candles.length && candles[0].close != null) { settle = Number(candles[0].close); settleSource = '15m-candle-fallback'; }
+      } catch (e) { console.error('[candle-spread] EOD candle fetch failed:', e && e.message); }
+    }
 
     for (const run of runs) {
       const cfg = { ...run, expiration: run.expiration || todayEST() };
@@ -399,7 +404,7 @@ async function eodSettlement() {
       if (px == null) { store.appendEvent(record, { type: 'eod_settlement', variant: run.variant, note: 'no settle price available' }); continue; }
       const term = trader.computeTerminalPnl(record.state, cfg, px);
       store.appendEvent(record, {
-        type: 'eod_settlement', variant: run.variant, settle: px,
+        type: 'eod_settlement', variant: run.variant, settle: px, settleSource: settleSource || 'run-underlying',
         terminalPnl: term.total, floorPnl: term.floor, positions: term.positions
       });
       // Concise, at-a-glance day summary (orders/time/strikes/price + real broker outcomes),

@@ -1211,6 +1211,18 @@ async function startServer() {
       analyzeCandles,
       getRaw1m,   // deep raw 1m for the v4-v9 live analysis-builder (5m cadence)
       getOrFetchChainData: (symbol, expiration) => persistence.getOrFetchChainData(symbol, expiration),
+      // Official index CLOSE for EOD 0DTE settlement — the $NDX quote's lastPrice (the 4:00 close, the
+      // actual settlement value), NOT the last 5m candle mark and NOT `closePrice` (Schwab's PRIOR close).
+      getSettlementPrice: async (symbol) => {
+        try {
+          const IDX = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
+          const q = symbol.startsWith('$') ? symbol : (IDX.includes(symbol) ? '$' + symbol : symbol);
+          const res = await marketClient.quotes([q]);
+          const quote = res && (res[q] || res[symbol]) && (res[q] || res[symbol]).quote;
+          const v = quote && quote.lastPrice;
+          return (typeof v === 'number' && v > 0) ? v : null;
+        } catch (e) { return null; }
+      },
       tradingClient,
       accountHash: process.env.ACCOUNT_HASH,
       // Real order sending is prod-only; dev mode never sends (avoids duplicate orders
