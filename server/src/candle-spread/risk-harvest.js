@@ -58,6 +58,11 @@ function bestHedge(positions, mark, spot, opts) {
   let worstS = spot, worstV = Infinity;
   for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(positions, S); if (v < worstV) { worstV = v; worstS = S; } }
   const zoneSide = worstS >= spot ? 'above' : 'below';
+  // CONVICTION gate: the loss zone only costs us if the underlying REACHES it. Only hedge when momentum
+  // points toward that side (opts.trend +1 = up → hedge an ABOVE loss; -1 = down → hedge a BELOW loss).
+  // Without it the overlay pays premium on every lopsided day but is only paid back on the fraction that
+  // actually run into the zone → net-negative. trend==null disables the gate (the naive version).
+  if (o.trend != null && ((zoneSide === 'above' && o.trend <= 0) || (zoneSide === 'below' && o.trend >= 0))) return null;
   let best = null;
   for (const cand of candidateHedges(zoneSide, spot, incr, widths, depth)) {
     if (o.ledger && o.ledger.conflicts && o.ledger.conflicts(cand.legs)) continue;   // respect leg-uniqueness

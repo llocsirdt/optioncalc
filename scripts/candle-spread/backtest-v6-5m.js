@@ -288,7 +288,9 @@ function runDay5m(bars, signalFn, opts = {}) {
       const hvMaxPerDay = opts.harvestMaxPerDay != null ? opts.harvestMaxPerDay : Infinity;   // cap churn
       if (band > 0 && hvSpent < hvBudget && hvCount < hvMaxPerDay && RH.reachableFloor(st.positions, S, band, 10) < hvTrigger) {
         const mark = (type, strike) => bs.bsPrice(type, S, strike, tau, iv);
-        const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5 });
+        // CONVICTION: only hedge the loss side the underlying is trending TOWARD (15m close vs 9EMA).
+        const trend = (opts.harvestDirGate !== false && A['15m'] && A['15m'].ema != null) ? Math.sign(A['15m'].close - A['15m'].ema) : null;
+        const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5, trend });
         for (const h of plan.hedges) {
           st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true });
           hvSpent += h.cost; hvCount++;
