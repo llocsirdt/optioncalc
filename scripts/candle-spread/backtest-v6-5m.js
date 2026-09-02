@@ -239,13 +239,38 @@ function runDay5m(bars, signalFn, opts = {}) {
           .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
           .filter(x => x.mark >= lockMin)
           .sort((a, b) => b.mark - a.mark);                 // deepest ITM first: cheapest cover, biggest lock
+        const lockedNow = [];
         for (const { p } of cands) {
           if (uncoveredRisk() + nd <= ctsCap) break;        // freed enough room under the binding cap
-          const cl = G.coverLegs(p.side, p.shortStrike);
+          let cl = G.coverLegs(p.side, p.shortStrike);       // debit-canonical (drives P&L)
+          if (enforceLegs) {
+            // Resolve the lock-cover for leg-uniqueness (prefer TWIN = same strikes, P&L-neutral; else
+            // wing-shift = anchor cover; else skip this winner) so the SENT legs are recorded — matching
+            // live's placeRestingCover, and letting the follow-on open be re-resolved to avoid them.
+            const rc = LL.resolveCover(p.side, p.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
+            if (rc.resolution === 'skip') { legCoverSkip++; continue; }   // can't lock leg-uniquely → leave uncovered
+            if (rc.resolution === 'twin') legCoverTwin++; else if (rc.resolution === 'wingShift') legCoverWing++;
+            ledger.record(rc.legs);
+            if (rc.wing !== G.WIDTH) cl = CL.coverLegsFor(p.side, p.shortStrike, rc.wing, 'debit');   // anchor-cover P&L legs
+          }
           p.coverLegs = cl; p.coverLimit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
-          if (enforceLegs) ledger.record(cl);
           p.covered = true; p.pendingCover = null; nCoverToStack++;
           if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
+          lockedNow.push({ side: p.side, shortStrike: p.shortStrike });
+        }
+        // RE-RESOLVE the open against the now-updated ledger (it may have just gained cover-to-stack legs),
+        // so the open can't NET against a lock we just placed — the 4-leg combo then merges two conflict-free
+        // spreads (no combo-level wing-shift needed). Prefer the parity twin (same strikes → P&L-neutral).
+        if (enforceLegs && lockedNow.length) {
+          const _s2 = o.legs.map(l => l.strike), _lo2 = Math.min(..._s2), _hi2 = Math.max(..._s2);
+          const preferStyle2 = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
+          const res2 = LL.resolveOpen(sig.openSide, _lo2, _hi2, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: preferStyle2 });
+          if (res2.resolution === 'shift') { o = G.buildOpen(sig.openSide, S + res2.shift * legIncr, tau, iv); resolvedLegs = res2.legs; }
+          else if (res2.resolution !== 'skip') resolvedLegs = res2.legs;
+        }
+        // Instrumentation hook (opts.onCoverToStack): READ-ONLY — measures 4-leg combo applicability.
+        if (opts.onCoverToStack && lockedNow.length) {
+          opts.onCoverToStack({ locked: lockedNow, openLegs: o.legs, openSide: sig.openSide, width: G.WIDTH, mark: (type, k) => bs.bsPrice(type, S, k, tau, iv) });
         }
       }
       // soft cap counts only AT-RISK debit (uncovered & NOT deep-ITM); hard cap + legacy count ALL uncovered.

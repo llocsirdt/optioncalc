@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-02T02:12:03.155Z",
+  "generatedAt": "2026-09-02T03:28:16.813Z",
   "dataDir": "backtest-data-5m-nq",
   "days": 765,
   "calendarDays": 922,
@@ -141,25 +141,25 @@
     "v9-40-paper": {
       "label": "v9 $40 cover-to-stack (paper fill study)",
       "days": 765,
-      "total": 4612200,
-      "avgDaily": 6029,
-      "stdevDaily": 12781,
+      "total": 4795060,
+      "avgDaily": 6268,
+      "stdevDaily": 13052,
       "median": 5005,
       "worst": -14585,
       "best": 71830,
-      "negDays": 259,
+      "negDays": 256,
       "winRate": 0.66
     },
     "v9-40-10k": {
       "label": "v9 $40 cover-to-stack, $10k cap (paper)",
       "days": 765,
-      "total": 3789435,
-      "avgDaily": 4954,
-      "stdevDaily": 9863,
-      "median": 3475,
+      "total": 3901265,
+      "avgDaily": 5100,
+      "stdevDaily": 10055,
+      "median": 3455,
       "worst": -9750,
-      "best": 56795,
-      "negDays": 238,
+      "best": 62620,
+      "negDays": 237,
       "winRate": 0.69
     },
     "v6-recap-paper": {
