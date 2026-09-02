@@ -16,6 +16,13 @@
     (el('expiration-dropdown') ? el('expiration-dropdown').value : '') || '';
   const currentVariant = () => (el('ps-variant-select') ? el('ps-variant-select').value : 'v6');
 
+  // Strategy runs are keyed by TRADE DATE, which is NOT the chain expiration the calculator is viewing:
+  // after a 0DTE expiration rolls off the chain dropdown post-close, the dropdown points at the NEXT session
+  // while the run is still filed under today. Remember the date the last successful pull resolved to (per
+  // symbol+variant) so restore/markers align with the run, not the rolled-forward chain.
+  const resolvedExp = {};   // `${symbol}:${variant}` -> tradeDate string
+  const strategyExpiration = () => resolvedExp[`${currentSymbol()}:${currentVariant()}`] || currentExpiration();
+
   const sourceKey = (symbol) => `positionsSource_${(symbol || currentSymbol()).toUpperCase()}`;
   function getPositionsSource(symbol) { try { return localStorage.getItem(sourceKey(symbol)) || 'manual'; } catch (e) { return 'manual'; } }
   function setStoredSource(s, symbol) { try { localStorage.setItem(sourceKey(symbol), s); } catch (e) {} }
@@ -75,7 +82,7 @@
     if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());
     // Chart markers are strategy-specific: show the cached book's trades on Strategy, clear otherwise.
     if (source === 'strategy') {
-      const m = getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant());
+      const m = getStrategyMeta(currentSymbol(), strategyExpiration(), currentVariant());
       applyTradesToChart(m ? m.positions : [], true);
     } else applyTradesToChart([]);
   }
@@ -104,15 +111,41 @@
     if (s) { s.textContent = text; s.classList.toggle('ps-error', !!isError); }
   }
 
+  const runUrl = (symbol, exp, date, variant) =>
+    `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(symbol)}/${encodeURIComponent(exp)}`
+    + `?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`;
+
+  // Resolve the actual date a run is filed under from the runs index — the latest run for this
+  // symbol+variant. Used as a fallback when the chain expiration doesn't match a run (post-close roll).
+  async function resolveRunDate(symbol, variant) {
+    try {
+      const data = await fetchJson(`${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`);
+      const mine = (data.runs || []).filter((r) => r.symbol === symbol && r.variant === variant && r.tradeDate);
+      if (!mine.length) return null;
+      mine.sort((a, b) => (a.tradeDate < b.tradeDate ? 1 : -1));
+      return { expiration: mine[0].expiration || mine[0].tradeDate, date: mine[0].tradeDate };
+    } catch (e) { return null; }
+  }
+
   async function pullStrategyPositions(focus) {
     const doFocus = focus !== false;   // explicit Pull (no arg) focuses the chart; auto-refresh passes false
-    const symbol = currentSymbol(), expiration = currentExpiration(), variant = currentVariant();
-    if (!symbol || !expiration) { setLastPulled('pick a symbol + expiration', true); return; }
+    const symbol = currentSymbol(), variant = currentVariant();
+    let expiration = currentExpiration();
+    if (!symbol) { setLastPulled('pick a symbol', true); return; }
     setLastPulled('pulling…', false);
     try {
-      const url = `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(symbol)}/${encodeURIComponent(expiration)}`
-        + `?date=${encodeURIComponent(expiration)}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`;
-      const run = await fetchJson(url);
+      let run;
+      try {
+        if (!expiration) throw { status: 404 };
+        run = await fetchJson(runUrl(symbol, expiration, expiration, variant));
+      } catch (e1) {
+        if (e1.status !== 404) throw e1;
+        const r = await resolveRunDate(symbol, variant);   // roll-safe fallback: find the run's real date
+        if (!r) throw (e1 instanceof Error ? e1 : Object.assign(new Error('http 404'), { status: 404 }));
+        expiration = r.expiration;
+        run = await fetchJson(runUrl(symbol, r.expiration, r.date, variant));
+      }
+      resolvedExp[`${symbol}:${variant}`] = expiration;    // remember so restore/markers stay aligned
       const record = run.record || run;
       const result = strategyRunToOptionArray(record);
       if (!result.count) { setLastPulled(`no ${variant} positions yet`, false); return; }
@@ -123,7 +156,7 @@
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastPulled(`${result.count} pos · ${t}`, false);
     } catch (e) {
-      setLastPulled(e.status === 404 ? `no ${variant} run for ${symbol} ${expiration}` : `pull failed (${e.message})`, true);
+      setLastPulled(e.status === 404 ? `no ${variant} run for ${symbol}` : `pull failed (${e.message})`, true);
     }
   }
 
@@ -144,14 +177,15 @@
     const markers = el('ps-chart-markers');
     if (markers) markers.addEventListener('change', () => {
       if (window.NQChart && window.NQChart.setShowTrades) window.NQChart.setShowTrades(markers.checked);
-      const m = markers.checked ? getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant()) : null;
+      const m = markers.checked ? getStrategyMeta(currentSymbol(), strategyExpiration(), currentVariant()) : null;
       applyTradesToChart(m ? m.positions : []);
     });
     const varSel = el('ps-variant-select');
     if (varSel) varSel.addEventListener('change', () => {
       varSel.dataset.loaded = '1';
+      // Changing the variant auto-pulls that variant's positions (no manual Pull click needed).
+      if (getPositionsSource() === 'strategy') { pullStrategyPositions(); return; }
       if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());
-      if (getPositionsSource() === 'strategy') { const m = getStrategyMeta(currentSymbol(), currentExpiration(), currentVariant()); applyTradesToChart(m ? m.positions : []); }
     });
     renderTabs();
   }
