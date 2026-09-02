@@ -517,6 +517,16 @@ function tallyRun(rec) {
   return t;
 }
 
+// BACKTEST BASELINE per variant (avg daily terminal P&L over the full history, generated offline by
+// scripts/candle-spread/build-backtest-baselines.js with each variant's matching config). Loaded once;
+// status diffs today's live terminal against it so we can see how real runs track the backtested edge.
+let _baselines = null;
+function backtestBaselines() {
+  if (_baselines) return _baselines;
+  try { _baselines = require('./backtest-baselines.json'); } catch (e) { _baselines = { variants: {} }; }
+  return _baselines;
+}
+
 // Compact live status for the UI to poll — confirms mode/gates and what each strategy is doing today,
 // so you can validate the server is behaving as expected (esp. the prod test-mode session).
 function status() {
@@ -546,6 +556,7 @@ function status() {
     if (st && st.lastUnderlying != null && st.positions && st.positions.length) {
       try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying).total); } catch (e) { /* leave null */ }
     }
+    const base = backtestBaselines().variants[run.variant] || null;
     return {
       variant: run.variant, symbol: run.symbol, signalSymbol: run.signalSymbol || run.symbol,
       mode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
@@ -554,6 +565,10 @@ function status() {
       covered: st ? st.positions.filter(p => p.covered).length : 0,
       terminalPnl,                                    // the real P&L (mark-to-market at the NDX underlying)
       realizedPnl: st ? Math.round(st.realizedPnl) : 0,   // conservative FLOOR (covered tents only)
+      // How today's live terminal compares to THIS variant's BACKTEST average daily terminal P&L.
+      backtestAvg: base ? base.avgDaily : null,
+      backtestDays: base ? base.days : null,
+      vsBacktest: (base && terminalPnl != null) ? terminalPnl - base.avgDaily : null,
       // capital view (recap variants): net cash currently deployed + the day's peak (= funding needed).
       cashDeployed: st && st.cashDeployed != null ? Math.round(st.cashDeployed) : null,
       peakCash: st && st.peakCashDeployed != null ? Math.round(st.peakCashDeployed) : null,

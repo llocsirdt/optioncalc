@@ -51,7 +51,10 @@
       const ord = r.mode !== 'simulate' ? ` · orders ${ro.sent || 0} sent/${ro.canceled || 0} cxl/${ro.filled || 0} fill${ro.lastAt ? ' @' + String(ro.lastAt).split(',').pop().trim() : ''}` : '';
       // P&L = terminal (mark-to-market, the real number); floor shown in parens as the conservative lower bound.
       const pnl = r.terminalPnl != null ? `${money(r.terminalPnl)} (floor ${money(r.realizedPnl)})` : money(r.realizedPnl);
-      return `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · ${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov) · ${pnl}${ord}`;
+      // vs BACKTEST: how today's terminal compares to this variant's backtested avg daily P&L.
+      const bt = (r.backtestAvg != null && r.vsBacktest != null)
+        ? ` · vs bt ${r.vsBacktest >= 0 ? '+' : ''}${money(r.vsBacktest)} (avg ${money(r.backtestAvg)})` : '';
+      return `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · ${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov) · ${pnl}${bt}${ord}`;
     }).join('\n');
     c.title = `${s.mode}   (next tick ~${tickMin}m · ${s.tradeDate})\ngates: prod=${s.gates.isProd} armed=${s.gates.liveArmed} client=${s.gates.hasTradingClient} acct=${s.gates.hasAccountHash}\n\n${detail}`;
 
