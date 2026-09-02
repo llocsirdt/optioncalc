@@ -71,6 +71,11 @@ const VARIANTS = [
   // v8 = v6 signal + risk caps: proactively cover deep-ITM leaders (frac×width), a soft "churn" cap
   // on at-risk debit (exempt for a same-side trend stack), and a hard total-uncovered backstop.
   { variant: 'v8', variantLabel: 'risk-capped',     signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
+  // v9 = v7 (be-wrong) + TUNED risk caps (tamed be-wrong): hard $40k backstop + proactiveCover 0.80, NO
+  // soft cap — the compelling high-ceiling variant. $20-ATM here (the canonical v9), to compare against
+  // v9-40-paper. Paper only (inherits dryRun:true); v9 breaches the ~$5-10k/day tolerance → stays paper
+  // pending the go/no-go ([[project_daily_risk_tolerance]]).
+  { variant: 'v9', variantLabel: 'v7 be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, hardCap: 40000, proactiveCoverFrac: 0.80, ...PORTED_COVER },
   // v6 at the $40 short-ATM sizing the user also trades: WIDTH 40, short leg ~ATM (shift = width/2),
   // long leg deeper ITM; capFrac 0.8 (~$22-23 real-world debit). Same v6 signal + tent cover.
   { variant: 'v6-40', variantLabel: '5m $40 short-ATM', signalFn: v6Signal, signalCfg: { fiveMin: true }, spreadWidth: 40, spreadShift: 20, capFrac: 0.8, ...PORTED_COVER },
