@@ -354,6 +354,7 @@ async function processGroup(runs, kind) {
         riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
         proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
         coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
+        comboOrders: run.comboOrders, comboSlip: run.comboSlip,   // 4-leg atomic cover+open (default off)
         capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
         enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
         A, priorA, isFifteen, underlying, signalSymbol, priceSymbol

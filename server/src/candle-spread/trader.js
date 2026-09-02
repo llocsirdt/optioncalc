@@ -17,6 +17,7 @@
 const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
+const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
 
 let nextPositionSeq = 1;
@@ -185,6 +186,95 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
   }
   if (locked) decisions.push({ action: 'cover-to-stack', locked, forOpen: openSide, minMark: round2(lockMin) });
   return locked;
+}
+
+// FOUR-LEG COMBO (deps.comboOrders): when a cap blocks the open, lock ONE deep-ITM winner AND place the new
+// open as a SINGLE atomic Schwab CUSTOM order (fills as a unit or not at all — no half-execution, no cap
+// breach; the winner's credit cover nets against the new debit → a small balanced order that fills near
+// mid). Only when exactly one winner frees the budget and both spreads resolve leg-uniquely (per the 765-day
+// instrumentation: ~98% / 100% of CTS events). Books BOTH the cover and the open on the one fill. Returns
+// true if placed; false → caller falls back to the sequential coverToStackFreeBudget path. Marketable
+// haircut = deps.comboSlip per leg (default 0.05). See combo-order.js.
+async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime) {
+  if (!(deps.enforceLegUniqueness && deps._ledger)) return false;   // combo requires the leg-uniqueness ledger
+  const W = cfg.spreadWidth, tick = cfg.tickIncrement, qty = cfg.quantity;
+  const minFrac = deps.coverToStackMinFrac != null ? deps.coverToStackMinFrac : 0.65;
+  const lockMin = minFrac * W;
+  const mid = (type, strike) => { const q = deps.getLeg(type, strike); return q ? q.mid : null; };
+  // 1) the single deepest-ITM winner that, covered ALONE, frees enough budget for this open
+  const cand = st.positions
+    .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked)
+    .map(p => ({ p, m: coverMarkNow(p.legs, deps.getLeg) }))
+    .filter(x => x.m != null && x.m >= lockMin)
+    .sort((a, b) => b.m - a.m)[0];
+  if (!cand) return false;
+  const winner = cand.p;
+  winner.covered = true;                                            // tentative: does covering just this one fit?
+  const fits = capState(st, res, openSide, cfg, deps).ok;
+  winner.covered = false;
+  if (!fits) return false;                                          // one winner isn't enough → sequential fallback
+
+  // 2) resolve the winner's cover (prefer CREDIT reclaim on a deep-ITM winner; twin → wing-shift → skip)
+  const plan = selectCoverFixedMark(winner, cfg, deps.getLeg);
+  if (plan.error) return false;
+  const wantCredit = cand.m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W;
+  const rc = LL.resolveCover(winner.side, winner.shortStrike, W, deps._ledger, { preferStyle: wantCredit ? 'credit' : 'debit', incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
+  if (rc.resolution === 'skip') return false;
+  const coverSentLegs = (rc.style === 'debit' && rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, rc.style);
+  const coverBookLegs = (rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, 'debit');   // debit-canonical (floor P&L)
+  // Booked cover price = min(target = W−openLimit, coverMark+tick) — same as resolveRestingCovers, so the
+  // locked floor (W − openLimit − coverLimit) matches the sequential path exactly.
+  const coverMark = CO.spreadNet(coverBookLegs, mid);
+  const coverLimit = L.roundToTick(Math.max(tick, Math.min(round2(W - winner.limit), coverMark + tick)), tick);
+
+  // 3) re-resolve the open against a TEMP ledger = the real one PLUS the cover, so the open can't net
+  // against the lock. Nothing touches the REAL ledger until we commit below → a bail is a clean rollback.
+  const tempLedger = LL.makeLegLedger({ ...(st.legLedger || {}) });
+  tempLedger.record(rc.legs);
+  const wantCreditOpen = deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1;
+  const rr = LL.resolveOpen(openSide, res.lower, res.upper, tempLedger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCreditOpen ? 'credit' : 'debit' });
+  if (rr.resolution === 'skip') return false;                      // can't place open cleanly → sequential fallback (real ledger untouched)
+  const openBook = rr.resolution === 'shift' ? buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg) : res;
+  if (openBook.error) return false;
+  const openSentLegs = rr.legs;
+
+  // 4) price + build the atomic CUSTOM order (net mid + marketable slip); merge same-strike legs to qty
+  const slip = deps.comboSlip != null ? deps.comboSlip : 0.05;
+  const cn = CO.comboNet(coverSentLegs, openSentLegs, mid, slip);
+  if (!cn) return false;
+  const merged = CO.mergeLegs([...coverSentLegs, ...openSentLegs], qty);
+  const resolvedMerged = [];
+  for (const l of merged) { const q = deps.getLeg(l.type, l.strike); if (!q || q.symbol == null) return false; resolvedMerged.push({ ...l, symbol: q.symbol }); }
+  const price = L.roundToTick(cn.limit, tick);
+  const payload = CO.buildComboPayload(resolvedMerged, price, qty, cn.side);
+  const placed = await deps.placeOrder(payload, { kind: 'combo-lock-open', winner: winner.id, coverLegs: coverSentLegs, openLegs: openSentLegs, net: cn.side, limit: price, slip });
+  deps._ledger.record(rc.legs);   // COMMIT the cover to the real ledger (resolved above vs a temp copy)
+
+  // 5) book the COVER onto the winner (mirrors resolveRestingCovers) — floor from the debit-canonical legs
+  winner.covered = true; winner.coverId = nextId('cov'); winner.coverLegs = coverBookLegs; winner.coverLimit = coverLimit;
+  winner.coverStatus = 'filled'; winner.coverTime = st.lastCandleTime || null; winner.coverEpoch = st.lastCandleEpoch || null;
+  winner.coverSentNet = cn.side; winner.viaCombo = true;
+  const floor = round2((W - winner.limit - coverLimit) * 100 * (winner.quantity || qty));
+  st.realizedPnl = round2(st.realizedPnl + floor);
+
+  // 6) book the OPEN as a new position (mirrors openPosition, minus the send — the combo already sent)
+  const pos = {
+    id: nextId('pos'), side: openSide, legs: openBook.legs, quantity: qty,
+    shortStrike: openBook.shortStrike, mark: openBook.mark, cap: openBook.cap, limit: openBook.limit,
+    orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
+    openedAt: new Date().toISOString(), openTime: st.lastCandleTime || null, openEpoch: st.lastCandleEpoch || null,
+    sentNet: cn.side, sentLimit: price, sentLegs: openSentLegs, viaCombo: winner.id
+  };
+  st.positions.push(pos);
+  deps._ledger.record(openSentLegs);
+  st.direction = openSide; st.openN = (st.openN || 0) + 1;
+
+  // 7) combo cash: ONE net impact for the whole order (+debit / −credit). Does not touch P&L.
+  st.cashDeployed = round2((st.cashDeployed || 0) + cn.net * 100 * qty);
+  st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+
+  decisions.push({ action: 'combo-lock-open', winner: winner.id, openId: pos.id, coverId: winner.coverId, net: cn.side, limit: price, legs: resolvedMerged.length, lockedFloor: floor, cashDeployed: st.cashDeployed });
+  return true;
 }
 
 // Build the P&L-equivalent CREDIT open order (parity twin of the debit vertical at the same strikes):
@@ -420,7 +510,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // A cap blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM winner
       // and open anyway; else skip (existing v8 behavior). capAllowsOpen logs the FINAL 'open-skip-cap'.
       let opened = false;
-      if (deps.coverToStack) {
+      // COMBO first (deps.comboOrders): lock 1 winner + open as ONE atomic 4-leg order. Falls back to the
+      // sequential cover-to-stack path when a single lock isn't enough or the spreads can't combine cleanly.
+      if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
+      if (!opened && deps.coverToStack) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
         if (capState(st, res, openSide, cfg, deps).ok) { await openPosition(st, res, openSide, cfg, deps, decisions, legStyle); opened = true; }
       }
@@ -746,5 +839,6 @@ module.exports = {
   selectCoversJoint,
   priceCoverCandidate,
   snapshotChain,
-  computeTerminalPnl
+  computeTerminalPnl,
+  tryComboLockAndOpen   // exported for the combo unit test
 };
