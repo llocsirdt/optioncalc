@@ -132,11 +132,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   const hvTrigger = opts.harvestTrigger != null ? opts.harvestTrigger : -1000;   // only act if reachable loss worse than this
   const hvBudget = opts.harvestDayBudget != null ? opts.harvestDayBudget : Infinity;
   let hvSpent = 0, hvCount = 0, hvDays = 0;
+  // PRICING underlying (opts.priceOf): options are priced/settled off THIS series while the SIGNAL stays on
+  // A (the analysis series). Default = the analysis 5m itself → baselines byte-identical. Override to price
+  // NDX options off the real NDX close while signalling off NQ (the live model; NDX ≈ NQ − basis, ~44pt).
+  const priceOf = opts.priceOf || (b => { const c = b.analysis['5m']; return { close: c.close, high: c.high, low: c.low }; });
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
-    const A = bars[i].analysis, c5 = A['5m'], S = c5.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
+    const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
@@ -148,7 +152,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
-      const pc = pos.pendingCover, ext = pos.side === 'bull' ? c5.high : c5.low;
+      const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
       if (legsMark(pc.legs, ext, tau, iv) <= pc.target) {
         if (enforceLegs) {
           // Resolve the cover: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip.
@@ -327,7 +331,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
   let settleBar = bars[bars.length - 1];
   if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
-  const settle = settleBar.analysis['5m'].close;
+  const settle = priceOf(settleBar).close;
   let floor = 0, terminal = 0, opens = 0, filled = 0, naked = 0;
   for (const pos of st.positions) {
     opens++; let value = legsPayoff(pos.legs, settle), cost = pos.limit;
