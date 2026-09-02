@@ -40,6 +40,14 @@ const BASE_RUNS = [
     tickIncrement: 0.05,       // NDX combos price in nickels; make per-run for other tickers
     coverTiming: 'on-reversal', // parked alt: 'each-candle'
     coverStyle: 'debit-offset', // parked alt: 'credit'
+    // CAPITAL RECAPTURE (default for ALL strategies): alternate debit/credit OPENS every 3 + CREDIT covers
+    // on deep-ITM winners — parity-equivalent (P&L-neutral, same settlement), but keeps NET cash deployed
+    // low so the book is fundable (~$75k → ~$28k peak on v6). Debit-only runs pin capital and run the
+    // account dry; recapture is the realistic combo that makes the strategy actually tradeable. LEG-
+    // UNIQUENESS is its required companion (never trade a strike both ways — the broker nets same-symbol
+    // positions; resolve to the parity twin / a strike shift / an anchor cover), costing ~0.6% of P&L.
+    capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
+    enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8,
     dryRun: true
   }
 ];
@@ -90,6 +98,18 @@ const VARIANTS = [
     signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true,
     spreadWidth: 40, spreadShift: 20, capFrac: 0.8,
     hardCap: 15000, proactiveCoverFrac: 0.80,
+    coverToStack: true, coverToStackMinFrac: 0.65,
+    dryRun: true, ...PORTED_COVER
+  },
+  // Same as v9-40-paper but the hardCap tightened to $10k — the size that fits the ~$5-10k/day risk
+  // tolerance. Backtest (CTS matrix): ~$4,954/day, worst −$9,750, 69% win — 3.4× v9 $20's return at the
+  // SAME worst-case risk, because coverToStack cycles the $40 wings through the tight cap. Rides on CTS
+  // fills (~7/day) → the 4-leg atomic combo is the enabler to trust it. Paper only pending that + go/no-go.
+  {
+    variant: 'v9-40-10k', variantLabel: 'v9 $40 cover-to-stack, $10k cap (paper)',
+    signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true,
+    spreadWidth: 40, spreadShift: 20, capFrac: 0.8,
+    hardCap: 10000, proactiveCoverFrac: 0.80,
     coverToStack: true, coverToStackMinFrac: 0.65,
     dryRun: true, ...PORTED_COVER
   },

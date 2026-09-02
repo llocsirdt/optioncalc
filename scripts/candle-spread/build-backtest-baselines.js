@@ -17,7 +17,10 @@ const path = require('path');
 const fs = require('fs');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo } = require('./backtest-width');
-const { VARIANTS } = require('../../server/src/candle-spread/index');
+const { buildRuns, VARIANTS } = require('../../server/src/candle-spread/index');
+// Grade against the ACTUAL merged runs (BASE_RUNS defaults × VARIANTS) the server trades — so shared
+// defaults like capital-recapture + leg-uniqueness are reflected in the baseline, not just per-variant knobs.
+const RUNS = buildRuns();
 
 const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
@@ -56,25 +59,38 @@ function stats(vals) {
   };
 }
 
-const days = load5mDays(DIR);
-if (!days.length) { console.error('no days loaded from', DIR); process.exit(1); }
+const allDays = load5mDays(DIR);
+if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
 
-const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, model: 'rthActionOnly (24h bands, RTH action), QTY=1', variants: {} };
-console.log(`BACKTEST BASELINES — ${VARIANTS.length} variants × ${days.length} days\n`);
+// A day is TRADEABLE only if it has a real RTH cash session (a bar in 09:30–16:00 ET). The 24h NQ feed
+// includes Sunday-evening/holiday futures sessions with no cash session — untradeable for 0DTE NDX, they
+// contribute $0 and would dilute the per-day average. Grade only against real trading days.
+const etMin = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
+const hasRth = d => d.bars.some(b => { const m = etMin(b.dt); return m >= 570 && m < 960; });
+const days = allDays.filter(hasRth);
+const excluded = allDays.length - days.length;
+
+const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: 'rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness)', variants: {} };
+console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)\n`);
 console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worst'.padEnd(12) + 'neg/win');
 console.log('-'.repeat(78));
-for (const v of VARIANTS) {
-  const fn = wrap(v), opts = optsFor(v);
+for (const run of RUNS) {
+  const fn = wrap(run), opts = optsFor(run);
   const daily = days.map(d => runDay5m(d.bars, fn, opts).terminal);
   const s = stats(daily);
-  out.variants[v.variant] = { label: v.variantLabel, ...s };
-  console.log(v.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
+  out.variants[run.variant] = { label: run.variantLabel, ...s };
+  console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
 }
 
-// Anchor check: v6 $20 must reproduce the known $1,412,935 total.
-const v6 = out.variants.v6;
-const anchorOK = v6 && v6.total === 1412935;
-console.log(`\nanchor v6 total = ${usd(v6 && v6.total)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935'}`);
+// ENGINE-INTEGRITY anchor: the PURE v6 signal (no recapture/leg-uniqueness) must still reproduce the known
+// $1,412,935 total — proves the engine + signal are unchanged. The graded v6 above carries the ~0.6% leg-
+// uniqueness cost now that it's a live default, so the anchor is checked separately on the pure config.
+const pureV6 = VARIANTS.find(v => v.variant === 'v6');
+const anchorTotal = Math.round(days.reduce((a, d) => a + runDay5m(d.bars, wrap(pureV6), { rthActionOnly: true }).terminal, 0));
+const anchorOK = anchorTotal === 1412935;
+console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935'}`);
+console.log(`graded v6 (live config) total = ${usd(out.variants.v6.total)}  avg/day ${usd(out.variants.v6.avgDaily)}`);
+out.engineAnchorPureV6Total = anchorTotal;
 
 if (DRY) { console.log('\n--dry: not written'); process.exit(anchorOK ? 0 : 2); }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
