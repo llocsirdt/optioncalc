@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
 require('dotenv').config({ path: '../.env' });
 
@@ -193,20 +195,37 @@ function fsUsage(p) {
 }
 function dirStats(dir) {
   // Always report the PATH (so /health confirms whether the run store is on the root disk vs /tmp
-  // — i.e. that the relocation took effect); files/sizeMB are null until the dir exists.
+  // — i.e. that the relocation took effect); files/sizeMB are null until the dir exists. `newest` = the
+  // most-recent file mtime, so we can tell a populated store from an empty/just-reset one at a glance.
   try {
     const files = fs.readdirSync(dir);
-    let bytes = 0, count = 0;
+    let bytes = 0, count = 0, newest = 0;
     for (const f of files) {
-      try { const st = fs.statSync(dir + '/' + f); if (st.isFile()) { bytes += st.size; count++; } } catch (e) { /* skip */ }
+      try { const st = fs.statSync(dir + '/' + f); if (st.isFile()) { bytes += st.size; count++; if (st.mtimeMs > newest) newest = st.mtimeMs; } } catch (e) { /* skip */ }
     }
-    return { path: dir, files: count, sizeMB: MB(bytes) };
-  } catch (e) { return { path: dir, files: null, sizeMB: null }; }   // dir not created yet
+    return { path: dir, files: count, sizeMB: MB(bytes), newest: newest ? new Date(newest).toISOString() : null };
+  } catch (e) { return { path: dir, files: null, sizeMB: null, newest: null }; }   // dir not created yet
 }
+// Every location the candle-spread run store could plausibly live, across the code's history: the ACTIVE
+// dir, the durable root-disk dir, the old /tmp (tmpfs) dir, and the in-app fallback (wiped on deploy). If
+// a restart/deploy/instance-swap ever loses runs again, /health shows exactly which dir has them (if any)
+// — turning a forensic guess into a direct read. See TODO in candle-spread/store.js re: durable backing.
+const RUN_DIR_CANDIDATES = [...new Set([
+  CANDLE_RUNS_DIR,
+  '/var/optioncalc-data/candle-spread-runs',
+  '/tmp/candle-spread-runs',
+  path.join(__dirname, 'persistence', 'candle-spread-runs')
+])];
 function diskUsage() {
   const now = Date.now();
   if (diskCache && now - diskCacheAt < 30000) return diskCache;
-  diskCache = { root: fsUsage('/'), tmp: fsUsage('/tmp'), candleRuns: dirStats(CANDLE_RUNS_DIR) };
+  diskCache = {
+    host: os.hostname(),                          // changes on instance replacement — spot a disk-reset swap
+    bootedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    root: fsUsage('/'), tmp: fsUsage('/tmp'),
+    candleRuns: dirStats(CANDLE_RUNS_DIR),         // the ACTIVE store dir (what the server reads/writes)
+    candleRunsProbe: RUN_DIR_CANDIDATES.map(dirStats)   // all candidate locations — catch a location mismatch
+  };
   diskCacheAt = now;
   return diskCache;
 }

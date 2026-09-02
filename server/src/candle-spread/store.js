@@ -10,6 +10,14 @@ const path = require('path');
 // Override via CANDLE_SPREAD_RUNS_DIR so tests can point at an isolated temp dir
 // (store-internal reads/writes use this local binding, so a module-level override is
 // the only reliable way to redirect persistence).
+//
+// *** CRITICAL TODO — DURABLE POSITION RECORDING ***
+// This is a LOCAL-DISK store. /var/optioncalc-data survives in-place restarts but NOT instance
+// replacement (an EB immutable deploy / ASG health swap gives a fresh EBS volume → empty store). On
+// 2026-09-01 today's runs vanished this way — recoverable when it's paper, CATASTROPHIC once live
+// (the server would forget real open positions on an instance swap). Before arming any real strategy,
+// move run/position state to OFF-INSTANCE durable backing (S3 or a DB), with read-through on boot so a
+// replacement instance rehydrates the day's open positions. See /health candleRunsProbe for diagnosis.
 const RUNS_DIR = process.env.CANDLE_SPREAD_RUNS_DIR || path.join(__dirname, '..', 'persistence', 'candle-spread-runs');
 
 function ensureDir() {
