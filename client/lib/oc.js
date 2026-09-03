@@ -2978,6 +2978,8 @@ function processInput() {
     // Key Points. Uses the shared analyzePortfolioRisk so the numbers match.
     outputStr += renderAggregateRisk();
 
+    outputStr += formatCurveTable(data, fullCost, fullOptionArray);
+
     if (keyPoints.length > 0) {
       outputStr += `
         <strong>Key Points on Curve (optionArray):</strong><br>
@@ -2985,12 +2987,12 @@ function processInput() {
       `;
     }
 
-    outputStr += formatCurveTable(data, fullCost, fullOptionArray);
-
     if (combinedData.length > 0) {
       const combinedOptionsForTable = fullOptionArray.concat(tempOptionArray);
 
-      // Find key points on combined curve as well (vs the combined cost basis).
+      outputStr += formatCurveTable(combinedData, combinedCost, combinedOptionsForTable);
+
+      // Find key points on combined curve as well (vs the combined cost basis) — below its table.
       const combinedKeyPoints = ChartModule.findKeyPointsOnCurve(combinedData, combinedCost);
       if (combinedKeyPoints.length > 0) {
         outputStr += `
@@ -2998,8 +3000,6 @@ function processInput() {
           <pre>${formatKeyPoints(combinedKeyPoints, combinedCost)}</pre>
         `;
       }
-
-      outputStr += formatCurveTable(combinedData, combinedCost, combinedOptionsForTable);
     }
 
     outputDiv.innerHTML = outputStr;
@@ -3093,18 +3093,46 @@ function renderAggregateRisk() {
 // so the price level is visible in the chain. Scans the rendered DOM so it can be
 // re-run cheaply on live price ticks without rebuilding the table.
 function updateCurvePriceLine(price) {
-  if (!Number.isFinite(price) || price <= 0) return;
+  const ctx = window.__curveCtx;
+  // Exact position value at an underlying price (same piecewise-linear payoff the curve builder uses).
+  const valueAt = p => {
+    if (!ctx || !Array.isArray(ctx.options)) return null;
+    let v = 0;
+    ctx.options.forEach(o => {
+      if (!o.type || o.strike == null || !o.qty) return;
+      const intrinsic = o.type === 'c' ? Math.max(0, p - o.strike) : Math.max(0, o.strike - p);
+      v += intrinsic * o.qty * 100;
+    });
+    return v;
+  };
   document.querySelectorAll('#output .curve-table').forEach(table => {
-    const rows = table.querySelectorAll('tbody tr');
-    let marked = null;
-    rows.forEach(r => r.classList.remove('curve-current-price-row'));
-    for (const r of rows) {
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    // Clear the prior pass: drop the injected price row + strip the border mark.
+    tbody.querySelectorAll('tr.curve-current-price-inserted').forEach(r => r.remove());
+    tbody.querySelectorAll('tr').forEach(r => r.classList.remove('curve-current-price-row'));
+    if (!Number.isFinite(price) || price <= 0) return;
+    // First REAL strike row >= price: both the border marker and the insertion anchor.
+    let next = null;
+    for (const r of tbody.querySelectorAll('tr')) {
       const firstCell = r.querySelector('td');
-      if (!firstCell) continue;
-      const strike = parseFloat(firstCell.textContent);
-      if (Number.isFinite(strike) && strike >= price) { marked = r; break; }
+      const strike = firstCell ? parseFloat(firstCell.textContent) : NaN;
+      if (Number.isFinite(strike) && strike >= price) { next = r; break; }
     }
-    if (marked) marked.classList.add('curve-current-price-row');
+    // Inject a THIN row at the exact current price showing its value + P/L (needs the stashed context).
+    const v = valueAt(price);
+    if (v != null) {
+      const diff = v - (ctx.cost || 0);
+      const diffStr = diff >= 0 ? `+$${diff.toFixed(0)}` : `-$${Math.abs(diff).toFixed(0)}`;
+      const diffCls = diff >= 0 ? 'curve-pl-pos' : 'curve-pl-neg';
+      const tr = document.createElement('tr');
+      tr.className = 'curve-current-price-inserted';
+      tr.title = 'Current underlying price';
+      tr.innerHTML = `<td>${price.toFixed(2)}</td><td>$${v.toFixed(0)}</td><td class="${diffCls}">${diffStr}</td><td></td><td></td>`;
+      if (next) tbody.insertBefore(tr, next); else tbody.appendChild(tr);
+    }
+    // Keep the gray border on the strike row where the price falls (mirrors the chart's price line).
+    if (next) next.classList.add('curve-current-price-row');
   });
 }
 

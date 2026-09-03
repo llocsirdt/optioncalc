@@ -51,7 +51,7 @@ pre {
   padding: 20px;
 }
 
-#container-col1, #container-col2, #container-col3, #container-col4 {
+#container-col1, #container-col2, #container-col3, #container-col-risk, #container-col4 {
   width: 30vw;
   min-width: 370px;
   margin-right: 20px;
@@ -151,6 +151,65 @@ pre {
 .curve-table .curve-current-price-row td {
   border-top: 2px solid #777;
 }
+
+/* Injected row at the EXACT current underlying price: a gray band (the price-line color #777) with
+   inverted white text at the SAME font/size as the other rows. Vertical padding trimmed to 0 so the
+   row is short without shrinking the type. */
+.curve-table tr.curve-current-price-inserted td {
+  padding: 0 10px;
+  line-height: 1.4;
+  background-color: #777;
+  color: #fff;
+  border-top: 2px solid #777;   /* symmetric with the border-bottom (next strike's border-top) */
+}
+.curve-table tr.curve-current-price-inserted td:first-child {
+  font-style: italic;
+}
+/* P/L cell: GREEN (profit) / RED (loss) background with white text, so the sign reads at a glance. */
+.curve-table tr.curve-current-price-inserted td.curve-pl-pos {
+  background-color: #2e7d32;
+  color: #fff;
+}
+.curve-table tr.curve-current-price-inserted td.curve-pl-neg {
+  background-color: #c62828;
+  color: #fff;
+}
+
+/* Strategy trade-details panel (col1, under the processed output): one row per open/cover event, the
+   glyph + color mirroring the NQ-chart markers, tied by position # so covers pair with their opens. */
+#strategy-trade-details { margin-top: 12px; }
+#strategy-trade-details h4 { margin: 0 0 6px; }
+.trade-detail-table {
+  border-collapse: collapse;
+  width: 100%;
+  font: 11px/1.4 ui-monospace, Menlo, monospace;
+}
+.trade-detail-table th,
+.trade-detail-table td {
+  padding: 1px 8px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid #eee;
+}
+.trade-detail-table th {
+  color: #555;
+  font-weight: 600;
+  border-bottom: 1px solid #ccc;
+}
+.trade-detail-table th:first-child,
+.trade-detail-table td.td-time { text-align: left; }
+.trade-detail-table th.th-ev { text-align: left; }
+.trade-detail-table th.th-legs { text-align: center; }
+.trade-detail-table td.td-ev { text-align: left; font-weight: 600; }
+.trade-detail-table td.td-legs { text-align: left; color: #333; }
+.trade-detail-table tr.td-cover td { background: #e6e6e6; }
+/* An OPEN with no matching cover = still exposed: amber tint + an asterisk on the OPEN label. */
+.trade-detail-table tr.td-uncovered td { background: #fff3d0; }
+.trade-detail-table td.td-cost { color: #555; }
+/* DR/CR tag on the cost = the actual order net sent (credit = the parity twin under capital recapture). */
+.trade-detail-table .net-tag { font-size: 9px; margin-left: 2px; }
+.trade-detail-table .net-cr { color: #2e7d32; font-weight: 700; }
+.trade-detail-table .net-dr { color: #aaa; }
 
 .curve-table .curve-pl-pos {
   color: #2e7d32;

@@ -35,7 +35,7 @@
 
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.7</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.21</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
   </div>
   
@@ -113,11 +113,9 @@
 </pre>
     </div>
 
-    <div id="portfolio-risk-container">
-      <h4>Portfolio Risk</h4>
-      <p>Finds combined best/worst case across positions loaded and searches the live chain for trades that improve it</p>
-      <div id="portfolio-risk-results"></div>
-    </div>
+    <!-- Strategy trade details: per open/cover event (time, icon matching the NQ chart, position #,
+         legs, cost) so the chart markers can be validated. Populated on a Strategy pull. -->
+    <div id="strategy-trade-details"></div>
 
   </div>
 
@@ -224,6 +222,14 @@
       </div>
     </div>
 
+  </div>
+
+  <div id="container-col-risk">
+    <div id="portfolio-risk-container">
+      <h4>Portfolio Risk</h4>
+      <p>Finds combined best/worst case across positions loaded and searches the live chain for trades that improve it</p>
+      <div id="portfolio-risk-results"></div>
+    </div>
   </div>
 
   <div id="container-col4">

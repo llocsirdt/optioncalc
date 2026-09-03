@@ -21,6 +21,33 @@
     return '#95a5a6';                                // DEV / all dry-run
   }
 
+  // Touch fallback for the hover tooltip: tapping the badge toggles a popover with the SAME detail text
+  // (c.title), since :hover/title tooltips don't appear on phones/touch devices.
+  let pop = null;
+  function ensurePop() {
+    if (pop) return pop;
+    pop = document.createElement('div');
+    pop.id = 'csEngineStatusPop';
+    pop.style.cssText = 'position:fixed;z-index:99999;display:none;max-width:min(94vw,680px);max-height:70vh;'
+      + 'overflow:auto;background:#1e1e1e;color:#eee;border:1px solid #555;border-radius:6px;padding:10px 12px;'
+      + 'font:11px/1.5 monospace;white-space:pre-wrap;box-shadow:0 4px 18px rgba(0,0,0,0.45);';
+    pop.addEventListener('click', e => e.stopPropagation());   // tapping the popover keeps it open
+    document.body.appendChild(pop);
+    return pop;
+  }
+  function hidePop() { if (pop) pop.style.display = 'none'; }
+  function showPop(anchor) {
+    const p = ensurePop();
+    p.textContent = anchor.title || '(no detail yet)';
+    p.style.display = 'block';
+    const r = anchor.getBoundingClientRect();
+    p.style.left = Math.max(6, Math.min(r.left, window.innerWidth - p.offsetWidth - 6)) + 'px';
+    p.style.top = Math.min(r.bottom + 6, window.innerHeight - p.offsetHeight - 6) + 'px';
+  }
+  function togglePop(anchor) {
+    if (pop && pop.style.display === 'block') hidePop(); else showPop(anchor);
+  }
+
   function render(s) {
     const c = el(); if (!c) return;
     const gatesOff = [];
@@ -62,6 +89,9 @@
       `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`
       + (inline ? `<span style="font:11px monospace;color:#999"> ${inline}</span>` : '')
       + `<span style="font:11px monospace;color:#bbb"> · ~${tickMin}m</span>`;
+
+    // If the tap-popover is open, keep it in sync with the fresh detail.
+    if (pop && pop.style.display === 'block') pop.textContent = c.title;
   }
 
   async function poll() {
@@ -75,5 +105,16 @@
     }
   }
 
-  window.addEventListener('DOMContentLoaded', () => { poll(); setInterval(poll, POLL_MS); });
+  window.addEventListener('DOMContentLoaded', () => {
+    poll();
+    setInterval(poll, POLL_MS);
+    const c = el();
+    if (c) {
+      c.style.cursor = 'pointer';
+      c.title = c.title || 'tap for strategy detail';
+      c.addEventListener('click', (e) => { e.stopPropagation(); togglePop(c); });
+    }
+    document.addEventListener('click', hidePop);                 // tap elsewhere closes it
+    window.addEventListener('resize', hidePop);
+  });
 })();

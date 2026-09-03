@@ -463,31 +463,51 @@ function drawChart(data, cost, optionArray = [], tempData = [], underlyingPrice 
             .attr("stroke-dasharray", "8, 4")
             .style("opacity", 0.7);
 
-        // Label box below the x-axis; add ←/→ when the price is off the visible range.
+        // Position value + P/L at the underlying price. The curve is piecewise-linear between sampled
+        // points, so linear interpolation between the two bracketing points is exact. `cost` is the same
+        // cost basis the click info box uses.
+        const bis = d3.bisector(d => d.closingPrice).left;
+        const j = bis(data, underlyingPrice, 1);
+        const pA = data[j - 1], pB = data[j];
+        const valAt = !pB ? pA.totalIntrinsicValue : !pA ? pB.totalIntrinsicValue
+            : pA.totalIntrinsicValue + (underlyingPrice - pA.closingPrice) / (pB.closingPrice - pA.closingPrice) * (pB.totalIntrinsicValue - pA.totalIntrinsicValue);
+        const linePl = valAt - cost;
+        const plText = linePl >= 0 ? `+$${linePl.toFixed(2)}` : `-$${Math.abs(linePl).toFixed(2)}`;
+        const plColor = linePl >= 0 ? '#2e7d32' : '#c62828';
+
+        // Label box below the x-axis: line 1 = underlying price (←/→ when off-range), line 2 = P/L.
         const labelGroup = svg.append("g")
             .attr("transform", `translate(${xPos}, ${height - 5})`);
-        const labelText = `${offLow ? '← ' : ''}$${underlyingPrice.toFixed(2)}${offHigh ? ' →' : ''}`;
-        const textWidth = labelText.length * 7;
-        const textHeight = 16;
+        const priceText = `${offLow ? '← ' : ''}$${underlyingPrice.toFixed(2)}${offHigh ? ' →' : ''}`;
+        const textWidth = Math.max(priceText.length, plText.length) * 7;
+        const lineH = 14;
 
         labelGroup.append("rect")
             .attr("x", -textWidth/2 - 4)
-            .attr("y", -textHeight - 2)
+            .attr("y", -(lineH * 2) - 4)
             .attr("width", textWidth + 8)
-            .attr("height", textHeight + 4)
+            .attr("height", lineH * 2 + 6)
             .attr("fill", "white")
             .attr("stroke", "lightgray")
             .attr("stroke-width", 1)
             .attr("rx", 3)
-            .style("opacity", 0.9);
+            .style("opacity", 0.92);
 
         labelGroup.append("text")
             .attr("text-anchor", "middle")
-            .attr("dy", -5)
+            .attr("dy", -lineH - 4)
             .style("font-size", "11px")
             .style("fill", "gray")
             .style("font-weight", "bold")
-            .text(labelText);
+            .text(priceText);
+
+        labelGroup.append("text")
+            .attr("text-anchor", "middle")
+            .attr("dy", -4)
+            .style("font-size", "11px")
+            .style("fill", plColor)
+            .style("font-weight", "bold")
+            .text(plText);
     }
 
     // Add a group for the interactive elements (drawn last to appear on top)
