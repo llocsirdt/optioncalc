@@ -31,7 +31,9 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 // Live variant config -> 5m-engine opts. The engine reads caps/flags directly; width/shift/capFrac go
 // through makeGeo; the signal's cfg (fiveMin/beWrong) is merged into ctx exactly as the live trader does.
 function optsFor(v) {
-  const o = { rthActionOnly: true };
+  // trackCapital: pure cash accounting (peakReal/avgReal); it never touches terminal/floor, so the graded
+  // P&L stays byte-identical — it just populates the capital object for the deployed-capital metrics.
+  const o = { rthActionOnly: true, trackCapital: true };
   if (v.bidirectional) o.bidirectional = true;
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac']) if (v[k] != null) o[k] = v[k];
   if (v.exemptTrendStack) o.exemptTrendStack = true;
@@ -72,24 +74,37 @@ const excluded = allDays.length - days.length;
 
 const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: 'rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness)', variants: {} };
 console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)\n`);
-console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worst'.padEnd(12) + 'neg/win');
+console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
 console.log('-'.repeat(78));
+const mean = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+const mean2 = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100;
 for (const run of RUNS) {
   const fn = wrap(run), opts = optsFor(run);
-  const daily = days.map(d => runDay5m(d.bars, fn, opts).terminal);
+  const results = days.map(d => runDay5m(d.bars, fn, opts));
+  const daily = results.map(r => r.terminal);
   const s = stats(daily);
-  out.variants[run.variant] = { label: run.variantLabel, ...s };
-  console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
+  // RISK/POTENTIAL metrics averaged across days: risk-curve extremes + trades/day + real capital deployed.
+  const avgBestCase = mean(results.map(r => r.bestCase));
+  const avgWorstCase = mean(results.map(r => r.worstCase));
+  const avgTerminalPotential = mean(results.map(r => r.avgTerminalPotential));
+  const avgTradesPerDay = mean2(results.map(r => r.opens));
+  const avgPeakCapital = mean(results.map(r => (r.capital ? r.capital.peakReal : 0)));
+  const avgDeployedCapital = mean(results.map(r => (r.capital ? r.capital.avgReal : 0)));
+  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital };
+  console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
 }
 
 // ENGINE-INTEGRITY anchor: the PURE v6 signal (no recapture/leg-uniqueness) must still reproduce the known
 // $1,412,935 total — proves the engine + signal are unchanged. The graded v6 above carries the ~0.6% leg-
 // uniqueness cost now that it's a live default, so the anchor is checked separately on the pure config.
-const pureV6 = VARIANTS.find(v => v.variant === 'v6');
+// The v6 family was renamed to per-width variants (v6-10/-20/-40); they all share the same v6 signalFn +
+// signalCfg, and the anchor forces the DEFAULT $20 ATM geometry (no geo opt) regardless, so any v6-family
+// member reproduces the pure anchor. Use v6-20.
+const pureV6 = VARIANTS.find(v => v.variant === 'v6-20');
 const anchorTotal = Math.round(days.reduce((a, d) => a + runDay5m(d.bars, wrap(pureV6), { rthActionOnly: true }).terminal, 0));
 const anchorOK = anchorTotal === 1412935;
 console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935'}`);
-console.log(`graded v6 (live config) total = ${usd(out.variants.v6.total)}  avg/day ${usd(out.variants.v6.avgDaily)}`);
+console.log(`graded v6-20 (live config) total = ${usd(out.variants['v6-20'].total)}  avg/day ${usd(out.variants['v6-20'].avgDaily)}`);
 out.engineAnchorPureV6Total = anchorTotal;
 
 if (DRY) { console.log('\n--dry: not written'); process.exit(anchorOK ? 0 : 2); }

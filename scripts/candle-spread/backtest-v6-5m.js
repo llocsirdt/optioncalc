@@ -114,6 +114,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   // (not the ~width approximation of depA/depC). depR += entryMark(legsTraded): +debit deploys, -credit
   // reclaims. peakR = worst simultaneous cash = the account funding this policy actually needs.
   let depR = 0, peakR = 0;
+  // avgReal (deployedCapital average): accumulate the real deployed cash (depR) at each RTH action step,
+  // divide by step count at EOD → the time-average real cash the day tied up (vs peakR's worst-case peak).
+  let sumReal = 0, nSteps = 0;
   // LEG-UNIQUENESS (opts.enforceLegUniqueness): a per-day ledger of which side each (type,strike) leg was
   // traded, so a leg is never both bought- and sold-to-open (the broker nets same-symbol positions). On a
   // conflict the resolver prefers the parity twin at the SAME strikes (keeps geometry + P&L), else shifts.
@@ -329,22 +332,62 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
       }
     }
+    // deployedCapital average: sample the real deployed cash once per (RTH) action step. Overnight bars
+    // are `continue`d above under rthOnly, so only true action steps are counted.
+    if (trackCap) { sumReal += depR; nSteps++; }
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
   let settleBar = bars[bars.length - 1];
   if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
   const settle = priceOf(settleBar).close;
-  let floor = 0, terminal = 0, opens = 0, filled = 0, naked = 0;
+  // bookPayoff(X): the FINAL EOD book's terminal P&L as a function of a hypothetical settle X — exactly the
+  // terminal accumulation below but parameterized on X (same order + per-position round2), so terminal and
+  // the risk-curve metrics can't drift. terminal = bookPayoff(settle).
+  const bookPayoff = X => {
+    let t = 0;
+    for (const pos of st.positions) {
+      let value = legsPayoff(pos.legs, X), cost = pos.limit;
+      if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, X); cost += pos.coverLimit; }
+      t = round2(t + (value - cost) * 100 * QTY);
+    }
+    return t;
+  };
+  let floor = 0, opens = 0, filled = 0, naked = 0;
   for (const pos of st.positions) {
-    opens++; let value = legsPayoff(pos.legs, settle), cost = pos.limit;
-    if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (G.WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
-    terminal = round2(terminal + (value - cost) * 100 * QTY);
+    opens++;
+    if (pos.covered && pos.coverLegs) { floor = round2(floor + (G.WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
+  }
+  const terminal = bookPayoff(settle);
+  // RISK-CURVE metrics — sweep bookPayoff over the span of TRADED strikes (5-pt grid; payoff is piecewise-
+  // linear with kinks only at strikes and flat beyond the outer strikes, so endpoints capture the tails).
+  //   bestCase  = max terminal over the grid (best settlement for the held book)
+  //   worstCase = min terminal over the grid (max possible loss — the "regularly risky?" number)
+  //   avgTerminalPotential = MEAN terminal over the grid (balanced-floor-with-peaks scores over jagged)
+  let bestCase = 0, worstCase = 0, avgTerminalPotential = 0;
+  if (st.positions.length) {
+    let loStrike = Infinity, hiStrike = -Infinity;
+    for (const pos of st.positions) {
+      for (const l of pos.legs) { if (l.strike < loStrike) loStrike = l.strike; if (l.strike > hiStrike) hiStrike = l.strike; }
+      if (pos.covered && pos.coverLegs) for (const l of pos.coverLegs) { if (l.strike < loStrike) loStrike = l.strike; if (l.strike > hiStrike) hiStrike = l.strike; }
+    }
+    if (!(hiStrike > loStrike)) {                       // degenerate (single strike) → evaluate one point
+      const v = bookPayoff(loStrike); bestCase = v; worstCase = v; avgTerminalPotential = v;
+    } else {
+      bestCase = -Infinity; worstCase = Infinity; let sum = 0, cnt = 0;
+      for (let X = loStrike; X <= hiStrike + 1e-9; X += 5) {
+        const v = bookPayoff(X);
+        if (v > bestCase) bestCase = v; if (v < worstCase) worstCase = v;
+        sum += v; cnt++;
+      }
+      avgTerminalPotential = round2(sum / cnt);
+    }
   }
   const coverPending = st.positions.filter(p => !p.covered && p.pendingCover).length;   // placed but never filled
   return {
     floor, terminal, opens, filled, naked, coverPending, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
-    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
+    bestCase, worstCase, avgTerminalPotential,
+    capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
     harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null
   };
