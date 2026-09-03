@@ -81,7 +81,10 @@
       // vs BACKTEST: how today's terminal compares to this variant's backtested avg daily P&L.
       const bt = (r.backtestAvg != null && r.vsBacktest != null)
         ? ` · vs bt ${r.vsBacktest >= 0 ? '+' : ''}${money(r.vsBacktest)} (avg ${money(r.backtestAvg)})` : '';
-      return `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · ${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov) · ${pnl}${bt}${ord}`;
+      // Two lines: (1) strategy + geometry + o/c/f + position counts; (2) INDENTED money stats (P&L, vs
+      // backtest, real orders) — the run-on single line wrapped awkwardly and was hard to read.
+      const head = `${r.variant} [${r.mode}] ${r.signalSymbol}→${r.symbol} ${geo} · ${r.opens}o/${r.covers}c/${r.coverFills}f · pos ${r.positions}(${r.covered}cov)`;
+      return `${head}\n      ${pnl}${bt}${ord}`;
     }).join('\n');
     c.title = `${s.mode}   (next tick ~${tickMin}m · ${s.tradeDate})\ngates: prod=${s.gates.isProd} armed=${s.gates.liveArmed} client=${s.gates.hasTradingClient} acct=${s.gates.hasAccountHash}\n\n${detail}`;
 

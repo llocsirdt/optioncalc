@@ -48,6 +48,12 @@ const BASE_RUNS = [
     // positions; resolve to the parity twin / a strike shift / an anchor cover), costing ~0.6% of P&L.
     capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
     enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8,
+    // RISK CAPS + COVER-TO-STACK as DEFAULTS for ALL strategies (2026-09-03). hardCap = ABSOLUTE at-risk
+    // (uncovered-debit) ceiling in $, NOT width-scaled — a wider spread must NOT be allowed to risk more
+    // (the whole point is bounding single-day risk). $20k baseline here; v6-v9 tighten to $10k (family).
+    // coverToStack lets a blocked open lock a deep-ITM winner (≥ minFrac×width) to free budget then open,
+    // so the tight cap doesn't just choke activity — it recycles. proactiveCoverFrac stays family-specific.
+    hardCap: 20000, coverToStack: true, coverToStackMinFrac: 0.65,
     dryRun: true
   }
 ];
@@ -61,73 +67,134 @@ const BASE_RUNS = [
 // dryRun defaults true (simulate); flip a single variant to 'test'/false to send. v9 = v7 (be-wrong)
 // + risk caps; the v9-40-paper run below is a PURE-PAPER $40 cover-to-stack fill study (never sends).
 const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
-const VARIANTS = [
-  // v0-v3 = CLASSIC signal (15m price-action breakout/reversal), cover geometry varies. Paper shadows for
-  // diversification (the classic family's worst days fall on DIFFERENT dates than the multi-TF lineage).
-  // Same signal; only the cover selector differs (fixed tent / greedy / joint / fixed-mark).
-  { variant: 'v0', variantLabel: 'classic fixed-tent', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting' },
-  { variant: 'v1', variantLabel: 'classic greedy',     signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'greedy', coverFillModel: 'resting' },
-  { variant: 'v2', variantLabel: 'classic joint',      signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'joint', coverFillModel: 'resting' },
-  { variant: 'v3', variantLabel: 'classic fixed-mark', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed-mark', coverFillModel: 'resting' },
-  { variant: 'v4', variantLabel: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
-  { variant: 'v5', variantLabel: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
-  // dryRun:'test' → when ARMED on prod (CANDLE_SPREAD_LIVE=true), v6 sends REAL orders at an
-  // UNFILLABLE price + auto-cancels ~60s later (paper-validate the live pipe, no execution risk).
-  // INERT until all three gates are on: isProd + CANDLE_SPREAD_LIVE=true + this dryRun:'test'.
-  { variant: 'v6', variantLabel: '5m-harness',      signalFn: v6Signal, signalCfg: { fiveMin: true }, dryRun: 'test', ...PORTED_COVER },
-  { variant: 'v7', variantLabel: 'be-wrong',        signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
-  // v8 = v6 signal + risk caps: proactively cover deep-ITM leaders (frac×width), a soft "churn" cap
-  // on at-risk debit (exempt for a same-side trend stack), and a hard total-uncovered backstop.
-  { variant: 'v8', variantLabel: 'risk-capped',     signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, hardCap: 9000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
-  // v9 = v7 (be-wrong) + TUNED risk caps (tamed be-wrong): hard $40k backstop + proactiveCover 0.80, NO
-  // soft cap — the compelling high-ceiling variant. $20-ATM here (the canonical v9), to compare against
-  // v9-40-paper. Paper only (inherits dryRun:true); v9 breaches the ~$5-10k/day tolerance → stays paper
-  // pending the go/no-go ([[project_daily_risk_tolerance]]).
-  { variant: 'v9', variantLabel: 'v7 be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, hardCap: 40000, proactiveCoverFrac: 0.80, ...PORTED_COVER },
-  // v6 at the $40 short-ATM sizing the user also trades: WIDTH 40, short leg ~ATM (shift = width/2),
-  // long leg deeper ITM; capFrac 0.8 (~$22-23 real-world debit). Same v6 signal + tent cover.
-  { variant: 'v6-40', variantLabel: '5m $40 short-ATM', signalFn: v6Signal, signalCfg: { fiveMin: true }, spreadWidth: 40, spreadShift: 20, capFrac: 0.8, ...PORTED_COVER },
-  // v9 $40 + COVER-TO-STACK, PURE PAPER (dryRun:true → builds/logs, sends NOTHING, assumes fills). A
-  // fill-realism STUDY: v9 (be-wrong) squeezed to a $15k budget cap so cover-to-stack fires heavily on
-  // $40 wings; every open + cover logs the REAL chain mark/bid/ask so we can compare the backtest's
-  // BS-mark fill assumption to reality over ~a week. NOT armed and NOT arm-able (dryRun:true never sends,
-  // even under CANDLE_SPREAD_LIVE — the live-send filter requires dryRun 'test'/false). v9 breaches the
-  // ~$5-10k/day tolerance for REAL trading → this stays paper pending the go/no-go. See experiments log.
-  {
-    variant: 'v9-40-paper', variantLabel: 'v9 $40 cover-to-stack (paper fill study)',
-    signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true,
-    spreadWidth: 40, spreadShift: 20, capFrac: 0.8,
-    hardCap: 15000, proactiveCoverFrac: 0.80,
-    coverToStack: true, coverToStackMinFrac: 0.65,
-    dryRun: true, ...PORTED_COVER
-  },
-  // Same as v9-40-paper but the hardCap tightened to $10k — the size that fits the ~$5-10k/day risk
-  // tolerance. Backtest (CTS matrix): ~$4,954/day, worst −$9,750, 69% win — 3.4× v9 $20's return at the
-  // SAME worst-case risk, because coverToStack cycles the $40 wings through the tight cap. Rides on CTS
-  // fills (~7/day) → the 4-leg atomic combo is the enabler to trust it. Paper only pending that + go/no-go.
-  {
-    variant: 'v9-40-10k', variantLabel: 'v9 $40 cover-to-stack, $10k cap (paper)',
-    signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true,
-    spreadWidth: 40, spreadShift: 20, capFrac: 0.8,
-    hardCap: 10000, proactiveCoverFrac: 0.80,
-    coverToStack: true, coverToStackMinFrac: 0.65,
-    dryRun: true, ...PORTED_COVER
-  },
-  // v6 $20 + CAPITAL RECAPTURE, PURE PAPER: alternate debit/credit OPENS every 3 + CREDIT covers on
-  // deep-ITM winners (creditCoverFrac 0.65) — both parity-equivalent, so P&L is byte-identical to v6
-  // (see capital-legs). Keeps net cash oscillating low; watches the live cash ledger (peakCashDeployed)
-  // to confirm the ~$75k→~$28k funding drop holds on real fills before it's ever enabled for real.
-  // dryRun:true = never sends. Phases 1 (opens) + 2 (ITM-credit covers) both on.
-  {
-    variant: 'v6-recap-paper', variantLabel: 'v6 $20 capital-recapture + leg-uniqueness (paper)',
-    signalFn: v6Signal, signalCfg: { fiveMin: true },
-    capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
-    // LEG-UNIQUENESS: never trade a leg both ways (broker nets same-symbol positions) — resolve to the
-    // parity twin / a strike shift / an anchor cover. Backtest: recapture + this costs only ~0.6% (the
-    // rest was fictional netting-impossible legs). Runs WITH recapture, the realistic live combo.
-    enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8,
-    dryRun: true, ...PORTED_COVER
+
+// SIGNAL FAMILIES (width-INDEPENDENT). Each is a signal fn + cadence + cover config + any risk caps/flags,
+// expressed at the BASE $20 width. The width sweep below cross-products these with WIDTHS → every family
+// gets a -10 / -20 / -40 variant. v0-v3 = CLASSIC signal (15m price-action breakout/reversal) with the
+// cover SELECTOR varying (fixed / greedy / joint / fixed-mark); v4-v9 = the multi-TF lineage on the
+// mark-priced resting tent (PORTED_COVER). Caps here are the $20 values; buildVariants scales them by width.
+const FAMILIES = [
+  { key: 'v0', label: 'classic fixed-tent', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting' },
+  { key: 'v1', label: 'classic greedy',     signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'greedy', coverFillModel: 'resting' },
+  { key: 'v2', label: 'classic joint',      signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'joint', coverFillModel: 'resting' },
+  { key: 'v3', label: 'classic fixed-mark', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed-mark', coverFillModel: 'resting' },
+  { key: 'v4', label: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
+  { key: 'v5', label: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
+  // v6 is ALSO the live-pipe harness: only its $20 variant (testAtBase + width 20) sends REAL unfillable
+  // test orders (dryRun:'test') + auto-cancels when armed; the $10/$40 siblings stay pure paper. INERT
+  // until all three gates: isProd + CANDLE_SPREAD_LIVE=true + that dryRun:'test'.
+  // All families inherit the shared $20k hard cap (BASE_RUNS); the aggressive families additionally get a
+  // tighter $10k-cap A/B variant via buildLowCap() below (that's what v9-40-10k is).
+  { key: 'v6', label: '5m-harness', signalFn: v6Signal, signalCfg: { fiveMin: true }, testAtBase: true, ...PORTED_COVER },
+  { key: 'v7', label: 'be-wrong',   signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
+  // v8 = v6 signal + a soft "churn" cap on at-risk debit (exempt for a same-side trend stack) + proactive
+  // deep-ITM covering, on top of the shared $20k hard backstop.
+  { key: 'v8', label: 'risk-capped', signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
+  // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the $20k backstop — the high-ceiling variant.
+  // Still paper pending go/no-go ([[project_daily_risk_tolerance]]).
+  { key: 'v9', label: 'be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, proactiveCoverFrac: 0.80, ...PORTED_COVER },
+];
+
+// The width sweep is now uniformly SHORT-ATM (shift = W/2: short leg ≈ ATM, long leg W deeper ITM) at
+// capFrac 0.8 — the geometry the user actually trades, held constant across widths so width is the only
+// variable. All three land on the 10-pt strike grid (W/2 − shift = 0 → short strike = center). The
+// ATM-CENTERED geometry (shift 0, legacy 0.525 cap) is measured separately via the `-ctr` comparators
+// below (width 20/40 only — $10 ATM-centered is off-grid).
+const WIDTHS = [
+  { w: 10, shift: 5,  capFrac: 0.8 },
+  { w: 20, shift: 10, capFrac: 0.8 },
+  { w: 40, shift: 20, capFrac: 0.8 },
+];
+
+// Cross-product families × widths → concrete variants `${key}-${w}`. Dollar risk caps are ABSOLUTE (a
+// wider spread must not risk more — see BASE_RUNS.hardCap note); families that don't set a cap inherit the
+// $20k baseline from BASE_RUNS. Fraction-of-width knobs (proactiveCoverFrac) are already width-relative.
+function buildVariants() {
+  const out = [];
+  for (const f of FAMILIES) {
+    for (const { w, shift, capFrac } of WIDTHS) {
+      const v = {
+        variant: `${f.key}-${w}`,
+        variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}`,
+        signalFn: f.signalFn, signalCfg: f.signalCfg,
+        coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        spreadWidth: w, spreadShift: shift,
+      };
+      if (capFrac != null) v.capFrac = capFrac;
+      if (f.bidirectional) v.bidirectional = true;
+      if (f.exemptTrendStack) v.exemptTrendStack = true;
+      if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
+      if (f.softCap != null) v.softCap = f.softCap;
+      if (f.hardCap != null) v.hardCap = f.hardCap;   // else inherits BASE_RUNS $20k
+      if (f.testAtBase && w === 20) v.dryRun = 'test';   // only v6-20 arms the live pipe
+      out.push(v);
+    }
   }
+  return out;
+}
+
+// ATM-CENTERED comparators (`-cATM`): the legacy shift-0 / capFrac-0.525 geometry, at the on-grid widths
+// ($20/$40 only — $10 ATM-centered lands off the 10-pt grid). Every family gets a centered twin at each,
+// so the short-ATM default sweep (vX-W) can be measured head-to-head against centered at the SAME width.
+// Absolute caps (inherit BASE $20k unless the family sets one); never testAtBase → always paper.
+const ATM_WIDTHS = [20, 40];
+function buildAtmComparators() {
+  const out = [];
+  for (const f of FAMILIES) {
+    for (const w of ATM_WIDTHS) {
+      const v = {
+        variant: `${f.key}-${w}-cATM`,
+        variantLabel: `${f.label} $${w} ATM-centered`,
+        signalFn: f.signalFn, signalCfg: f.signalCfg,
+        coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → legacy 0.525 ATM ceiling
+      };
+      if (f.bidirectional) v.bidirectional = true;
+      if (f.exemptTrendStack) v.exemptTrendStack = true;
+      if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
+      if (f.softCap != null) v.softCap = f.softCap;
+      if (f.hardCap != null) v.hardCap = f.hardCap;   // else inherits BASE_RUNS $20k
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+// Additional $10k-cap A/B variants for the AGGRESSIVE families (v5-v9) at the cap-meaningful widths
+// ($20/$40 — a $10 spread's cheap positions barely reach even a $10k cap, so $10-10k ≈ $10-20k). Same
+// short-ATM geometry as the main sweep; each `vX-W-10k` pairs against its $20k sibling `vX-W` to isolate
+// the cap effect. This generator PRODUCES v9-40-10k (formerly a hand-written special). Always paper
+// (no testAtBase) — only the $20k v6-20 arms the pipe.
+const LOW_CAP_FAMILIES = new Set(['v5', 'v6', 'v7', 'v8', 'v9']);
+const LOW_CAP = 10000;
+function buildLowCap() {
+  const out = [];
+  const widths = WIDTHS.filter((x) => x.w === 20 || x.w === 40);
+  for (const f of FAMILIES) {
+    if (!LOW_CAP_FAMILIES.has(f.key)) continue;
+    for (const { w, shift, capFrac } of widths) {
+      const v = {
+        variant: `${f.key}-${w}-10k`,
+        variantLabel: `${f.label} $${w} short-ATM, $10k cap`,
+        signalFn: f.signalFn, signalCfg: f.signalCfg,
+        coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        spreadWidth: w, spreadShift: shift, hardCap: LOW_CAP,
+      };
+      if (capFrac != null) v.capFrac = capFrac;
+      if (f.bidirectional) v.bidirectional = true;
+      if (f.exemptTrendStack) v.exemptTrendStack = true;
+      if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
+      if (f.softCap != null) v.softCap = f.softCap;
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+const VARIANTS = [
+  ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, $20k default cap
+  ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, $20k default cap
+  ...buildLowCap(),          // v5-v9 × 20/40, short-ATM, $10k-cap A/B (incl. v9-40-10k)
 ];
 
 // Expand base runs × variants into the concrete run list.

@@ -70,6 +70,9 @@
       const q = p.quantity || 1;
       evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0, legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * q), net: p.openNet || 'DEBIT' });
       if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0, legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * q), net: p.coverNet || 'DEBIT' });
+      // A resting cover order that was placed but never filled: shown as a dimmed row so every order the
+      // engine sent to the broker is visible (matches the broker's rejected/working orders 1:1).
+      else if (p.unfilledCover) evs.push({ id: p.id, type: 'cover', unfilled: true, side: p.side, time: p.unfilledCover.time, epoch: p.unfilledCover.epoch || (p.openEpoch || 0) + 1, legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * q), net: p.unfilledCover.net || 'DEBIT' });
     });
     if (!evs.length) { box.innerHTML = ''; return; }
     // Number positions #1.. by open time (earliest = #1); covers inherit their open's number.
@@ -79,23 +82,23 @@
     const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
     const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
     const glyph = e => e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
-    const coveredIds = new Set(evs.filter(e => e.type === 'cover').map(e => e.id));
-    const opens = evs.filter(e => e.type === 'open').length, covers = evs.length - opens;
-    const uncovered = evs.filter(e => e.type === 'open' && !coveredIds.has(e.id)).length;
+    const coveredIds = new Set(evs.filter(e => e.type === 'cover' && !e.unfilled).map(e => e.id));   // FILLED covers only
+    const opens = evs.filter(e => e.type === 'open').length, covers = evs.filter(e => e.type === 'cover').length;
+    const unfilled = evs.filter(e => e.type === 'cover' && e.unfilled).length;
     const rows = evs.map(e => {
       const open = e.type === 'open';
-      const isUncov = open && !coveredIds.has(e.id);   // an open with no matching cover = still exposed
-      const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : 'COVER';
+      const isUncov = open && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
+      const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
       const cr = e.net === 'CREDIT';
       const costStr = cr ? `+${usd(e.cost)}` : usd(e.cost);   // credit = cash received → leading +
-      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}" title="${e.id}">`
+      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}" title="${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`
         + `<td class="td-ev" style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
         + `<td class="td-legs">${e.legs}</td>`
         + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
     }).join('');
-    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${uncovered ? ` · ${uncovered} uncovered*` : ''}</span></h4>`
+    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}</span></h4>`
       + `<table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
       + `<tbody>${rows}</tbody></table>`;
   }
@@ -142,7 +145,7 @@
       if (variants.length) {
         const prev = sel.value;
         sel.innerHTML = variants.map((v) => `<option value="${v}">${v}</option>`).join('');
-        sel.value = variants.indexOf(prev) >= 0 ? prev : (variants.indexOf('v6') >= 0 ? 'v6' : variants[0]);
+        sel.value = variants.indexOf(prev) >= 0 ? prev : (variants.indexOf('v6-20') >= 0 ? 'v6-20' : variants[0]);
         sel.dataset.loaded = '1';
       }
     } catch (e) { /* keep the default option; pull will report a clear error */ }

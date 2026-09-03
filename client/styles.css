@@ -205,6 +205,10 @@ pre {
 .trade-detail-table tr.td-cover td { background: #e6e6e6; }
 /* An OPEN with no matching cover = still exposed: amber tint + an asterisk on the OPEN label. */
 .trade-detail-table tr.td-uncovered td { background: #fff3d0; }
+/* A cover order that was placed but never filled: mute ALL text (incl. the inline side color + net tag) so
+   it reads as "sent, didn't book" while still being counted as an order sent to the broker. */
+.trade-detail-table tr.td-unfilled td,
+.trade-detail-table tr.td-unfilled td * { color: #b8b8b8 !important; font-style: italic; }
 .trade-detail-table td.td-cost { color: #555; }
 /* DR/CR tag on the cost = the actual order net sent (credit = the parity twin under capital recapture). */
 .trade-detail-table .net-tag { font-size: 9px; margin-left: 2px; }

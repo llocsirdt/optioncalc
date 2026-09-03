@@ -28,6 +28,17 @@
     return Number.isFinite(t) ? Math.floor(t / FIVE_MIN) * FIVE_MIN : null;
   }
 
+  // Format an ISO timestamp as the "MM/DD HH:MM" ET candle string the run's own openTime/coverTime use, so
+  // an unfilled cover's order-log time (raw UTC ISO) lines up with the filled rows in the trades table.
+  function etCandleTime(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d);
+    const g = (t) => (parts.find((p) => p.type === t) || {}).value || '';
+    return `${g('month')}/${g('day')} ${g('hour')}:${g('minute')}`;
+  }
+
   // pos.legs / pos.coverLegs entries are { side:'long'|'short', type:'C'|'P', strike }. Emit optionArray
   // legs { qty (signed × quantity), type ('c'|'p'), strike, cost (dollars, net on the long leg) }.
   function spreadToLegs(spreadLegs, netLimit, qty) {
@@ -58,7 +69,8 @@
     // position they cover (meta.of) — so a credit cover uses its REAL sent legs + credit price, not a guess.
     const coverByPos = new Map();
     for (const e of (run && run.events) || []) {
-      if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs && /cover/.test(e.meta.kind || '')) coverByPos.set(e.meta.of, e.meta);
+      if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs && /cover/.test(e.meta.kind || ''))
+        coverByPos.set(e.meta.of, { legs: e.meta.legs, net: e.meta.net, limit: e.meta.limit, time: e.time });
     }
     for (const pos of ordered) {
       if (!pos || !pos.legs || !pos.legs.length) continue;
@@ -78,9 +90,18 @@
         else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
         legs.push(...spreadToLegs(cLegs, cCredit ? -cAmt : cAmt, qty));
       }
+      // UNFILLED cover: a resting cover order was placed for this position but never booked (its mark never
+      // reached target), so it isn't a leg in the P&L — surface it (order-log legs/price/net + ET time) so the
+      // trades table can show EVERY order sent, dimmed, and reconcile 1:1 against the broker's order list.
+      let unfilledCover = null;
+      if (!pos.covered) {
+        const uc = coverByPos.get(pos.id);
+        if (uc && uc.legs && uc.legs.length)
+          unfilledCover = { legs: fmtSpread(uc.legs, qty), net: uc.net === 'CREDIT' ? 'CREDIT' : 'DEBIT', limit: uc.limit || 0, time: etCandleTime(uc.time), epoch: epochFrom5m(uc.time) };
+      }
       allLegs.push(...legs);
       positions.push({
-        id: pos.id, side: pos.side, covered: !!pos.covered, shortStrike: pos.shortStrike,
+        id: pos.id, side: pos.side, covered: !!pos.covered, shortStrike: pos.shortStrike, unfilledCover,
         openTime: pos.openTime || null, coverTime: pos.coverTime || null,       // human CANDLE times (log/tooltip)
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).
