@@ -55,6 +55,10 @@
   // false) keeps never-filled opens out. Returns { optionArrayString, legs, positions, count, source }.
   function strategyRunToOptionArray(run, opts) {
     const o = opts || {};
+    // TIME SLICE (opts.asOfEpoch): reconstruct the book AS OF a 5m-mark epoch — include a position's OPEN
+    // only if it was opened by then, and its COVER only if it booked by then (else it's still open at that
+    // time). Used by the compare page's time-of-day slider. Unset → the full end-of-day book (unchanged).
+    const asOf = o.asOfEpoch;
     const state = (run && run.state) || {};
     const cfg = (run && run.config) || {};
     const src = (run && run.variant) || cfg.variant || 'strategy';
@@ -75,6 +79,9 @@
     for (const pos of ordered) {
       if (!pos || !pos.legs || !pos.legs.length) continue;
       if (!pos.filled && !o.includeUnfilled) continue;
+      const oEpoch = pos.openEpoch || epochFrom5m(pos.openedAt);
+      if (asOf != null && oEpoch != null && oEpoch > asOf) continue;   // not opened yet at asOf
+      const coverByT = asOf == null || (pos.coverEpoch != null && pos.coverEpoch <= asOf);   // has it booked by asOf?
       const qty = pos.quantity || cfg.quantity || 1;
       // Emit each spread AS ACTUALLY SENT: a CREDIT order → its real credit-twin legs + a NEGATIVE cost
       // (cash received); a DEBIT → the debit legs + positive cost. So the optionArray total NETS the
@@ -84,7 +91,7 @@
       const oAmt = oCredit ? (pos.sentLimit || 0) : (pos.limit || 0);
       const legs = spreadToLegs(oLegs, oCredit ? -oAmt : oAmt, qty);
       let cLegs = null, cAmt = 0, cCredit = false;
-      if (pos.covered && pos.coverLegs && pos.coverLegs.length) {
+      if (pos.covered && coverByT && pos.coverLegs && pos.coverLegs.length) {
         const ord = coverByPos.get(pos.id);   // the EXACT cover order (legs + price + net) from the log
         if (ord && ord.legs) { cCredit = ord.net === 'CREDIT'; cLegs = ord.legs; cAmt = ord.limit || 0; }
         else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
@@ -101,7 +108,7 @@
       }
       allLegs.push(...legs);
       positions.push({
-        id: pos.id, side: pos.side, covered: !!pos.covered, shortStrike: pos.shortStrike, unfilledCover,
+        id: pos.id, side: pos.side, covered: !!(pos.covered && coverByT), shortStrike: pos.shortStrike, unfilledCover,
         openTime: pos.openTime || null, coverTime: pos.coverTime || null,       // human CANDLE times (log/tooltip)
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).

@@ -16,6 +16,11 @@
   label.tgl { user-select:none; }
   label.tgl input { vertical-align:-1px; margin-right:4px; }
   #status { padding:10px 14px; color:var(--muted); }
+  #timebar { position:sticky; top:44px; z-index:4; display:flex; align-items:center; gap:10px; padding:6px 14px; background:var(--bg); border-bottom:1px solid var(--grid); }
+  #timebar .tb-lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
+  #timebar input[type=range] { flex:1; cursor:pointer; }
+  #timebar .tb-time { font:12px ui-monospace, monospace; font-weight:700; min-width:74px; text-align:right; }
+  #timebar input:disabled { opacity:.4; }
   .wrap { overflow:auto; padding:8px 14px 40px; }
   table.grid { border-collapse:separate; border-spacing:6px; }
   table.grid th { font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
@@ -57,6 +62,11 @@
   <button id="btTableBtn">Backtest table ▾</button>
   <button id="refresh">Refresh</button>
 </header>
+<div id="timebar">
+  <span class="tb-lbl">Time of day</span>
+  <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
+  <span id="timeLabel" class="tb-time">full day</span>
+</div>
 <div id="status">Loading…</div>
 <div class="wrap"><table class="grid" id="grid"></table></div>
 <div class="wrap" id="btWrap" style="display:none">
@@ -93,8 +103,11 @@ const COLUMNS = [
 const CW = 174, CH = 74;   // mini-chart px
 
 const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
+const records = {}; // variant -> raw run record (kept so the time slider can rebuild the book at any epoch)
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
+let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
+let pendingT = null, sliderRAF = null;             // rAF-coalesced slider recompute
 
 const usd = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
 const fetchJson = async (u) => { const r = await fetch(u, { cache:'no-store' }); if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; } return r.json(); };
@@ -307,11 +320,68 @@ async function inBatches(items, n, fn) {
   for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn));
 }
 
+// --- TIME-OF-DAY SLIDER: rebuild every variant's book as of a chosen 5m-mark epoch ---
+const parseETMin = (t) => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
+const etLabel = (T) => new Date(T).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+
+// Underlying at time T = the latest candle whose epoch <= T (step function). Empty map → null.
+function underlyingAt(T) {
+  if (!underlyingMap.length) return null;
+  let u = underlyingMap[0].under;
+  for (const p of underlyingMap) { if (p.epoch <= T) u = p.under; else break; }
+  return u;
+}
+
+// Build the epoch↔underlying series + day range. candle_close events carry a "MM/DD HH:MM" ET time and the
+// underlying, but no epoch — so anchor ET-minute→epoch off a position's own openEpoch↔openTime pair (same
+// day, so it's a clean linear map, no timezone/DST guessing). Uses the record with the most candles.
+function buildTimeIndex() {
+  underlyingMap = []; dayMin = 0; dayMax = 0;
+  let bestN = -1; const eps = [];
+  for (const v of Object.keys(records)) {
+    const rec = records[v]; const st = rec.state || {};
+    const anchor = (st.positions || []).find((p) => p.openEpoch && p.openTime);
+    if (!anchor) continue;
+    const anchorMin = parseETMin(anchor.openTime); if (anchorMin == null) continue;
+    const toEpoch = (min) => anchor.openEpoch + (min - anchorMin) * 60000;
+    (st.positions || []).forEach((p) => { if (p.openEpoch) eps.push(p.openEpoch); if (p.coverEpoch) eps.push(p.coverEpoch); });
+    const cc = (rec.events || []).filter((e) => e.type === 'candle_close' && e.underlying != null && e.candle && e.candle.time);
+    if (cc.length > bestN) {
+      bestN = cc.length;
+      underlyingMap = cc.map((e) => ({ epoch: toEpoch(parseETMin(e.candle.time)), under: e.underlying }))
+        .filter((x) => Number.isFinite(x.epoch)).sort((a, b) => a.epoch - b.epoch);
+    }
+  }
+  if (underlyingMap.length) eps.push(underlyingMap[0].epoch, underlyingMap[underlyingMap.length - 1].epoch);
+  if (eps.length) { dayMin = Math.min(...eps); dayMax = Math.max(...eps); }
+}
+
+// Recompute every variant's cell for the book as of epoch T (T null → full end-of-day book).
+function applyTime(T) {
+  const under = (T != null) ? underlyingAt(T) : null;
+  for (const v of Object.keys(records)) {
+    try {
+      const res = strategyRunToOptionArray(records[v], T != null ? { asOfEpoch: T } : {});
+      const u = under != null ? under : (records[v].state && records[v].state.lastUnderlying);
+      cells[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
+    } catch (e) { cells[v] = { err: 'calc' }; }
+  }
+  render();
+}
+
+function setupSlider() {
+  const s = document.getElementById('timeSlider'), lbl = document.getElementById('timeLabel');
+  if (!dayMax || dayMax <= dayMin) { s.disabled = true; lbl.textContent = 'full day'; return; }
+  s.min = dayMin; s.max = dayMax; s.step = 300000; s.value = dayMax; s.disabled = false;   // 5-min steps
+  lbl.textContent = 'full day';
+}
+
 async function load() {
   const status = document.getElementById('status');
   status.textContent = 'Loading runs…';
   document.getElementById('grid').innerHTML = '';
   for (const k of Object.keys(cells)) delete cells[k];
+  for (const k of Object.keys(records)) delete records[k];
   try {
     const idx = await fetchJson(runsUrl());
     const all = (idx.runs || []).filter((r) => r.variant && r.tradeDate);
@@ -330,15 +400,14 @@ async function load() {
     await inBatches(targets, 8, async (v) => {
       try {
         const rec = await fetchJson(runUrl(symbol, vm[v].expiration, vm[v].date, v));
-        const record = rec.record || rec;
-        const res = strategyRunToOptionArray(record);
-        const under = record.state && record.state.lastUnderlying;
-        cells[v] = analyzeLegs(res.legs, Number.isFinite(under) ? under : undefined);
+        records[v] = rec.record || rec;
       } catch (e) { cells[v] = { err: e.status === 404 ? 'no run' : (e.message || 'error') }; }
       status.textContent = `Loading… ${++done}/${targets.length}`;
     });
     status.textContent = '';
-    render();
+    buildTimeIndex();
+    setupSlider();
+    applyTime(dayMax || null);   // full-day book by default; render() runs inside
   } catch (e) {
     status.textContent = 'Failed to load: ' + (e.message || e);
   }
@@ -346,6 +415,12 @@ async function load() {
 
 document.getElementById('refresh').addEventListener('click', load);
 document.getElementById('syncY').addEventListener('change', render);
+document.getElementById('timeSlider').addEventListener('input', (e) => {
+  pendingT = +e.target.value;
+  document.getElementById('timeLabel').textContent = (pendingT >= dayMax) ? 'full day' : etLabel(pendingT);
+  if (sliderRAF) return;   // coalesce rapid drags to one recompute per frame (60 charts)
+  sliderRAF = requestAnimationFrame(() => { sliderRAF = null; applyTime(pendingT >= dayMax ? null : pendingT); });
+});
 // Click/tap a chart → drop the purple cursor at that underlying price and read off the projected P&L.
 document.getElementById('grid').addEventListener('click', (e) => {
   const svg = e.target.closest('svg[data-v]'); if (!svg) return;
