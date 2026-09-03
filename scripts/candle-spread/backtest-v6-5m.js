@@ -136,6 +136,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   // A (the analysis series). Default = the analysis 5m itself → baselines byte-identical. Override to price
   // NDX options off the real NDX close while signalling off NQ (the live model; NDX ≈ NQ − basis, ~44pt).
   const priceOf = opts.priceOf || (b => { const c = b.analysis['5m']; return { close: c.close, high: c.high, low: c.low }; });
+  // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
+  // engine (resolveRestingCovers) books at the candle-CLOSE mark. opts.coverFillAtClose matches live.
+  const coverAtClose = opts.coverFillAtClose === true;
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -153,7 +156,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
-      if (legsMark(pc.legs, ext, tau, iv) <= pc.target) {
+      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= pc.target) {
         if (enforceLegs) {
           // Resolve the cover: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip.
           const rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
@@ -338,8 +341,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; floor = round2(floor + (G.WIDTH - pos.limit - pos.coverLimit) * 100 * QTY); filled++; } else naked++;
     terminal = round2(terminal + (value - cost) * 100 * QTY);
   }
+  const coverPending = st.positions.filter(p => !p.covered && p.pendingCover).length;   // placed but never filled
   return {
-    floor, terminal, opens, filled, naked, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
+    floor, terminal, opens, filled, naked, coverPending, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
     harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null
