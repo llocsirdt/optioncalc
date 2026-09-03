@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-03T05:28:16.147Z",
+  "generatedAt": "2026-09-03T06:20:59.239Z",
   "dataDir": "backtest-data-5m-nq",
   "days": 765,
   "calendarDays": 922,
@@ -22,7 +22,9 @@
       "avgTerminalPotential": 485,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 3172,
-      "avgDeployedCapital": 1192
+      "avgDeployedCapital": 1192,
+      "maxDD7": -13450,
+      "maxDD30": -15870
     },
     "v0-20": {
       "label": "classic fixed-tent $20 short-ATM",
@@ -40,7 +42,9 @@
       "avgTerminalPotential": 1046,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 4656,
-      "avgDeployedCapital": 943
+      "avgDeployedCapital": 943,
+      "maxDD7": -24270,
+      "maxDD30": -36330
     },
     "v0-40": {
       "label": "classic fixed-tent $40 short-ATM",
@@ -58,7 +62,9 @@
       "avgTerminalPotential": 2143,
       "avgTradesPerDay": 14.3,
       "avgPeakCapital": 7259,
-      "avgDeployedCapital": -1
+      "avgDeployedCapital": -1,
+      "maxDD7": -47430,
+      "maxDD30": -53810
     },
     "v1-10": {
       "label": "classic greedy $10 short-ATM",
@@ -76,7 +82,9 @@
       "avgTerminalPotential": 511,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 3171,
-      "avgDeployedCapital": 1191
+      "avgDeployedCapital": 1191,
+      "maxDD7": -13450,
+      "maxDD30": -15870
     },
     "v1-20": {
       "label": "classic greedy $20 short-ATM",
@@ -94,7 +102,9 @@
       "avgTerminalPotential": 1087,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 5735,
-      "avgDeployedCapital": 1902
+      "avgDeployedCapital": 1902,
+      "maxDD7": -26730,
+      "maxDD30": -39205
     },
     "v1-40": {
       "label": "classic greedy $40 short-ATM",
@@ -112,7 +122,9 @@
       "avgTerminalPotential": 2177,
       "avgTradesPerDay": 15.5,
       "avgPeakCapital": 9954,
-      "avgDeployedCapital": 3031
+      "avgDeployedCapital": 3031,
+      "maxDD7": -48675,
+      "maxDD30": -51135
     },
     "v2-10": {
       "label": "classic joint $10 short-ATM",
@@ -130,7 +142,9 @@
       "avgTerminalPotential": 450,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 3521,
-      "avgDeployedCapital": 1405
+      "avgDeployedCapital": 1405,
+      "maxDD7": -13725,
+      "maxDD30": -18005
     },
     "v2-20": {
       "label": "classic joint $20 short-ATM",
@@ -148,7 +162,9 @@
       "avgTerminalPotential": 866,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 6816,
-      "avgDeployedCapital": 2616
+      "avgDeployedCapital": 2616,
+      "maxDD7": -28000,
+      "maxDD30": -38865
     },
     "v2-40": {
       "label": "classic joint $40 short-ATM",
@@ -166,7 +182,9 @@
       "avgTerminalPotential": 1662,
       "avgTradesPerDay": 15.59,
       "avgPeakCapital": 12350,
-      "avgDeployedCapital": 4786
+      "avgDeployedCapital": 4786,
+      "maxDD7": -48785,
+      "maxDD30": -56905
     },
     "v3-10": {
       "label": "classic fixed-mark $10 short-ATM",
@@ -184,7 +202,9 @@
       "avgTerminalPotential": 485,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 3172,
-      "avgDeployedCapital": 1192
+      "avgDeployedCapital": 1192,
+      "maxDD7": -13450,
+      "maxDD30": -15870
     },
     "v3-20": {
       "label": "classic fixed-mark $20 short-ATM",
@@ -202,7 +222,9 @@
       "avgTerminalPotential": 1046,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 4656,
-      "avgDeployedCapital": 943
+      "avgDeployedCapital": 943,
+      "maxDD7": -24270,
+      "maxDD30": -36330
     },
     "v3-40": {
       "label": "classic fixed-mark $40 short-ATM",
@@ -220,7 +242,9 @@
       "avgTerminalPotential": 2143,
       "avgTradesPerDay": 14.3,
       "avgPeakCapital": 7259,
-      "avgDeployedCapital": -1
+      "avgDeployedCapital": -1,
+      "maxDD7": -47430,
+      "maxDD30": -53810
     },
     "v4-10": {
       "label": "multiTF-overext $10 short-ATM",
@@ -238,7 +262,9 @@
       "avgTerminalPotential": 2120,
       "avgTradesPerDay": 17.72,
       "avgPeakCapital": 2663,
-      "avgDeployedCapital": 451
+      "avgDeployedCapital": 451,
+      "maxDD7": -23610,
+      "maxDD30": -41505
     },
     "v4-20": {
       "label": "multiTF-overext $20 short-ATM",
@@ -256,7 +282,9 @@
       "avgTerminalPotential": 4252,
       "avgTradesPerDay": 17.7,
       "avgPeakCapital": 4328,
-      "avgDeployedCapital": -54
+      "avgDeployedCapital": -54,
+      "maxDD7": -48265,
+      "maxDD30": -89490
     },
     "v4-40": {
       "label": "multiTF-overext $40 short-ATM",
@@ -274,7 +302,9 @@
       "avgTerminalPotential": 7339,
       "avgTradesPerDay": 14.61,
       "avgPeakCapital": 7176,
-      "avgDeployedCapital": -1050
+      "avgDeployedCapital": -1050,
+      "maxDD7": -80160,
+      "maxDD30": -137215
     },
     "v5-10": {
       "label": "trend-flip $10 short-ATM",
@@ -292,7 +322,9 @@
       "avgTerminalPotential": 1105,
       "avgTradesPerDay": 21.33,
       "avgPeakCapital": 3934,
-      "avgDeployedCapital": 1504
+      "avgDeployedCapital": 1504,
+      "maxDD7": -16295,
+      "maxDD30": -23280
     },
     "v5-20": {
       "label": "trend-flip $20 short-ATM",
@@ -310,7 +342,9 @@
       "avgTerminalPotential": 2452,
       "avgTradesPerDay": 21.33,
       "avgPeakCapital": 5135,
-      "avgDeployedCapital": 623
+      "avgDeployedCapital": 623,
+      "maxDD7": -35625,
+      "maxDD30": -58085
     },
     "v5-40": {
       "label": "trend-flip $40 short-ATM",
@@ -328,7 +362,9 @@
       "avgTerminalPotential": 5072,
       "avgTradesPerDay": 17.23,
       "avgPeakCapital": 6946,
-      "avgDeployedCapital": -2652
+      "avgDeployedCapital": -2652,
+      "maxDD7": -70550,
+      "maxDD30": -131005
     },
     "v6-10": {
       "label": "5m-harness $10 short-ATM",
@@ -346,7 +382,9 @@
       "avgTerminalPotential": 1373,
       "avgTradesPerDay": 29.82,
       "avgPeakCapital": 6482,
-      "avgDeployedCapital": 3098
+      "avgDeployedCapital": 3098,
+      "maxDD7": -18425,
+      "maxDD30": -18425
     },
     "v6-20": {
       "label": "5m-harness $20 short-ATM",
@@ -364,7 +402,9 @@
       "avgTerminalPotential": 3247,
       "avgTradesPerDay": 29.78,
       "avgPeakCapital": 6793,
-      "avgDeployedCapital": 1523
+      "avgDeployedCapital": 1523,
+      "maxDD7": -41135,
+      "maxDD30": -80700
     },
     "v6-40": {
       "label": "5m-harness $40 short-ATM",
@@ -382,7 +422,9 @@
       "avgTerminalPotential": 6200,
       "avgTradesPerDay": 19.28,
       "avgPeakCapital": 7044,
-      "avgDeployedCapital": -4416
+      "avgDeployedCapital": -4416,
+      "maxDD7": -77580,
+      "maxDD30": -161540
     },
     "v7-10": {
       "label": "be-wrong $10 short-ATM",
@@ -400,7 +442,9 @@
       "avgTerminalPotential": -2287,
       "avgTradesPerDay": 47.33,
       "avgPeakCapital": 7337,
-      "avgDeployedCapital": 2856
+      "avgDeployedCapital": 2856,
+      "maxDD7": -45365,
+      "maxDD30": -81360
     },
     "v7-20": {
       "label": "be-wrong $20 short-ATM",
@@ -418,7 +462,9 @@
       "avgTerminalPotential": -412,
       "avgTradesPerDay": 41.37,
       "avgPeakCapital": 9025,
-      "avgDeployedCapital": 3251
+      "avgDeployedCapital": 3251,
+      "maxDD7": -70480,
+      "maxDD30": -112240
     },
     "v7-40": {
       "label": "be-wrong $40 short-ATM",
@@ -436,7 +482,9 @@
       "avgTerminalPotential": 4697,
       "avgTradesPerDay": 25.8,
       "avgPeakCapital": 10810,
-      "avgDeployedCapital": 3558
+      "avgDeployedCapital": 3558,
+      "maxDD7": -87130,
+      "maxDD30": -87130
     },
     "v8-10": {
       "label": "risk-capped $10 short-ATM",
@@ -454,7 +502,9 @@
       "avgTerminalPotential": 1430,
       "avgTradesPerDay": 24.22,
       "avgPeakCapital": 5415,
-      "avgDeployedCapital": 2601
+      "avgDeployedCapital": 2601,
+      "maxDD7": -14305,
+      "maxDD30": -17545
     },
     "v8-20": {
       "label": "risk-capped $20 short-ATM",
@@ -472,7 +522,9 @@
       "avgTerminalPotential": 2608,
       "avgTradesPerDay": 14.17,
       "avgPeakCapital": 4809,
-      "avgDeployedCapital": 1412
+      "avgDeployedCapital": 1412,
+      "maxDD7": -30470,
+      "maxDD30": -64250
     },
     "v8-40": {
       "label": "risk-capped $40 short-ATM",
@@ -490,7 +542,9 @@
       "avgTerminalPotential": 4986,
       "avgTradesPerDay": 11.52,
       "avgPeakCapital": 5889,
-      "avgDeployedCapital": -1110
+      "avgDeployedCapital": -1110,
+      "maxDD7": -79210,
+      "maxDD30": -163165
     },
     "v9-10": {
       "label": "be-wrong + caps $10 short-ATM",
@@ -508,7 +562,9 @@
       "avgTerminalPotential": 1453,
       "avgTradesPerDay": 47.37,
       "avgPeakCapital": 5944,
-      "avgDeployedCapital": 6
+      "avgDeployedCapital": 6,
+      "maxDD7": -34655,
+      "maxDD30": -64160
     },
     "v9-20": {
       "label": "be-wrong + caps $20 short-ATM",
@@ -526,7 +582,9 @@
       "avgTerminalPotential": 1859,
       "avgTradesPerDay": 41.78,
       "avgPeakCapital": 6718,
-      "avgDeployedCapital": -2219
+      "avgDeployedCapital": -2219,
+      "maxDD7": -69480,
+      "maxDD30": -99265
     },
     "v9-40": {
       "label": "be-wrong + caps $40 short-ATM",
@@ -544,7 +602,9 @@
       "avgTerminalPotential": 4628,
       "avgTradesPerDay": 25.2,
       "avgPeakCapital": 8127,
-      "avgDeployedCapital": -1374
+      "avgDeployedCapital": -1374,
+      "maxDD7": -85435,
+      "maxDD30": -85435
     },
     "v0-20-cATM": {
       "label": "classic fixed-tent $20 ATM-centered",
@@ -562,7 +622,9 @@
       "avgTerminalPotential": 1209,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 5427,
-      "avgDeployedCapital": 1797
+      "avgDeployedCapital": 1797,
+      "maxDD7": -24110,
+      "maxDD30": -24110
     },
     "v0-40-cATM": {
       "label": "classic fixed-tent $40 ATM-centered",
@@ -580,7 +642,9 @@
       "avgTerminalPotential": 1948,
       "avgTradesPerDay": 14.97,
       "avgPeakCapital": 6885,
-      "avgDeployedCapital": -254
+      "avgDeployedCapital": -254,
+      "maxDD7": -41785,
+      "maxDD30": -52745
     },
     "v1-20-cATM": {
       "label": "classic greedy $20 ATM-centered",
@@ -598,7 +662,9 @@
       "avgTerminalPotential": 1255,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 6465,
-      "avgDeployedCapital": 2492
+      "avgDeployedCapital": 2492,
+      "maxDD7": -17880,
+      "maxDD30": -24455
     },
     "v1-40-cATM": {
       "label": "classic greedy $40 ATM-centered",
@@ -616,7 +682,9 @@
       "avgTerminalPotential": 2628,
       "avgTradesPerDay": 15.71,
       "avgPeakCapital": 12255,
-      "avgDeployedCapital": 4686
+      "avgDeployedCapital": 4686,
+      "maxDD7": -38085,
+      "maxDD30": -48735
     },
     "v2-20-cATM": {
       "label": "classic joint $20 ATM-centered",
@@ -634,7 +702,9 @@
       "avgTerminalPotential": 1067,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 7652,
-      "avgDeployedCapital": 3192
+      "avgDeployedCapital": 3192,
+      "maxDD7": -24815,
+      "maxDD30": -33125
     },
     "v2-40-cATM": {
       "label": "classic joint $40 ATM-centered",
@@ -652,7 +722,9 @@
       "avgTerminalPotential": 2363,
       "avgTradesPerDay": 15.77,
       "avgPeakCapital": 15382,
-      "avgDeployedCapital": 6619
+      "avgDeployedCapital": 6619,
+      "maxDD7": -45555,
+      "maxDD30": -58705
     },
     "v3-20-cATM": {
       "label": "classic fixed-mark $20 ATM-centered",
@@ -670,7 +742,9 @@
       "avgTerminalPotential": 1209,
       "avgTradesPerDay": 15.84,
       "avgPeakCapital": 5427,
-      "avgDeployedCapital": 1797
+      "avgDeployedCapital": 1797,
+      "maxDD7": -24110,
+      "maxDD30": -24110
     },
     "v3-40-cATM": {
       "label": "classic fixed-mark $40 ATM-centered",
@@ -688,7 +762,9 @@
       "avgTerminalPotential": 1948,
       "avgTradesPerDay": 14.97,
       "avgPeakCapital": 6885,
-      "avgDeployedCapital": -254
+      "avgDeployedCapital": -254,
+      "maxDD7": -41785,
+      "maxDD30": -52745
     },
     "v4-20-cATM": {
       "label": "multiTF-overext $20 ATM-centered",
@@ -706,7 +782,9 @@
       "avgTerminalPotential": 5023,
       "avgTradesPerDay": 17.72,
       "avgPeakCapital": 4824,
-      "avgDeployedCapital": 774
+      "avgDeployedCapital": 774,
+      "maxDD7": -48590,
+      "maxDD30": -83805
     },
     "v4-40-cATM": {
       "label": "multiTF-overext $40 ATM-centered",
@@ -724,7 +802,9 @@
       "avgTerminalPotential": 9225,
       "avgTradesPerDay": 15.52,
       "avgPeakCapital": 6728,
-      "avgDeployedCapital": -1492
+      "avgDeployedCapital": -1492,
+      "maxDD7": -84365,
+      "maxDD30": -156030
     },
     "v5-20-cATM": {
       "label": "trend-flip $20 ATM-centered",
@@ -742,7 +822,9 @@
       "avgTerminalPotential": 2765,
       "avgTradesPerDay": 21.33,
       "avgPeakCapital": 6886,
-      "avgDeployedCapital": 2412
+      "avgDeployedCapital": 2412,
+      "maxDD7": -22230,
+      "maxDD30": -44900
     },
     "v5-40-cATM": {
       "label": "trend-flip $40 ATM-centered",
@@ -760,7 +842,9 @@
       "avgTerminalPotential": 5314,
       "avgTradesPerDay": 18.48,
       "avgPeakCapital": 7309,
-      "avgDeployedCapital": -1642
+      "avgDeployedCapital": -1642,
+      "maxDD7": -61995,
+      "maxDD30": -88700
     },
     "v6-20-cATM": {
       "label": "5m-harness $20 ATM-centered",
@@ -778,7 +862,9 @@
       "avgTerminalPotential": 3566,
       "avgTradesPerDay": 29.81,
       "avgPeakCapital": 10655,
-      "avgDeployedCapital": 4775
+      "avgDeployedCapital": 4775,
+      "maxDD7": -31745,
+      "maxDD30": -47045
     },
     "v6-40-cATM": {
       "label": "5m-harness $40 ATM-centered",
@@ -796,7 +882,9 @@
       "avgTerminalPotential": 6987,
       "avgTradesPerDay": 21.55,
       "avgPeakCapital": 8204,
-      "avgDeployedCapital": -1929
+      "avgDeployedCapital": -1929,
+      "maxDD7": -66635,
+      "maxDD30": -111850
     },
     "v7-20-cATM": {
       "label": "be-wrong $20 ATM-centered",
@@ -814,7 +902,9 @@
       "avgTerminalPotential": -145,
       "avgTradesPerDay": 41.64,
       "avgPeakCapital": 10131,
-      "avgDeployedCapital": 4119
+      "avgDeployedCapital": 4119,
+      "maxDD7": -71260,
+      "maxDD30": -112685
     },
     "v7-40-cATM": {
       "label": "be-wrong $40 ATM-centered",
@@ -832,7 +922,9 @@
       "avgTerminalPotential": 2009,
       "avgTradesPerDay": 23.23,
       "avgPeakCapital": 7511,
-      "avgDeployedCapital": 954
+      "avgDeployedCapital": 954,
+      "maxDD7": -90900,
+      "maxDD30": -123495
     },
     "v8-20-cATM": {
       "label": "risk-capped $20 ATM-centered",
@@ -850,7 +942,9 @@
       "avgTerminalPotential": 3086,
       "avgTradesPerDay": 15.07,
       "avgPeakCapital": 6865,
-      "avgDeployedCapital": 3312
+      "avgDeployedCapital": 3312,
+      "maxDD7": -30435,
+      "maxDD30": -49350
     },
     "v8-40-cATM": {
       "label": "risk-capped $40 ATM-centered",
@@ -868,7 +962,9 @@
       "avgTerminalPotential": 6799,
       "avgTradesPerDay": 11.58,
       "avgPeakCapital": 6749,
-      "avgDeployedCapital": 269
+      "avgDeployedCapital": 269,
+      "maxDD7": -82890,
+      "maxDD30": -169235
     },
     "v9-20-cATM": {
       "label": "be-wrong + caps $20 ATM-centered",
@@ -886,7 +982,9 @@
       "avgTerminalPotential": 2293,
       "avgTradesPerDay": 41.97,
       "avgPeakCapital": 8559,
-      "avgDeployedCapital": -510
+      "avgDeployedCapital": -510,
+      "maxDD7": -75510,
+      "maxDD30": -120990
     },
     "v9-40-cATM": {
       "label": "be-wrong + caps $40 ATM-centered",
@@ -904,7 +1002,9 @@
       "avgTerminalPotential": 2385,
       "avgTradesPerDay": 23.35,
       "avgPeakCapital": 7101,
-      "avgDeployedCapital": -2360
+      "avgDeployedCapital": -2360,
+      "maxDD7": -91515,
+      "maxDD30": -128080
     },
     "v5-20-10k": {
       "label": "trend-flip $20 short-ATM, $10k cap",
@@ -922,7 +1022,9 @@
       "avgTerminalPotential": 2583,
       "avgTradesPerDay": 20.11,
       "avgPeakCapital": 5089,
-      "avgDeployedCapital": 704
+      "avgDeployedCapital": 704,
+      "maxDD7": -29650,
+      "maxDD30": -59270
     },
     "v5-40-10k": {
       "label": "trend-flip $40 short-ATM, $10k cap",
@@ -940,7 +1042,9 @@
       "avgTerminalPotential": 4300,
       "avgTradesPerDay": 10.1,
       "avgPeakCapital": 6790,
-      "avgDeployedCapital": -1143
+      "avgDeployedCapital": -1143,
+      "maxDD7": -41725,
+      "maxDD30": -88290
     },
     "v6-20-10k": {
       "label": "5m-harness $20 short-ATM, $10k cap",
@@ -958,7 +1062,9 @@
       "avgTerminalPotential": 3361,
       "avgTradesPerDay": 25.82,
       "avgPeakCapital": 6597,
-      "avgDeployedCapital": 1678
+      "avgDeployedCapital": 1678,
+      "maxDD7": -36595,
+      "maxDD30": -65140
     },
     "v6-40-10k": {
       "label": "5m-harness $40 short-ATM, $10k cap",
@@ -976,7 +1082,9 @@
       "avgTerminalPotential": 4585,
       "avgTradesPerDay": 10.55,
       "avgPeakCapital": 6813,
-      "avgDeployedCapital": -1969
+      "avgDeployedCapital": -1969,
+      "maxDD7": -40670,
+      "maxDD30": -90240
     },
     "v7-20-10k": {
       "label": "be-wrong $20 short-ATM, $10k cap",
@@ -994,7 +1102,9 @@
       "avgTerminalPotential": 903,
       "avgTradesPerDay": 27.32,
       "avgPeakCapital": 6564,
-      "avgDeployedCapital": 2787
+      "avgDeployedCapital": 2787,
+      "maxDD7": -43635,
+      "maxDD30": -47770
     },
     "v7-40-10k": {
       "label": "be-wrong $40 short-ATM, $10k cap",
@@ -1012,7 +1122,9 @@
       "avgTerminalPotential": 4371,
       "avgTradesPerDay": 15.77,
       "avgPeakCapital": 8873,
-      "avgDeployedCapital": 2711
+      "avgDeployedCapital": 2711,
+      "maxDD7": -35675,
+      "maxDD30": -35675
     },
     "v8-20-10k": {
       "label": "risk-capped $20 short-ATM, $10k cap",
@@ -1030,7 +1142,9 @@
       "avgTerminalPotential": 2606,
       "avgTradesPerDay": 13.89,
       "avgPeakCapital": 4784,
-      "avgDeployedCapital": 1415
+      "avgDeployedCapital": 1415,
+      "maxDD7": -33625,
+      "maxDD30": -69060
     },
     "v8-40-10k": {
       "label": "risk-capped $40 short-ATM, $10k cap",
@@ -1048,7 +1162,9 @@
       "avgTerminalPotential": 4216,
       "avgTradesPerDay": 8.31,
       "avgPeakCapital": 5667,
-      "avgDeployedCapital": -767
+      "avgDeployedCapital": -767,
+      "maxDD7": -51680,
+      "maxDD30": -94180
     },
     "v9-20-10k": {
       "label": "be-wrong + caps $20 short-ATM, $10k cap",
@@ -1066,7 +1182,9 @@
       "avgTerminalPotential": 1475,
       "avgTradesPerDay": 27.47,
       "avgPeakCapital": 5612,
-      "avgDeployedCapital": 541
+      "avgDeployedCapital": 541,
+      "maxDD7": -42465,
+      "maxDD30": -49895
     },
     "v9-40-10k": {
       "label": "be-wrong + caps $40 short-ATM, $10k cap",
@@ -1084,7 +1202,9 @@
       "avgTerminalPotential": 4024,
       "avgTradesPerDay": 15.12,
       "avgPeakCapital": 7581,
-      "avgDeployedCapital": 1275
+      "avgDeployedCapital": 1275,
+      "maxDD7": -38405,
+      "maxDD30": -38405
     }
   },
   "engineAnchorPureV6Total": 1412935

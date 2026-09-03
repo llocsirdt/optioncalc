@@ -61,6 +61,21 @@ function stats(vals) {
   };
 }
 
+// Largest drawdown (peak-to-trough equity decline) confined to any rolling window of <= W consecutive days
+// — i.e. the worst loss you could take over any W-day stretch. Returned NEGATIVE (a loss), 0 if never down.
+// `daily` must be chronological (load5mDays sorts files by YYYY-MM-DD date).
+function rollingDD(daily, W) {
+  const cum = [0];
+  for (let i = 0; i < daily.length; i++) cum.push(cum[i] + daily[i]);
+  let maxDrop = 0;
+  for (let b = 1; b < cum.length; b++) {
+    let peak = -Infinity;
+    for (let a = Math.max(0, b - W); a < b; a++) if (cum[a] > peak) peak = cum[a];
+    if (peak - cum[b] > maxDrop) maxDrop = peak - cum[b];
+  }
+  return -Math.round(maxDrop);
+}
+
 const allDays = load5mDays(DIR);
 if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
 
@@ -90,7 +105,8 @@ for (const run of RUNS) {
   const avgTradesPerDay = mean2(results.map(r => r.opens));
   const avgPeakCapital = mean(results.map(r => (r.capital ? r.capital.peakReal : 0)));
   const avgDeployedCapital = mean(results.map(r => (r.capital ? r.capital.avgReal : 0)));
-  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital };
+  const maxDD7 = rollingDD(daily, 7), maxDD30 = rollingDD(daily, 30);
+  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30 };
   console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
 }
 
