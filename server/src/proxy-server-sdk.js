@@ -1065,6 +1065,17 @@ app.get('/api/v1/candle-spread/runs/:symbol/:expiration', (req, res) => {
   }
 });
 
+// Per-variant backtest BASELINES (avg daily P&L + the risk-potential metrics) for the comparison page's
+// backtest overlay. Reads the JSON fresh each request (it's regenerated out-of-band by the backtest script).
+app.get('/api/v1/candle-spread/baselines', (req, res) => {
+  try {
+    const p = require('path').join(__dirname, 'candle-spread', 'backtest-baselines.json');
+    res.type('application/json').send(require('fs').readFileSync(p, 'utf8'));
+  } catch (error) {
+    res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: 'Failed to read baselines', message: error.message });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {

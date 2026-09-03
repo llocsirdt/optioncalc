@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy Comparison — Risk Curves</title>
+<style>
+  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--grid); padding:10px 14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header .meta { color:var(--muted); font-size:12px; }
+  header .spacer { flex:1; }
+  button, label.tgl { font:12px sans-serif; padding:4px 10px; border:1px solid #ccc; border-radius:4px; background:#f7f7f7; cursor:pointer; }
+  label.tgl { user-select:none; }
+  label.tgl input { vertical-align:-1px; margin-right:4px; }
+  #status { padding:10px 14px; color:var(--muted); }
+  .wrap { overflow:auto; padding:8px 14px 40px; }
+  table.grid { border-collapse:separate; border-spacing:6px; }
+  table.grid th { font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
+  table.grid th.rowh { text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
+  td.cell { width:184px; min-height:118px; border:1px solid var(--grid); border-radius:6px; padding:3px 5px; vertical-align:top; background:#fcfcfc; }
+  td.empty { border:1px dashed #eee; background:transparent; }
+  .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; }
+  .cell .cname b { color:var(--fg); }
+  .cell .nums { font:10px ui-monospace, monospace; display:flex; justify-content:space-between; margin-top:1px; }
+  .cell .nums .w { color:var(--loss); } .cell .nums .b { color:var(--profit); } .cell .nums .a { color:var(--muted); }
+  .cell .btnums { font:9px ui-monospace, monospace; display:flex; justify-content:space-between; opacity:0.75; }
+  .cell .btnums .lbl { color:#c79200; } .cell .btnums .w { color:var(--loss); } .cell .btnums .b { color:var(--profit); } .cell .btnums .a { color:#c79200; }
+  .cell .axis { font:8.5px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; margin-top:1px; }
+  .cell .axis .cur { color:#666; font-weight:700; }
+  .cell .term { font:11px ui-monospace, monospace; font-weight:700; text-align:center; margin-top:1px; }
+  .cell .sel { font:9px ui-monospace, monospace; color:#666; min-height:12px; margin-top:1px; text-align:center; }
+  svg { cursor:crosshair; }
+  #btWrap h2 { font-size:14px; margin:4px 0 8px; font-weight:700; }
+  #btWrap h2 .sub { font-weight:400; color:var(--muted); font-size:12px; }
+  table.bt { border-collapse:collapse; font:12px ui-monospace, Menlo, monospace; }
+  table.bt th, table.bt td { padding:3px 11px; border-bottom:1px solid var(--grid); white-space:nowrap; }
+  table.bt th { position:sticky; top:0; background:var(--bg); cursor:pointer; user-select:none; text-align:right; color:#555; border-bottom:1px solid #ccc; }
+  table.bt th:first-child, table.bt td.v { text-align:left; }
+  table.bt td.num { text-align:right; }
+  table.bt td.v { font-weight:600; }
+  table.bt tbody tr:hover { background:rgba(0,0,0,0.035); }
+  .cell .nodata { color:#ccc; font-size:11px; text-align:center; padding-top:34px; }
+  .cell .err { color:var(--loss); font-size:10px; text-align:center; padding-top:34px; }
+  svg { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Strategy Risk Curves</h1>
+  <span class="meta" id="hmeta">—</span>
+  <span class="spacer"></span>
+  <label class="tgl"><input type="checkbox" id="syncY"> sync Y-axis (compare magnitudes)</label>
+  <label class="tgl"><input type="checkbox" id="btOverlay"> backtest overlay</label>
+  <button id="btTableBtn">Backtest table ▾</button>
+  <button id="refresh">Refresh</button>
+</header>
+<div id="status">Loading…</div>
+<div class="wrap"><table class="grid" id="grid"></table></div>
+<div class="wrap" id="btWrap" style="display:none">
+  <h2>Backtest averages · 765 days <span class="sub">(avg $/day across the backtest; click a column to sort)</span></h2>
+  <table class="bt" id="btTable"></table>
+</div>
+
+<script src="shared/portfolio-risk.js"></script>
+<script src="client/lib/strategy-positions.js"></script>
+<script>
+'use strict';
+// Standalone comparison page: pulls every candle-spread variant's latest run, draws each one's terminal
+// risk curve (the SAME shared payoff math as the main calculator) in a grid — rows = signal family (v0-v9),
+// columns = each sub-variant (width / geometry / cap). Read-only; no trading, no writes.
+
+// Proxy base — mirror schwab-api.js: ?proxy=local forces localhost; file:// -> localhost; http -> CloudFront.
+const PROXY_URL = (new URLSearchParams(location.search).get('proxy') === 'local')
+  ? 'http://localhost:3001'
+  : (location.href.startsWith('http') ? 'https://d1kbxyxn33vpw2.cloudfront.net' : 'http://localhost:3001');
+
+const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9'];
+// Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
+// then the 2 tight-cap A/B twins (only v5-v9 have these → empty cells elsewhere).
+const COLUMNS = [
+  { k:'10',      h:'$10' },
+  { k:'20',      h:'$20' },
+  { k:'40',      h:'$40' },
+  { k:'20-cATM', h:'$20 ctr' },
+  { k:'40-cATM', h:'$40 ctr' },
+  { k:'20-10k',  h:'$20·10k' },
+  { k:'40-10k',  h:'$40·10k' },
+];
+const CW = 174, CH = 74;   // mini-chart px
+
+const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
+let commonDate = '', symbol = 'NDX';
+let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
+
+const usd = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
+const fetchJson = async (u) => { const r = await fetch(u, { cache:'no-store' }); if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; } return r.json(); };
+const runsUrl = () => `${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`;
+const runUrl = (sym, exp, date, v) => `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
+
+// Turn a run record's legs into {curve, worst, best, avg, lo, hi}. Reuses PortfolioRisk (shared math) so
+// the curve is identical to the main calculator's; worst/best come from analyzePortfolioRisk (with its
+// naked-leg unbounded handling), avg = mean of the sampled P&L (the "terminal potential" metric).
+// Linear-interpolate the P&L at an arbitrary underlying price off the sampled curve (points are sorted
+// ascending by x). Prices outside the sampled window clamp to the tail values (payoff is flat there).
+function pnlAtPrice(curve, price) {
+  if (price <= curve[0].x) return curve[0].y;
+  const last = curve[curve.length - 1];
+  if (price >= last.x) return last.y;
+  for (let i = 1; i < curve.length; i++) {
+    if (curve[i].x >= price) { const a = curve[i - 1], b = curve[i], t = (price - a.x) / (b.x - a.x || 1); return a.y + t * (b.y - a.y); }
+  }
+  return last.y;
+}
+
+function analyzeLegs(legs, underlying) {
+  if (!legs || !legs.length) return { empty: true };
+  const strikes = legs.map((l) => l.strike);
+  const minStrike = Math.min(...strikes), maxStrike = Math.max(...strikes);
+  const range = maxStrike - minStrike;
+  const padding = Math.max(50, range * 0.25);
+  const step = Math.max(1, range / 200 || 1);
+  // Range spans the traded strikes (padded) AND the current underlying, so the price line + curve share one scale.
+  let minPrice = Math.max(0.01, minStrike - padding), maxPrice = maxStrike + padding;
+  if (Number.isFinite(underlying)) { minPrice = Math.min(minPrice, underlying); maxPrice = Math.max(maxPrice, underlying); }
+  const totalCost = legs.reduce((s, l) => s + (l.cost || 0), 0);
+  const raw = PortfolioRisk.calculatePortfolioValueAtExpiration(legs, minPrice, maxPrice, step);
+  const curve = raw.map((p) => ({ x: p.closingPrice, y: p.totalIntrinsicValue - totalCost }));
+  const risk = PortfolioRisk.analyzePortfolioRisk(legs, { padding, priceStep: step });
+  const avg = curve.reduce((s, p) => s + p.y, 0) / curve.length;
+  const lo = Math.min(...curve.map((p) => p.y)), hi = Math.max(...curve.map((p) => p.y));
+  const under = Number.isFinite(underlying) ? underlying : null;
+  return { curve, worst: risk.lockedInProfit, best: risk.profitPotential, avg, lo, hi,
+    xMin: curve[0].x, xMax: curve[curve.length - 1].x, underlying: under, underPnl: under != null ? pnlAtPrice(curve, under) : null,
+    unboundedLoss: risk.unboundedUpsideRisk || risk.unboundedDownsideRisk, unboundedGain: risk.unboundedUpsideGain };
+}
+
+// Mini filled risk curve (green above zero, red below) + zero baseline. yMin/yMax let the caller impose a
+// shared scale (magnitude comparison) or pass the cell's own lo/hi (shape-only, auto-scaled per cell). When
+// `bt` (backtest averages {worst,avg,best}) is given, faint dashed reference lines mark those levels.
+function svgCurve(v, d, yMin, yMax, bt) {
+  const xMin = d.xMin, xMax = d.xMax;
+  const padY = (yMax - yMin) * 0.08 || 1;
+  const y0 = yMin - padY, y1 = yMax + padY;
+  const X = (x) => ((x - xMin) / (xMax - xMin || 1)) * CW;
+  const Y = (y) => CH - ((y - y0) / (y1 - y0 || 1)) * CH;
+  const zeroY = Math.max(0, Math.min(CH, Y(0)));
+  const pts = d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
+  const areaUp = `M0,${zeroY} L ${d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' L ')} L ${CW},${zeroY} Z`;
+  const id = 'c' + Math.random().toString(36).slice(2, 8);
+  const btLine = (y, color) => (y != null && Number.isFinite(y))
+    ? `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>` : '';
+  const btLines = bt ? btLine(bt.worst, 'var(--loss)') + btLine(bt.best, 'var(--profit)') : '';
+  // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
+  const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
+  const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
+  // Max value (top-right, near the top of the P&L axis) + max loss (bottom-right, near the bottom).
+  const T = (txt, y, color) => `<text x="${CW - 3}" y="${y}" text-anchor="end" font-size="9" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.5" paint-order="stroke">${txt}</text>`;
+  const maxTxt = T(d.unboundedGain ? '+∞' : usd(d.best), 10, 'var(--profit)');
+  const lossTxt = T(d.unboundedLoss ? '−∞' : usd(d.worst), CH - 3, 'var(--loss)');
+  return `<svg data-v="${v}" width="${CW}" height="${CH}" viewBox="0 0 ${CW} ${CH}">
+    <defs>
+      <clipPath id="up${id}"><rect x="0" y="0" width="${CW}" height="${zeroY}"/></clipPath>
+      <clipPath id="dn${id}"><rect x="0" y="${zeroY}" width="${CW}" height="${CH - zeroY}"/></clipPath>
+    </defs>
+    <path d="${areaUp}" fill="var(--profit)" fill-opacity="0.22" clip-path="url(#up${id})"/>
+    <path d="${areaUp}" fill="var(--loss)" fill-opacity="0.22" clip-path="url(#dn${id})"/>
+    <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}" stroke="var(--zero)" stroke-width="1" stroke-dasharray="3 2"/>
+    ${btLines}
+    <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
+    ${curLine}${cursor}${maxTxt}${lossTxt}
+  </svg>`;
+}
+
+const fmtN = (n) => Number.isFinite(n) ? usd(n) : '—';
+
+function render() {
+  const grid = document.getElementById('grid');
+  const finite = Object.values(cells).filter((c) => c.curve);
+  const syncY = document.getElementById('syncY').checked;
+  const overlay = document.getElementById('btOverlay').checked && !!baselines;
+
+  // A cell's effective lo/hi — widened to include its backtest worst/avg/best when the overlay is on, so
+  // the reference dashes stay on-canvas even when today's book sits well inside the historical envelope.
+  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b) { for (const y of [b.worst, b.avg]) if (Number.isFinite(y)) lo = Math.min(lo, y); } return lo; };
+  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b) { for (const y of [b.best, b.avg]) if (Number.isFinite(y)) hi = Math.max(hi, y); } return hi; };
+
+  let gMin = null, gMax = null;
+  if (syncY && finite.length) {
+    gMin = Infinity; gMax = -Infinity;
+    for (const f of FAMILIES) for (const c of COLUMNS) { const v = `${f}-${c.k}`, d = cells[v]; if (!d || !d.curve) continue; gMin = Math.min(gMin, cellLo(v, d)); gMax = Math.max(gMax, cellHi(v, d)); }
+  }
+
+  let html = '<thead><tr><th class="rowh"></th>' + COLUMNS.map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
+  for (const f of FAMILIES) {
+    html += `<tr><th class="rowh">${f}</th>`;
+    for (const c of COLUMNS) {
+      const v = `${f}-${c.k}`, d = cells[v];
+      if (!d) { html += '<td class="empty"></td>'; continue; }
+      if (d.err) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="err">${d.err}</div></td>`; continue; }
+      if (d.empty) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="nodata">no positions</div></td>`; continue; }
+      const bt = overlay ? baselines[v] : null;
+      const yMin = syncY ? gMin : cellLo(v, d), yMax = syncY ? gMax : cellHi(v, d);
+      const wStr = d.unboundedLoss ? '−∞' : usd(d.worst);
+      const bStr = d.unboundedGain ? '+∞' : usd(d.best);
+      const btRow = bt ? `<div class="btnums"><span class="lbl">bt</span><span class="w">${fmtN(bt.worst)}</span><span class="b">${fmtN(bt.best)}</span></div>` : '';
+      const btTitle = bt ? `\nbacktest avg — max loss ${fmtN(bt.worst)} · max ${fmtN(bt.best)} · ${bt.trades != null ? bt.trades + '/day' : ''} · peak cap ${fmtN(bt.peakCap)}` : '';
+      const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span>${d.underlying != null ? `<span class="cur">${Math.round(d.underlying)}</span>` : ''}<span>${Math.round(d.xMax)}</span></div>`;
+      const term = d.underPnl != null ? `<div class="term" style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(d.underPnl)}</div>` : '<div class="term">—</div>';
+      html += `<td class="cell" title="${v}\nterminal @ now ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}">`
+        + `<div class="cname"><b>${v}</b></div>`
+        + svgCurve(v, d, yMin, yMax, bt)
+        + axis
+        + term
+        + btRow
+        + '<div class="sel"></div>'
+        + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody>';
+  grid.innerHTML = html;
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · gray = now (click to project P&L) · max top-right / max-loss bottom-right / terminal center${overlay ? ' · dashes = backtest' : ''}  ·  ${finite.length} variants`;
+}
+
+// Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
+// variants living at top level or under a `.variants` key; only keeps entries that carry the new metrics.
+async function loadBaselines() {
+  const json = await fetchJson(`${PROXY_URL}/api/v1/candle-spread/baselines?cb=${Date.now()}`);
+  const src = (json && json.variants && typeof json.variants === 'object') ? json.variants : json;
+  const m = {};
+  for (const [k, e] of Object.entries(src || {})) {
+    if (!e || typeof e !== 'object' || !/^v\d/.test(k)) continue;
+    if (e.avgWorstCase == null && e.avgTerminalPotential == null && e.avgBestCase == null) continue;
+    m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
+      trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,
+      avgDaily: e.avgDaily, realizedWorst: e.worst, cap: /-10k$/.test(k) ? 10000 : 20000 };
+  }
+  return m;
+}
+
+// Load + cache the baselines once (shared by the overlay and the table). Throws if none carry metrics yet.
+async function ensureBaselines() {
+  if (baselines) return baselines;
+  const m = await loadBaselines();
+  if (!Object.keys(m).length) throw new Error('baselines have no potential metrics yet — regenerate the backtest');
+  baselines = m;
+  return baselines;
+}
+
+// The sortable backtest table (all variants). `k` is the baselines-map field; 'n' = numeric column.
+const BT_COLS = [
+  { k: 'variant', h: 'variant', t: 's' }, { k: 'cap', h: 'cap', t: 'n' }, { k: 'avgDaily', h: 'avgDaily', t: 'n' },
+  { k: 'best', h: 'avgBest', t: 'n' }, { k: 'worst', h: 'avgWorst', t: 'n' }, { k: 'avg', h: 'avgTermPot', t: 'n' },
+  { k: 'trades', h: 'trades/d', t: 'n' }, { k: 'peakCap', h: 'peakCap', t: 'n' }, { k: 'deployedCap', h: 'deployCap', t: 'n' },
+  { k: 'realizedWorst', h: 'realized worst', t: 'n' },
+];
+let btSort = { k: 'avgDaily', dir: -1 };
+
+function renderBtTable() {
+  if (!baselines) return;
+  const rows = Object.entries(baselines).map(([variant, e]) => ({ variant, ...e }));
+  const k = btSort.k;
+  rows.sort((a, b) => k === 'variant'
+    ? a.variant.localeCompare(b.variant) * btSort.dir
+    : (((a[k] == null ? -Infinity : a[k]) - (b[k] == null ? -Infinity : b[k])) * btSort.dir));
+  const arrow = (col) => btSort.k === col ? (btSort.dir < 0 ? ' ▼' : ' ▲') : '';
+  // Sign-color the P&L columns; worst columns always red; capital/trades neutral.
+  const colOf = (key, n) => (['avgDaily', 'best', 'avg'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
+    : (['worst', 'realizedWorst'].includes(key) ? 'var(--loss)' : '');
+  let h = '<thead><tr>' + BT_COLS.map((c) => `<th data-k="${c.k}">${c.h}${arrow(c.k)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const r of rows) {
+    h += '<tr>' + BT_COLS.map((c) => {
+      if (c.k === 'variant') return `<td class="v">${r.variant}</td>`;
+      if (c.k === 'cap') return `<td class="num">$${r.cap / 1000}k</td>`;
+      if (c.k === 'trades') return `<td class="num">${r.trades == null ? '—' : r.trades}</td>`;
+      const val = r[c.k], col = colOf(c.k, val);
+      return `<td class="num"${col ? ` style="color:${col}"` : ''}>${fmtN(val)}</td>`;
+    }).join('') + '</tr>';
+  }
+  document.getElementById('btTable').innerHTML = h + '</tbody>';
+}
+
+async function inBatches(items, n, fn) {
+  for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn));
+}
+
+async function load() {
+  const status = document.getElementById('status');
+  status.textContent = 'Loading runs…';
+  document.getElementById('grid').innerHTML = '';
+  for (const k of Object.keys(cells)) delete cells[k];
+  try {
+    const idx = await fetchJson(runsUrl());
+    const all = (idx.runs || []).filter((r) => r.variant && r.tradeDate);
+    if (!all.length) { status.textContent = 'No runs found on the server yet.'; return; }
+    symbol = all.some((r) => r.symbol === 'NDX') ? 'NDX' : all[0].symbol;
+    const vm = {};   // variant -> latest {expiration, date}
+    for (const r of all) {
+      if (r.symbol !== symbol) continue;
+      if (!vm[r.variant] || r.tradeDate > vm[r.variant].date) vm[r.variant] = { expiration: r.expiration || r.tradeDate, date: r.tradeDate };
+    }
+    commonDate = Object.values(vm).map((x) => x.date).sort().pop() || '';
+    const targets = [];
+    for (const f of FAMILIES) for (const c of COLUMNS) { const v = `${f}-${c.k}`; if (vm[v]) targets.push(v); }
+    if (!targets.length) { status.textContent = 'Runs exist but none match the v0-v9 sweep naming yet.'; return; }
+    let done = 0;
+    await inBatches(targets, 8, async (v) => {
+      try {
+        const rec = await fetchJson(runUrl(symbol, vm[v].expiration, vm[v].date, v));
+        const record = rec.record || rec;
+        const res = strategyRunToOptionArray(record);
+        const under = record.state && record.state.lastUnderlying;
+        cells[v] = analyzeLegs(res.legs, Number.isFinite(under) ? under : undefined);
+      } catch (e) { cells[v] = { err: e.status === 404 ? 'no run' : (e.message || 'error') }; }
+      status.textContent = `Loading… ${++done}/${targets.length}`;
+    });
+    status.textContent = '';
+    render();
+  } catch (e) {
+    status.textContent = 'Failed to load: ' + (e.message || e);
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('syncY').addEventListener('change', render);
+// Click/tap a chart → drop the purple cursor at that underlying price and read off the projected P&L.
+document.getElementById('grid').addEventListener('click', (e) => {
+  const svg = e.target.closest('svg[data-v]'); if (!svg) return;
+  const d = cells[svg.dataset.v]; if (!d || !d.curve) return;
+  const rect = svg.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / (rect.width || 1)));
+  const price = d.xMin + frac * (d.xMax - d.xMin);
+  const pnl = pnlAtPrice(d.curve, price);
+  const cur = svg.querySelector('line.cursor');
+  if (cur) { const cx = (frac * CW).toFixed(1); cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.setAttribute('visibility', 'visible'); }
+  const td = svg.closest('td'), sel = td && td.querySelector('.sel');
+  if (sel) sel.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(pnl)}</b>`;
+});
+document.getElementById('btOverlay').addEventListener('change', async (e) => {
+  const status = document.getElementById('status');
+  if (e.target.checked && !baselines) {
+    status.textContent = 'Loading backtest baselines…';
+    try { await ensureBaselines(); status.textContent = ''; }
+    catch (err) { status.textContent = 'No backtest baselines available (' + (err.status === 404 ? 'not deployed yet' : (err.message || err)) + ')'; e.target.checked = false; return; }
+  }
+  render();
+});
+
+// Backtest table: toggle the section, loading baselines on first open, then render (sortable by header).
+document.getElementById('btTableBtn').addEventListener('click', async () => {
+  const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');
+  if (wrap.style.display !== 'none') { wrap.style.display = 'none'; btn.textContent = 'Backtest table ▾'; return; }
+  const status = document.getElementById('status');
+  if (!baselines) {
+    status.textContent = 'Loading backtest baselines…';
+    try { await ensureBaselines(); status.textContent = ''; }
+    catch (err) { status.textContent = 'No backtest baselines available (' + (err.status === 404 ? 'not deployed yet' : (err.message || err)) + ')'; return; }
+  }
+  renderBtTable();
+  wrap.style.display = ''; btn.textContent = 'Backtest table ▴';
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+document.getElementById('btTable').addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-k]'); if (!th) return;
+  const k = th.dataset.k;
+  if (btSort.k === k) btSort.dir *= -1; else btSort = { k, dir: k === 'variant' ? 1 : -1 };
+  renderBtTable();
+});
+
+load();
+</script>
+</body>
+</html>
