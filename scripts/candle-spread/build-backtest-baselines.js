@@ -106,7 +106,16 @@ for (const run of RUNS) {
   const avgPeakCapital = mean(results.map(r => (r.capital ? r.capital.peakReal : 0)));
   const avgDeployedCapital = mean(results.map(r => (r.capital ? r.capital.avgReal : 0)));
   const maxDD7 = rollingDD(daily, 7), maxDD30 = rollingDD(daily, 30);
-  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30 };
+  // SIZE-NORMALIZED / SIZE-INDEPENDENT scores so strategy quality can be separated from position size
+  // (the 10/20/40 width dial). widthNorm = 20/W puts $-metrics on a $20-equivalent basis (exact here — all
+  // sweep widths share capFrac 0.8, so per-spread risk scales linearly with width). Efficiency & ret-on-cap
+  // are ratios (width cancels). profitScore/riskScore = the $20-normalized avgDaily / worst-month drawdown.
+  const W = run.spreadWidth || 20, widthNorm = Math.round(20 / W * 1000) / 1000;
+  const profitScore = Math.round(s.avgDaily * widthNorm);
+  const riskScore = Math.round(maxDD30 * widthNorm);
+  const efficiency = maxDD30 ? Math.round(s.total / Math.abs(maxDD30) * 10) / 10 : null;   // Calmar-like return/DD
+  const returnOnCapital = avgPeakCapital > 0 ? Math.round(s.avgDaily / avgPeakCapital * 1000) / 1000 : null; // daily $/$ peak cap
+  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital };
   console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
 }
 

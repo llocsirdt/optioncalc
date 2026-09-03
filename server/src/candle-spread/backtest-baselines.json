@@ -24,7 +24,12 @@
       "avgPeakCapital": 3172,
       "avgDeployedCapital": 1192,
       "maxDD7": -13450,
-      "maxDD30": -15870
+      "maxDD30": -15870,
+      "widthNorm": 2,
+      "profitScore": 638,
+      "riskScore": -31740,
+      "efficiency": 15.4,
+      "returnOnCapital": 0.101
     },
     "v0-20": {
       "label": "classic fixed-tent $20 short-ATM",
@@ -44,7 +49,12 @@
       "avgPeakCapital": 4656,
       "avgDeployedCapital": 943,
       "maxDD7": -24270,
-      "maxDD30": -36330
+      "maxDD30": -36330,
+      "widthNorm": 1,
+      "profitScore": 755,
+      "riskScore": -36330,
+      "efficiency": 15.9,
+      "returnOnCapital": 0.162
     },
     "v0-40": {
       "label": "classic fixed-tent $40 short-ATM",
@@ -64,7 +74,12 @@
       "avgPeakCapital": 7259,
       "avgDeployedCapital": -1,
       "maxDD7": -47430,
-      "maxDD30": -53810
+      "maxDD30": -53810,
+      "widthNorm": 0.5,
+      "profitScore": 910,
+      "riskScore": -26905,
+      "efficiency": 25.9,
+      "returnOnCapital": 0.251
     },
     "v1-10": {
       "label": "classic greedy $10 short-ATM",
@@ -84,7 +99,12 @@
       "avgPeakCapital": 3171,
       "avgDeployedCapital": 1191,
       "maxDD7": -13450,
-      "maxDD30": -15870
+      "maxDD30": -15870,
+      "widthNorm": 2,
+      "profitScore": 638,
+      "riskScore": -31740,
+      "efficiency": 15.4,
+      "returnOnCapital": 0.101
     },
     "v1-20": {
       "label": "classic greedy $20 short-ATM",
@@ -104,7 +124,12 @@
       "avgPeakCapital": 5735,
       "avgDeployedCapital": 1902,
       "maxDD7": -26730,
-      "maxDD30": -39205
+      "maxDD30": -39205,
+      "widthNorm": 1,
+      "profitScore": 726,
+      "riskScore": -39205,
+      "efficiency": 14.2,
+      "returnOnCapital": 0.127
     },
     "v1-40": {
       "label": "classic greedy $40 short-ATM",
@@ -124,7 +149,12 @@
       "avgPeakCapital": 9954,
       "avgDeployedCapital": 3031,
       "maxDD7": -48675,
-      "maxDD30": -51135
+      "maxDD30": -51135,
+      "widthNorm": 0.5,
+      "profitScore": 796,
+      "riskScore": -25567,
+      "efficiency": 23.8,
+      "returnOnCapital": 0.16
     },
     "v2-10": {
       "label": "classic joint $10 short-ATM",
@@ -144,7 +174,12 @@
       "avgPeakCapital": 3521,
       "avgDeployedCapital": 1405,
       "maxDD7": -13725,
-      "maxDD30": -18005
+      "maxDD30": -18005,
+      "widthNorm": 2,
+      "profitScore": 640,
+      "riskScore": -36010,
+      "efficiency": 13.6,
+      "returnOnCapital": 0.091
     },
     "v2-20": {
       "label": "classic joint $20 short-ATM",
@@ -164,7 +199,12 @@
       "avgPeakCapital": 6816,
       "avgDeployedCapital": 2616,
       "maxDD7": -28000,
-      "maxDD30": -38865
+      "maxDD30": -38865,
+      "widthNorm": 1,
+      "profitScore": 716,
+      "riskScore": -38865,
+      "efficiency": 14.1,
+      "returnOnCapital": 0.105
     },
     "v2-40": {
       "label": "classic joint $40 short-ATM",
@@ -184,7 +224,12 @@
       "avgPeakCapital": 12350,
       "avgDeployedCapital": 4786,
       "maxDD7": -48785,
-      "maxDD30": -56905
+      "maxDD30": -56905,
+      "widthNorm": 0.5,
+      "profitScore": 683,
+      "riskScore": -28452,
+      "efficiency": 18.4,
+      "returnOnCapital": 0.111
     },
     "v3-10": {
       "label": "classic fixed-mark $10 short-ATM",
@@ -204,7 +249,12 @@
       "avgPeakCapital": 3172,
       "avgDeployedCapital": 1192,
       "maxDD7": -13450,
-      "maxDD30": -15870
+      "maxDD30": -15870,
+      "widthNorm": 2,
+      "profitScore": 638,
+      "riskScore": -31740,
+      "efficiency": 15.4,
+      "returnOnCapital": 0.101
     },
     "v3-20": {
       "label": "classic fixed-mark $20 short-ATM",
@@ -224,7 +274,12 @@
       "avgPeakCapital": 4656,
       "avgDeployedCapital": 943,
       "maxDD7": -24270,
-      "maxDD30": -36330
+      "maxDD30": -36330,
+      "widthNorm": 1,
+      "profitScore": 755,
+      "riskScore": -36330,
+      "efficiency": 15.9,
+      "returnOnCapital": 0.162
     },
     "v3-40": {
       "label": "classic fixed-mark $40 short-ATM",
@@ -244,7 +299,12 @@
       "avgPeakCapital": 7259,
       "avgDeployedCapital": -1,
       "maxDD7": -47430,
-      "maxDD30": -53810
+      "maxDD30": -53810,
+      "widthNorm": 0.5,
+      "profitScore": 910,
+      "riskScore": -26905,
+      "efficiency": 25.9,
+      "returnOnCapital": 0.251
     },
     "v4-10": {
       "label": "multiTF-overext $10 short-ATM",
@@ -264,7 +324,12 @@
       "avgPeakCapital": 2663,
       "avgDeployedCapital": 451,
       "maxDD7": -23610,
-      "maxDD30": -41505
+      "maxDD30": -41505,
+      "widthNorm": 2,
+      "profitScore": 576,
+      "riskScore": -83010,
+      "efficiency": 5.3,
+      "returnOnCapital": 0.108
     },
     "v4-20": {
       "label": "multiTF-overext $20 short-ATM",
@@ -284,7 +349,12 @@
       "avgPeakCapital": 4328,
       "avgDeployedCapital": -54,
       "maxDD7": -48265,
-      "maxDD30": -89490
+      "maxDD30": -89490,
+      "widthNorm": 1,
+      "profitScore": 704,
+      "riskScore": -89490,
+      "efficiency": 6,
+      "returnOnCapital": 0.163
     },
     "v4-40": {
       "label": "multiTF-overext $40 short-ATM",
@@ -304,7 +374,12 @@
       "avgPeakCapital": 7176,
       "avgDeployedCapital": -1050,
       "maxDD7": -80160,
-      "maxDD30": -137215
+      "maxDD30": -137215,
+      "widthNorm": 0.5,
+      "profitScore": 726,
+      "riskScore": -68607,
+      "efficiency": 8.1,
+      "returnOnCapital": 0.202
     },
     "v5-10": {
       "label": "trend-flip $10 short-ATM",
@@ -324,7 +399,12 @@
       "avgPeakCapital": 3934,
       "avgDeployedCapital": 1504,
       "maxDD7": -16295,
-      "maxDD30": -23280
+      "maxDD30": -23280,
+      "widthNorm": 2,
+      "profitScore": 1100,
+      "riskScore": -46560,
+      "efficiency": 18.1,
+      "returnOnCapital": 0.14
     },
     "v5-20": {
       "label": "trend-flip $20 short-ATM",
@@ -344,7 +424,12 @@
       "avgPeakCapital": 5135,
       "avgDeployedCapital": 623,
       "maxDD7": -35625,
-      "maxDD30": -58085
+      "maxDD30": -58085,
+      "widthNorm": 1,
+      "profitScore": 1286,
+      "riskScore": -58085,
+      "efficiency": 16.9,
+      "returnOnCapital": 0.25
     },
     "v5-40": {
       "label": "trend-flip $40 short-ATM",
@@ -364,7 +449,12 @@
       "avgPeakCapital": 6946,
       "avgDeployedCapital": -2652,
       "maxDD7": -70550,
-      "maxDD30": -131005
+      "maxDD30": -131005,
+      "widthNorm": 0.5,
+      "profitScore": 1041,
+      "riskScore": -65502,
+      "efficiency": 12.2,
+      "returnOnCapital": 0.3
     },
     "v6-10": {
       "label": "5m-harness $10 short-ATM",
@@ -384,7 +474,12 @@
       "avgPeakCapital": 6482,
       "avgDeployedCapital": 3098,
       "maxDD7": -18425,
-      "maxDD30": -18425
+      "maxDD30": -18425,
+      "widthNorm": 2,
+      "profitScore": 1656,
+      "riskScore": -36850,
+      "efficiency": 34.4,
+      "returnOnCapital": 0.128
     },
     "v6-20": {
       "label": "5m-harness $20 short-ATM",
@@ -404,7 +499,12 @@
       "avgPeakCapital": 6793,
       "avgDeployedCapital": 1523,
       "maxDD7": -41135,
-      "maxDD30": -80700
+      "maxDD30": -80700,
+      "widthNorm": 1,
+      "profitScore": 1737,
+      "riskScore": -80700,
+      "efficiency": 16.5,
+      "returnOnCapital": 0.256
     },
     "v6-40": {
       "label": "5m-harness $40 short-ATM",
@@ -424,7 +524,12 @@
       "avgPeakCapital": 7044,
       "avgDeployedCapital": -4416,
       "maxDD7": -77580,
-      "maxDD30": -161540
+      "maxDD30": -161540,
+      "widthNorm": 0.5,
+      "profitScore": 672,
+      "riskScore": -80770,
+      "efficiency": 6.4,
+      "returnOnCapital": 0.191
     },
     "v7-10": {
       "label": "be-wrong $10 short-ATM",
@@ -444,7 +549,12 @@
       "avgPeakCapital": 7337,
       "avgDeployedCapital": 2856,
       "maxDD7": -45365,
-      "maxDD30": -81360
+      "maxDD30": -81360,
+      "widthNorm": 2,
+      "profitScore": 2942,
+      "riskScore": -162720,
+      "efficiency": 13.8,
+      "returnOnCapital": 0.2
     },
     "v7-20": {
       "label": "be-wrong $20 short-ATM",
@@ -464,7 +574,12 @@
       "avgPeakCapital": 9025,
       "avgDeployedCapital": 3251,
       "maxDD7": -70480,
-      "maxDD30": -112240
+      "maxDD30": -112240,
+      "widthNorm": 1,
+      "profitScore": 2112,
+      "riskScore": -112240,
+      "efficiency": 14.4,
+      "returnOnCapital": 0.234
     },
     "v7-40": {
       "label": "be-wrong $40 short-ATM",
@@ -484,7 +599,12 @@
       "avgPeakCapital": 10810,
       "avgDeployedCapital": 3558,
       "maxDD7": -87130,
-      "maxDD30": -87130
+      "maxDD30": -87130,
+      "widthNorm": 0.5,
+      "profitScore": 4209,
+      "riskScore": -43565,
+      "efficiency": 73.9,
+      "returnOnCapital": 0.779
     },
     "v8-10": {
       "label": "risk-capped $10 short-ATM",
@@ -504,7 +624,12 @@
       "avgPeakCapital": 5415,
       "avgDeployedCapital": 2601,
       "maxDD7": -14305,
-      "maxDD30": -17545
+      "maxDD30": -17545,
+      "widthNorm": 2,
+      "profitScore": 1202,
+      "riskScore": -35090,
+      "efficiency": 26.2,
+      "returnOnCapital": 0.111
     },
     "v8-20": {
       "label": "risk-capped $20 short-ATM",
@@ -524,7 +649,12 @@
       "avgPeakCapital": 4809,
       "avgDeployedCapital": 1412,
       "maxDD7": -30470,
-      "maxDD30": -64250
+      "maxDD30": -64250,
+      "widthNorm": 1,
+      "profitScore": 480,
+      "riskScore": -64250,
+      "efficiency": 5.7,
+      "returnOnCapital": 0.1
     },
     "v8-40": {
       "label": "risk-capped $40 short-ATM",
@@ -544,7 +674,12 @@
       "avgPeakCapital": 5889,
       "avgDeployedCapital": -1110,
       "maxDD7": -79210,
-      "maxDD30": -163165
+      "maxDD30": -163165,
+      "widthNorm": 0.5,
+      "profitScore": 334,
+      "riskScore": -81582,
+      "efficiency": 3.1,
+      "returnOnCapital": 0.113
     },
     "v9-10": {
       "label": "be-wrong + caps $10 short-ATM",
@@ -564,7 +699,12 @@
       "avgPeakCapital": 5944,
       "avgDeployedCapital": 6,
       "maxDD7": -34655,
-      "maxDD30": -64160
+      "maxDD30": -64160,
+      "widthNorm": 2,
+      "profitScore": 2858,
+      "riskScore": -128320,
+      "efficiency": 17,
+      "returnOnCapital": 0.24
     },
     "v9-20": {
       "label": "be-wrong + caps $20 short-ATM",
@@ -584,7 +724,12 @@
       "avgPeakCapital": 6718,
       "avgDeployedCapital": -2219,
       "maxDD7": -69480,
-      "maxDD30": -99265
+      "maxDD30": -99265,
+      "widthNorm": 1,
+      "profitScore": 2476,
+      "riskScore": -99265,
+      "efficiency": 19.1,
+      "returnOnCapital": 0.369
     },
     "v9-40": {
       "label": "be-wrong + caps $40 short-ATM",
@@ -604,7 +749,12 @@
       "avgPeakCapital": 8127,
       "avgDeployedCapital": -1374,
       "maxDD7": -85435,
-      "maxDD30": -85435
+      "maxDD30": -85435,
+      "widthNorm": 0.5,
+      "profitScore": 3547,
+      "riskScore": -42717,
+      "efficiency": 63.5,
+      "returnOnCapital": 0.873
     },
     "v0-20-cATM": {
       "label": "classic fixed-tent $20 ATM-centered",
@@ -624,7 +774,12 @@
       "avgPeakCapital": 5427,
       "avgDeployedCapital": 1797,
       "maxDD7": -24110,
-      "maxDD30": -24110
+      "maxDD30": -24110,
+      "widthNorm": 1,
+      "profitScore": 907,
+      "riskScore": -24110,
+      "efficiency": 28.8,
+      "returnOnCapital": 0.167
     },
     "v0-40-cATM": {
       "label": "classic fixed-tent $40 ATM-centered",
@@ -644,7 +799,12 @@
       "avgPeakCapital": 6885,
       "avgDeployedCapital": -254,
       "maxDD7": -41785,
-      "maxDD30": -52745
+      "maxDD30": -52745,
+      "widthNorm": 0.5,
+      "profitScore": 826,
+      "riskScore": -26372,
+      "efficiency": 24,
+      "returnOnCapital": 0.24
     },
     "v1-20-cATM": {
       "label": "classic greedy $20 ATM-centered",
@@ -664,7 +824,12 @@
       "avgPeakCapital": 6465,
       "avgDeployedCapital": 2492,
       "maxDD7": -17880,
-      "maxDD30": -24455
+      "maxDD30": -24455,
+      "widthNorm": 1,
+      "profitScore": 869,
+      "riskScore": -24455,
+      "efficiency": 27.2,
+      "returnOnCapital": 0.134
     },
     "v1-40-cATM": {
       "label": "classic greedy $40 ATM-centered",
@@ -684,7 +849,12 @@
       "avgPeakCapital": 12255,
       "avgDeployedCapital": 4686,
       "maxDD7": -38085,
-      "maxDD30": -48735
+      "maxDD30": -48735,
+      "widthNorm": 0.5,
+      "profitScore": 779,
+      "riskScore": -24367,
+      "efficiency": 24.4,
+      "returnOnCapital": 0.127
     },
     "v2-20-cATM": {
       "label": "classic joint $20 ATM-centered",
@@ -704,7 +874,12 @@
       "avgPeakCapital": 7652,
       "avgDeployedCapital": 3192,
       "maxDD7": -24815,
-      "maxDD30": -33125
+      "maxDD30": -33125,
+      "widthNorm": 1,
+      "profitScore": 818,
+      "riskScore": -33125,
+      "efficiency": 18.9,
+      "returnOnCapital": 0.107
     },
     "v2-40-cATM": {
       "label": "classic joint $40 ATM-centered",
@@ -724,7 +899,12 @@
       "avgPeakCapital": 15382,
       "avgDeployedCapital": 6619,
       "maxDD7": -45555,
-      "maxDD30": -58705
+      "maxDD30": -58705,
+      "widthNorm": 0.5,
+      "profitScore": 726,
+      "riskScore": -29352,
+      "efficiency": 18.9,
+      "returnOnCapital": 0.094
     },
     "v3-20-cATM": {
       "label": "classic fixed-mark $20 ATM-centered",
@@ -744,7 +924,12 @@
       "avgPeakCapital": 5427,
       "avgDeployedCapital": 1797,
       "maxDD7": -24110,
-      "maxDD30": -24110
+      "maxDD30": -24110,
+      "widthNorm": 1,
+      "profitScore": 907,
+      "riskScore": -24110,
+      "efficiency": 28.8,
+      "returnOnCapital": 0.167
     },
     "v3-40-cATM": {
       "label": "classic fixed-mark $40 ATM-centered",
@@ -764,7 +949,12 @@
       "avgPeakCapital": 6885,
       "avgDeployedCapital": -254,
       "maxDD7": -41785,
-      "maxDD30": -52745
+      "maxDD30": -52745,
+      "widthNorm": 0.5,
+      "profitScore": 826,
+      "riskScore": -26372,
+      "efficiency": 24,
+      "returnOnCapital": 0.24
     },
     "v4-20-cATM": {
       "label": "multiTF-overext $20 ATM-centered",
@@ -784,7 +974,12 @@
       "avgPeakCapital": 4824,
       "avgDeployedCapital": 774,
       "maxDD7": -48590,
-      "maxDD30": -83805
+      "maxDD30": -83805,
+      "widthNorm": 1,
+      "profitScore": 842,
+      "riskScore": -83805,
+      "efficiency": 7.7,
+      "returnOnCapital": 0.175
     },
     "v4-40-cATM": {
       "label": "multiTF-overext $40 ATM-centered",
@@ -804,7 +999,12 @@
       "avgPeakCapital": 6728,
       "avgDeployedCapital": -1492,
       "maxDD7": -84365,
-      "maxDD30": -156030
+      "maxDD30": -156030,
+      "widthNorm": 0.5,
+      "profitScore": 443,
+      "riskScore": -78015,
+      "efficiency": 4.3,
+      "returnOnCapital": 0.132
     },
     "v5-20-cATM": {
       "label": "trend-flip $20 ATM-centered",
@@ -824,7 +1024,12 @@
       "avgPeakCapital": 6886,
       "avgDeployedCapital": 2412,
       "maxDD7": -22230,
-      "maxDD30": -44900
+      "maxDD30": -44900,
+      "widthNorm": 1,
+      "profitScore": 1400,
+      "riskScore": -44900,
+      "efficiency": 23.9,
+      "returnOnCapital": 0.203
     },
     "v5-40-cATM": {
       "label": "trend-flip $40 ATM-centered",
@@ -844,7 +1049,12 @@
       "avgPeakCapital": 7309,
       "avgDeployedCapital": -1642,
       "maxDD7": -61995,
-      "maxDD30": -88700
+      "maxDD30": -88700,
+      "widthNorm": 0.5,
+      "profitScore": 892,
+      "riskScore": -44350,
+      "efficiency": 15.4,
+      "returnOnCapital": 0.244
     },
     "v6-20-cATM": {
       "label": "5m-harness $20 ATM-centered",
@@ -864,7 +1074,12 @@
       "avgPeakCapital": 10655,
       "avgDeployedCapital": 4775,
       "maxDD7": -31745,
-      "maxDD30": -47045
+      "maxDD30": -47045,
+      "widthNorm": 1,
+      "profitScore": 1834,
+      "riskScore": -47045,
+      "efficiency": 29.8,
+      "returnOnCapital": 0.172
     },
     "v6-40-cATM": {
       "label": "5m-harness $40 ATM-centered",
@@ -884,7 +1099,12 @@
       "avgPeakCapital": 8204,
       "avgDeployedCapital": -1929,
       "maxDD7": -66635,
-      "maxDD30": -111850
+      "maxDD30": -111850,
+      "widthNorm": 0.5,
+      "profitScore": 916,
+      "riskScore": -55925,
+      "efficiency": 12.5,
+      "returnOnCapital": 0.223
     },
     "v7-20-cATM": {
       "label": "be-wrong $20 ATM-centered",
@@ -904,7 +1124,12 @@
       "avgPeakCapital": 10131,
       "avgDeployedCapital": 4119,
       "maxDD7": -71260,
-      "maxDD30": -112685
+      "maxDD30": -112685,
+      "widthNorm": 1,
+      "profitScore": 2143,
+      "riskScore": -112685,
+      "efficiency": 14.5,
+      "returnOnCapital": 0.212
     },
     "v7-40-cATM": {
       "label": "be-wrong $40 ATM-centered",
@@ -924,7 +1149,12 @@
       "avgPeakCapital": 7511,
       "avgDeployedCapital": 954,
       "maxDD7": -90900,
-      "maxDD30": -123495
+      "maxDD30": -123495,
+      "widthNorm": 0.5,
+      "profitScore": 1787,
+      "riskScore": -61747,
+      "efficiency": 22.1,
+      "returnOnCapital": 0.476
     },
     "v8-20-cATM": {
       "label": "risk-capped $20 ATM-centered",
@@ -944,7 +1174,12 @@
       "avgPeakCapital": 6865,
       "avgDeployedCapital": 3312,
       "maxDD7": -30435,
-      "maxDD30": -49350
+      "maxDD30": -49350,
+      "widthNorm": 1,
+      "profitScore": 698,
+      "riskScore": -49350,
+      "efficiency": 10.8,
+      "returnOnCapital": 0.102
     },
     "v8-40-cATM": {
       "label": "risk-capped $40 ATM-centered",
@@ -964,7 +1199,12 @@
       "avgPeakCapital": 6749,
       "avgDeployedCapital": 269,
       "maxDD7": -82890,
-      "maxDD30": -169235
+      "maxDD30": -169235,
+      "widthNorm": 0.5,
+      "profitScore": 390,
+      "riskScore": -84617,
+      "efficiency": 3.5,
+      "returnOnCapital": 0.116
     },
     "v9-20-cATM": {
       "label": "be-wrong + caps $20 ATM-centered",
@@ -984,7 +1224,12 @@
       "avgPeakCapital": 8559,
       "avgDeployedCapital": -510,
       "maxDD7": -75510,
-      "maxDD30": -120990
+      "maxDD30": -120990,
+      "widthNorm": 1,
+      "profitScore": 2549,
+      "riskScore": -120990,
+      "efficiency": 16.1,
+      "returnOnCapital": 0.298
     },
     "v9-40-cATM": {
       "label": "be-wrong + caps $40 ATM-centered",
@@ -1004,7 +1249,12 @@
       "avgPeakCapital": 7101,
       "avgDeployedCapital": -2360,
       "maxDD7": -91515,
-      "maxDD30": -128080
+      "maxDD30": -128080,
+      "widthNorm": 0.5,
+      "profitScore": 1864,
+      "riskScore": -64040,
+      "efficiency": 22.3,
+      "returnOnCapital": 0.525
     },
     "v5-20-10k": {
       "label": "trend-flip $20 short-ATM, $10k cap",
@@ -1024,7 +1274,12 @@
       "avgPeakCapital": 5089,
       "avgDeployedCapital": 704,
       "maxDD7": -29650,
-      "maxDD30": -59270
+      "maxDD30": -59270,
+      "widthNorm": 1,
+      "profitScore": 1141,
+      "riskScore": -59270,
+      "efficiency": 14.7,
+      "returnOnCapital": 0.224
     },
     "v5-40-10k": {
       "label": "trend-flip $40 short-ATM, $10k cap",
@@ -1044,7 +1299,12 @@
       "avgPeakCapital": 6790,
       "avgDeployedCapital": -1143,
       "maxDD7": -41725,
-      "maxDD30": -88290
+      "maxDD30": -88290,
+      "widthNorm": 0.5,
+      "profitScore": 377,
+      "riskScore": -44145,
+      "efficiency": 6.5,
+      "returnOnCapital": 0.111
     },
     "v6-20-10k": {
       "label": "5m-harness $20 short-ATM, $10k cap",
@@ -1064,7 +1324,12 @@
       "avgPeakCapital": 6597,
       "avgDeployedCapital": 1678,
       "maxDD7": -36595,
-      "maxDD30": -65140
+      "maxDD30": -65140,
+      "widthNorm": 1,
+      "profitScore": 1249,
+      "riskScore": -65140,
+      "efficiency": 14.7,
+      "returnOnCapital": 0.189
     },
     "v6-40-10k": {
       "label": "5m-harness $40 short-ATM, $10k cap",
@@ -1084,7 +1349,12 @@
       "avgPeakCapital": 6813,
       "avgDeployedCapital": -1969,
       "maxDD7": -40670,
-      "maxDD30": -90240
+      "maxDD30": -90240,
+      "widthNorm": 0.5,
+      "profitScore": 318,
+      "riskScore": -45120,
+      "efficiency": 5.4,
+      "returnOnCapital": 0.093
     },
     "v7-20-10k": {
       "label": "be-wrong $20 short-ATM, $10k cap",
@@ -1104,7 +1374,12 @@
       "avgPeakCapital": 6564,
       "avgDeployedCapital": 2787,
       "maxDD7": -43635,
-      "maxDD30": -47770
+      "maxDD30": -47770,
+      "widthNorm": 1,
+      "profitScore": 1429,
+      "riskScore": -47770,
+      "efficiency": 22.9,
+      "returnOnCapital": 0.218
     },
     "v7-40-10k": {
       "label": "be-wrong $40 short-ATM, $10k cap",
@@ -1124,7 +1399,12 @@
       "avgPeakCapital": 8873,
       "avgDeployedCapital": 2711,
       "maxDD7": -35675,
-      "maxDD30": -35675
+      "maxDD30": -35675,
+      "widthNorm": 0.5,
+      "profitScore": 3134,
+      "riskScore": -17837,
+      "efficiency": 134.4,
+      "returnOnCapital": 0.706
     },
     "v8-20-10k": {
       "label": "risk-capped $20 short-ATM, $10k cap",
@@ -1144,7 +1424,12 @@
       "avgPeakCapital": 4784,
       "avgDeployedCapital": 1415,
       "maxDD7": -33625,
-      "maxDD30": -69060
+      "maxDD30": -69060,
+      "widthNorm": 1,
+      "profitScore": 438,
+      "riskScore": -69060,
+      "efficiency": 4.8,
+      "returnOnCapital": 0.092
     },
     "v8-40-10k": {
       "label": "risk-capped $40 short-ATM, $10k cap",
@@ -1164,7 +1449,12 @@
       "avgPeakCapital": 5667,
       "avgDeployedCapital": -767,
       "maxDD7": -51680,
-      "maxDD30": -94180
+      "maxDD30": -94180,
+      "widthNorm": 0.5,
+      "profitScore": 77,
+      "riskScore": -47090,
+      "efficiency": 1.2,
+      "returnOnCapital": 0.027
     },
     "v9-20-10k": {
       "label": "be-wrong + caps $20 short-ATM, $10k cap",
@@ -1184,7 +1474,12 @@
       "avgPeakCapital": 5612,
       "avgDeployedCapital": 541,
       "maxDD7": -42465,
-      "maxDD30": -49895
+      "maxDD30": -49895,
+      "widthNorm": 1,
+      "profitScore": 1535,
+      "riskScore": -49895,
+      "efficiency": 23.5,
+      "returnOnCapital": 0.274
     },
     "v9-40-10k": {
       "label": "be-wrong + caps $40 short-ATM, $10k cap",
@@ -1204,7 +1499,12 @@
       "avgPeakCapital": 7581,
       "avgDeployedCapital": 1275,
       "maxDD7": -38405,
-      "maxDD30": -38405
+      "maxDD30": -38405,
+      "widthNorm": 0.5,
+      "profitScore": 2550,
+      "riskScore": -19202,
+      "efficiency": 101.6,
+      "returnOnCapital": 0.673
     }
   },
   "engineAnchorPureV6Total": 1412935

@@ -60,7 +60,8 @@
 <div id="status">Loading…</div>
 <div class="wrap"><table class="grid" id="grid"></table></div>
 <div class="wrap" id="btWrap" style="display:none">
-  <h2>Backtest averages · 765 days <span class="sub">(avg $/day across the backtest; click a column to sort)</span></h2>
+  <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span>
+    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label></h2>
   <table class="bt" id="btTable"></table>
 </div>
 
@@ -234,10 +235,17 @@ async function loadBaselines() {
   for (const [k, e] of Object.entries(src || {})) {
     if (!e || typeof e !== 'object' || !/^v\d/.test(k)) continue;
     if (e.avgWorstCase == null && e.avgTerminalPotential == null && e.avgBestCase == null) continue;
+    const wm = k.match(/^v\d+-(\d+)/); const width = wm ? +wm[1] : 20; const widthNorm = 20 / width;
+    const md30 = e.maxDD30;
     m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
       trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,
       avgDaily: e.avgDaily, realizedWorst: e.worst, cap: /-10k$/.test(k) ? 10000 : 20000,
-      total: e.total, winRate: e.winRate, maxDD7: e.maxDD7, maxDD30: e.maxDD30 };
+      total: e.total, winRate: e.winRate, maxDD7: e.maxDD7, maxDD30: md30, width, widthNorm,
+      // size-normalized / size-independent scores — prefer baked fields, else compute client-side.
+      profitScore: e.profitScore != null ? e.profitScore : Math.round(e.avgDaily * widthNorm),
+      riskScore: e.riskScore != null ? e.riskScore : Math.round((md30 || 0) * widthNorm),
+      efficiency: e.efficiency != null ? e.efficiency : (md30 ? Math.round(e.total / Math.abs(md30) * 10) / 10 : null),
+      returnOnCapital: e.returnOnCapital != null ? e.returnOnCapital : (e.avgPeakCapital > 0 ? Math.round(e.avgDaily / e.avgPeakCapital * 1000) / 1000 : null) };
   }
   return m;
 }
@@ -258,7 +266,11 @@ const BT_COLS = [
   { k: 'best', h: 'avgBest', t: 'n' }, { k: 'worst', h: 'avgWorst', t: 'n' }, { k: 'avg', h: 'avgTermPot', t: 'n' },
   { k: 'trades', h: 'trades/d', t: 'n' }, { k: 'peakCap', h: 'peakCap', t: 'n' }, { k: 'deployedCap', h: 'deployCap', t: 'n' },
   { k: 'realizedWorst', h: 'realized worst', t: 'n' }, { k: 'maxDD7', h: 'maxDD 7d', t: 'n' }, { k: 'maxDD30', h: 'maxDD 30d', t: 'n' },
+  { k: 'profitScore', h: 'ProfitScore', t: 'n' }, { k: 'riskScore', h: 'RiskScore', t: 'n' },
+  { k: 'efficiency', h: 'Efficiency', t: 'n' }, { k: 'returnOnCapital', h: 'Ret/Cap', t: 'n' },
 ];
+// $-denominated columns that the "normalize to $20" toggle rescales by widthNorm (scores/ratios excluded).
+const NORM_COLS = new Set(['avgDaily', 'total', 'best', 'worst', 'avg', 'maxDD7', 'maxDD30', 'realizedWorst', 'peakCap', 'deployedCap']);
 let btSort = { k: 'avgDaily', dir: -1 };
 
 function renderBtTable() {
@@ -270,8 +282,9 @@ function renderBtTable() {
     : (((a[k] == null ? -Infinity : a[k]) - (b[k] == null ? -Infinity : b[k])) * btSort.dir));
   const arrow = (col) => btSort.k === col ? (btSort.dir < 0 ? ' ▼' : ' ▲') : '';
   // Sign-color the P&L columns; worst columns always red; capital/trades neutral.
-  const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
-    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30'].includes(key) ? 'var(--loss)' : '');
+  const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total', 'profitScore'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
+    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore'].includes(key) ? 'var(--loss)' : '');
+  const norm = document.getElementById('btNormalize') && document.getElementById('btNormalize').checked;
   let h = '<thead><tr>' + BT_COLS.map((c) => `<th data-k="${c.k}">${c.h}${arrow(c.k)}</th>`).join('') + '</tr></thead><tbody>';
   for (const r of rows) {
     h += '<tr>' + BT_COLS.map((c) => {
@@ -279,7 +292,11 @@ function renderBtTable() {
       if (c.k === 'cap') return `<td class="num">$${r.cap / 1000}k</td>`;
       if (c.k === 'trades') return `<td class="num">${r.trades == null ? '—' : r.trades}</td>`;
       if (c.k === 'winRate') return `<td class="num">${r.winRate == null ? '—' : Math.round(r.winRate * 100) + '%'}</td>`;
-      const val = r[c.k], col = colOf(c.k, val);
+      if (c.k === 'efficiency') return `<td class="num" style="color:${r.efficiency >= 0 ? 'var(--profit)' : ''}">${r.efficiency == null ? '—' : r.efficiency}</td>`;
+      if (c.k === 'returnOnCapital') return `<td class="num" style="color:${r.returnOnCapital > 0 ? 'var(--profit)' : ''}">${r.returnOnCapital == null ? '—' : r.returnOnCapital}</td>`;
+      let val = r[c.k];
+      if (norm && NORM_COLS.has(c.k) && val != null) val = Math.round(val * r.widthNorm);   // $20-normalize the $ columns
+      const col = colOf(c.k, val);
       return `<td class="num"${col ? ` style="color:${col}"` : ''}>${fmtN(val)}</td>`;
     }).join('') + '</tr>';
   }
@@ -372,6 +389,7 @@ document.getElementById('btTable').addEventListener('click', (e) => {
   if (btSort.k === k) btSort.dir *= -1; else btSort = { k, dir: k === 'variant' ? 1 : -1 };
   renderBtTable();
 });
+document.getElementById('btNormalize').addEventListener('change', renderBtTable);
 
 load();
 </script>
