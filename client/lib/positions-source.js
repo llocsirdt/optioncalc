@@ -59,6 +59,47 @@
     window.NQChart.setTrades(trades, { focus: !!focus });   // focus pans the chart to the trades (Pull / tab switch)
   }
 
+  // STRATEGY TRADE DETAILS: render a simple per-event table (open ▲/▼, cover ◇ — colored + shaped to match
+  // the NQ-chart markers) so the timing / legs / qty / cost of each open and its cover can be validated, tied
+  // by a stable position # (chronological by open). Empty positions → clears the panel.
+  function renderStrategyTradeDetails(positions) {
+    const box = el('strategy-trade-details');
+    if (!box) return;
+    const evs = [];
+    (positions || []).forEach((p) => {
+      const q = p.quantity || 1;
+      evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0, legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * q), net: p.openNet || 'DEBIT' });
+      if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0, legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * q), net: p.coverNet || 'DEBIT' });
+    });
+    if (!evs.length) { box.innerHTML = ''; return; }
+    // Number positions #1.. by open time (earliest = #1); covers inherit their open's number.
+    const seq = new Map();
+    evs.filter(e => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
+    evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1));
+    const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
+    const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
+    const glyph = e => e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
+    const coveredIds = new Set(evs.filter(e => e.type === 'cover').map(e => e.id));
+    const opens = evs.filter(e => e.type === 'open').length, covers = evs.length - opens;
+    const uncovered = evs.filter(e => e.type === 'open' && !coveredIds.has(e.id)).length;
+    const rows = evs.map(e => {
+      const open = e.type === 'open';
+      const isUncov = open && !coveredIds.has(e.id);   // an open with no matching cover = still exposed
+      const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : 'COVER';
+      const cr = e.net === 'CREDIT';
+      const costStr = cr ? `+${usd(e.cost)}` : usd(e.cost);   // credit = cash received → leading +
+      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}" title="${e.id}">`
+        + `<td class="td-time">${e.time || '—'}</td>`
+        + `<td>#${seq.get(e.id) || '?'}</td>`
+        + `<td class="td-ev" style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
+        + `<td class="td-legs">${e.legs}</td>`
+        + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
+    }).join('');
+    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${uncovered ? ` · ${uncovered} uncovered*` : ''}</span></h4>`
+      + `<table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
+      + `<tbody>${rows}</tbody></table>`;
+  }
+
   // --- tabs + affordances ---
   function renderTabs() {
     const bar = el('positions-source-tabs');
@@ -84,7 +125,8 @@
     if (source === 'strategy') {
       const m = getStrategyMeta(currentSymbol(), strategyExpiration(), currentVariant());
       applyTradesToChart(m ? m.positions : [], true);
-    } else applyTradesToChart([]);
+      renderStrategyTradeDetails(m ? m.positions : []);
+    } else { applyTradesToChart([]); renderStrategyTradeDetails([]); }
   }
 
   // --- Strategy pull ---
@@ -153,6 +195,7 @@
       if (textInput) { textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2); if (typeof processInput === 'function') processInput(); }
       saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
       applyTradesToChart(result.positions, doFocus);
+      renderStrategyTradeDetails(result.positions);
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastPulled(`${result.count} pos · ${t}`, false);
     } catch (e) {

@@ -454,7 +454,7 @@ async function eodSettlement() {
         if (px == null) { const lastCC = [...record.events].reverse().find(ev => ev.type === 'candle_close'); px = lastCC ? Number(lastCC.underlying != null ? lastCC.underlying : lastCC.candle.close) : null; }
       }
       if (px == null) { store.appendEvent(record, { type: 'eod_settlement', variant: run.variant, note: 'no settle price available' }); continue; }
-      const term = trader.computeTerminalPnl(record.state, cfg, px);
+      const term = trader.computeTerminalPnl(record.state, cfg, px, record.events);
       store.appendEvent(record, {
         type: 'eod_settlement', variant: run.variant, settle: px, settleSource: settleSource || 'run-underlying',
         terminalPnl: term.total, floorPnl: term.floor, positions: term.positions
@@ -575,7 +575,7 @@ function status() {
     // FLOOR (always ~positive; ignores uncovered legs), kept as the conservative lower bound.
     let terminalPnl = null;
     if (st && st.lastUnderlying != null && st.positions && st.positions.length) {
-      try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying).total); } catch (e) { /* leave null */ }
+      try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying, rec.events).total); } catch (e) { /* leave null */ }
     }
     const base = backtestBaselines().variants[run.variant] || null;
     return {

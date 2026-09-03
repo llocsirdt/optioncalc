@@ -763,15 +763,30 @@ function snapshotChain(getLeg, underlying, incr, windowStrikes) {
 // price (0DTE => intrinsic). Covered pairs realize their true value INCLUDING the upside
 // the floor number ignores (so it doesn't undersell the joint variant); uncovered filled
 // spreads settle at their own intrinsic. floor = state.realizedPnl (guaranteed locked sum).
-function computeTerminalPnl(state, cfg, settle) {
+// TERMINAL (settle) P&L, valued from the ACTUAL orders sent — a credit open/cover uses its real credit-twin
+// legs + NEGATIVE cost (cash received), a debit uses its legs + positive cost — so this is the REAL cash
+// P&L, not the debit-canonical (parity-idealized) figure, which OVERSTATES recapture variants by the
+// credit-vs-debit pricing gap (~$0.71/credit-open). Opens carry sentLegs/sentLimit on the position; covers
+// come from the order log (order_simulated dry-run / order_sent live, keyed by meta.of). Falls back to
+// debit-canonical only when an order isn't found. See feedback_use_real_numbers_not_derived.
+function computeTerminalPnl(state, cfg, settle, events) {
+  const coverByPos = new Map();
+  for (const e of events || []) {
+    if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs && /cover/.test(e.meta.kind || '')) coverByPos.set(e.meta.of, e.meta);
+  }
   const positions = [];
   let total = 0;
   for (const pos of state.positions || []) {
     if (!pos.filled) continue;
     const qty = pos.quantity || cfg.quantity;
-    let value = L.legsPayoff(pos.legs, settle);
-    let cost = pos.limit;
-    if (pos.covered && pos.coverLegs) { value += L.legsPayoff(pos.coverLegs, settle); cost += (pos.coverLimit || 0); }
+    const oCredit = pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLegs.length;
+    let value = L.legsPayoff(oCredit ? pos.sentLegs : pos.legs, settle);
+    let cost = oCredit ? -(pos.sentLimit || 0) : pos.limit;
+    if (pos.covered && pos.coverLegs) {
+      const ord = coverByPos.get(pos.id);   // the EXACT cover order (real legs + price + net)
+      if (ord && ord.legs) { value += L.legsPayoff(ord.legs, settle); cost += (ord.net === 'CREDIT' ? -(ord.limit || 0) : (ord.limit || 0)); }
+      else { value += L.legsPayoff(pos.coverLegs, settle); cost += (pos.coverLimit || 0); }   // fallback: debit-canonical
+    }
     const pnl = round2((value - cost) * 100 * qty);
     total = round2(total + pnl);
     positions.push({ id: pos.id, side: pos.side, covered: !!pos.covered, geometry: pos.coverGeometry || null, value: round2(value), cost: round2(cost), pnl });

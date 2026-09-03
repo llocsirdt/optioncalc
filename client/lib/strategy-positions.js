@@ -12,6 +12,12 @@
 
   function fmtLeg(leg) { return `${leg.qty}${leg.type}${leg.strike}@${leg.cost}`; }
 
+  // Human-readable spread string for the trade-details panel, e.g. "+1c29050 -1c29070" (signed by side).
+  function fmtSpread(spreadLegs, qty) {
+    return (spreadLegs || []).map(l => `${l.side === 'long' ? '+' : '-'}${qty}${String(l.type).toLowerCase()}${l.strike}`).join(' ');
+  }
+
+
   // Fallback for runs recorded before openEpoch existed: an open's wall-clock (openedAt) floored to the
   // 5m grid equals the candle mark (the engine fires a few seconds after each 5m boundary), so it lands
   // on the correct NQ chart candle. Opens only — old positions carry no cover timestamp to salvage.
@@ -43,13 +49,34 @@
     const src = (run && run.variant) || cfg.variant || 'strategy';
     const allLegs = [];
     const positions = [];
-    for (const pos of state.positions || []) {
+    // ORDERING CONVENTION: the optionArray (and the risk-curve playback slider) expects MOST RECENT
+    // positions FIRST, oldest LAST — the order the Fidelity CSV already arrives in. The server's
+    // state.positions is the opposite (chronological: opens are pushed as they fill → OLDEST first), so
+    // reverse it here. Any future position source we parse must emit newest-first to preserve this.
+    const ordered = [...(state.positions || [])].reverse();
+    // EXACT cover orders from the order log (order_simulated in dry-run / order_sent live), keyed by the
+    // position they cover (meta.of) — so a credit cover uses its REAL sent legs + credit price, not a guess.
+    const coverByPos = new Map();
+    for (const e of (run && run.events) || []) {
+      if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs && /cover/.test(e.meta.kind || '')) coverByPos.set(e.meta.of, e.meta);
+    }
+    for (const pos of ordered) {
       if (!pos || !pos.legs || !pos.legs.length) continue;
       if (!pos.filled && !o.includeUnfilled) continue;
       const qty = pos.quantity || cfg.quantity || 1;
-      const legs = spreadToLegs(pos.legs, pos.limit, qty);
+      // Emit each spread AS ACTUALLY SENT: a CREDIT order → its real credit-twin legs + a NEGATIVE cost
+      // (cash received); a DEBIT → the debit legs + positive cost. So the optionArray total NETS the
+      // recapture credits instead of summing gross debit-canonical costs (which overstates capital used).
+      const oCredit = pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLegs.length;
+      const oLegs = oCredit ? pos.sentLegs : pos.legs;
+      const oAmt = oCredit ? (pos.sentLimit || 0) : (pos.limit || 0);
+      const legs = spreadToLegs(oLegs, oCredit ? -oAmt : oAmt, qty);
+      let cLegs = null, cAmt = 0, cCredit = false;
       if (pos.covered && pos.coverLegs && pos.coverLegs.length) {
-        legs.push(...spreadToLegs(pos.coverLegs, pos.coverLimit, qty));
+        const ord = coverByPos.get(pos.id);   // the EXACT cover order (legs + price + net) from the log
+        if (ord && ord.legs) { cCredit = ord.net === 'CREDIT'; cLegs = ord.legs; cAmt = ord.limit || 0; }
+        else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
+        legs.push(...spreadToLegs(cLegs, cCredit ? -cAmt : cAmt, qty));
       }
       allLegs.push(...legs);
       positions.push({
@@ -58,7 +85,11 @@
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).
         openEpoch: pos.openEpoch || epochFrom5m(pos.openedAt), coverEpoch: pos.coverEpoch || null,
-        openLimit: pos.limit, coverLimit: pos.covered ? pos.coverLimit : null, legs,
+        openLimit: oAmt, coverLimit: pos.covered ? cAmt : null, legs,           // ACTUAL sent amounts (magnitude)
+        // Per-side leg strings (AS SENT) + qty for the trade-details validation panel.
+        quantity: qty, openLegs: fmtSpread(oLegs, qty),
+        coverLegs: cLegs ? fmtSpread(cLegs, qty) : null,
+        openNet: oCredit ? 'CREDIT' : 'DEBIT', coverNet: cCredit ? 'CREDIT' : 'DEBIT',
       });
     }
     return {
