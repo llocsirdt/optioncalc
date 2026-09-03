@@ -236,7 +236,8 @@ async function loadBaselines() {
     if (e.avgWorstCase == null && e.avgTerminalPotential == null && e.avgBestCase == null) continue;
     m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
       trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,
-      avgDaily: e.avgDaily, realizedWorst: e.worst, cap: /-10k$/.test(k) ? 10000 : 20000 };
+      avgDaily: e.avgDaily, realizedWorst: e.worst, cap: /-10k$/.test(k) ? 10000 : 20000,
+      total: e.total, winRate: e.winRate, maxDD7: e.maxDD7, maxDD30: e.maxDD30 };
   }
   return m;
 }
@@ -253,9 +254,10 @@ async function ensureBaselines() {
 // The sortable backtest table (all variants). `k` is the baselines-map field; 'n' = numeric column.
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's' }, { k: 'cap', h: 'cap', t: 'n' }, { k: 'avgDaily', h: 'avgDaily', t: 'n' },
+  { k: 'total', h: 'total', t: 'n' }, { k: 'winRate', h: 'win%', t: 'n' },
   { k: 'best', h: 'avgBest', t: 'n' }, { k: 'worst', h: 'avgWorst', t: 'n' }, { k: 'avg', h: 'avgTermPot', t: 'n' },
   { k: 'trades', h: 'trades/d', t: 'n' }, { k: 'peakCap', h: 'peakCap', t: 'n' }, { k: 'deployedCap', h: 'deployCap', t: 'n' },
-  { k: 'realizedWorst', h: 'realized worst', t: 'n' },
+  { k: 'realizedWorst', h: 'realized worst', t: 'n' }, { k: 'maxDD7', h: 'maxDD 7d', t: 'n' }, { k: 'maxDD30', h: 'maxDD 30d', t: 'n' },
 ];
 let btSort = { k: 'avgDaily', dir: -1 };
 
@@ -268,14 +270,15 @@ function renderBtTable() {
     : (((a[k] == null ? -Infinity : a[k]) - (b[k] == null ? -Infinity : b[k])) * btSort.dir));
   const arrow = (col) => btSort.k === col ? (btSort.dir < 0 ? ' ▼' : ' ▲') : '';
   // Sign-color the P&L columns; worst columns always red; capital/trades neutral.
-  const colOf = (key, n) => (['avgDaily', 'best', 'avg'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
-    : (['worst', 'realizedWorst'].includes(key) ? 'var(--loss)' : '');
+  const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
+    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30'].includes(key) ? 'var(--loss)' : '');
   let h = '<thead><tr>' + BT_COLS.map((c) => `<th data-k="${c.k}">${c.h}${arrow(c.k)}</th>`).join('') + '</tr></thead><tbody>';
   for (const r of rows) {
     h += '<tr>' + BT_COLS.map((c) => {
       if (c.k === 'variant') return `<td class="v">${r.variant}</td>`;
       if (c.k === 'cap') return `<td class="num">$${r.cap / 1000}k</td>`;
       if (c.k === 'trades') return `<td class="num">${r.trades == null ? '—' : r.trades}</td>`;
+      if (c.k === 'winRate') return `<td class="num">${r.winRate == null ? '—' : Math.round(r.winRate * 100) + '%'}</td>`;
       const val = r[c.k], col = colOf(c.k, val);
       return `<td class="num"${col ? ` style="color:${col}"` : ''}>${fmtN(val)}</td>`;
     }).join('') + '</tr>';
