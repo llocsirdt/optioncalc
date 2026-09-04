@@ -49,6 +49,35 @@ function load5mDays(dir) {
 }
 
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
+
+// INTRADAY-IV CORRECTION (opts.intradayIV) — a time-of-day IV MULTIPLIER calibrated from the real
+// captured chains (scripts/candle-spread/calibrate-intraday-iv.js -> data/intraday-iv-correction.json).
+// When enabled, the per-bar band-IV is multiplied by ivMult(timeOfDay) BEFORE it flows into every
+// legsMark/bsPrice call (opens, covers, cap checks, cover-to-stack, settlement), so BS reprices ALL
+// moneyness consistently off one corrected IV. Default OFF -> byte-identical to the current baseline.
+// LIMITATION: single-IV (NO skew) correction calibrated on ATM vol; covers at other moneyness receive
+// the SAME time-of-day IV mult (best single-IV approximation; moneyness skew is a later refinement).
+let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
+function loadIvCorrection() {
+  if (_ivCorr) return _ivCorr;
+  const p = path.join(__dirname, '..', '..', 'data', 'intraday-iv-correction.json');
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const pts = Object.entries(j.perBucket)
+    .map(([k, m]) => { const [h, mm] = k.split(':').map(Number); return { min: h * 60 + mm, mult: m }; })
+    .filter(x => x.mult != null)
+    .sort((a, b) => a.min - b.min);
+  _ivCorr = { minutes: pts.map(p => p.min), mults: pts.map(p => p.mult) };
+  return _ivCorr;
+}
+// linear interpolation of the multiplier at ET minute-of-day; clamped to the endpoints outside the table.
+function ivMultAt(minOfDay) {
+  const c = loadIvCorrection(), M = c.minutes, V = c.mults, n = M.length;
+  if (!n) return 1;
+  if (minOfDay <= M[0]) return V[0];
+  if (minOfDay >= M[n - 1]) return V[n - 1];
+  for (let i = 1; i < n; i++) if (minOfDay <= M[i]) { const t = (minOfDay - M[i - 1]) / (M[i] - M[i - 1]); return V[i - 1] + t * (V[i] - V[i - 1]); }
+  return V[n - 1];
+}
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
@@ -146,7 +175,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
-    const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt), iv = ivOf(A);
+    const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt);
+    // per-bar band-IV; when opts.intradayIV is on, scale by the calibrated time-of-day IV multiplier so
+    // the correction flows into every legsMark/bsPrice below. Default OFF -> iv === ivOf(A) (byte-identical).
+    let iv = ivOf(A);
+    if (opts.intradayIV) iv *= ivMultAt(etMinute(bars[i].dt));
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.

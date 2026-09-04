@@ -25,7 +25,12 @@ const RUNS = buildRuns();
 const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
 const DRY = process.argv.includes('--dry');
-const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread', 'backtest-baselines.json');
+// INTRADAY-IV CORRECTION passthrough (--intradayIV): reprice every leg with the calibrated time-of-day IV
+// multiplier (data/intraday-iv-correction.json via runDay5m opts.intradayIV). Writes to a SEPARATE file so
+// the canonical baseline-baselines.json is never overwritten. Default off -> canonical BS baselines.
+const INTRADAY_IV = process.argv.includes('--intradayIV');
+const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread',
+  INTRADAY_IV ? 'backtest-baselines-ivcorrected.json' : 'backtest-baselines.json');
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
 
 // Live variant config -> 5m-engine opts. The engine reads caps/flags directly; width/shift/capFrac go
@@ -34,6 +39,7 @@ function optsFor(v) {
   // trackCapital: pure cash accounting (peakReal/avgReal); it never touches terminal/floor, so the graded
   // P&L stays byte-identical — it just populates the capital object for the deployed-capital metrics.
   const o = { rthActionOnly: true, trackCapital: true };
+  if (INTRADAY_IV) o.intradayIV = true;   // --intradayIV: reprice every leg with the calibrated time-of-day IV mult
   if (v.bidirectional) o.bidirectional = true;
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac']) if (v[k] != null) o[k] = v[k];
   if (v.exemptTrendStack) o.exemptTrendStack = true;

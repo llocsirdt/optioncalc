@@ -1,0 +1,223 @@
+{
+  "generatedAt": "2026-09-03T23:18:59.582Z",
+  "method": "ivMult(t) = median_days[ ATM_impliedVol_real(t) / bandIV(day) ]; splice: iv_corrected = bandIV(bar) * ivMult(tod)",
+  "perBucket": {
+    "09:30": 1.2702,
+    "10:00": 1.2327,
+    "10:30": 1.021,
+    "11:00": 0.9392,
+    "11:30": 0.9933,
+    "12:00": 0.9768,
+    "12:30": 0.9108,
+    "13:00": 0.8603,
+    "13:30": 0.8851,
+    "14:00": 0.9934,
+    "14:30": 0.9289,
+    "15:00": 0.9475,
+    "15:30": 0.8431
+  },
+  "meta": {
+    "dates": [
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-09-02"
+    ],
+    "nDays": 6,
+    "imputedBandIVDates": [
+      "2026-09-02"
+    ],
+    "bandIVoverOpenATMratio": 0.6993,
+    "perDayBandIV": {
+      "2026-08-20": 0.1921,
+      "2026-08-21": 0.192,
+      "2026-08-26": 0.1843,
+      "2026-08-27": 0.2086,
+      "2026-08-28": 0.1921,
+      "2026-09-02": 0.1576
+    },
+    "perDayOpenATM_IV": {
+      "2026-08-20": 0.2747,
+      "2026-08-21": 0.2892,
+      "2026-08-26": 0.23,
+      "2026-08-27": 0.2765,
+      "2026-08-28": 0.2772,
+      "2026-09-02": 0.2254
+    },
+    "bucketDiagnostics": {
+      "09:30": {
+        "nDays": 6,
+        "nSnapshots": 15,
+        "atmMult": 1.2702,
+        "verticalImpliedMult": 1.1245,
+        "directMarkRatio": 0.9737
+      },
+      "10:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 1.2327,
+        "verticalImpliedMult": 0.9963,
+        "directMarkRatio": 0.9685
+      },
+      "10:30": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 1.021,
+        "verticalImpliedMult": 0.7772,
+        "directMarkRatio": 0.9846
+      },
+      "11:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9392,
+        "verticalImpliedMult": 0.9452,
+        "directMarkRatio": 1.0017
+      },
+      "11:30": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9933,
+        "verticalImpliedMult": 4.5103,
+        "directMarkRatio": 1.0041
+      },
+      "12:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9768,
+        "verticalImpliedMult": 0.65,
+        "directMarkRatio": 1.006
+      },
+      "12:30": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9108,
+        "verticalImpliedMult": 0.8512,
+        "directMarkRatio": 0.9958
+      },
+      "13:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.8603,
+        "verticalImpliedMult": 0.6587,
+        "directMarkRatio": 1.0265
+      },
+      "13:30": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.8851,
+        "verticalImpliedMult": 0.6911,
+        "directMarkRatio": 1.0102
+      },
+      "14:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9934,
+        "verticalImpliedMult": 0.7955,
+        "directMarkRatio": 1.0013
+      },
+      "14:30": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9289,
+        "verticalImpliedMult": 1.0075,
+        "directMarkRatio": 0.9977
+      },
+      "15:00": {
+        "nDays": 6,
+        "nSnapshots": 16,
+        "atmMult": 0.9475,
+        "verticalImpliedMult": 0.9606,
+        "directMarkRatio": 0.9969
+      },
+      "15:30": {
+        "nDays": 6,
+        "nSnapshots": 11,
+        "atmMult": 0.8431,
+        "verticalImpliedMult": 0.9816,
+        "directMarkRatio": 1.0001
+      }
+    },
+    "crossDayShapeStability": {
+      "09:30": {
+        "meanRelShape": 1,
+        "stdevRelShape": 0,
+        "n": 6
+      },
+      "10:00": {
+        "meanRelShape": 0.9436,
+        "stdevRelShape": 0.1197,
+        "n": 6
+      },
+      "10:30": {
+        "meanRelShape": 0.8208,
+        "stdevRelShape": 0.0526,
+        "n": 6
+      },
+      "11:00": {
+        "meanRelShape": 0.7522,
+        "stdevRelShape": 0.0454,
+        "n": 6
+      },
+      "11:30": {
+        "meanRelShape": 0.7704,
+        "stdevRelShape": 0.1208,
+        "n": 6
+      },
+      "12:00": {
+        "meanRelShape": 0.7848,
+        "stdevRelShape": 0.1953,
+        "n": 6
+      },
+      "12:30": {
+        "meanRelShape": 0.7695,
+        "stdevRelShape": 0.1838,
+        "n": 6
+      },
+      "13:00": {
+        "meanRelShape": 0.7299,
+        "stdevRelShape": 0.1853,
+        "n": 6
+      },
+      "13:30": {
+        "meanRelShape": 0.7214,
+        "stdevRelShape": 0.1395,
+        "n": 6
+      },
+      "14:00": {
+        "meanRelShape": 0.7479,
+        "stdevRelShape": 0.1005,
+        "n": 6
+      },
+      "14:30": {
+        "meanRelShape": 0.7275,
+        "stdevRelShape": 0.1056,
+        "n": 6
+      },
+      "15:00": {
+        "meanRelShape": 0.756,
+        "stdevRelShape": 0.0907,
+        "n": 6
+      },
+      "15:30": {
+        "meanRelShape": 0.709,
+        "stdevRelShape": 0.0991,
+        "n": 6
+      }
+    },
+    "directMarkRatioByWidth": {
+      "10": 0.9926,
+      "20": 0.9931,
+      "40": 0.9989
+    },
+    "caveats": [
+      "Only 6 usable captured days (08-25 dropped: 2 candles) — PROVISIONAL.",
+      "No-skew limitation: single-IV time-of-day correction calibrated on ATM vol; covers at other moneyness get the same IV mult (best single-IV approximation; moneyness skew is a later refinement).",
+      "Literal short-ATM vertical inversion (m=IV_real_spread/bandIV) is ill-conditioned (low vega): per-bucket cross-day median swings 0.65..4.5 (see bucketDiagnostics.verticalImpliedMult) — NOT shipped. ATM-IV multiplier substituted as the well-identified single-IV proxy.",
+      "directMarkRatio ~0.97..1.03 all day: band-IV BS already matches real spread marks within ~3%; the traded verticals + intrinsic settlement are LOW-VEGA, so the IV correction moves opens/covers only modestly.",
+      "Cross-instrument: calibration is on real NDX chains (6 Aug-Sep 2026 days); baselines run on NQ 2022-2026 history. The multiplier is a dimensionless time-of-day SHAPE, not a level transfer between datasets.",
+      "09-02 is a 5m-cadence run with no captured band → bandIV imputed via median(bandIV/openATM) ratio (contributes pure intraday shape)."
+    ]
+  }
+}
