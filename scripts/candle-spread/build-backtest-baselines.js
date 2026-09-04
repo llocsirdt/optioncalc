@@ -25,12 +25,16 @@ const RUNS = buildRuns();
 const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
 const DRY = process.argv.includes('--dry');
-// INTRADAY-IV CORRECTION passthrough (--intradayIV): reprice every leg with the calibrated time-of-day IV
-// multiplier (data/intraday-iv-correction.json via runDay5m opts.intradayIV). Writes to a SEPARATE file so
-// the canonical baseline-baselines.json is never overwritten. Default off -> canonical BS baselines.
-const INTRADAY_IV = process.argv.includes('--intradayIV');
+// INTRADAY-IV CORRECTION is now CANONICAL (2026-09-04). It reprices every leg with the calibrated
+// time-of-day IV multiplier (data/intraday-iv-correction.json via runDay5m opts.intradayIV), measured off
+// the REAL captured chains — band-IV runs ~30% below real ATM IV at the open. Validated on 765 NQ days ×
+// 60 variants: Spearman rho 0.990 vs the plain-BS baselines, 59/60 variants gain (median +9.3%), worst-day
+// unchanged. STANDING RULE (user): any change that improves BACKTEST ACCURACY becomes the new baseline,
+// even if it lowers the headline numbers — accuracy is the point of the backtest. `--noIntradayIV` runs
+// the legacy flat-band-IV pricing for A/B only, into a separate file.
+const INTRADAY_IV = !process.argv.includes('--noIntradayIV');
 const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread',
-  INTRADAY_IV ? 'backtest-baselines-ivcorrected.json' : 'backtest-baselines.json');
+  INTRADAY_IV ? 'backtest-baselines.json' : 'backtest-baselines-flativ.json');
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
 
 // Live variant config -> 5m-engine opts. The engine reads caps/flags directly; width/shift/capFrac go
@@ -39,9 +43,12 @@ function optsFor(v) {
   // trackCapital: pure cash accounting (peakReal/avgReal); it never touches terminal/floor, so the graded
   // P&L stays byte-identical — it just populates the capital object for the deployed-capital metrics.
   const o = { rthActionOnly: true, trackCapital: true };
-  if (INTRADAY_IV) o.intradayIV = true;   // --intradayIV: reprice every leg with the calibrated time-of-day IV mult
+  if (INTRADAY_IV) o.intradayIV = true;   // canonical: reprice every leg with the calibrated time-of-day IV mult
   if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac']) if (v[k] != null) o[k] = v[k];
+  // DAY-LOSS GOVERNOR: lossTarget/lossMax bound the BOOK FLOOR (the day's true max loss); floorOffset
+  // enables the low-cost risk-offsetting buys. The `-unc` twins null these out → ungoverned.
+  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+  if (v.floorOffset) o.floorOffset = true;
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.coverSelector) o.coverSelector = v.coverSelector;
   if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
@@ -121,8 +128,24 @@ for (const run of RUNS) {
   const riskScore = Math.round(maxDD30 * widthNorm);
   const efficiency = maxDD30 ? Math.round(s.total / Math.abs(maxDD30) * 10) / 10 : null;   // Calmar-like return/DD
   const returnOnCapital = avgPeakCapital > 0 ? Math.round(s.avgDaily / avgPeakCapital * 1000) / 1000 : null; // daily $/$ peak cap
-  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital };
-  console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%`);
+  // GOVERNOR telemetry + the BOUND CHECK that matters: `capExceeded` counts days whose REALIZED terminal
+  // came in worse than −lossMax. It must be 0 — that is the whole claim of the governor (the old hardCap
+  // could not make it, routinely realizing ~2× the cap). worstHeldFloor = the worst book floor actually
+  // held intraday across all days; it should sit at or inside −lossMax.
+  const gov = run.lossMax != null ? {
+    lossTarget: run.lossTarget, lossMax: run.lossMax,
+    worstHeldFloor: Math.min(...results.map(r => r.governor.worstFloor)),
+    worstFloorPreReduction: Math.min(...results.map(r => r.governor.worstFloorPre)),
+    capExceeded: daily.filter(x => x < -run.lossMax).length,
+    avgBreachBars: mean2(results.map(r => r.governor.breaches)),
+    floorCovers: results.reduce((a, r) => a + r.governor.covers, 0),
+    coversDeferred: results.reduce((a, r) => a + r.governor.coverDeferred, 0),
+    offsets: results.reduce((a, r) => a + r.governor.offsets, 0),
+    offsetSpent: results.reduce((a, r) => a + r.governor.offsetSpent, 0),
+    opensBlocked: results.reduce((a, r) => a + r.governor.blocked, 0),
+  } : null;
+  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov };
+  console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%` + (gov ? `  gov held ${usd(gov.worstHeldFloor)}/${usd(-gov.lossMax)}${gov.capExceeded ? "  ✗ EXCEEDED x" + gov.capExceeded : "  ✓"}` : "  (uncapped)"));
 }
 
 // ENGINE-INTEGRITY anchor: the PURE v6 signal (no recapture/leg-uniqueness) must still reproduce the known

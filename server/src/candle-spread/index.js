@@ -48,12 +48,15 @@ const BASE_RUNS = [
     // positions; resolve to the parity twin / a strike shift / an anchor cover), costing ~0.6% of P&L.
     capitalRecapture: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
     enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8,
-    // RISK CAPS + COVER-TO-STACK as DEFAULTS for ALL strategies (2026-09-03). hardCap = ABSOLUTE at-risk
-    // (uncovered-debit) ceiling in $, NOT width-scaled — a wider spread must NOT be allowed to risk more
-    // (the whole point is bounding single-day risk). $20k baseline here; v6-v9 tighten to $10k (family).
-    // coverToStack lets a blocked open lock a deep-ITM winner (≥ minFrac×width) to free budget then open,
-    // so the tight cap doesn't just choke activity — it recycles. proactiveCoverFrac stays family-specific.
-    hardCap: 20000, coverToStack: true, coverToStackMinFrac: 0.65,
+    // DAY-LOSS GOVERNOR + COVER-TO-CONTINUE as DEFAULTS for ALL strategies (2026-09-04) — REPLACES the
+    // old hardCap/softCap regime as the risk layer. The caps gated `uncoveredRisk()` = Σ uncovered OPEN
+    // DEBIT, an instantaneous at-open snapshot that ignores covered pairs' locked P&L and resets each time
+    // the book is covered — so a day ran several sequential books each inside the cap and realized ~2× it
+    // (v6-40 −$24,095 against a $20k hardCap). The governor instead bounds the BOOK FLOOR (worst terminal
+    // P&L of the WHOLE day's book), which IS the day's max loss. See LOSS_TARGET/maxCapFor below.
+    // coverToStack ("cover to continue") lets a blocked open lock a deep-ITM winner (≥ minFrac×width) to
+    // free room and keep trading rather than going dormant. proactiveCoverFrac stays family-specific.
+    lossTarget: 5000, floorOffset: true, coverToStack: true, coverToStackMinFrac: 0.65,
     dryRun: true
   }
 ];
@@ -106,6 +109,17 @@ const WIDTHS = [
   { w: 40, shift: 20, capFrac: 0.8 },
 ];
 
+// ── DAY-LOSS GOVERNOR SIZING ────────────────────────────────────────────────────────────────────────
+// TARGET = the ideal max day loss, the SAME $5,000 for every model at every width — the working level the
+// engine actively manages back toward (lock winners → buy a low-cost offset), without blocking.
+// MAX = the hard ceiling no open may push the book floor through. It carries a WIDTH-SCALED BUFFER so a
+// single order can marginally exceed the target instead of freezing the model — a wider spread costs more
+// per contract, so it needs more headroom to place even one position:
+//     maxCap = max(2 × width×100, target + width×100)   →   $10 → $6k · $20 → $7k · $40 → $9k
+// (the 2×width term only binds for widths ≥ $50; below that target+width is the greater.)
+const LOSS_TARGET = 5000;
+const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
+
 // Cross-product families × widths → concrete variants `${key}-${w}`. Dollar risk caps are ABSOLUTE (a
 // wider spread must not risk more — see BASE_RUNS.hardCap note); families that don't set a cap inherit the
 // $20k baseline from BASE_RUNS. Fraction-of-width knobs (proactiveCoverFrac) are already width-relative.
@@ -125,8 +139,36 @@ function buildVariants() {
       if (f.exemptTrendStack) v.exemptTrendStack = true;
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       if (f.softCap != null) v.softCap = f.softCap;
-      if (f.hardCap != null) v.hardCap = f.hardCap;   // else inherits BASE_RUNS $20k
+      v.lossMax = maxCapFor(w);                          // lossTarget ($5k) + floorOffset inherit from BASE_RUNS
       if (f.testAtBase && w === 20) v.dryRun = 'test';   // only v6-20 arms the live pipe
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+// UNCAPPED TWINS (`-unc`): the SAME family+geometry with the governor (and every legacy cap) switched OFF.
+// Purpose (user, 2026-09-04): the risk-controlled number is the realistic one to trade, but a model's
+// UNBOUNDED potential is its own metric — it says which strategies will scale as the risk tolerance is
+// raised (or the cap eventually removed) as capital grows. Pairing every capped variant with its uncapped
+// twin on ONE baseline run makes "what does the cap cost this model?" a direct subtraction. Always paper.
+function buildUncapped() {
+  const out = [];
+  for (const f of FAMILIES) {
+    for (const { w, shift, capFrac } of WIDTHS) {
+      const v = {
+        variant: `${f.key}-${w}-unc`,
+        variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}, UNCAPPED`,
+        signalFn: f.signalFn, signalCfg: f.signalCfg,
+        coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        spreadWidth: w, spreadShift: shift,
+        lossTarget: null, lossMax: null, floorOffset: false,   // no governor
+        softCap: null, hardCap: null, riskCap: null,           // no legacy caps either
+      };
+      if (capFrac != null) v.capFrac = capFrac;
+      if (f.bidirectional) v.bidirectional = true;
+      if (f.exemptTrendStack) v.exemptTrendStack = true;
+      if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       out.push(v);
     }
   }
@@ -153,48 +195,21 @@ function buildAtmComparators() {
       if (f.exemptTrendStack) v.exemptTrendStack = true;
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       if (f.softCap != null) v.softCap = f.softCap;
-      if (f.hardCap != null) v.hardCap = f.hardCap;   // else inherits BASE_RUNS $20k
+      v.lossMax = maxCapFor(w);                       // same governor as the short-ATM sweep
       out.push(v);
     }
   }
   return out;
 }
 
-// Additional $10k-cap A/B variants for the AGGRESSIVE families (v5-v9) at the cap-meaningful widths
-// ($20/$40 — a $10 spread's cheap positions barely reach even a $10k cap, so $10-10k ≈ $10-20k). Same
-// short-ATM geometry as the main sweep; each `vX-W-10k` pairs against its $20k sibling `vX-W` to isolate
-// the cap effect. This generator PRODUCES v9-40-10k (formerly a hand-written special). Always paper
-// (no testAtBase) — only the $20k v6-20 arms the pipe.
-const LOW_CAP_FAMILIES = new Set(['v5', 'v6', 'v7', 'v8', 'v9']);
-const LOW_CAP = 10000;
-function buildLowCap() {
-  const out = [];
-  const widths = WIDTHS.filter((x) => x.w === 20 || x.w === 40);
-  for (const f of FAMILIES) {
-    if (!LOW_CAP_FAMILIES.has(f.key)) continue;
-    for (const { w, shift, capFrac } of widths) {
-      const v = {
-        variant: `${f.key}-${w}-10k`,
-        variantLabel: `${f.label} $${w} short-ATM, $10k cap`,
-        signalFn: f.signalFn, signalCfg: f.signalCfg,
-        coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        spreadWidth: w, spreadShift: shift, hardCap: LOW_CAP,
-      };
-      if (capFrac != null) v.capFrac = capFrac;
-      if (f.bidirectional) v.bidirectional = true;
-      if (f.exemptTrendStack) v.exemptTrendStack = true;
-      if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
-      if (f.softCap != null) v.softCap = f.softCap;
-      out.push(v);
-    }
-  }
-  return out;
-}
+// RETIRED 2026-09-04: buildLowCap() — the `vX-W-10k` $10k-hardCap A/B twins. They existed to measure the
+// cap dial when `hardCap` was the risk layer; the day-loss governor replaces that regime entirely (and
+// the measurement they were built for is now the capped-vs-`-unc` pair). Removed rather than left dead.
 
 const VARIANTS = [
-  ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, $20k default cap
-  ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, $20k default cap
-  ...buildLowCap(),          // v5-v9 × 20/40, short-ATM, $10k-cap A/B (incl. v9-40-10k)
+  ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
+  ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
+  ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
 ];
 
 // Expand base runs × variants into the concrete run list.

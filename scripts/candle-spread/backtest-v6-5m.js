@@ -171,6 +171,168 @@ function runDay5m(bars, signalFn, opts = {}) {
   // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
   // engine (resolveRestingCovers) books at the candle-CLOSE mark. opts.coverFillAtClose matches live.
   const coverAtClose = opts.coverFillAtClose === true;
+
+  // ══ DAY-LOSS GOVERNOR (opts.lossTarget / opts.lossMax) ═══════════════════════════════════════════
+  // WHAT IT FIXES: riskCap/softCap/hardCap all gate on `uncoveredRisk()` = Σ uncovered OPEN DEBIT — an
+  // INSTANTANEOUS at-open snapshot. It ignores covered pairs that locked a NEGATIVE floor, and it resets
+  // every time the book is covered, so a day can run several sequential books each inside the cap and
+  // realize ~2× it (measured: v6-40 −$24,095 against a $20k hardCap). The governor instead gates on the
+  // BOOK FLOOR — the worst terminal P&L of the WHOLE day's book (covered pairs, hedges and all). Since
+  // realized day P&L = bookPayoff(settle) >= floor, holding floor >= −lossMax is a TRUE bound on the
+  // day's loss, not an at-risk proxy.
+  //   lossTarget = the WORKING target the engine actively manages toward (breach → reduce risk, but keep
+  //                trading); lossMax = the HARD ceiling an open may never push the floor through (the
+  //                buffer that lets one order marginally exceed the target without freezing the model).
+  // Both default Infinity → ungoverned, byte-identical to the pre-governor engine.
+  const lossTarget = opts.lossTarget != null ? opts.lossTarget : Infinity;
+  const lossMax = opts.lossMax != null ? opts.lossMax : Infinity;
+  const governed = lossTarget < Infinity || lossMax < Infinity;
+  // Terminal P&L of one position at settle X (covered pair = its locked value; matches bookPayoff/EOD).
+  const posPnlAt = (p, X) => {
+    let value = legsPayoff(p.legs, X), cost = p.limit;
+    if (p.covered && p.coverLegs) { value += legsPayoff(p.coverLegs, X); cost += p.coverLimit; }
+    return (value - cost) * 100 * QTY;
+  };
+  const bookAt = (X, extra) => {
+    let t = 0;
+    for (const p of st.positions) t += posPnlAt(p, X);
+    if (extra) t += posPnlAt(extra, X);
+    return t;
+  };
+  // EXACT book floor. The terminal payoff is piecewise-linear in the settle price with kinks ONLY at
+  // strikes and flat tails beyond the outermost ones, so the minimum is attained at a strike or on a
+  // tail — evaluating the distinct strikes plus one point outside each end is exact (and far cheaper
+  // than sweeping a grid). `extra` = a hypothetical position (the projected floor if we added it).
+  const _ks = [];
+  function floorOf(extra) {
+    _ks.length = 0;
+    const push = k => { if (_ks.indexOf(k) < 0) _ks.push(k); };
+    for (const p of st.positions) { for (const l of p.legs) push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) push(l.strike); }
+    if (extra) for (const l of extra.legs) push(l.strike);
+    if (!_ks.length) return 0;
+    let lo = Infinity, hi = -Infinity;
+    for (const k of _ks) { if (k < lo) lo = k; if (k > hi) hi = k; }
+    let m = Infinity;
+    for (let j = 0; j < _ks.length; j++) { const v = bookAt(_ks[j], extra); if (v < m) m = v; }
+    const vLo = bookAt(lo - legIncr, extra); if (vLo < m) m = vLo;
+    const vHi = bookAt(hi + legIncr, extra); if (vHi < m) m = vHi;
+    return m;
+  }
+  // The floor only moves when the BOOK moves (open / cover booked / hedge bought) — cache it and mark
+  // dirty at every mutation site so the per-bar checks are near-free.
+  let _floorCache = null;
+  const markBookDirty = () => { _floorCache = null; };
+  const floorNow = () => { if (_floorCache === null) _floorCache = floorOf(null); return _floorCache; };
+  // LOW-COST RISK OFFSET (opts.floorOffset) — the user's "look for risk-offsetting positions with low
+  // cost": when the floor is through the target, buy the far-side debit spread with the best FLOOR-LIFT
+  // PER DOLLAR (ratio-gated, so it only ever trades an outsized risk reduction for a small slice of the
+  // peak). Distinct from the v11 riskHarvest overlay: that one targets the REACHABLE floor over a ±σ
+  // band on a direction gate (a P&L bet); this one targets the ABSOLUTE floor to satisfy a hard cap.
+  const floorOffset = opts.floorOffset === true;
+  const offMinRatio = opts.floorOffsetMinRatio != null ? opts.floorOffsetMinRatio : 3;
+  const offWidths = opts.floorOffsetWidths || [20, 40, 60];
+  const offDepth = opts.floorOffsetDepth != null ? opts.floorOffsetDepth : 8;
+  const offSlip = opts.floorOffsetSlip != null ? opts.floorOffsetSlip : 0.25;   // per leg; the validated NDX fill
+  const offMaxPerDay = opts.floorOffsetMaxPerDay != null ? opts.floorOffsetMaxPerDay : 6;
+  const offBudget = opts.floorOffsetBudget != null ? opts.floorOffsetBudget : Infinity;
+  let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
+
+  // COVER-TO-CONTINUE — lock the deepest-ITM winners until `need()` is satisfied. A covered tent is a
+  // bounded (normally positive) constant, so locking a winner REMOVES its loss tail from the book floor
+  // and frees budget to keep trading instead of going dormant for the day. Shared by the account/risk-cap
+  // path and the governor path; returns the positions locked (for the open's ledger re-resolve).
+  // floorAware (governed callers only): a lock is committed ONLY if it actually improves the BOOK floor.
+  // NON-OBVIOUS AND IMPORTANT: the book floor is NOT the sum of the positions' individual floors. A naked
+  // OPPOSITE-side position is a natural hedge at the far tail — it pays exactly where the other side's
+  // stack loses. Covering it lifts ITS own floor to ~0 but REMOVES that offset, so the book floor can
+  // DROP (measured: 2023-02-21 bar 166→169, floor −$6,695 → −$9,320 purely from bears being covered while
+  // 8 naked bulls stayed on). So "cover to reduce risk" is only true position-locally; against the book it
+  // has to be checked. Ungoverned callers keep the legacy unconditional behaviour (baseline parity).
+  function lockDeepWinners(need, S, tau, iv, floorAware) {
+    const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
+    const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge)
+      .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
+      .filter(x => x.mark >= lockMin)
+      .sort((a, b) => b.mark - a.mark);                 // deepest ITM first: cheapest cover, biggest lock
+    const locked = [];
+    for (const { p } of cands) {
+      if (!need()) break;
+      // Resolve the lock-cover for leg-uniqueness (prefer TWIN = same strikes, P&L-neutral; else
+      // wing-shift = anchor cover; else skip this winner). PURE — nothing is recorded until we commit,
+      // so a floor-rejected candidate leaves the ledger untouched.
+      let cl = G.coverLegs(p.side, p.shortStrike), rc = null;   // debit-canonical (drives P&L)
+      if (enforceLegs) {
+        rc = LL.resolveCover(p.side, p.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
+        if (rc.resolution === 'skip') { legCoverSkip++; continue; }   // can't lock leg-uniquely → leave uncovered
+        if (rc.wing !== G.WIDTH) cl = CL.coverLegsFor(p.side, p.shortStrike, rc.wing, 'debit');   // anchor-cover P&L legs
+      }
+      const climit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
+      if (floorAware) {
+        const f0 = floorNow();
+        p.coverLegs = cl; p.coverLimit = climit; p.covered = true;          // simulate…
+        const f1 = floorOf(null);
+        p.coverLegs = null; p.coverLimit = null; p.covered = false;          // …and revert
+        if (f1 <= f0) continue;   // locking this winner would NOT lift the book floor → leave it as the tail hedge
+      }
+      if (enforceLegs) { if (rc.resolution === 'twin') legCoverTwin++; else if (rc.resolution === 'wingShift') legCoverWing++; ledger.record(rc.legs); }
+      p.coverLegs = cl; p.coverLimit = climit;
+      p.covered = true; p.pendingCover = null; nCoverToStack++; markBookDirty();
+      if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
+      locked.push({ side: p.side, shortStrike: p.shortStrike });
+    }
+    return locked;
+  }
+
+  // Buy the cheapest high-ratio far-side offsets until the floor is back inside `limit` (or nothing
+  // clears the ratio / the day budget is spent). Returns how many were bought.
+  function buyFloorOffsets(limit, S, tau, iv, force) {
+    if (!floorOffset) return 0;
+    const mark = (type, k) => bs.bsPrice(type, S, k, tau, iv);
+    // FORCE = "must-fix" mode, used only when the floor is through the HARD ceiling: take the best
+    // available floor-lift-per-dollar even if it doesn't clear the ratio gate, because lossMax is a
+    // ceiling, not a preference. Un-forced, the ratio gate keeps the overlay to outsized-reduction-only.
+    const minRatio = force ? 0 : offMinRatio;
+    const maxCount = force ? offMaxPerDay * 3 : offMaxPerDay;
+    let bought = 0;
+    while (offCount < maxCount && offSpent < offBudget) {
+      const f = floorNow();
+      if (-f <= limit) break;
+      // Which tail is the floor on? (the side the offset has to pay into)
+      let worstX = S, worstV = Infinity;
+      for (const p of st.positions) for (const l of p.legs) { const v = bookAt(l.strike, null); if (v < worstV) { worstV = v; worstX = l.strike; } }
+      const zoneSide = worstX >= S ? 'above' : 'below';
+      let best = null;
+      for (const cand of RH.candidateHedges(zoneSide, S, legIncr, offWidths, offDepth)) {
+        if (enforceLegs && ledger.conflicts(cand.legs)) continue;      // respect leg-uniqueness
+        const debit = RH.legsDebit(cand.legs, mark, offSlip);
+        if (debit == null || debit <= 0) continue;
+        const cost = debit * 100 * QTY;
+        if (offSpent + cost > offBudget) continue;
+        const hp = { side: 'hedge', shortStrike: null, legs: cand.legs, limit: debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true };
+        const lift = floorOf(hp) - f;
+        if (lift <= 0) continue;
+        const ratio = lift / cost;
+        if (ratio >= minRatio && (!best || ratio > best.ratio)) best = { hp, cost, ratio };
+      }
+      if (!best) break;
+      st.positions.push(best.hp); markBookDirty();
+      if (enforceLegs) ledger.record(best.hp.legs);
+      offSpent += best.cost; offCount++; bought++;
+    }
+    return bought;
+  }
+
+  // The full reduction ladder, cheapest risk-removal first: lock winners (frees a tail for ~free, often
+  // at a profit), then spend premium on offsets only if the floor is still through `limit`.
+  function reduceRisk(S, tau, iv) {
+    // (1) FREE first — lock deep-ITM winners, but only those that actually lift the book floor.
+    floorCovers += lockDeepWinners(() => -floorNow() > lossTarget, S, tau, iv, true).length;
+    // (2) Ratio-gated offsets toward the WORKING TARGET: outsized risk reduction for a small slice of peak.
+    if (-floorNow() > lossTarget) buyFloorOffsets(lossTarget, S, tau, iv, false);
+    // (3) MUST-FIX toward the HARD ceiling: whatever the best available lift is, take it.
+    if (-floorNow() > lossMax) buyFloorOffsets(lossMax, S, tau, iv, true);
+  }
+
   for (let i = 0; i < bars.length; i++) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
@@ -193,22 +355,41 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
       if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= pc.target) {
+        // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
+        // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
+        // removes the offset and can push the BOOK floor down (the 2026-02-21 mechanism). Since we own the
+        // resting order, the fix is simply not to take the fill yet — leave it pending and re-check next
+        // bar. This is what makes lossMax an airtight ceiling: opens are gated, offsets only lift, and now
+        // no cover can lower the book floor through it either. Covers that IMPROVE the floor always book.
+        // Resolve the cover FIRST (pure — nothing recorded yet) so we know the ACTUAL legs/limit this fill
+        // would book: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip. The
+        // governor then simulates exactly what would be booked (the anchor cover's limit is NOT capped at
+        // the tent target, so simulating the ideal tent instead would under-state the floor hit).
+        let cLegs = pc.legs, cLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK)), rc = null;
         if (enforceLegs) {
-          // Resolve the cover: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip.
-          const rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
+          rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
+          if (rc.wing !== G.WIDTH) {
+            // Anchor cover (wider wing): P&L uses the ACTUAL legs (debit-canonical at the shifted wing).
+            cLegs = CL.coverLegsFor(pos.side, pos.shortStrike, rc.wing, 'debit');
+            cLimit = roundTick(legsMark(cLegs, S, tau, iv) + TICK);
+          }
+        }
+        if (governed) {
+          const f0 = floorNow();
+          const sv = { covered: pos.covered, coverLegs: pos.coverLegs, coverLimit: pos.coverLimit };
+          pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true;
+          const f1 = floorOf(null);
+          pos.covered = sv.covered; pos.coverLegs = sv.coverLegs; pos.coverLimit = sv.coverLimit;
+          if (f1 < f0 && -f1 > lossMax) { coverDeferred++; continue; }   // would un-hedge the book past the ceiling
+        }
+        if (enforceLegs) {
           if (rc.resolution === 'twin') legCoverTwin++;
           else if (rc.resolution === 'wingShift') legCoverWing++;
           ledger.record(rc.legs);
-          if (rc.wing !== G.WIDTH) {
-            // Anchor cover (wider wing): P&L uses the ACTUAL legs (debit-canonical at the shifted wing).
-            const pnlLegs = CL.coverLegsFor(pos.side, pos.shortStrike, rc.wing, 'debit');
-            pos.coverLegs = pnlLegs; pos.coverLimit = roundTick(legsMark(pnlLegs, S, tau, iv) + TICK);
-            pos.covered = true; pos.pendingCover = null; continue;
-          }
         }
-        pos.coverLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK));
-        pos.coverLegs = pc.legs; pos.covered = true; pos.pendingCover = null;
+        pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null; markBookDirty();
+        if (rc && rc.wing !== G.WIDTH) continue;   // anchor cover: legacy skips the capital accounting below
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
@@ -223,6 +404,18 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
     }
     if (trackCap) peakUncov = Math.max(peakUncov, uncoveredRisk());   // margin view: at-risk uncovered $ right now
+    // (b1) GOVERNOR — WORKING TARGET. Every bar (not just when an open is pending): if the book floor has
+    // fallen through lossTarget, actively work it back — lock deep-ITM winners first, then buy a low-cost
+    // offset. This is the "try to keep risk under the target" half; the hard lossMax gate below is the
+    // "never let an open push it past" half.
+    if (governed) {
+      const f0 = floorNow();
+      if (-f0 > lossTarget) { floorBreaches++; reduceRisk(S, tau, iv); }
+      // sample AFTER the ladder: worstFloor is the exposure we actually HELD, which is what lossMax bounds.
+      const f1 = floorNow();
+      if (f1 < worstFloor) worstFloor = f1;
+      if (-f0 > worstFloorPre) worstFloorPre = -f0;   // pre-reduction exposure (what the ladder had to fix)
+    }
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
@@ -275,32 +468,19 @@ function runDay5m(bars, signalFn, opts = {}) {
       // The cap cover-to-stack recycles against: the account ceiling always, and — when
       // opts.coverToStackVsRisk — the STRATEGY risk cap too (user's "if risk hits the cap, cover to
       // enable more"). Effective trigger = the tightest active cap it's allowed to recycle against.
+      // The candidate position this open would add — the governor gates on the PROJECTED book floor with
+      // it included, so an open can never push the day's max loss through lossMax.
+      const candPos = { side: sig.openSide, legs: o.legs, limit: o.limit, covered: false, coverLegs: null, coverLimit: null };
       const ctsCap = Math.min(capCeiling, opts.coverToStackVsRisk ? Math.min(riskCap, hardCap) : Infinity);
-      if (opts.coverToStack && ctsCap < Infinity && uncoveredRisk() + nd > ctsCap) {
-        const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
-        const cands = st.positions.filter(p => !p.covered && !p.pendingCover)
-          .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
-          .filter(x => x.mark >= lockMin)
-          .sort((a, b) => b.mark - a.mark);                 // deepest ITM first: cheapest cover, biggest lock
-        const lockedNow = [];
-        for (const { p } of cands) {
-          if (uncoveredRisk() + nd <= ctsCap) break;        // freed enough room under the binding cap
-          let cl = G.coverLegs(p.side, p.shortStrike);       // debit-canonical (drives P&L)
-          if (enforceLegs) {
-            // Resolve the lock-cover for leg-uniqueness (prefer TWIN = same strikes, P&L-neutral; else
-            // wing-shift = anchor cover; else skip this winner) so the SENT legs are recorded — matching
-            // live's placeRestingCover, and letting the follow-on open be re-resolved to avoid them.
-            const rc = LL.resolveCover(p.side, p.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
-            if (rc.resolution === 'skip') { legCoverSkip++; continue; }   // can't lock leg-uniquely → leave uncovered
-            if (rc.resolution === 'twin') legCoverTwin++; else if (rc.resolution === 'wingShift') legCoverWing++;
-            ledger.record(rc.legs);
-            if (rc.wing !== G.WIDTH) cl = CL.coverLegsFor(p.side, p.shortStrike, rc.wing, 'debit');   // anchor-cover P&L legs
-          }
-          p.coverLegs = cl; p.coverLimit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
-          p.covered = true; p.pendingCover = null; nCoverToStack++;
-          if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
-          lockedNow.push({ side: p.side, shortStrike: p.shortStrike });
-        }
+      // GOVERNED: recycle against the projected floor vs lossMax. UNGOVERNED (legacy): against uncovered
+      // debit vs the tightest active cap. Only LOCKING runs here (it's free risk removal); paying premium
+      // for an offset purely to unblock a new open is left to the (b1) target ladder.
+      const needRoom = governed
+        ? () => opts.coverToStack !== false && -floorOf(candPos) > lossMax
+        : () => opts.coverToStack && ctsCap < Infinity && uncoveredRisk() + nd > ctsCap;
+      if (needRoom()) {
+        const lockedNow = lockDeepWinners(needRoom, S, tau, iv, governed);
+        if (governed) floorCovers += lockedNow.length;
         // RE-RESOLVE the open against the now-updated ledger (it may have just gained cover-to-stack legs),
         // so the open can't NET against a lock we just placed — the 4-leg combo then merges two conflict-free
         // spreads (no combo-level wing-shift needed). Prefer the parity twin (same strikes → P&L-neutral).
@@ -325,8 +505,14 @@ function runDay5m(bars, signalFn, opts = {}) {
       const softOk = (opts.exemptTrendStack && stacking) ? true : (atRisk + nd <= softCap);
       const strategyOk = (totalUncov + nd <= riskCap) && softOk && (totalUncov + nd <= hardCap);   // strategy RISK caps
       const ceilingOk = totalUncov + nd <= capCeiling;                                             // ACCOUNT capital ceiling (separate)
-      if (strategyOk && ceilingOk) {
+      // GOVERNOR HARD GATE — the projected BOOK FLOOR (rebuilt from the FINAL `o`, which the ledger
+      // re-resolve above may have shifted) must stay inside lossMax. Because realized day P&L =
+      // bookPayoff(settle) >= floor, and every open is gated here, the day's loss is bounded by lossMax.
+      const govOk = !governed || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
+      if (!govOk) govBlocked++;
+      if (strategyOk && ceilingOk && govOk) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
+        markBookDirty();
         if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
         st.dir = sig.openSide;
         if (trackCap) {
@@ -361,7 +547,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5, trend });
         for (const h of plan.hedges) {
           st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true });
-          hvSpent += h.cost; hvCount++;
+          hvSpent += h.cost; hvCount++; markBookDirty();
         }
       }
     }
@@ -422,7 +608,10 @@ function runDay5m(bars, signalFn, opts = {}) {
     bestCase, worstCase, avgTerminalPotential,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
-    harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null
+    harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null,
+    // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
+    // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
+    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), blocked: govBlocked, coverDeferred } : null
   };
 }
 
