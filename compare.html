@@ -16,7 +16,7 @@
   label.tgl { user-select:none; }
   label.tgl input { vertical-align:-1px; margin-right:4px; }
   #status { padding:10px 14px; color:var(--muted); }
-  #timebar { position:sticky; top:44px; z-index:4; display:flex; align-items:center; gap:10px; padding:6px 14px; background:var(--bg); border-bottom:1px solid var(--grid); }
+  #timebar { flex-basis:100%; width:100%; display:flex; align-items:center; gap:10px; margin-top:4px; padding-top:6px; border-top:1px solid var(--grid); }
   #timebar .tb-lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
   #timebar input[type=range] { flex:1; cursor:pointer; }
   #timebar .tb-time { font:12px ui-monospace, monospace; font-weight:700; min-width:74px; text-align:right; }
@@ -27,8 +27,14 @@
   table.grid th.rowh { text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
   td.cell { width:184px; min-height:118px; border:1px solid var(--grid); border-radius:6px; padding:3px 5px; vertical-align:top; background:#fcfcfc; }
   td.empty { border:1px dashed #eee; background:transparent; }
-  .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; }
+  .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
+  .cell .cname .hmax { font:9px ui-monospace, monospace; white-space:nowrap; }
+  .cell .cname .hmax i { font-style:normal; font-weight:700; }
+  .cell .cname .hmax .p { color:var(--profit); } .cell .cname .hmax .l { color:var(--loss); }
+  .cell .chartwrap { position:relative; width:174px; padding-bottom:15px; }
+  .cell .nowlbl { position:absolute; bottom:0; transform:translateX(-50%); font:8px ui-monospace, monospace; text-align:center; line-height:1.05; color:#555; background:rgba(252,252,252,0.82); padding:0 1px; pointer-events:none; white-space:nowrap; }
+  .cell .nowlbl i { display:block; font-weight:700; }
   .cell .nums { font:10px ui-monospace, monospace; display:flex; justify-content:space-between; margin-top:1px; }
   .cell .nums .w { color:var(--loss); } .cell .nums .b { color:var(--profit); } .cell .nums .a { color:var(--muted); }
   .cell .btnums { font:9px ui-monospace, monospace; display:flex; justify-content:space-between; opacity:0.75; }
@@ -55,18 +61,16 @@
 <body>
 <header>
   <h1>Strategy Risk Curves</h1>
-  <span class="meta" id="hmeta">—</span>
-  <span class="spacer"></span>
-  <label class="tgl"><input type="checkbox" id="syncY"> sync Y-axis (compare magnitudes)</label>
-  <label class="tgl"><input type="checkbox" id="btOverlay"> backtest overlay</label>
+  <span class="meta" id="hmeta">—</span><br/>
+  <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <button id="btTableBtn">Backtest table ▾</button>
   <button id="refresh">Refresh</button>
+  <div id="timebar">
+    <span class="tb-lbl">Time of day</span>
+    <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
+    <span id="timeLabel" class="tb-time">full day</span>
+  </div>
 </header>
-<div id="timebar">
-  <span class="tb-lbl">Time of day</span>
-  <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
-  <span id="timeLabel" class="tb-time">full day</span>
-</div>
 <div id="status">Loading…</div>
 <div class="wrap"><table class="grid" id="grid"></table></div>
 <div class="wrap" id="btWrap" style="display:none">
@@ -164,16 +168,17 @@ function svgCurve(v, d, yMin, yMax, bt) {
   const pts = d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
   const areaUp = `M0,${zeroY} L ${d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' L ')} L ${CW},${zeroY} Z`;
   const id = 'c' + Math.random().toString(36).slice(2, 8);
-  const btLine = (y, color) => (y != null && Number.isFinite(y))
-    ? `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>` : '';
-  const btLines = bt ? btLine(bt.worst, 'var(--loss)') + btLine(bt.best, 'var(--profit)') : '';
+  // Backtest AVERAGE loss/profit: dashed reference lines (always shown) with the $ value inline at the LEFT.
+  const btEl = (y, color, txt) => {
+    if (y == null || !Number.isFinite(y)) return '';
+    const ly = Math.max(8, Math.min(CH - 1, Y(y) - 1.5));
+    return `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>`
+      + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="8" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.4" paint-order="stroke">${txt}</text>`;
+  };
+  const btLines = bt ? btEl(bt.worst, 'var(--loss)', fmtN(bt.worst)) + btEl(bt.best, 'var(--profit)', fmtN(bt.best)) : '';
   // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
   const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
   const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
-  // Max value (top-right, near the top of the P&L axis) + max loss (bottom-right, near the bottom).
-  const T = (txt, y, color) => `<text x="${CW - 3}" y="${y}" text-anchor="end" font-size="9" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.5" paint-order="stroke">${txt}</text>`;
-  const maxTxt = T(d.unboundedGain ? '+∞' : usd(d.best), 10, 'var(--profit)');
-  const lossTxt = T(d.unboundedLoss ? '−∞' : usd(d.worst), CH - 3, 'var(--loss)');
   return `<svg data-v="${v}" width="${CW}" height="${CH}" viewBox="0 0 ${CW} ${CH}">
     <defs>
       <clipPath id="up${id}"><rect x="0" y="0" width="${CW}" height="${zeroY}"/></clipPath>
@@ -184,9 +189,16 @@ function svgCurve(v, d, yMin, yMax, bt) {
     <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}" stroke="var(--zero)" stroke-width="1" stroke-dasharray="3 2"/>
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
-    ${curLine}${cursor}${maxTxt}${lossTxt}
+    ${curLine}${cursor}
   </svg>`;
 }
+
+// Compact $ for the tight cell header: +$13.8k / −$4.9k.
+const usdK = (n) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const a = Math.abs(n), s = n < 0 ? '−$' : '+$';
+  return a >= 1000 ? s + (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'k' : s + Math.round(a);
+};
 
 const fmtN = (n) => Number.isFinite(n) ? usd(n) : '—';
 
@@ -194,12 +206,12 @@ function render() {
   const grid = document.getElementById('grid');
   const finite = Object.values(cells).filter((c) => c.curve);
   const syncY = document.getElementById('syncY').checked;
-  const overlay = document.getElementById('btOverlay').checked && !!baselines;
+  const overlay = !!baselines;   // backtest reference lines are permanent (when baselines are loaded)
 
-  // A cell's effective lo/hi — widened to include its backtest worst/avg/best when the overlay is on, so
-  // the reference dashes stay on-canvas even when today's book sits well inside the historical envelope.
-  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b) { for (const y of [b.worst, b.avg]) if (Number.isFinite(y)) lo = Math.min(lo, y); } return lo; };
-  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b) { for (const y of [b.best, b.avg]) if (Number.isFinite(y)) hi = Math.max(hi, y); } return hi; };
+  // A cell's effective lo/hi — widened to include its backtest worst/best so the reference dashes stay
+  // on-canvas even when today's book sits well inside the historical envelope.
+  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst); return lo; };
+  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best); return hi; };
 
   let gMin = null, gMax = null;
   if (syncY && finite.length) {
@@ -219,16 +231,22 @@ function render() {
       const yMin = syncY ? gMin : cellLo(v, d), yMax = syncY ? gMax : cellHi(v, d);
       const wStr = d.unboundedLoss ? '−∞' : usd(d.worst);
       const bStr = d.unboundedGain ? '+∞' : usd(d.best);
-      const btRow = bt ? `<div class="btnums"><span class="lbl">bt</span><span class="w">${fmtN(bt.worst)}</span><span class="b">${fmtN(bt.best)}</span></div>` : '';
+      // Header: strategy id (left) + the book's max terminal profit / max loss (right).
+      const hmax = `<span class="hmax"><i class="p">${d.unboundedGain ? '+∞' : usdK(d.best)}</i> <i class="l">${d.unboundedLoss ? '−∞' : usdK(d.worst)}</i></span>`;
+      // Under-the-line "now" label: current underlying price + its terminal P&L, positioned at the gray line.
+      let nowlbl = '';
+      if (d.underlying != null) {
+        const xu = ((d.underlying - d.xMin) / ((d.xMax - d.xMin) || 1)) * CW;
+        const lx = Math.max(16, Math.min(CW - 16, xu));
+        const pnl = d.underPnl != null ? `<i style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(d.underPnl)}</i>` : '';
+        nowlbl = `<div class="nowlbl" style="left:${lx.toFixed(1)}px">${Math.round(d.underlying)}${pnl}</div>`;
+      }
       const btTitle = bt ? `\nbacktest avg — max loss ${fmtN(bt.worst)} · max ${fmtN(bt.best)} · ${bt.trades != null ? bt.trades + '/day' : ''} · peak cap ${fmtN(bt.peakCap)}` : '';
-      const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span>${d.underlying != null ? `<span class="cur">${Math.round(d.underlying)}</span>` : ''}<span>${Math.round(d.xMax)}</span></div>`;
-      const term = d.underPnl != null ? `<div class="term" style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(d.underPnl)}</div>` : '<div class="term">—</div>';
-      html += `<td class="cell" title="${v}\nterminal @ now ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}">`
-        + `<div class="cname"><b>${v}</b></div>`
-        + svgCurve(v, d, yMin, yMax, bt)
+      const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span><span>${Math.round(d.xMax)}</span></div>`;
+      html += `<td class="cell" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}">`
+        + `<div class="cname"><b>${v}</b>${hmax}</div>`
+        + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt)}${nowlbl}</div>`
         + axis
-        + term
-        + btRow
         + '<div class="sel"></div>'
         + '</td>';
     }
@@ -236,7 +254,7 @@ function render() {
   }
   html += '</tbody>';
   grid.innerHTML = html;
-  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · gray = now (click to project P&L) · max top-right / max-loss bottom-right / terminal center${overlay ? ' · dashes = backtest' : ''}  ·  ${finite.length} variants`;
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants`;
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
@@ -405,6 +423,7 @@ async function load() {
       status.textContent = `Loading… ${++done}/${targets.length}`;
     });
     status.textContent = '';
+    try { await ensureBaselines(); } catch (e) { /* no baselines → charts still render, just without the reference lines */ }
     buildTimeIndex();
     setupSlider();
     applyTime(dayMax || null);   // full-day book by default; render() runs inside
@@ -434,16 +453,6 @@ document.getElementById('grid').addEventListener('click', (e) => {
   const td = svg.closest('td'), sel = td && td.querySelector('.sel');
   if (sel) sel.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(pnl)}</b>`;
 });
-document.getElementById('btOverlay').addEventListener('change', async (e) => {
-  const status = document.getElementById('status');
-  if (e.target.checked && !baselines) {
-    status.textContent = 'Loading backtest baselines…';
-    try { await ensureBaselines(); status.textContent = ''; }
-    catch (err) { status.textContent = 'No backtest baselines available (' + (err.status === 404 ? 'not deployed yet' : (err.message || err)) + ')'; e.target.checked = false; return; }
-  }
-  render();
-});
-
 // Backtest table: toggle the section, loading baselines on first open, then render (sortable by header).
 document.getElementById('btTableBtn').addEventListener('click', async () => {
   const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');
