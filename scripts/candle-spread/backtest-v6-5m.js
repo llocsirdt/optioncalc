@@ -81,6 +81,7 @@ function ivMultAt(minOfDay) {
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
+const WG = require('../../server/src/candle-spread/wing-convert');   // peak->floor wing conversion (knee-anchored)
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -235,6 +236,22 @@ function runDay5m(bars, signalFn, opts = {}) {
   const offSlip = opts.floorOffsetSlip != null ? opts.floorOffsetSlip : 0.25;   // per leg; the validated NDX fill
   const offMaxPerDay = opts.floorOffsetMaxPerDay != null ? opts.floorOffsetMaxPerDay : 6;
   const offBudget = opts.floorOffsetBudget != null ? opts.floorOffsetBudget : Infinity;
+  // 'target' (legacy default) | 'mark' (cross at the real price) | 'rest' (resting order at the ideal target)
+  // WING CONVERSION (opts.wingConvert) — turn PEAK into FLOOR with cheap OTM spreads anchored at the
+  // curve's knee. DISTINCT from floorOffset: that fires when the floor is BAD; this fires when the book is
+  // GOOD and the job is banking more of it. wingAfterMin supports the time-of-day idea (e.g. 840 = 2pm).
+  const wingOn = opts.wingConvert === true;
+  const wingAfterMin = opts.wingAfterMin != null ? opts.wingAfterMin : 0;
+  const wingEvery = opts.wingEveryBars != null ? opts.wingEveryBars : 3;   // re-plan at most every N bars
+  const wingMinRatio = opts.wingMinRatio != null ? opts.wingMinRatio : 3;
+  const wingSlip = opts.wingSlip != null ? opts.wingSlip : 0.25;           // per leg, marketable proxy
+  const wingBandSig = opts.wingBandSigmas != null ? opts.wingBandSigmas : 1.5;
+  const wingMaxPerDay = opts.wingMaxPerDay != null ? opts.wingMaxPerDay : 6;
+  const wingBudgetFrac = opts.wingBudgetFrac != null ? opts.wingBudgetFrac : 0.10;   // of the current peak
+  let wingCount = 0, wingSpent = 0, wingLastBar = -99;
+  const lockMode = opts.lockCoverMode || 'target';
+  const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
+  let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
   // COVER-TO-CONTINUE — lock the deepest-ITM winners until `need()` is satisfied. A covered tent is a
@@ -257,6 +274,26 @@ function runDay5m(bars, signalFn, opts = {}) {
     const locked = [];
     for (const { p } of cands) {
       if (!need()) break;
+      // LOCK-COVER PRICING MODE (opts.lockCoverMode) — the open question of what an instant
+      // cover-to-continue lock actually costs. The open+cover pair is NOT a complement: they are
+      // ADJACENT spreads sharing one strike, so the combined payoff runs from W (both tails) to 2W (at
+      // the shared strike). Cost < W = guaranteed profit; cost between W and 2W = negative floor with
+      // live upside to 2W — a real trade, not a mistake.
+      //   'rest'   — place a RESTING order at the ideal target (W − openCost) and book it only if/when
+      //              the market actually gets there (identical semantics to the signal-cover path). No
+      //              immediate risk relief; the position stays naked until it fills, or never fills.
+      //   'mark'   — CROSS now: pay mark + 1 tick, whatever that is. Always executable; total cost may
+      //              land between W and 2W.
+      //   'target' — LEGACY (default): books instantly at min(W − openCost, mark + tick). That takes the
+      //              resting-mode PRICE with crossing-mode IMMEDIACY, so whenever the cover marks above
+      //              the target it books below the market. Measured: 65% of v6-20 locks and 79% of v7-40
+      //              locks, the latter averaging ~$1,070/contract under the mark. Kept only so prior
+      //              baselines stay reproducible; not a defensible fill model.
+      if (lockMode === 'rest') {
+        p.pendingCover = { legs: G.coverLegs(p.side, p.shortStrike), target: round2(G.WIDTH - p.limit) };
+        lockRested++;
+        continue;   // frees no risk NOW — that is the honest cost of resting rather than crossing
+      }
       // Resolve the lock-cover for leg-uniqueness (prefer TWIN = same strikes, P&L-neutral; else
       // wing-shift = anchor cover; else skip this winner). PURE — nothing is recorded until we commit,
       // so a floor-rejected candidate leaves the ledger untouched.
@@ -266,13 +303,33 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (rc.resolution === 'skip') { legCoverSkip++; continue; }   // can't lock leg-uniquely → leave uncovered
         if (rc.wing !== G.WIDTH) cl = CL.coverLegsFor(p.side, p.shortStrike, rc.wing, 'debit');   // anchor-cover P&L legs
       }
-      const climit = roundTick(Math.min(round2(G.WIDTH - p.limit), legsMark(cl, S, tau, iv) + TICK));
+      // coverToStackSlip: the lock-cover is booked INSTANTLY at mark + 1 tick with no resting-fill check
+      // (the agreed CROSS mode — the position is deep ITM so its offsetting cover is cheap/OTM and you
+      // cross to grab it). That price comes from flat-IV BS, which UNDER-prices a cheap OTM cover because
+      // it carries no skew. This knob adds a per-spread premium so the result's dependence on that
+      // optimism can be measured. Default 0 = unchanged.
+      const _rawMark = legsMark(cl, S, tau, iv) + TICK + (opts.coverToStackSlip || 0);
+      const _breakeven = round2(G.WIDTH - p.limit);
+      if (_rawMark > _breakeven) lockUnfillable++; else lockFillable++;   // was the ideal target actually available?
+      if (opts.onLock) opts.onLock({ W: G.WIDTH, openLimit: p.limit, posMark: legsMark(p.legs, S, tau, iv), coverMark: _rawMark - TICK, breakeven: _breakeven, booked: Math.min(_breakeven, _rawMark) });
+      const climit = lockMode === 'mark' ? roundTick(_rawMark) : roundTick(Math.min(_breakeven, _rawMark));
       if (floorAware) {
         const f0 = floorNow();
         p.coverLegs = cl; p.coverLimit = climit; p.covered = true;          // simulate…
         const f1 = floorOf(null);
         p.coverLegs = null; p.coverLimit = null; p.covered = false;          // …and revert
-        if (f1 <= f0) continue;   // locking this winner would NOT lift the book floor → leave it as the tail hedge
+        // FLOOR GATE (opts.lockFloorGate) — what the governor is allowed to do when it covers. The open
+        // question: is a lock a RISK action (it must buy headroom, so it must lift the floor) or a TRADE
+        // (a W..2W tent — negative floor, live upside to 2W at the shared strike — which is the strategy's
+        // actual profit engine: as many tents as possible, locked as often as possible, upside decided by
+        // the closing price)? A floor-maximizing rule refuses exactly those tents.
+        //   'improve' — narrow/risk-only: take a lock ONLY if it RAISES the book floor.
+        //   'cap'     — permissive: take any lock that leaves the floor inside lossMax (tents allowed).
+        //   'target'  — middle: allow a floor-lowering lock only while still inside the working target.
+        const gateOk = lockGate === 'cap' ? (-f1 <= lossMax)
+          : lockGate === 'target' ? (f1 > f0 || -f1 <= lossTarget)
+            : (f1 > f0);
+        if (!gateOk) continue;
       }
       if (enforceLegs) { if (rc.resolution === 'twin') legCoverTwin++; else if (rc.resolution === 'wingShift') legCoverWing++; ledger.record(rc.legs); }
       p.coverLegs = cl; p.coverLimit = climit;
@@ -351,6 +408,30 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit) };
       }
     }
+    // (a0b) CONTINUOUS COVER (opts.continuousCover) — the user's ACTUAL policy, and a different shape of
+    // rule from everything else here: keep a standing resting cover on EVERY uncovered position at its
+    // profit-locking price (W − openCost), from the moment it is opened. Not risk-triggered and not
+    // signal-triggered — the objective is simply "open as many tents as possible, lock as often as
+    // possible, keep risk low, and let the closing price decide the upside". The existing resting-fill
+    // machinery books each one the moment the market actually offers that price, so nothing fills
+    // optimistically. WHY IT MATTERS: the engine otherwise only covers on a signal reversal, the v8/v9
+    // proactive frac, or governor distress — which is why backtest books end with a non-negative floor on
+    // only ~5% of days while the live books do it routinely.
+    if (opts.continuousCover) {
+      // continuousCoverMinLockFrac: the resting target is the price that still LOCKS A REAL PROFIT, not
+      // merely break-even. Resting at the bare break-even price (W − openCost) fills the instant the cover
+      // is barely acceptable, and that is a bad trade on a deep winner: an uncovered spread wins
+      // (W − openCost) whenever it stays past its short strike, whereas covering at break-even leaves 0 in
+      // both tails and only pays at the shared strike. Requiring the lock to secure `frac × W` makes the
+      // order fill only when the offsetting spread is genuinely cheap — the CROSS case.
+      const minLock = (opts.continuousCoverMinLockFrac || 0) * G.WIDTH;
+      for (const pos of st.positions) {
+        if (pos.covered || pos.pendingCover || pos.hedge) continue;
+        const tgt = round2(G.WIDTH - pos.limit - minLock);
+        if (tgt <= 0) continue;
+        pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: tgt };
+      }
+    }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
@@ -415,6 +496,34 @@ function runDay5m(bars, signalFn, opts = {}) {
       const f1 = floorNow();
       if (f1 < worstFloor) worstFloor = f1;
       if (-f0 > worstFloorPre) worstFloorPre = -f0;   // pre-reduction exposure (what the ladder had to fix)
+    }
+    // (b2) WING CONVERSION — bank peak as floor. Runs regardless of whether the floor is healthy (that is
+    // the whole point); gated by time-of-day, a re-plan interval, a per-day count and a budget expressed as
+    // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
+    if (wingOn && wingCount < wingMaxPerDay && etMinute(bars[i].dt) >= wingAfterMin && i - wingLastBar >= wingEvery && st.positions.length) {
+      wingLastBar = i;
+      const band = Math.round(S * iv * Math.sqrt(tau) * wingBandSig);
+      if (band > 0) {
+        // marketable proxy: buy the long leg above mid, sell the short below (live swaps in real quotes)
+        const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, iv) + (legSide === 'long' ? wingSlip : -wingSlip);
+        const bookView = st.positions.map(p => ({ filled: true, legs: p.legs, limit: p.limit, quantity: QTY, covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
+        // Budget is a fraction of the CURRENT peak — there has to be a peak worth converting before we
+        // spend anything, and a small tent can never justify real premium.
+        const shape = WG.curveShape(bookView, { step: legIncr });
+        const peakNow = shape ? shape.peak.pnl : 0;
+        const budget = Math.min(opts.wingBudget != null ? opts.wingBudget : Infinity, wingBudgetFrac * peakNow);
+        const plan = peakNow > 0 && budget > 0 ? WG.planWings(bookView, {
+          spot: S, band, incr: legIncr, price, qty: QTY, step: legIncr, budget,
+          maxWings: Math.min(3, wingMaxPerDay - wingCount), minRatio: wingMinRatio,
+        }) : null;
+        if (plan && plan.wings.length) {
+          for (const w of plan.wings) {
+            st.positions.push({ side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true });
+            wingSpent += w.cost * 100 * QTY; wingCount++;
+          }
+          markBookDirty();
+        }
+      }
     }
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
@@ -572,6 +681,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     return t;
   };
+  // OFFSET P&L attribution: what the floor-offset hedges actually settled for, vs what they cost. An
+  // insurance overlay should be a net COST that buys a better floor — if this is strongly positive the
+  // "hedges" are really directional bets and the risk story is not what it appears.
+  let offsetPnl = 0;
+  for (const pos of st.positions) if (pos.hedge) offsetPnl += (legsPayoff(pos.legs, settle) - pos.limit) * 100 * QTY;
   let floor = 0, opens = 0, filled = 0, naked = 0;
   for (const pos of st.positions) {
     opens++;
@@ -611,7 +725,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null,
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
-    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), blocked: govBlocked, coverDeferred } : null
+    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null
   };
 }
 
