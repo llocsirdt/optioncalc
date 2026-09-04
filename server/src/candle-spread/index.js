@@ -57,6 +57,10 @@ const BASE_RUNS = [
     // coverToStack ("cover to continue") lets a blocked open lock a deep-ITM winner (≥ minFrac×width) to
     // free room and keep trading rather than going dormant. proactiveCoverFrac stays family-specific.
     lossTarget: 5000, floorOffset: true, coverToStack: true, coverToStackMinFrac: 0.65,
+    // CONTINUOUS COVERING (see MIN_LOCK below) + lock covers priced as RESTING orders. 'rest' is the
+    // best honest lock-pricing model measured; the legacy instant-book-at-target mode was deleted from
+    // the engine (it booked below the market whenever the cover marked above the target).
+    continuousCover: true, lockCoverMode: 'rest',
     dryRun: true
   }
 ];
@@ -68,7 +72,7 @@ const BASE_RUNS = [
 //   v4/v5 act on 15m closes only (at15); v6/v7 act every 5m (fiveMin).
 //   v7 = v6 signal + "be wrong" bidirectional opens (opposite side while holding).
 // dryRun defaults true (simulate); flip a single variant to 'test'/false to send. v9 = v7 (be-wrong)
-// + risk caps; the v9-40-paper run below is a PURE-PAPER $40 cover-to-stack fill study (never sends).
+// + proactive covering.
 const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 
 // SIGNAL FAMILIES (width-INDEPENDENT). Each is a signal fn + cadence + cover config + any risk caps/flags,
@@ -86,12 +90,12 @@ const FAMILIES = [
   // v6 is ALSO the live-pipe harness: only its $20 variant (testAtBase + width 20) sends REAL unfillable
   // test orders (dryRun:'test') + auto-cancels when armed; the $10/$40 siblings stay pure paper. INERT
   // until all three gates: isProd + CANDLE_SPREAD_LIVE=true + that dryRun:'test'.
-  // All families inherit the shared $20k hard cap (BASE_RUNS); the aggressive families additionally get a
-  // tighter $10k-cap A/B variant via buildLowCap() below (that's what v9-40-10k is).
+  // All families inherit the day-loss governor from BASE_RUNS ($5k target, width-scaled max) plus the
+  // continuous-covering policy; each also gets an uncapped `-unc` twin via buildUncapped() below.
   { key: 'v6', label: '5m-harness', signalFn: v6Signal, signalCfg: { fiveMin: true }, testAtBase: true, ...PORTED_COVER },
   { key: 'v7', label: 'be-wrong',   signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
   // v8 = v6 signal + a soft "churn" cap on at-risk debit (exempt for a same-side trend stack) + proactive
-  // deep-ITM covering, on top of the shared $20k hard backstop.
+  // deep-ITM covering, on top of the shared governor.
   { key: 'v8', label: 'risk-capped', signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
   // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the $20k backstop — the high-ceiling variant.
   // Still paper pending go/no-go ([[project_daily_risk_tolerance]]).
@@ -120,6 +124,30 @@ const WIDTHS = [
 const LOSS_TARGET = 5000;
 const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
 
+// ── CONTINUOUS COVERING ─────────────────────────────────────────────────────────────────────────────
+// Every uncovered position carries a standing resting cover from the moment it opens, at the price that
+// still LOCKS A REAL PROFIT (not bare break-even). This is the single biggest measured improvement:
+// across 9 variants × 200 days it beat OFF on both fill models at every threshold tested, and OFF averages
+// only 43.9% of achievable. Resting at bare break-even is actively HARMFUL — it fills the instant the
+// cover is barely acceptable, which is a bad trade on a deep winner (an uncovered spread wins
+// W − openCost whenever it stays past its short strike; covering at break-even leaves 0 in both tails).
+//
+// Thresholds from the 2026-09-04 sweep (200 days, wings off, wick AND close fill models). Two gradients
+// held throughout: WIDER spreads want a LOWER threshold, and BIDIRECTIONAL families want lower than the
+// rest — v7/v9 already cover hard (proactiveCoverFrac 0.80), so a demanding lock only suppresses fills
+// they need. The curve is flat across 0.20–0.35, so precision matters far less than being switched on.
+//   MEASURED: v4 (0.30/0.30), v6 (0.35/0.35), v9 (0.20/0.20) at widths 10/20.
+//   INFERRED: v8 shares v6's signal → v6's value; v7 shares v9's (be-wrong) → v9's; v5 is v6's lineage
+//             predecessor → 0.30. v0–v3 (classic) were NOT swept → the safest single value, 0.25.
+//   $40 is UNDER-DETERMINED — the optimistic and conservative fill models point OPPOSITE ways there
+//   (v4-40 wick 0.10 vs close 0.25) — so it takes the safest single value pending the full 765-day run.
+const MIN_LOCK = { v0: 0.25, v1: 0.25, v2: 0.25, v3: 0.25, v4: 0.30, v5: 0.30, v6: 0.35, v7: 0.20, v8: 0.35, v9: 0.20 };
+const minLockFor = (key, w) => {
+  const base = MIN_LOCK[key] != null ? MIN_LOCK[key] : 0.25;
+  if (w >= 40) return Math.min(base, key === 'v7' || key === 'v9' ? 0.20 : 0.25);   // wider → lower
+  return base;
+};
+
 // Cross-product families × widths → concrete variants `${key}-${w}`. Dollar risk caps are ABSOLUTE (a
 // wider spread must not risk more — see BASE_RUNS.hardCap note); families that don't set a cap inherit the
 // $20k baseline from BASE_RUNS. Fraction-of-width knobs (proactiveCoverFrac) are already width-relative.
@@ -140,6 +168,7 @@ function buildVariants() {
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       if (f.softCap != null) v.softCap = f.softCap;
       v.lossMax = maxCapFor(w);                          // lossTarget ($5k) + floorOffset inherit from BASE_RUNS
+      v.continuousCoverMinLockFrac = minLockFor(f.key, w);
       if (f.testAtBase && w === 20) v.dryRun = 'test';   // only v6-20 arms the live pipe
       out.push(v);
     }
@@ -163,6 +192,8 @@ function buildUncapped() {
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
         spreadWidth: w, spreadShift: shift,
         lossTarget: null, lossMax: null, floorOffset: false,   // no governor
+        continuousCoverMinLockFrac: minLockFor(f.key, w),      // covering policy is NOT a risk cap — the
+        // `-unc` twins isolate the CAPS, so they keep the same covering policy as their capped sibling.
         softCap: null, hardCap: null, riskCap: null,           // no legacy caps either
       };
       if (capFrac != null) v.capFrac = capFrac;
@@ -196,6 +227,7 @@ function buildAtmComparators() {
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       if (f.softCap != null) v.softCap = f.softCap;
       v.lossMax = maxCapFor(w);                       // same governor as the short-ATM sweep
+      v.continuousCoverMinLockFrac = minLockFor(f.key, w);
       out.push(v);
     }
   }

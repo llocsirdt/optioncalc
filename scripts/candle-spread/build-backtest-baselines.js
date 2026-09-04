@@ -49,6 +49,11 @@ function optsFor(v) {
   // enables the low-cost risk-offsetting buys. The `-unc` twins null these out → ungoverned.
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
   if (v.floorOffset) o.floorOffset = true;
+  // CONTINUOUS COVERING: a standing resting cover on every position at its profit-locking price. Not a
+  // risk cap — it applies to the `-unc` twins too, so those isolate the CAPS rather than the policy.
+  if (v.continuousCover) o.continuousCover = true;
+  if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
+  if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.coverSelector) o.coverSelector = v.coverSelector;
   if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }

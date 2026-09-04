@@ -249,7 +249,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const wingMaxPerDay = opts.wingMaxPerDay != null ? opts.wingMaxPerDay : 6;
   const wingBudgetFrac = opts.wingBudgetFrac != null ? opts.wingBudgetFrac : 0.10;   // of the current peak
   let wingCount = 0, wingSpent = 0, wingLastBar = -99;
-  const lockMode = opts.lockCoverMode || 'target';
+  const lockMode = opts.lockCoverMode || 'rest';
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
@@ -279,16 +279,21 @@ function runDay5m(bars, signalFn, opts = {}) {
       // ADJACENT spreads sharing one strike, so the combined payoff runs from W (both tails) to 2W (at
       // the shared strike). Cost < W = guaranteed profit; cost between W and 2W = negative floor with
       // live upside to 2W — a real trade, not a mistake.
-      //   'rest'   — place a RESTING order at the ideal target (W − openCost) and book it only if/when
-      //              the market actually gets there (identical semantics to the signal-cover path). No
-      //              immediate risk relief; the position stays naked until it fills, or never fills.
+      //   'rest' (DEFAULT) — place a RESTING order at the ideal target (W − openCost) and book it only
+      //              if/when the market actually gets there (identical semantics to the signal-cover
+      //              path). No immediate risk relief; the position stays naked until it fills, or never
+      //              fills. Best honest mode everywhere it was measured.
       //   'mark'   — CROSS now: pay mark + 1 tick, whatever that is. Always executable; total cost may
-      //              land between W and 2W.
-      //   'target' — LEGACY (default): books instantly at min(W − openCost, mark + tick). That takes the
-      //              resting-mode PRICE with crossing-mode IMMEDIACY, so whenever the cover marks above
-      //              the target it books below the market. Measured: 65% of v6-20 locks and 79% of v7-40
-      //              locks, the latter averaging ~$1,070/contract under the mark. Kept only so prior
-      //              baselines stay reproducible; not a defensible fill model.
+      //              land between W and 2W. Kept because the right answer is likely conditional (curve
+      //              posture / trend / time of day), so both extremes stay testable.
+      // REMOVED 2026-09-04 — the legacy 'target' mode, which booked instantly at min(W − openCost,
+      // mark + tick). That took the resting-mode PRICE with crossing-mode IMMEDIACY: whenever the cover
+      // marked above the target it booked BELOW the market. Pre-existing behaviour (it predates the
+      // governor) and harmless while coverToStack fired only on a blocked open — but the governor calls
+      // this thousands of times per run, which made it the dominant P&L driver and produced the bogus
+      // "capped beats uncapped" result. Measured 65% of v6-20 and 79% of v7-40 locks priced below market,
+      // the latter by ~$1,070/contract. Deleted rather than left reachable so it cannot be selected by
+      // accident; prior baselines built with it are superseded, not reproducible.
       if (lockMode === 'rest') {
         p.pendingCover = { legs: G.coverLegs(p.side, p.shortStrike), target: round2(G.WIDTH - p.limit) };
         lockRested++;
@@ -312,7 +317,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const _breakeven = round2(G.WIDTH - p.limit);
       if (_rawMark > _breakeven) lockUnfillable++; else lockFillable++;   // was the ideal target actually available?
       if (opts.onLock) opts.onLock({ W: G.WIDTH, openLimit: p.limit, posMark: legsMark(p.legs, S, tau, iv), coverMark: _rawMark - TICK, breakeven: _breakeven, booked: Math.min(_breakeven, _rawMark) });
-      const climit = lockMode === 'mark' ? roundTick(_rawMark) : roundTick(Math.min(_breakeven, _rawMark));
+      const climit = roundTick(_rawMark);   // 'mark' is the only instant-book mode left: pay the real price
       if (floorAware) {
         const f0 = floorNow();
         p.coverLegs = cl; p.coverLimit = climit; p.covered = true;          // simulate…
