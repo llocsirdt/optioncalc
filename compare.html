@@ -99,10 +99,11 @@ const COLUMNS = [
   { k:'10',      h:'$10' },
   { k:'20',      h:'$20' },
   { k:'40',      h:'$40' },
+  { k:'10-unc',  h:'$10 unc' },
+  { k:'20-unc',  h:'$20 unc' },
+  { k:'40-unc',  h:'$40 unc' },
   { k:'20-cATM', h:'$20 ctr' },
   { k:'40-cATM', h:'$40 ctr' },
-  { k:'20-10k',  h:'$20·10k' },
-  { k:'40-10k',  h:'$40·10k' },
 ];
 const CW = 174, CH = 74;   // mini-chart px
 
@@ -116,6 +117,12 @@ let pendingT = null, sliderRAF = null;             // rAF-coalesced slider recom
 const usd = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
 const fetchJson = async (u) => { const r = await fetch(u, { cache:'no-store' }); if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; } return r.json(); };
 const runsUrl = () => `${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`;
+// REPLAY MODE — ?replay=YYYY-MM-DD (or ?replay=latest) renders a BACKTEST day instead of today's live
+// shadow runs. The bundle is emitted in the same run-record shape as a live run, so every downstream
+// piece (strategyRunToOptionArray, buildTimeIndex, the slider, the curves) works unchanged.
+const REPLAY = new URLSearchParams(location.search).get('replay');
+const replaysUrl = () => `${PROXY_URL}/api/v1/candle-spread/replays?cb=${Date.now()}`;
+const replayUrl = (d) => `${PROXY_URL}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
 const runUrl = (sym, exp, date, v) => `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
 
 // Turn a run record's legs into {curve, worst, best, avg, lo, hi}. Reuses PortfolioRisk (shared math) so
@@ -254,7 +261,8 @@ function render() {
   }
   html += '</tbody>';
   grid.innerHTML = html;
-  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants`;
+  const src = REPLAY ? 'BACKTEST REPLAY' : 'live';
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants`;
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
@@ -401,6 +409,24 @@ async function load() {
   for (const k of Object.keys(cells)) delete cells[k];
   for (const k of Object.keys(records)) delete records[k];
   try {
+    if (REPLAY) {
+      let date = REPLAY;
+      if (date === 'latest') {
+        const l = await fetchJson(replaysUrl());
+        if (!l.dates || !l.dates.length) { status.textContent = 'No backtest replays generated yet (scripts/candle-spread/backtest-replay.js --date ...).'; return; }
+        date = l.dates[l.dates.length - 1];
+      }
+      const bundle = await fetchJson(replayUrl(date));
+      symbol = bundle.symbol || 'NDX';
+      commonDate = bundle.date;
+      for (const [v, rec] of Object.entries(bundle.runs || {})) records[v] = rec;
+      status.textContent = '';
+      try { await ensureBaselines(); } catch (e) { /* curves still render without reference lines */ }
+      buildTimeIndex();
+      setupSlider();
+      applyTime(dayMax || null);
+      return;
+    }
     const idx = await fetchJson(runsUrl());
     const all = (idx.runs || []).filter((r) => r.variant && r.tradeDate);
     if (!all.length) { status.textContent = 'No runs found on the server yet.'; return; }

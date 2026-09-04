@@ -1076,6 +1076,35 @@ app.get('/api/v1/candle-spread/baselines', (req, res) => {
   }
 });
 
+// BACKTEST REPLAYS — one historical day rendered as run records in the LIVE record shape, so the
+// compare-strategies page can drive its time-of-day slider over a backtest day exactly as it does over
+// today's shadow runs. Generated out-of-band by scripts/candle-spread/backtest-replay.js into
+// data/backtest-replays/<date>.json (the 5m dataset those are built from is local-only and gitignored,
+// so in practice this serves from a dev machine, not the deployed instance).
+//   GET /api/v1/candle-spread/replays          -> { dates: [...] }
+//   GET /api/v1/candle-spread/replay?date=...  -> the day's bundle
+const REPLAY_DIR = require('path').join(__dirname, '..', '..', 'data', 'backtest-replays');
+app.get('/api/v1/candle-spread/replays', (req, res) => {
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(REPLAY_DIR)) return res.json({ dates: [] });
+    const dates = fs.readdirSync(REPLAY_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).map(f => f.slice(0, 10)).sort();
+    res.json({ dates });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list backtest replays', message: error.message });
+  }
+});
+app.get('/api/v1/candle-spread/replay', (req, res) => {
+  const date = String(req.query.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
+  try {
+    const p = require('path').join(REPLAY_DIR, `${date}.json`);
+    res.type('application/json').send(require('fs').readFileSync(p, 'utf8'));
+  } catch (error) {
+    res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: 'Replay not generated for that date', date, message: error.message });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {

@@ -32,6 +32,8 @@ const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 't
 const money = n => (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n));
 const etDay = ms => new Date(ms).toLocaleDateString('en-US', { timeZone: 'America/New_York' });
 const etMinute = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
+// "MM/DD HH:MM" in ET — the exact stamp format the live run records use for candle + position times.
+const etStamp = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); const p = n => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const isFive = a => ['1m', '5m', '15m', '60m'].every(tf => a[tf] && a[tf].bbupper != null && a[tf].bblower != null && a[tf].ema != null);
 
 // Load ALL 5m bars per day (not just 15m closes). Returns { date, bars:[{dt,analysis,fifteen}] }.
@@ -252,6 +254,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const lockMode = opts.lockCoverMode || 'rest';
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
+  let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
   // COVER-TO-CONTINUE — lock the deepest-ITM winners until `need()` is satisfied. A covered tent is a
@@ -338,7 +341,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       if (enforceLegs) { if (rc.resolution === 'twin') legCoverTwin++; else if (rc.resolution === 'wingShift') legCoverWing++; ledger.record(rc.legs); }
       p.coverLegs = cl; p.coverLimit = climit;
-      p.covered = true; p.pendingCover = null; nCoverToStack++; markBookDirty();
+      p.covered = true; p.pendingCover = null; nCoverToStack++;
+      p.coverEpoch = lockEpoch; p.coverTime = lockET; markBookDirty();
       if (trackCap) { const back = (G.WIDTH - p.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }   // deep winner → credit cover
       locked.push({ side: p.side, shortStrike: p.shortStrike });
     }
@@ -400,6 +404,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
     const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt);
+    // REPLAY STAMPS — every position records when it opened and when its cover filled, in the same shape
+    // the LIVE run records use (epoch + "MM/DD HH:MM" ET). Pure bookkeeping, never read by the P&L math;
+    // it is what lets a backtest day be replayed in the compare-strategies UI exactly like a live day.
+    const nowEpoch = bars[i].dt, nowET = etStamp(bars[i].dt);
+    lockEpoch = nowEpoch; lockET = nowET;
     // per-bar band-IV; when opts.intradayIV is on, scale by the calibrated time-of-day IV multiplier so
     // the correction flows into every legsMark/bsPrice below. Default OFF -> iv === ivOf(A) (byte-identical).
     let iv = ivOf(A);
@@ -474,7 +483,8 @@ function runDay5m(bars, signalFn, opts = {}) {
           else if (rc.resolution === 'wingShift') legCoverWing++;
           ledger.record(rc.legs);
         }
-        pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null; markBookDirty();
+        pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null;
+        pos.coverEpoch = nowEpoch; pos.coverTime = nowET; markBookDirty();
         if (rc && rc.wing !== G.WIDTH) continue;   // anchor cover: legacy skips the capital accounting below
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
@@ -523,7 +533,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }) : null;
         if (plan && plan.wings.length) {
           for (const w of plan.wings) {
-            st.positions.push({ side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true });
+            st.positions.push({ side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true, openEpoch: nowEpoch, openTime: nowET });
             wingSpent += w.cost * 100 * QTY; wingCount++;
           }
           markBookDirty();
@@ -625,7 +635,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const govOk = !governed || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
       if (!govOk) govBlocked++;
       if (strategyOk && ceilingOk && govOk) {
-        st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
+        st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
         markBookDirty();
         if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
         st.dir = sig.openSide;
@@ -660,7 +670,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         const trend = (opts.harvestDirGate !== false && A['15m'] && A['15m'].ema != null) ? Math.sign(A['15m'].close - A['15m'].ema) : null;
         const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5, trend });
         for (const h of plan.hedges) {
-          st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true });
+          st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, openEpoch: nowEpoch, openTime: nowET });
           hvSpent += h.cost; hvCount++; markBookDirty();
         }
       }
@@ -722,8 +732,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
   }
   const coverPending = st.positions.filter(p => !p.covered && p.pendingCover).length;   // placed but never filled
+  // REPLAY: the RTH bar series (epoch + ET stamp + underlying), so a backtest day can be rebuilt at any
+  // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
+  const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, settle, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
+    floor, terminal, opens, filled, naked, coverPending, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
     bestCase, worstCase, avgTerminalPotential,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
