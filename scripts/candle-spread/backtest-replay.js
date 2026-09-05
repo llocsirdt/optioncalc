@@ -32,7 +32,7 @@ const OUTDIR = path.join(__dirname, '..', '..', 'data', 'backtest-replays');
 // selects its dataset unambiguously — no flag needed, and asking for a date only one host has simply
 // reports which datasets were searched instead of silently replaying the wrong instrument.
 const DATASETS = [
-  { name: 'backtest-data-5m-ndx', dir: path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-ndx') },
+  { name: 'backtest-data-5m-nq-ndx', dir: path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq-ndx') },
   { name: 'backtest-data-5m-nq', dir: path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq') },
 ];
 const explicit = arg('--dataDir', null);
@@ -74,6 +74,10 @@ function optsFor(v) {
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
+  // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. When the dataset carries an NDX
+  // price series (`px`), options MUST be priced off it — without this the engine silently prices off the
+  // SIGNAL series, which is the quiet way to violate the rule.
+  if (day.bars.some(b => b.px)) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
   return o;
 }
 

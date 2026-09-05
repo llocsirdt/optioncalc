@@ -45,12 +45,9 @@ server/nodemon.json
 
 # Backtest output files (large JSON files with historical data)
 tests/backtest/*
-# ...EXCEPT the NDX Schwab 5m dataset. It is small (4.5 MB / 90 days) and shipping it lets the deployed
-# server generate backtest replays for 2026 dates on demand, so the compare page works against the real
-# backend and not just a local checkout. The NQ Kaggle history stays out: 122 MB, and a child process
-# needs 0.36 GB to load it vs 0.07 GB for NDX — too much for the 1 GB instance. NQ replays stay local.
-!tests/backtest/backtest-data-5m-ndx/
-!tests/backtest/backtest-data-5m-ndx/**
+# ...EXCEPT the dual NQ-signal / NDX-priced set. Small (1.7 MB / 34 days) and shipping it lets the
+# deployed server generate faithful 2026 replays on demand. The NQ Kaggle history stays out: 122 MB, and a
+# child process needs 0.36 GB to load it vs 0.02 GB for the dual set — too much for the 1 GB instance.
 !tests/backtest/backtest-data-5m-nq-ndx/
 !tests/backtest/backtest-data-5m-nq-ndx/**
 !tests/backtest/DATASETS.md

@@ -7,7 +7,6 @@ overnight NQ acts as real support/resistance) and **prices and settles options o
 | dataset | days | signal | pricing | matches live? |
 |---|---|---|---|---|
 | `backtest-data-5m-nq` | 922 (2022-12-27 … 2025-12-11) | NQ 24h ✅ | **NQ** ❌ | signal right, prices options off the wrong instrument |
-| `backtest-data-5m-ndx` | 90 (2026-01-28 … 2026-09-04) | **NDX, RTH-only** ❌ | NDX ✅ | pricing right, but the bands have **no overnight component at all** |
 | **`backtest-data-5m-nq-ndx`** | **34 (2026-07-20 … 2026-09-04)** | **NQ 24h ✅** | **NDX ✅** | **yes — this is the faithful one** |
 
 Bars in the dual set carry both: `analysis` is the NQ multi-timeframe snapshot, `px` is the NDX OHLC at
