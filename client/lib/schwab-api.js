@@ -8,9 +8,17 @@
 // CloudFront distribution that terminates TLS.
 // ?proxy=local forces the local dev server even when served over http (for testing an
 // http-hosted copy against localhost:3001); otherwise file:// -> localhost, http -> CloudFront.
-const PROXY_URL = (new URLSearchParams(window.location.search).get('proxy') === 'local')
-  ? "http://localhost:3001"
-  : (window.location.href.startsWith('http') ? "https://d1kbxyxn33vpw2.cloudfront.net" : "http://localhost:3001");
+// Backend selection. `?proxy=local` / `?proxy=remote` force it; otherwise the ORIGIN decides.
+// A LOCAL origin means the local server: that covers file:// (the usual dev mode) AND
+// http://localhost:PORT (serving the page from a static server), which the old
+// `location.href.startsWith('http')` test could not tell apart from GitHub Pages — so a locally SERVED
+// page pointed at CloudFront and every local-only endpoint (backtest replays, the 5m datasets) 404'd.
+const IS_LOCAL_ORIGIN = (window.location.protocol === 'file:')
+  || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(window.location.hostname);
+const _proxyParam = new URLSearchParams(window.location.search).get('proxy');
+const PROXY_URL = _proxyParam === 'local' ? 'http://localhost:3001'
+  : _proxyParam === 'remote' ? 'https://d1kbxyxn33vpw2.cloudfront.net'
+  : (IS_LOCAL_ORIGIN ? 'http://localhost:3001' : 'https://d1kbxyxn33vpw2.cloudfront.net');
 
 // Schwab API integration variables
 let schwabConnected = false;

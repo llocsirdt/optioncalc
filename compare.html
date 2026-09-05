@@ -103,9 +103,17 @@
 // columns = each sub-variant (width / geometry / cap). Read-only; no trading, no writes.
 
 // Proxy base — mirror schwab-api.js: ?proxy=local forces localhost; file:// -> localhost; http -> CloudFront.
-const PROXY_URL = (new URLSearchParams(location.search).get('proxy') === 'local')
-  ? 'http://localhost:3001'
-  : (location.href.startsWith('http') ? 'https://d1kbxyxn33vpw2.cloudfront.net' : 'http://localhost:3001');
+// Backend selection. `?proxy=local` / `?proxy=remote` force it; otherwise the ORIGIN decides.
+// A LOCAL origin means the local server: that covers file:// (the usual dev mode) AND
+// http://localhost:PORT (serving the page from a static server), which the old
+// `location.href.startsWith('http')` test could not tell apart from GitHub Pages — so a locally SERVED
+// page pointed at CloudFront and every local-only endpoint (backtest replays, the 5m datasets) 404'd.
+const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
+  || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
+const _proxyParam = new URLSearchParams(location.search).get('proxy');
+const PROXY_URL = _proxyParam === 'local' ? 'http://localhost:3001'
+  : _proxyParam === 'remote' ? 'https://d1kbxyxn33vpw2.cloudfront.net'
+  : (IS_LOCAL_ORIGIN ? 'http://localhost:3001' : 'https://d1kbxyxn33vpw2.cloudfront.net');
 
 const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9'];
 // Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
