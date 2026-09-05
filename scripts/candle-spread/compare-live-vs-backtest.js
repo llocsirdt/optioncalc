@@ -50,6 +50,10 @@ function deployedOpts(v) {
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.proactiveCoverFrac != null) o.proactiveCoverFrac = v.proactiveCoverFrac;
   if (v.softCap != null) o.softCap = v.softCap;
+  // v0-v3 differ ONLY by cover selector (fixed/greedy/joint/fixed-mark). Omitting it collapses all four
+  // into one identical run — which reads as the backtest disagreeing with live when it is really the
+  // comparison config being wrong.
+  if (v.coverSelector) o.coverSelector = v.coverSelector;
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
   return o;
