@@ -51,6 +51,9 @@ tests/backtest/*
 # needs 0.36 GB to load it vs 0.07 GB for NDX — too much for the 1 GB instance. NQ replays stay local.
 !tests/backtest/backtest-data-5m-ndx/
 !tests/backtest/backtest-data-5m-ndx/**
+!tests/backtest/backtest-data-5m-nq-ndx/
+!tests/backtest/backtest-data-5m-nq-ndx/**
+!tests/backtest/DATASETS.md
 
 # Generated backtest replay bundles (~2 MB/day) — regenerable on demand from the dataset above, so there
 # is no reason to carry them in git or in the deploy package.

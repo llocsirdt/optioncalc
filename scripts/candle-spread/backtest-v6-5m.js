@@ -43,7 +43,10 @@ function load5mDays(dir) {
   for (const f of files) {
     const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
     const bars = arr.filter(x => x.datetime != null && isFive(x.analysis))
-      .map(x => ({ dt: x.datetime, analysis: x.analysis, fifteen: new Date(x.datetime).getMinutes() % 15 === 0 }));
+      // `px` (optional) is a SECOND price series carried alongside the signal series — the live model
+      // signals off /NQ (24h) but prices and settles NDX options, so a faithful dataset needs both. Bars
+      // without it are unchanged; runDay5m only reads it when opts.priceOf is pointed at it.
+      .map(x => ({ dt: x.datetime, analysis: x.analysis, px: x.px || null, fifteen: new Date(x.datetime).getMinutes() % 15 === 0 }));
     if (bars.length < 5) continue;
     out.push({ date: etDay(bars[0].dt), bars });
   }
