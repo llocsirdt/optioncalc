@@ -63,6 +63,10 @@
     const cfg = (run && run.config) || {};
     const src = (run && run.variant) || cfg.variant || 'strategy';
     const allLegs = [];
+    // Parallel to allLegs: the epoch each leg came into existence. Built HERE, beside the legs themselves,
+    // because this is the only place that knows which of a position's legs are the OPEN and which are the
+    // COVER — downstream all it sees is one flat array. Feeds the calculator's time-based playback slider.
+    const allLegEpochs = [];
     const positions = [];
     // ORDERING CONVENTION: the optionArray (and the risk-curve playback slider) expects MOST RECENT
     // positions FIRST, oldest LAST — the order the Fidelity CSV already arrives in. The server's
@@ -90,11 +94,15 @@
       const oLegs = oCredit ? pos.sentLegs : pos.legs;
       const oAmt = oCredit ? (pos.sentLimit || 0) : (pos.limit || 0);
       const legs = spreadToLegs(oLegs, oCredit ? -oAmt : oAmt, qty);
-      let cLegs = null, cAmt = 0, cCredit = false;
+      const openLegCount = legs.length;         // everything after this index is cover
+      let cLegs = null, cAmt = 0, cCredit = false, cEpoch = null;
       if (pos.covered && coverByT && pos.coverLegs && pos.coverLegs.length) {
         const ord = coverByPos.get(pos.id);   // the EXACT cover order (legs + price + net) from the log
         if (ord && ord.legs) { cCredit = ord.net === 'CREDIT'; cLegs = ord.legs; cAmt = ord.limit || 0; }
         else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
+        // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
+        // cover ORDER's own time from the log, and only then to the open (never earlier than the open).
+        cEpoch = pos.coverEpoch || (ord && epochFrom5m(ord.time)) || oEpoch;
         legs.push(...spreadToLegs(cLegs, cCredit ? -cAmt : cAmt, qty));
       }
       // UNFILLED cover: a resting cover order was placed for this position but never booked (its mark never
@@ -107,6 +115,7 @@
           unfilledCover = { legs: fmtSpread(uc.legs, qty), net: uc.net === 'CREDIT' ? 'CREDIT' : 'DEBIT', limit: uc.limit || 0, time: etCandleTime(uc.time), epoch: epochFrom5m(uc.time) };
       }
       allLegs.push(...legs);
+      for (let i = 0; i < legs.length; i++) allLegEpochs.push(i < openLegCount ? oEpoch : cEpoch);
       positions.push({
         id: pos.id, side: pos.side, covered: !!(pos.covered && coverByT), shortStrike: pos.shortStrike, unfilledCover,
         openTime: pos.openTime || null, coverTime: pos.coverTime || null,       // human CANDLE times (log/tooltip)
@@ -122,7 +131,7 @@
     }
     return {
       optionArrayString: allLegs.map(fmtLeg).join(','),
-      legs: allLegs, positions, count: positions.length, source: src,
+      legs: allLegs, legEpochs: allLegEpochs, positions, count: positions.length, source: src,
       tradeDate: run && run.tradeDate, symbol: (run && run.symbol) || cfg.symbol,
     };
   }

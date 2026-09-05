@@ -236,6 +236,9 @@ pre {
   font: 13px sans-serif;
   color: #555;
   white-space: nowrap;
+  /* The readout swaps between "9" and "11:35 AM · 14 legs", so reserve room for the wider one — without
+     it the range input resizes under the cursor as you drag. */
+  min-width: 150px;
 }
 
 #optionRange {

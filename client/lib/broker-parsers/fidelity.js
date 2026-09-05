@@ -1,8 +1,12 @@
 // Fidelity brokerage CSV adapter for the broker-import pipeline (see broker-import.js).
 // Every adapter registers into window.BrokerImportParsers with this contract:
 //   { label: string, detect(csvText) -> boolean, extractLegs(csvText) -> { legs, skippedCount, totalRows } }
-// `legs` entries are { qty, type ('c'|'p'), strike, cost, root, expiration } — cost follows the
-// optionArray convention (+ = debit paid, - = credit received).
+// `legs` entries are { qty, type ('c'|'p'), strike, cost, root, expiration, tradeEpoch } — cost follows
+// the optionArray convention (+ = debit paid, - = credit received). tradeEpoch comes from the CSV's Run
+// Date and feeds the calculator's playback slider.
+// NOTE ON GRANULARITY: Fidelity's transaction export carries Run Date only — a DATE, with no time of day.
+// So an import covering one session gives every leg the same epoch and the slider correctly stays in
+// position-count mode; scrubbing by time only becomes meaningful across multiple days.
 
 const FIDELITY_MONTH_NUMBERS = {
   JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
@@ -42,6 +46,15 @@ function fidelityParseOptionDescription(description) {
     expiration: `20${yearTwoDigit}-${month}-${day.padStart(2, '0')}`,
     strike: parseFloat(strikeText.replace(/,/g, '')),
   };
+}
+
+// "MM/DD/YYYY" (Fidelity's Run Date) -> epoch ms at local midnight. Built from parts rather than passed
+// to Date.parse, which reads a bare ISO-looking date as UTC and would shift the day in western timezones.
+function fidelityRunDateEpoch(runDate) {
+  const m = String(runDate || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const t = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])).getTime();
+  return Number.isFinite(t) ? t : null;
 }
 
 function fidelityDetect(csvText) {
@@ -85,6 +98,7 @@ function fidelityExtractLegs(csvText) {
       cost: Math.round(-amount),
       root: parsed.root,
       expiration: parsed.expiration,
+      tradeEpoch: fidelityRunDateEpoch(row['Run Date']),
     });
   });
 

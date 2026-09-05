@@ -7,6 +7,30 @@ let fullMinStrike = 0;
 let fullMaxStrike = 0;
 let fullStrikeIncrement = 0;
 
+// ── POSITION TIMES (playback slider) ───────────────────────────────────────────────────────────────
+// The optionArray reaches processInput() as TEXT, and the leg syntax has no room for a timestamp — so a
+// source that knows when each leg was traded (Schwab strategy runs, a Fidelity CSV) hands the times over
+// here instead, right before it calls processInput().
+// Keyed by a FINGERPRINT of the exact optionArray string they describe: edit the textarea by hand and the
+// fingerprint stops matching, so stale times are dropped rather than silently misaligned onto new legs.
+// Manual entry never registers any, which is what makes the slider fall back to counting positions.
+let pendingPositionTimes = null;   // { fingerprint, epochs:number[] } — consumed by processInput()
+
+function setPositionTimes(optionArrayString, epochs) {
+  if (!optionArrayString || !Array.isArray(epochs) || !epochs.some((e) => Number.isFinite(e))) {
+    pendingPositionTimes = null;
+    return;
+  }
+  pendingPositionTimes = { fingerprint: positionTimesFingerprint(optionArrayString), epochs: epochs.slice() };
+}
+
+// Whitespace-insensitive so reformatting the JSON does not invalidate the times; content-sensitive so
+// changing, adding or removing a leg does.
+function positionTimesFingerprint(optionArrayString) {
+  return String(optionArrayString).replace(/\s+/g, '');
+}
+window.setPositionTimes = setPositionTimes;
+
 // Global variables for selected positions
 let selectedTablePositions = new Map(); // key: "c100.5" or "p100.5", value: {strike, type, bid, ask, side}
 let selectedPositionsCost = 0;
@@ -803,15 +827,50 @@ function clearSelectedPositions() {
 // Note: Schwab API functions (restoreLastSymbol, saveCurrentSymbol) are now in schwab-api.js
 
 
-// Function to update the chart based on slider value
+// ── PLAYBACK SLIDER ────────────────────────────────────────────────────────────────────────────────
+// TWO MODES, chosen by the data rather than by a setting:
+//   TIME  — when the legs carry trade times (a Schwab strategy run, a multi-day Fidelity import), the
+//           slider runs over the clock and shows the book AS OF that moment, the way the compare page's
+//           time-of-day slider does. A cover appears only once it actually booked, because its legs carry
+//           their own later epoch.
+//   COUNT — the original behaviour, kept for manual entry and for any import with no usable times: the
+//           last N positions entered.
+// TIME mode needs at least two DISTINCT epochs; one instant is not a timeline (a single-day Fidelity CSV
+// lands here — its Run Date column is date-only, so every leg shares one epoch).
+function sliderTimeline() {
+  const eps = fullOptionArray.map((o) => o.epoch).filter((e) => Number.isFinite(e));
+  if (eps.length < 2) return null;
+  const min = Math.min(...eps), max = Math.max(...eps);
+  return min === max ? null : { min, max };
+}
+
+// Legs with no epoch are always present: a partially-timed book still shows everything it cannot place in
+// time, rather than making untimed legs vanish for most of the slider's travel.
+function optionsAsOf(t) {
+  return fullOptionArray.filter((o) => !Number.isFinite(o.epoch) || o.epoch <= t);
+}
+
+function fmtSliderClock(epoch) {
+  return new Date(epoch).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// Both modes route through here, so the chart maths below has exactly one caller shape.
 function updateChartWithSlider() {
   const slider = document.getElementById('optionRange');
-  const count = parseInt(slider.value);
-  document.getElementById('optionCount').textContent = count;
-  
-  // Get a subset of the original options based on the slider value
-  //const visibleOptions = fullOptionArray.slice(0, count);
-  const visibleOptions = fullOptionArray.slice(-count); // show positions from the end of the array
+  const tl = sliderTimeline();
+  let visibleOptions, label;
+  if (tl) {
+    const t = parseInt(slider.value, 10);
+    visibleOptions = optionsAsOf(t);
+    const atEnd = t >= tl.max;
+    // Count POSITIONS (distinct legs would overstate it), matching what count mode reports.
+    label = `${atEnd ? 'full day' : fmtSliderClock(t)} · ${visibleOptions.length} leg${visibleOptions.length === 1 ? '' : 's'}`;
+  } else {
+    const count = parseInt(slider.value, 10);
+    visibleOptions = fullOptionArray.slice(-count);   // show positions from the end of the array
+    label = String(count);
+  }
+  document.getElementById('optionCount').textContent = label;
 
   // Create a map to combine the visible options for chart rendering
   const visibleCombinedMap = new Map();
@@ -858,11 +917,12 @@ function updateChartWithSlider() {
   ChartModule.drawChart(data, visibleCost, visibleOptions, null, underlyingPrice);
 }
 
-// Function to show all options
+// Function to show all options — "all" is the end of the timeline in TIME mode, the full count in COUNT
+// mode. updateChartWithSlider owns the readout in both.
 function showAllOptions() {
   const slider = document.getElementById('optionRange');
-  slider.value = fullOptionArray.length;
-  document.getElementById('optionCount').textContent = fullOptionArray.length;
+  const tl = sliderTimeline();
+  slider.value = tl ? tl.max : fullOptionArray.length;
   updateChartWithSlider();
 }
 
@@ -2692,6 +2752,24 @@ function processInput() {
       });
     }
     
+    // Attach the trade times a source registered for exactly THIS optionArray (see setPositionTimes).
+    // The leg order is preserved end-to-end — the source joins its legs with ',' and we split on ',' — so
+    // index i here is leg i there. Both guards matter: the fingerprint catches a hand-edited textarea, and
+    // the length check catches any parse that did not yield one entry per leg. Either failing just means
+    // no times, and the slider stays in position-count mode.
+    if (pendingPositionTimes
+        && pendingPositionTimes.fingerprint === positionTimesFingerprint(
+             typeof processedJSON.optionArray === 'string'
+               ? processedJSON.optionArray
+               : (processedJSON.optionArray || []).join(','))
+        && pendingPositionTimes.epochs.length === fullOptionArray.length) {
+      fullOptionArray.forEach((opt, i) => {
+        const e = pendingPositionTimes.epochs[i];
+        if (Number.isFinite(e)) opt.epoch = e;
+      });
+    }
+    pendingPositionTimes = null;   // one-shot: consumed by the input it was registered for
+
     // Process tempOptionArray if it exists
     let tempOptionArray = [];
     if (processedJSON.tempOptionArray) {
@@ -2793,10 +2871,24 @@ function processInput() {
       // Show the slider if there are multiple options. 'flex' — the container lays its label and range
       // out as a flex row now that it sits in the column under the chart; 'block' would override that.
       sliderContainer.style.display = 'flex';
-      slider.min = 1;
-      slider.max = fullOptionArray.length;
-      slider.value = fullOptionArray.length; // Default to showing all options
-      document.getElementById('optionCount').textContent = fullOptionArray.length;
+      const tl = sliderTimeline();
+      const lbl = document.getElementById('sliderMode');
+      if (tl) {
+        // TIME mode: the range IS the clock. 30s steps — fine enough to land on any 5m mark exactly while
+        // keeping a full session inside a comfortable number of steps for dragging.
+        slider.min = tl.min;
+        slider.max = tl.max;
+        slider.step = 30000;
+        slider.value = tl.max;              // open on the complete book
+        if (lbl) lbl.textContent = 'Time:';
+      } else {
+        slider.min = 1;
+        slider.max = fullOptionArray.length;
+        slider.step = 1;
+        slider.value = fullOptionArray.length; // Default to showing all options
+        if (lbl) lbl.textContent = 'Pos:';
+      }
+      updateChartWithSlider();               // one place decides the readout, in either mode
     } else {
       // Hide the slider if there's only one option
       sliderContainer.style.display = 'none';

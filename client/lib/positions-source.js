@@ -253,7 +253,14 @@
       const result = strategyRunToOptionArray(record);
       if (!result.count) { setLastPulled(`no ${variant} positions yet`, false); return; }
       const textInput = el('textInput');
-      if (textInput) { textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2); if (typeof processInput === 'function') processInput(); }
+      if (textInput) {
+        // Hand the per-leg trade times over BEFORE processInput reads the textarea — the leg string itself
+        // has nowhere to carry them, so the playback slider gets them through this side channel and runs
+        // on the clock instead of on position count.
+        if (typeof window.setPositionTimes === 'function') window.setPositionTimes(result.optionArrayString, result.legEpochs || []);
+        textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2);
+        if (typeof processInput === 'function') processInput();
+      }
       saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
       applyTradesToChart(result.positions, doFocus);
       renderStrategyTradeDetails(result.positions);

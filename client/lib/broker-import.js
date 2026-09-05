@@ -104,6 +104,9 @@ function buildOptionArrayFromCsv(csvText, sourceKey) {
   const groups = groupLegsByExpiration(legs).map((group) => ({
     ...group,
     optionArrayString: legsToOptionArrayString(group.legs),
+    // Parallel to the leg string, for the playback slider. A parser with no times yields nulls, which the
+    // slider reads as "no timeline" and falls back to counting positions.
+    legEpochs: group.legs.map((leg) => (Number.isFinite(leg.tradeEpoch) ? leg.tradeEpoch : null)),
   }));
   return { groups, skippedCount, totalRows, source: key };
 }
@@ -181,6 +184,8 @@ function loadBrokerImportGroupIntoTextarea(index) {
   const textInput = document.getElementById('textInput');
   if (!textInput) return;
 
+  // Times first — processInput consumes them as it reads the textarea (see setPositionTimes in oc.js).
+  if (typeof window.setPositionTimes === 'function') window.setPositionTimes(group.optionArrayString, group.legEpochs || []);
   textInput.value = JSON.stringify({ optionArray: group.optionArrayString }, null, 2);
   processInput();
 }
