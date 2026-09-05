@@ -16,7 +16,11 @@
   label.tgl { user-select:none; }
   label.tgl input { vertical-align:-1px; margin-right:4px; }
   #status { padding:10px 14px; color:var(--muted); }
-  #timebar { flex-basis:100%; width:100%; display:flex; align-items:center; gap:10px; margin-top:4px; padding-top:6px; border-top:1px solid var(--grid); }
+  /* The time slider sits at the BOTTOM, stuck to the viewport: dragging a slider ABOVE the charts puts
+     your hand over the very cells you are reading. Below-and-sticky keeps it reachable and out of the way. */
+  #timebar { position:sticky; bottom:0; z-index:6; display:flex; align-items:center; gap:10px;
+             padding:8px 14px; background:var(--bg); border-top:1px solid var(--grid);
+             box-shadow:0 -2px 10px rgba(0,0,0,0.08); }
   #timebar .tb-lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
   #timebar input[type=range] { flex:1; cursor:pointer; }
   #timebar .tb-time { font:12px ui-monospace, monospace; font-weight:700; min-width:74px; text-align:right; }
@@ -65,21 +69,25 @@
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <button id="btTableBtn">Backtest table ▾</button>
   <button id="refresh">Refresh</button>
-  <span id="replaybar" style="display:none">
-    <label class="tgl" title="any tradeable day in the 5m dataset; generated on first request (~15s)">replay date
-      <input type="date" id="replayDate" style="margin-left:4px">
+  <span id="srcbar">
+    <label class="tgl" title="LIVE = the server's recorded shadow runs · BACKTEST = the same strategies replayed over a historical day">source
+      <select id="srcSelect" style="margin-left:4px">
+        <option value="live">Live runs</option>
+        <option value="backtest">Backtest replay</option>
+      </select>
     </label>
+    <label class="tgl">date <input type="date" id="replayDate" style="margin-left:4px"></label>
     <button id="replayGo">Load</button>
     <span id="replayRange" class="meta"></span>
   </span>
-  <div id="timebar">
-    <span class="tb-lbl">Time of day</span>
-    <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
-    <span id="timeLabel" class="tb-time">full day</span>
-  </div>
 </header>
 <div id="status">Loading…</div>
 <div class="wrap"><table class="grid" id="grid"></table></div>
+<div id="timebar">
+  <span class="tb-lbl">Time of day</span>
+  <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
+  <span id="timeLabel" class="tb-time">full day</span>
+</div>
 <div class="wrap" id="btWrap" style="display:none">
   <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span>
     <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label></h2>
@@ -127,7 +135,13 @@ const runsUrl = () => `${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`;
 // REPLAY MODE — ?replay=YYYY-MM-DD (or ?replay=latest) renders a BACKTEST day instead of today's live
 // shadow runs. The bundle is emitted in the same run-record shape as a live run, so every downstream
 // piece (strategyRunToOptionArray, buildTimeIndex, the slider, the curves) works unchanged.
-const REPLAY = new URLSearchParams(location.search).get('replay');
+// SOURCE + DATE are one model now. `?src=live|backtest` with `?date=YYYY-MM-DD`; `?replay=DATE` stays as
+// a backwards-compatible alias for the backtest source. Live runs and backtest replays produce the SAME
+// run-record shape, so everything downstream is identical — only where the records come from differs.
+const _q = new URLSearchParams(location.search);
+const REPLAY = _q.get('replay');                       // legacy alias
+const SRC = _q.get('src') || (REPLAY ? 'backtest' : 'live');
+const WANT_DATE = _q.get('date') || (REPLAY && REPLAY !== 'latest' ? REPLAY : null);
 const replaysUrl = () => `${PROXY_URL}/api/v1/candle-spread/replays?cb=${Date.now()}`;
 const replayUrl = (d) => `${PROXY_URL}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
 const runUrl = (sym, exp, date, v) => `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
@@ -268,7 +282,7 @@ function render() {
   }
   html += '</tbody>';
   grid.innerHTML = html;
-  const src = REPLAY ? 'BACKTEST REPLAY' : 'live';
+  const src = SRC === 'backtest' ? 'BACKTEST REPLAY' : 'LIVE RUN';
   document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants`;
 }
 
@@ -416,12 +430,10 @@ async function load() {
   for (const k of Object.keys(cells)) delete cells[k];
   for (const k of Object.keys(records)) delete records[k];
   try {
-    if (REPLAY) {
-      let date = REPLAY;
+    if (SRC === 'backtest') {
+      let date = WANT_DATE || 'latest';
       // Show the picker and tell the user what range is replayable. `available` is every tradeable day in
       // the dataset, not just what has been generated — the server builds a missing one on request.
-      const bar = document.getElementById('replaybar');
-      if (bar) bar.style.display = '';
       let idx = null;
       try { idx = await fetchJson(replaysUrl()); } catch (e) { /* older server → no index; direct load still works */ }
       if (idx) {
@@ -454,12 +466,19 @@ async function load() {
     const all = (idx.runs || []).filter((r) => r.variant && r.tradeDate);
     if (!all.length) { status.textContent = 'No runs found on the server yet.'; return; }
     symbol = all.some((r) => r.symbol === 'NDX') ? 'NDX' : all[0].symbol;
-    const vm = {};   // variant -> latest {expiration, date}
+    // Every recorded trade date, newest last — the store keeps history, the page just never offered it.
+    const liveDates = [...new Set(all.filter((r) => r.symbol === symbol).map((r) => r.tradeDate))].sort();
+    const pickDate = (WANT_DATE && liveDates.includes(WANT_DATE)) ? WANT_DATE : liveDates[liveDates.length - 1];
+    const dEl = document.getElementById('replayDate'), rEl = document.getElementById('replayRange');
+    if (dEl) { dEl.min = liveDates[0]; dEl.max = liveDates[liveDates.length - 1]; dEl.value = pickDate; }
+    if (rEl) rEl.textContent = `${liveDates.length} recorded day${liveDates.length === 1 ? '' : 's'} (${liveDates[0]} … ${liveDates[liveDates.length - 1]})`;
+    if (WANT_DATE && !liveDates.includes(WANT_DATE)) status.textContent = `No live run recorded for ${WANT_DATE} — showing ${pickDate}.`;
+    const vm = {};   // variant -> the run for the SELECTED date
     for (const r of all) {
-      if (r.symbol !== symbol) continue;
-      if (!vm[r.variant] || r.tradeDate > vm[r.variant].date) vm[r.variant] = { expiration: r.expiration || r.tradeDate, date: r.tradeDate };
+      if (r.symbol !== symbol || r.tradeDate !== pickDate) continue;
+      vm[r.variant] = { expiration: r.expiration || r.tradeDate, date: r.tradeDate };
     }
-    commonDate = Object.values(vm).map((x) => x.date).sort().pop() || '';
+    commonDate = pickDate;
     const targets = [];
     for (const f of FAMILIES) for (const c of COLUMNS) { const v = `${f}-${c.k}`; if (vm[v]) targets.push(v); }
     if (!targets.length) { status.textContent = 'Runs exist but none match the v0-v9 sweep naming yet.'; return; }
@@ -506,16 +525,20 @@ document.getElementById('grid').addEventListener('click', (e) => {
 // cached record, the time index and the slider are all scoped to one day, so rebuilding them in place
 // would be more code and more ways to leave a stale fragment behind.
 (function () {
-  const go = document.getElementById('replayGo'), d = document.getElementById('replayDate');
-  if (!go || !d) return;
+  const go = document.getElementById('replayGo'), d = document.getElementById('replayDate'), sel = document.getElementById('srcSelect');
+  if (!go || !d || !sel) return;
+  sel.value = SRC;
   const load = () => {
-    if (!d.value) return;
     const u = new URL(location.href);
-    u.searchParams.set('replay', d.value);
+    u.searchParams.set('src', sel.value);
+    if (d.value) u.searchParams.set('date', d.value); else u.searchParams.delete('date');
+    u.searchParams.delete('replay');   // drop the legacy alias so the two cannot disagree
     location.href = u.toString();
   };
   go.addEventListener('click', load);
   d.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
+  // Switching source keeps the date, so the same day can be compared live-vs-backtest in two clicks.
+  sel.addEventListener('change', load);
 })();
 
 // Backtest table: toggle the section, loading baselines on first open, then render (sortable by header).

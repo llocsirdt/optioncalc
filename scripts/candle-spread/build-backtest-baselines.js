@@ -33,8 +33,12 @@ const DRY = process.argv.includes('--dry');
 // even if it lowers the headline numbers — accuracy is the point of the backtest. `--noIntradayIV` runs
 // the legacy flat-band-IV pricing for A/B only, into a separate file.
 const INTRADAY_IV = !process.argv.includes('--noIntradayIV');
+// A NON-DEFAULT dataset writes its own baselines file. The NQ history is the canon the live runs are
+// graded against; an NDX validation run must never overwrite it just because it was pointed elsewhere.
+const DEFAULT_DIR = path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
+const suffix = path.resolve(DIR) === path.resolve(DEFAULT_DIR) ? '' : '-' + path.basename(DIR).replace(/^backtest-data-5m-/, '');
 const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread',
-  INTRADAY_IV ? 'backtest-baselines.json' : 'backtest-baselines-flativ.json');
+  (INTRADAY_IV ? 'backtest-baselines' : 'backtest-baselines-flativ') + suffix + '.json');
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
 
 // Live variant config -> 5m-engine opts. The engine reads caps/flags directly; width/shift/capFrac go

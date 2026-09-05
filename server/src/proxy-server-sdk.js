@@ -1096,11 +1096,16 @@ app.get('/api/v1/candle-spread/replays', (req, res) => {
     // `available` = every tradeable day in the 5m dataset, i.e. everything that CAN be replayed, not just
     // what has been generated. Read from the dataset directory names so it costs nothing.
     let available = [];
-    try {
-      const dir = require('path').join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
-      available = fs.readdirSync(dir).map(f => (f.match(/^backtest-[A-Z]+-(\d{4}-\d{2}-\d{2})\.json$/) || [])[1]).filter(Boolean).sort();
-    } catch (e) { /* dataset not present on this host (deployed instance) → cached only */ }
-    res.json({ dates: cached, cached, available, first: available[0] || null, last: available[available.length - 1] || null });
+    const sets = [];
+    for (const name of ['backtest-data-5m-ndx', 'backtest-data-5m-nq']) {
+      try {
+        const dir = require('path').join(__dirname, '..', '..', 'tests', 'backtest', name);
+        const ds = fs.readdirSync(dir).map(f => (f.match(/^backtest-[A-Z]+-(\d{4}-\d{2}-\d{2})\.json$/) || [])[1]).filter(Boolean).sort();
+        if (ds.length) { available = available.concat(ds); sets.push({ name, days: ds.length, first: ds[0], last: ds[ds.length - 1] }); }
+      } catch (e) { /* that dataset is not present on this host — the NQ history is local-only */ }
+    }
+    available = [...new Set(available)].sort();
+    res.json({ dates: cached, cached, available, sets, first: available[0] || null, last: available[available.length - 1] || null });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list backtest replays', message: error.message });
   }

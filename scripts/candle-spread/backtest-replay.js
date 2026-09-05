@@ -26,23 +26,37 @@ const { makeGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
 
 const arg = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : d; };
-const DIR = arg('--dataDir', path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq'));
 const OUTDIR = path.join(__dirname, '..', '..', 'data', 'backtest-replays');
-
-const days = load5mDays(DIR);
+// KNOWN DATASETS, searched in order. NQ is the 2022-2025 Kaggle history (large, local-only); NDX is the
+// Schwab capture (2026, small enough to ship). Their date ranges do not overlap, so a requested date
+// selects its dataset unambiguously — no flag needed, and asking for a date only one host has simply
+// reports which datasets were searched instead of silently replaying the wrong instrument.
+const DATASETS = [
+  { name: 'backtest-data-5m-ndx', dir: path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-ndx') },
+  { name: 'backtest-data-5m-nq', dir: path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq') },
+];
+const explicit = arg('--dataDir', null);
+const pools = explicit ? [{ name: path.basename(explicit), dir: explicit }] : DATASETS.filter(d => fs.existsSync(d.dir));
+const loaded = pools.map(p => ({ ...p, days: load5mDays(p.dir) }));
 // load5mDays labels days as M/D/YYYY (ET); accept either that or ISO on the command line.
 const iso = d => { const [m, dd, y] = d.split('/'); return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; };
 
 if (process.argv.includes('--list')) {
-  console.log(`${days.length} days available in ${path.basename(DIR)}:`);
-  console.log(days.map(d => iso(d.date)).join(' '));
+  for (const p of loaded) {
+    const ds = p.days.map(d => iso(d.date)).sort();
+    console.log(`${ds.length} days in ${p.name}: ${ds[0]} .. ${ds[ds.length - 1]}`);
+  }
   process.exit(0);
 }
 
 const want = arg('--date', null);
 if (!want) { console.error('need --date YYYY-MM-DD (or --list)'); process.exit(1); }
-const day = days.find(d => iso(d.date) === want || d.date === want);
-if (!day) { console.error(`no such day: ${want}. Use --list to see available dates.`); process.exit(1); }
+let day = null, DIR = null, poolName = null;
+for (const p of loaded) {
+  const hit = p.days.find(d => iso(d.date) === want || d.date === want);
+  if (hit) { day = hit; DIR = p.dir; poolName = p.name; break; }
+}
+if (!day) { console.error(`no such day: ${want}. Searched: ${loaded.map(p => p.name).join(', ') || '(no datasets present)'}. Use --list.`); process.exit(1); }
 
 // Same opts mapping the baseline builder uses, so a replay is the SAME run the baselines measured.
 function optsFor(v) {
@@ -67,7 +81,7 @@ const RUNS = buildRuns();
 const date = iso(day.date);
 const out = {
   date, symbol: 'NDX', generatedAt: new Date().toISOString(),
-  source: 'backtest', dataDir: path.basename(DIR),
+  source: 'backtest', dataDir: poolName,
   model: 'rthActionOnly, QTY=1, live config (governor + continuous covering + resting locks)',
   runs: {},
 };
