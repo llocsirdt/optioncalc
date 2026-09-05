@@ -106,12 +106,23 @@ const days = allDays.filter(hasRth);
 const excluded = allDays.length - days.length;
 
 const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: 'rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness)', variants: {} };
-console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)\n`);
-console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
-console.log('-'.repeat(78));
 const mean = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
 const mean2 = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100;
-for (const run of RUNS) {
+
+// ── PARALLELISM (--workers N) ───────────────────────────────────────────────────────────────────────
+// The variants are completely independent and runDay5m is pure given (bars, opts), so splitting them
+// across processes yields BYTE-IDENTICAL results — only the wall clock changes. Node is single-threaded
+// for this workload, so one process pins one core; the dataset is ~0.35 GB resident per process, which is
+// what makes forking cheap enough to be worth it. Default 1 = the original sequential behaviour.
+// A worker computes a strided slice (i, i+N, i+2N…) so the widths — and therefore the cost per variant —
+// spread evenly across workers instead of one worker landing all the slow $40s.
+const wi = process.argv.indexOf('--workers');
+const WORKERS = wi >= 0 ? Math.max(1, Math.min(16, Number(process.argv[wi + 1]) || 1)) : 1;
+const si = process.argv.indexOf('--_slice');
+const SLICE = si >= 0 ? Number(process.argv[si + 1]) : null;      // set only in a forked worker
+const SLICE_OF = si >= 0 ? Number(process.argv[si + 2]) : null;
+
+function computeVariant(run) {
   const fn = wrap(run), opts = optsFor(run);
   const results = days.map(d => runDay5m(d.bars, fn, opts));
   const daily = results.map(r => r.terminal);
@@ -149,8 +160,122 @@ for (const run of RUNS) {
     offsetSpent: results.reduce((a, r) => a + r.governor.offsetSpent, 0),
     opensBlocked: results.reduce((a, r) => a + r.governor.blocked, 0),
   } : null;
-  out.variants[run.variant] = { label: run.variantLabel, ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov };
+  return { label: run.variantLabel, daily, dates: days.map(d => d.date), ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov };
+}
+
+function printRow(run, v) {
+  const s = v, avgWorstCase = v.avgWorstCase, gov = v.governor;
   console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%` + (gov ? `  gov held ${usd(gov.worstHeldFloor)}/${usd(-gov.lossMax)}${gov.capExceeded ? "  ✗ EXCEEDED x" + gov.capExceeded : "  ✓"}` : "  (uncapped)"));
+}
+
+// ── WORKER MODE: compute this slice, hand the results back, done. ─────────────────────────────────────
+if (SLICE != null) {
+  const mine = RUNS.filter((_, i) => i % SLICE_OF === SLICE);
+  const res = {};
+  for (const run of mine) res[run.variant] = computeVariant(run);
+  process.stdout.write('\u0000RESULT' + JSON.stringify(res));
+  process.exit(0);
+}
+
+console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}\n`);
+console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
+console.log('-'.repeat(78));
+
+(async () => {
+if (WORKERS > 1) {
+  // Fan out, then print rows in the CANONICAL order once everything is back — workers finish out of
+  // order, and a table whose row order depends on scheduling is not comparable between runs.
+  const { spawn } = require('child_process');
+  const base = process.argv.slice(2).filter((a, i, arr) => a !== '--workers' && arr[i - 1] !== '--workers');
+  const merged = {};
+  await Promise.all(Array.from({ length: WORKERS }, (_, k) => new Promise((resolve, reject) => {
+    const ch = spawn(process.execPath, [__filename, ...base, '--_slice', String(k), String(WORKERS)], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let buf = '';
+    ch.stdout.on('data', d => { buf += d.toString(); });
+    ch.on('error', reject);
+    ch.on('close', (code) => {
+      const at = buf.indexOf('\u0000RESULT');
+      if (code !== 0 || at < 0) return reject(new Error(`worker ${k} failed (exit ${code})`));
+      Object.assign(merged, JSON.parse(buf.slice(at + 7)));
+      resolve();
+    });
+  })));
+  for (const run of RUNS) { out.variants[run.variant] = merged[run.variant]; printRow(run, merged[run.variant]); }
+} else {
+  for (const run of RUNS) { const v = computeVariant(run); out.variants[run.variant] = v; printRow(run, v); }
+}
+
+// ── SUMMARY CSV ─────────────────────────────────────────────────────────────────────────────────────
+// Emitted on EVERY build, from the SAME run as the JSON, so the table we review can never drift from the
+// baselines. (It used to live in generate-strategy-csv.js, which carried its own hardcoded caps/variants
+// and silently went stale once the governor + continuous covering landed.) Aggregate block on top, then
+// one row per date. Windowed losses/streaks need the per-day series, which is why they live here.
+function writeSummaryCsv(file) {
+  const names = RUNS.map(r => r.variant).filter(n => out.variants[n] && out.variants[n].daily);
+  const S = {};
+  for (const n of names) {
+    const d = out.variants[n].daily, dates = out.variants[n].dates;
+    const cum = [0]; d.forEach((x, i) => cum.push(cum[i] + x));
+    // worst N-day window (rolling sum), with the date it ENDS on
+    const worstWin = (N) => { let v = Infinity, at = ''; for (let i = N; i < cum.length; i++) { const s2 = cum[i] - cum[i - N]; if (s2 < v) { v = s2; at = dates[i - 1]; } } return { v: v === Infinity ? 0 : v, d: at }; };
+    // longest consecutive losing / winning streak
+    let ls = 0, lsBest = 0, ls$ = 0, lsEnd = '', cur$ = 0, ws = 0, wsBest = 0, ws$ = 0, cw$ = 0;
+    for (let i = 0; i < d.length; i++) {
+      if (d[i] < 0) { ls++; cur$ += d[i]; if (ls > lsBest) { lsBest = ls; ls$ = cur$; lsEnd = dates[i]; } } else { ls = 0; cur$ = 0; }
+      if (d[i] > 0) { ws++; cw$ += d[i]; if (ws > wsBest) { wsBest = ws; ws$ = cw$; } } else { ws = 0; cw$ = 0; }
+    }
+    // true max drawdown (peak-to-trough over the whole series, unwindowed)
+    let peak = -Infinity, mdd = 0;
+    for (const c of cum) { if (c > peak) peak = c; if (peak - c > mdd) mdd = peak - c; }
+    const wi2 = d.indexOf(Math.min(...d)), bi = d.indexOf(Math.max(...d));
+    S[n] = { ...out.variants[n], w5: worstWin(5), w10: worstWin(10), lsBest, ls$, lsEnd, wsBest, ws$, mdd: -mdd,
+      worstDate: dates[wi2], bestDate: dates[bi] };
+  }
+  const R2 = Math.round;
+  const lines = [['', ...names].join(',')];
+  const row = (label, fn) => lines.push([label, ...names.map(n => fn(S[n]))].join(','));
+  row('TOTAL terminal $', s2 => R2(s2.total));
+  row('AVG terminal/day $', s2 => R2(s2.avgDaily));
+  row('MEDIAN terminal/day $', s2 => R2(s2.median));
+  row('RETURN / worst-10day-loss', s2 => s2.w10.v < 0 ? (s2.total / -s2.w10.v).toFixed(1) : '');
+  row('WORST 5-day loss $ (~1wk)', s2 => R2(s2.w5.v));
+  row('  worst 5-day END date', s2 => s2.w5.d);
+  row('WORST 10-day loss $ (~2wk)', s2 => R2(s2.w10.v));
+  row('  worst 10-day END date', s2 => s2.w10.d);
+  row('MAX LOSING STREAK (days)', s2 => s2.lsBest);
+  row('  losing-streak $', s2 => R2(s2.ls$));
+  row('  losing-streak END date', s2 => s2.lsEnd);
+  row('MAX WINNING STREAK (days)', s2 => s2.wsBest);
+  row('  winning-streak $', s2 => R2(s2.ws$));
+  row('WORST single day $', s2 => R2(s2.worst));
+  row('  worst day DATE', s2 => s2.worstDate);
+  row('BEST single day $', s2 => R2(s2.best));
+  row('  best day DATE', s2 => s2.bestDate);
+  row('opens/day', s2 => s2.avgTradesPerDay);
+  row('NEG days', s2 => `${s2.negDays}/${days.length}`);
+  row('WIN %', s2 => Math.round(s2.winRate * 100) + '%');
+  row('(context) true MAX DRAWDOWN $', s2 => R2(s2.mdd));
+  row('maxDD 7-day $', s2 => R2(s2.maxDD7));
+  row('maxDD 30-day $', s2 => R2(s2.maxDD30));
+  row('ret / maxDD30', s2 => s2.maxDD30 ? (s2.total / Math.abs(s2.maxDD30)).toFixed(1) : '');
+  row('avg peak capital $', s2 => R2(s2.avgPeakCapital));
+  row('ret on capital (daily $/$)', s2 => s2.returnOnCapital != null ? s2.returnOnCapital : '');
+  row('profitScore ($20-norm)', s2 => R2(s2.profitScore));
+  row('riskScore ($20-norm)', s2 => R2(s2.riskScore));
+  // GOVERNOR block — the cap and whether it actually held. capExceeded MUST be 0.
+  row('GOV lossMax $', s2 => s2.governor ? -s2.governor.lossMax : '');
+  row('GOV worst floor HELD $', s2 => s2.governor ? s2.governor.worstHeldFloor : '');
+  row('GOV days over cap', s2 => s2.governor ? s2.governor.capExceeded : '');
+  row('GOV covers deferred', s2 => s2.governor ? s2.governor.coversDeferred : '');
+  row('GOV offsets bought', s2 => s2.governor ? s2.governor.offsets : '');
+  row('GOV offset spend $', s2 => s2.governor ? s2.governor.offsetSpent : '');
+  row('GOV opens blocked', s2 => s2.governor ? s2.governor.opensBlocked : '');
+  lines.push('');
+  lines.push(['DATE', ...names].join(','));
+  const dates = out.variants[names[0]].dates;
+  for (let i = 0; i < dates.length; i++) lines.push([dates[i], ...names.map(n => R2(out.variants[n].daily[i]))].join(','));
+  fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+  return file;
 }
 
 // ENGINE-INTEGRITY anchor: the PURE v6 signal (no recapture/leg-uniqueness) must still reproduce the known
@@ -167,6 +292,11 @@ console.log(`graded v6-20 (live config) total = ${usd(out.variants['v6-20'].tota
 out.engineAnchorPureV6Total = anchorTotal;
 
 if (DRY) { console.log('\n--dry: not written'); process.exit(anchorOK ? 0 : 2); }
+const CSV = OUT.replace(/\.json$/, '.csv');
+writeSummaryCsv(CSV);
+for (const v of Object.values(out.variants)) { delete v.daily; delete v.dates; }   // keep the JSON lean
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
 console.log('\nwrote', path.relative(process.cwd(), OUT));
+console.log('wrote', path.relative(process.cwd(), CSV), '(aggregate summary block + per-date rows)');
 process.exit(anchorOK ? 0 : 2);
+})().catch(e => { console.error('baseline build failed:', e.message); process.exit(1); });

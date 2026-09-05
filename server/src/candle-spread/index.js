@@ -121,6 +121,19 @@ const WIDTHS = [
 // per contract, so it needs more headroom to place even one position:
 //     maxCap = max(2 × width×100, target + width×100)   →   $10 → $6k · $20 → $7k · $40 → $9k
 // (the 2×width term only binds for widths ≥ $50; below that target+width is the greater.)
+// ── WHICH VARIANT IS ARMED (env-driven, no deploy needed) ───────────────────────────────────────────
+//   CANDLE_SPREAD_ARMED       = variant name (default 'v6-20'). Give it a name not on the roster — e.g.
+//                               'none' — to arm NOTHING, which is the safe way to stand the pipe down.
+//   CANDLE_SPREAD_ARMED_MODE  = 'test' (default) sends a REAL order at an intentionally unfillable price
+//                               and auto-cancels it; 'live' sends REAL, FILLABLE orders.
+// This selects WHICH run may send. It does NOT arm anything by itself — every existing gate still
+// applies: sending additionally requires DEPS.isProd === true AND CANDLE_SPREAD_LIVE === 'true'. So the
+// default config here is inert in dev and inert in prod until the master switch is deliberately on.
+// An unknown variant name arms nothing and is logged loudly at startup rather than silently falling back,
+// because a typo silently arming the WRONG strategy is the failure mode that matters.
+const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v6-20';
+const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
+
 const LOSS_TARGET = 5000;
 const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
 
@@ -169,7 +182,9 @@ function buildVariants() {
       if (f.softCap != null) v.softCap = f.softCap;
       v.lossMax = maxCapFor(w);                          // lossTarget ($5k) + floorOffset inherit from BASE_RUNS
       v.continuousCoverMinLockFrac = minLockFor(f.key, w);
-      if (f.testAtBase && w === 20) v.dryRun = 'test';   // only v6-20 arms the live pipe
+      // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
+      // strategy without a code package + deploy — an EB env-var change is an environment update only.
+      if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
       out.push(v);
     }
   }
@@ -238,11 +253,20 @@ function buildAtmComparators() {
 // cap dial when `hardCap` was the risk layer; the day-loss governor replaces that regime entirely (and
 // the measurement they were built for is now the capped-vs-`-unc` pair). Removed rather than left dead.
 
-const VARIANTS = [
+// Validate the env selection against the roster the moment it is built, so a typo is loud, immediate and
+// impossible to mistake for "armed but quiet".
+function reportArming(list) {
+  const hit = list.find(v => v.variant === ARMED_VARIANT);
+  if (hit) console.log(`[candle-spread] ARMED SELECTION: ${ARMED_VARIANT} -> dryRun=${JSON.stringify(ARMED_MODE)} (${ARMED_MODE === false ? 'REAL FILLABLE ORDERS' : 'unfillable test orders'}); still gated by isProd + CANDLE_SPREAD_LIVE`);
+  else console.log(`[candle-spread] ARMED SELECTION: "${ARMED_VARIANT}" is NOT on the roster — NOTHING is armed (all runs stay dryRun:true).`);
+  return list;
+}
+
+const VARIANTS = reportArming([
   ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
   ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
   ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
-];
+]);
 
 // Expand base runs × variants into the concrete run list.
 function buildRuns() {
@@ -689,7 +713,12 @@ function status() {
     isProd: !!(DEPS && DEPS.isProd === true),
     liveArmed: LIVE_ARMED,                                   // CANDLE_SPREAD_LIVE === 'true'
     hasTradingClient: !!(DEPS && DEPS.tradingClient),
-    hasAccountHash: !!(DEPS && DEPS.accountHash)
+    hasAccountHash: !!(DEPS && DEPS.accountHash),
+    // Which variant the env SELECTED, and whether that name actually exists — so a typo (which arms
+    // nothing) is visible in /status instead of only in the startup log.
+    armedSelection: ARMED_VARIANT,
+    armedMode: ARMED_MODE === false ? 'live (real fillable orders)' : 'test (unfillable + auto-cancel)',
+    armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT)
   };
   const liveV = RUNS.filter(r => r.dryRun === false).map(r => r.variant);
   const testV = RUNS.filter(r => r.dryRun === 'test').map(r => r.variant);
