@@ -254,6 +254,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const lockMode = opts.lockCoverMode || 'rest';
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
+  let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
@@ -567,6 +568,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
     if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
+      // ADAPTIVE geometry can DECLINE: every placement from deep-ITM through straddle priced above the
+      // risk/reward ceiling. Skipping is the correct answer — the alternative (buying anyway, or booking a
+      // capped sub-market price) is exactly the artifact this geometry exists to avoid.
+      if (o && o.skip) { geoSkip++; sig.openSide = null; }
+      else {
       // LEG-UNIQUENESS: resolve the ideal spread against the day's ledger — ideal → parity twin (same
       // strikes) → shift → skip. P&L stays on the debit-canonical spread at the RESOLVED strikes; the
       // ledger records the actual (style-specific) legs on commit. `resolvedLegs` = what to record.
@@ -656,6 +662,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
       }   // end if(!legSkip1)
+      }   // end else (adaptive geometry did not decline)
     }
     // RISK-HARVEST (opts.riskHarvest): after opens/covers, if a REACHABLE loss exists (worse than
     // hvTrigger over ±band = spot·iv·√tau·sigmas) and a ≥hvRatio far-side hedge is available, buy it to lift
@@ -736,7 +743,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack,
+    floor, terminal, opens, filled, naked, coverPending, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,

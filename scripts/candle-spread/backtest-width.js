@@ -44,6 +44,54 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac }) {
   return { WIDTH: width, buildOpen, coverLegs };
 }
 
+// ── ADAPTIVE (time-of-day) STRIKE PLACEMENT ─────────────────────────────────────────────────────────
+// The user's actual strike selection: early in the session the short leg sits ON or IN the money — often
+// a strike or two ITM — and as the day goes on the chosen strikes walk toward the money until, by about
+// 1-2pm, spreads merely STRADDLE it. Never skewed OTM on an OPEN (OTM is only for covering / raising the
+// floor). The driver is a single price ceiling: never pay more than ~65% of width for a long debit spread,
+// because above that the risk/reward isn't there.
+//
+// ONE RULE REPRODUCES ALL OF IT: pick the MOST ITM placement whose real mark is still <= maxDebitFrac x W,
+// floored at straddle; if even that is too expensive, DON'T OPEN. It is self-adjusting — a given ITM skew
+// gets more expensive relative to width as expiry approaches, so the choice drifts ITM -> ATM on its own.
+// Measured (200d): the median mark for a fixed short-ATM placement rises through the day and crosses 65%
+// at ~14:00 ($20) / ~13:00 ($40), which is exactly the user's "rarely opening ITM by 1-2pm".
+//
+// IMPORTANT: this prices at the REAL mark of the chosen placement. It does NOT cap the price like
+// makeGeo's `min(width x capFrac, mark)`, which books BELOW market whenever the cap binds (measured at
+// 59.1% of bars for the ATM-centred geometry). Here the ceiling changes WHICH STRIKES we trade, which is
+// what the user actually does, rather than pretending we bought at a price nobody offered.
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3 }) {
+  // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
+  // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
+  // the least-ITM placement available — still never OTM.
+  const halfOnGrid = Math.floor((width / 2) / incr) * incr;
+  function buildOpen(side, S, tau, iv) {
+    const center = Math.floor(S / incr) * incr;
+    // Candidate SHORT strikes, ordered MOST ITM first. Bull: lower short strike = deeper ITM = pricier.
+    for (let k = -maxItmStrikes; k <= halfOnGrid / incr; k++) {
+      const off = k * incr;
+      const shortStrike = side === 'bull' ? center + off : center - off;
+      const lo = side === 'bull' ? shortStrike - width : shortStrike;
+      const hi = side === 'bull' ? shortStrike : shortStrike + width;
+      const legs = side === 'bull'
+        ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
+        : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
+      const mark = legsMark(legs, S, tau, iv);
+      if (!(mark > 0)) continue;
+      if (mark <= maxDebitFrac * width) {
+        return { legs, shortStrike, limit: Math.max(TICK, roundTick(mark)), itmStrikes: -k, fracOfWidth: mark / width };
+      }
+    }
+    // Every placement from deep-ITM through straddle is above the ceiling → decline rather than overpay.
+    return { skip: true, reason: 'no placement within ' + Math.round(maxDebitFrac * 100) + '% of width', limit: 0 };
+  }
+  const coverLegs = (side, shortStrike) => side === 'bull'
+    ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
+    : [{ side: 'short', type: 'C', strike: shortStrike }, { side: 'long', type: 'C', strike: shortStrike - width }];
+  return { WIDTH: width, buildOpen, coverLegs, adaptive: true };
+}
+
 const di = process.argv.indexOf('--dataDir');
 const days = load5mDays(di >= 0 ? process.argv[di + 1] : eng.DATA_DIR);
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
@@ -57,7 +105,7 @@ function avgDebit(geo) {   // sample the ATM open debit across days (first bar o
 }
 function stat(arr) { let t = 0, cum = 0, pk = 0, dd = 0, w = 1e9; for (const x of arr) { t += x; cum += x; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); w = Math.min(w, x); } return { t, dd, w, ret: dd > 0 ? t / dd : 0 }; }
 
-module.exports = { makeGeo };
+module.exports = { makeGeo, makeAdaptiveGeo };
 
 if (require.main === module) {
   const geos = [
