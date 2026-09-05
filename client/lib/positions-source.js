@@ -9,6 +9,15 @@
   'use strict';
   const SOURCES = ['manual', 'fidelity', 'strategy'];
 
+  // LIVE RUN DATA COMES FROM PROD, even in local dev. The local engine only records while this machine is
+  // awake, so its runs stop wherever the Mac slept and never settle — pulling the strategy book from it
+  // shows a partial day. Reading prod instead means the local UI, the deployed UI and the phone all show
+  // the SAME book. Everything else (quotes, chains, chartseries) still goes to PROXY_URL, so working on
+  // the local server is unaffected. `?proxy=local` opts back in to local runs deliberately.
+  const RUNS_BASE = (new URLSearchParams(location.search).get('proxy') === 'local')
+    ? PROXY_URL
+    : 'https://d1kbxyxn33vpw2.cloudfront.net';
+
   const el = (id) => document.getElementById(id);
   const currentSymbol = () => (el('symbol-input') ? el('symbol-input').value.trim().toUpperCase() : '');
   const currentExpiration = () =>
@@ -159,7 +168,7 @@
     const sel = el('ps-variant-select');
     if (!sel || sel.dataset.loaded === '1') return;
     try {
-      const data = await fetchJson(`${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`);
+      const data = await fetchJson(`${RUNS_BASE}/api/v1/candle-spread/runs?cb=${Date.now()}`);
       const sym = currentSymbol();
       const haveRun = new Set((data.runs || []).filter((r) => !sym || r.symbol === sym).map((r) => r.variant));
       const roster = (data.variants || []).filter((v) => v && v.variant);
@@ -215,14 +224,14 @@
   }
 
   const runUrl = (symbol, exp, date, variant) =>
-    `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(symbol)}/${encodeURIComponent(exp)}`
+    `${RUNS_BASE}/api/v1/candle-spread/runs/${encodeURIComponent(symbol)}/${encodeURIComponent(exp)}`
     + `?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`;
 
   // Resolve the actual date a run is filed under from the runs index — the latest run for this
   // symbol+variant. Used as a fallback when the chain expiration doesn't match a run (post-close roll).
   async function resolveRunDate(symbol, variant) {
     try {
-      const data = await fetchJson(`${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`);
+      const data = await fetchJson(`${RUNS_BASE}/api/v1/candle-spread/runs?cb=${Date.now()}`);
       const mine = (data.runs || []).filter((r) => r.symbol === symbol && r.variant === variant && r.tradeDate);
       if (!mine.length) return null;
       mine.sort((a, b) => (a.tradeDate < b.tradeDate ? 1 : -1));

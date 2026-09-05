@@ -98,7 +98,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.32</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.33</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -149,9 +149,22 @@
 const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
   || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
 const _proxyParam = new URLSearchParams(location.search).get('proxy');
-const PROXY_URL = _proxyParam === 'local' ? 'http://localhost:3001'
-  : _proxyParam === 'remote' ? 'https://d1kbxyxn33vpw2.cloudfront.net'
-  : (IS_LOCAL_ORIGIN ? 'http://localhost:3001' : 'https://d1kbxyxn33vpw2.cloudfront.net');
+const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
+// SPLIT ROUTING — each kind of data comes from the backend that actually HAS it:
+//   LIVE RUNS  -> PROD, even when developing locally. The local engine only records while this machine is
+//                 awake, so its runs stop at whatever ragged time the Mac slept (15:20, 15:35, 15:45 on
+//                 successive days) and never settle. Prod is always-on and settles at the close. This also
+//                 means the local page shows the SAME live data as the deployed UI and the phone.
+//   BACKTEST   -> LOCAL. Replay is local-only by construction: the deploy package zips server/ alone,
+//                 while the replay route spawns scripts/candle-spread/backtest-replay.js and reads
+//                 tests/backtest/, so prod has no generator and returns an empty date list.
+// `?proxy=local` forces BOTH local (to test local live data); `?proxy=remote` forces BOTH remote.
+const FORCE_BASE = _proxyParam === 'local' ? LOCAL_BASE : _proxyParam === 'remote' ? PROD_BASE : null;
+const LIVE_BASE = FORCE_BASE || PROD_BASE;
+const BT_BASE = FORCE_BASE || (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
+// Baselines ship inside server/, so prod has them; locally they are the file just rebuilt on disk, which
+// is the one being iterated on — read them from wherever the backtest side is pointed.
+const PROXY_URL = BT_BASE;
 
 const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9'];
 // Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
@@ -189,7 +202,7 @@ let pendingT = null, sliderRAF = null;             // rAF-coalesced slider recom
 
 const usd = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
 const fetchJson = async (u) => { const r = await fetch(u, { cache:'no-store' }); if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; } return r.json(); };
-const runsUrl = () => `${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`;
+const runsUrl = () => `${LIVE_BASE}/api/v1/candle-spread/runs?cb=${Date.now()}`;
 // REPLAY MODE — ?replay=YYYY-MM-DD (or ?replay=latest) renders a BACKTEST day instead of today's live
 // shadow runs. The bundle is emitted in the same run-record shape as a live run, so every downstream
 // piece (strategyRunToOptionArray, buildTimeIndex, the slider, the curves) works unchanged.
@@ -200,9 +213,9 @@ const _q = new URLSearchParams(location.search);
 const REPLAY = _q.get('replay');                       // legacy alias
 const SRC = _q.get('src') || (REPLAY ? 'backtest' : 'live');
 const WANT_DATE = _q.get('date') || (REPLAY && REPLAY !== 'latest' ? REPLAY : null);
-const replaysUrl = () => `${PROXY_URL}/api/v1/candle-spread/replays?cb=${Date.now()}`;
-const replayUrl = (d) => `${PROXY_URL}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
-const runUrl = (sym, exp, date, v) => `${PROXY_URL}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
+const replaysUrl = () => `${BT_BASE}/api/v1/candle-spread/replays?cb=${Date.now()}`;
+const replayUrl = (d) => `${BT_BASE}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
+const runUrl = (sym, exp, date, v) => `${LIVE_BASE}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
 
 // Turn a run record's legs into {curve, worst, best, avg, lo, hi}. Reuses PortfolioRisk (shared math) so
 // the curve is identical to the main calculator's; worst/best come from analyzePortfolioRisk (with its
@@ -372,7 +385,12 @@ function render() {
   // No chart legend here — how to read the cells is not news to the reader, and the encodings get tweaked
   // often enough that a written legend just goes stale. What DOES stay is state you cannot see by looking:
   // whether the dashed backtest-average reference is actually present on this day.
-  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src}${overlay ? '' : ' · no backtest avg'}  ·  ${finite.length} variants${aliasMeta}`;
+  // Name the BACKEND each side came from. With split routing (live from prod, backtest from local) the
+  // page can be showing two servers at once, and silently guessing which is what is how the 29510 misread
+  // happened in the first place.
+  const host = (u) => (u === LOCAL_BASE ? 'local' : 'prod');
+  const backend = SRC === 'backtest' ? `backtest@${host(BT_BASE)}` : `live@${host(LIVE_BASE)}`;
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · ${backend}${overlay ? '' : ' · no backtest avg'}  ·  ${finite.length} variants${aliasMeta}`;
   renderCompletenessBanner();
 }
 
@@ -391,8 +409,10 @@ function renderCompletenessBanner() {
   el.innerHTML = `<b>⚠ ${bad.length} of ${total} runs never settled${half}</b> — ${worst.detail}. `
     + `These books are wherever the run stopped, not the closing book, so the "now" price is not the close. `
     + `Backtest-average grading is suppressed for them. `
-    + `If this is the local server, its engine stops whenever the machine sleeps — `
-    + `<a href="?proxy=remote&amp;src=${encodeURIComponent(SRC)}${commonDate ? '&amp;date=' + encodeURIComponent(commonDate) : ''}">load the deployed server's runs</a>.`;
+    + (LIVE_BASE === LOCAL_BASE
+        ? `You are reading the LOCAL server's runs, whose engine stops whenever this machine sleeps — `
+          + `<a href="?src=${encodeURIComponent(SRC)}${commonDate ? '&amp;date=' + encodeURIComponent(commonDate) : ''}">use the deployed runs instead</a>.`
+        : `These came from the deployed server, so this is a genuine gap in the run itself, not a local-dev artifact.`);
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
