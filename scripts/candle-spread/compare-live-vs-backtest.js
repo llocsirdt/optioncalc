@@ -25,10 +25,14 @@ const path = require('path');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
+const completeness = require('../../shared/run-completeness.js');
 
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
 const DATE = arg('--date', null);
 const ONLY = arg('--variant', null);
+// --force compares anyway. There are real reasons to (inspecting WHERE a run died), but the numbers are
+// not a like-for-like decomposition, so it says so loudly rather than quietly producing a table.
+const FORCE = process.argv.includes('--force');
 if (!DATE) { console.error('need --date YYYY-MM-DD'); process.exit(1); }
 
 const AR = path.join(__dirname, '..', '..', 'candle-spread-archive');
@@ -55,19 +59,30 @@ function deployedOpts(v) {
   // comparison config being wrong.
   if (v.coverSelector) o.coverSelector = v.coverSelector;
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
-  if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
+  // Always explicit — the old conditional let a $20 shift-0 variant fall through to the base engine's own
+  // geometry and silently miss changes made here. Same trap as in build-backtest-baselines.js.
+  o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
   return o;
 }
 
 const RUNS = buildRuns();
 const files = fs.readdirSync(AR).filter(f => f.includes(`_${DATE}_`));
 const rows = [];
+const incomplete = [];   // live runs that never settled — excluded unless --force
 for (const f of files) {
   const name = f.replace(/^NDX_[0-9-]+_[0-9-]+_/, '').replace('.json', '');
   if (ONLY && name !== ONLY) continue;
   const v = RUNS.find(r => r.variant === name);
   if (!v) continue;                                   // retired / pre-sweep variant naming
   let j; try { j = JSON.parse(fs.readFileSync(path.join(AR, f), 'utf8')); } catch (e) { continue; }
+  // COMPLETENESS GATE. The backtest always runs the WHOLE session; a live run that died mid-afternoon did
+  // not. Decomposing the two then attributes the missing hours to signals/strikes/pricing — the exact
+  // wrong conclusion, and an invisible one, because a truncated run looks like a finished one.
+  const comp = completeness.assessRun(j);
+  if (!comp.complete) {
+    incomplete.push({ name, detail: comp.detail });
+    if (!FORCE) continue;
+  }
   const fn = (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
   const bt = runDay5m(day.bars, fn, deployedOpts(v));
 
@@ -80,7 +95,20 @@ for (const f of files) {
   const B = (bt.positions || []).map(p => norm(p, 'bt'));
   rows.push({ name, L, B });
 }
-if (!rows.length) { console.error(`no comparable variants for ${DATE} (live archive may predate the width sweep)`); process.exit(1); }
+if (incomplete.length) {
+  console.log(`\n${FORCE ? '!! COMPARING ANYWAY (--force)' : '!! EXCLUDED'} — ${incomplete.length} live run(s) never settled:`);
+  for (const x of incomplete.slice(0, 6)) console.log(`   ${x.name.padEnd(14)} ${x.detail}`);
+  if (incomplete.length > 6) console.log(`   …and ${incomplete.length - 6} more`);
+  console.log(FORCE
+    ? '   The backtest runs the FULL session; these did not. Differences below include missing time,\n   not just model divergence — this is not a like-for-like decomposition.\n'
+    : '   The backtest runs the FULL session, so decomposing against a truncated live run charges the\n   missing hours to signals/strikes/pricing. Re-run with --force to inspect them anyway.\n');
+}
+if (!rows.length) {
+  console.error(incomplete.length && !FORCE
+    ? `no COMPLETE live runs for ${DATE} — every archived run that day is truncated (see above)`
+    : `no comparable variants for ${DATE} (live archive may predate the width sweep)`);
+  process.exit(1);
+}
 
 console.log(`LIVE vs BACKTEST decomposition — ${DATE} · ${rows.length} variant(s) · config matched to the deployed build\n`);
 

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Strategy Comparison — Risk Curves</title>
+<script src="shared/market-calendar.js"></script>
+<script src="shared/run-completeness.js"></script>
 <style>
   :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; }
   * { box-sizing: border-box; }
@@ -57,6 +59,12 @@
   /* "≈" — this cell holds a run recorded under the pre-2026-09-03 naming, resolved into its nearest
      canonical slot. margin-right:auto keeps it beside the name while .hmax stays flush right. */
   .cell .cname .alias { color:#c79200; font-weight:700; padding-left:3px; margin-right:auto; cursor:help; }
+  /* This run never reached settlement — a partial day that otherwise renders exactly like a whole one. */
+  .cell .cname .partial { color:var(--loss); font-weight:700; padding-left:3px; margin-right:auto; cursor:help; }
+  .cell.is-partial { border-color:#f0b4b2; background:#fffafa; }
+  #incompleteBanner { margin:0 14px 6px; padding:6px 9px; border:1px solid #f0b4b2; background:#fff5f5;
+                      border-radius:5px; font-size:11px; color:#a33; }
+  #incompleteBanner b { color:#8a2a2a; }
   .cell .cname .hmax i { font-style:normal; font-weight:700; }
   .cell .cname .hmax .p { color:var(--profit); } .cell .cname .hmax .l { color:var(--loss); }
   .cell .chartwrap { position:relative; width:174px; padding-bottom:15px; }
@@ -111,6 +119,7 @@
   </div>
 </header>
 <div id="status">Loading…</div>
+<div id="incompleteBanner" hidden></div>
 <div class="wrap"><table class="grid" id="grid"></table></div>
 <div id="timebar">
   <span class="tb-lbl">Time of day</span>
@@ -170,6 +179,9 @@ const recordsB = {}, cellsB = {};
 // render at all — but an alias is not an equality (a `-10k` run traded a tighter cap, a `-paper` run a
 // different fill model), so the cell is marked rather than passed off as a native run.
 const aliasInfo = {};
+// variant -> RunCompleteness.assessRun(record). A run that stopped mid-session renders exactly like a
+// finished one, so this is the only thing standing between a partial day and being read as a closing book.
+const completeness = {};
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
 let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
@@ -287,9 +299,14 @@ function render() {
 
   // A cell's effective lo/hi — widened to include its backtest worst/best so the reference dashes stay
   // on-canvas even when today's book sits well inside the historical envelope.
-  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst);
+  // GRADING GATE: the dashed backtest average is a FULL-SESSION figure. Drawing it against a run that
+  // stopped at 15:20 invites reading the gap as performance when most of it is just missing time. So an
+  // incomplete run gets no reference line — the banner says why, rather than showing a silent comparison.
+  const gradable = (v) => !completeness[v] || completeness[v].complete;
+  const btFor = (v) => (overlay && gradable(v)) ? baselines[v] : null;
+  const cellLo = (v, d) => { let lo = d.lo; const b = btFor(v); if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst);
     const o = cellsB[v]; if (o && Number.isFinite(o.lo)) lo = Math.min(lo, o.lo); return lo; };
-  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best);
+  const cellHi = (v, d) => { let hi = d.hi; const b = btFor(v); if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best);
     const o = cellsB[v]; if (o && Number.isFinite(o.hi)) hi = Math.max(hi, o.hi); return hi; };
 
   let gMin = null, gMax = null;
@@ -306,7 +323,7 @@ function render() {
       if (!d) { html += '<td class="empty"></td>'; continue; }
       if (d.err) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="err">${d.err}</div></td>`; continue; }
       if (d.empty) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="nodata">no positions</div></td>`; continue; }
-      const bt = overlay ? baselines[v] : null;
+      const bt = btFor(v);
       const yMin = syncY ? gMin : cellLo(v, d), yMax = syncY ? gMax : cellHi(v, d);
       const wStr = d.unboundedLoss ? '−∞' : usd(d.worst);
       const bStr = d.unboundedGain ? '+∞' : usd(d.best);
@@ -326,9 +343,15 @@ function render() {
       const al = aliasInfo[v];
       const aliasTitle = al ? `\n≈ recorded as "${al.aliasOf}" — ${al.aliasNote}` : '';
       const aliasBadge = al ? `<span class="alias" title="recorded as &quot;${al.aliasOf}&quot; — ${al.aliasNote}">≈</span>` : '';
+      // "⚠" = this run never settled, so the book shown is wherever it stopped, NOT the closing book. It
+      // renders identically to a finished day otherwise, which is exactly why it needs saying on the cell.
+      const cp = completeness[v];
+      const partial = cp && !cp.complete;
+      const partTitle = partial ? `\n⚠ ${cp.detail}` : '';
+      const partBadge = partial ? `<span class="partial" title="${cp.detail}">⚠</span>` : '';
       const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span><span>${Math.round(d.xMax)}</span></div>`;
-      html += `<td class="cell" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}">`
-        + `<div class="cname"><b>${v}</b>${aliasBadge}${hmax}</div>`
+      html += `<td class="cell${partial ? ' is-partial' : ''}" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}">`
+        + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${hmax}</div>`
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
         + (cellsB[v] && cellsB[v].underPnl != null && d.underPnl != null
@@ -350,6 +373,26 @@ function render() {
   // often enough that a written legend just goes stale. What DOES stay is state you cannot see by looking:
   // whether the dashed backtest-average reference is actually present on this day.
   document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src}${overlay ? '' : ' · no backtest avg'}  ·  ${finite.length} variants${aliasMeta}`;
+  renderCompletenessBanner();
+}
+
+// One banner for the whole day rather than trusting a reader to notice per-cell badges. It says what is
+// wrong, and — the actionable part — that grading against the backtest average is suspended, because a
+// partial session compared to a full-day figure charges the missing hours to the strategy.
+function renderCompletenessBanner() {
+  const el = document.getElementById('incompleteBanner');
+  if (!el) return;
+  const bad = Object.keys(completeness).filter((v) => cells[v] && !completeness[v].complete);
+  if (!bad.length) { el.hidden = true; el.textContent = ''; return; }
+  const total = Object.keys(completeness).filter((v) => cells[v]).length;
+  const worst = completeness[bad[0]];
+  const half = worst.earlyClose ? ' (a 13:00 half day)' : '';
+  el.hidden = false;
+  el.innerHTML = `<b>⚠ ${bad.length} of ${total} runs never settled${half}</b> — ${worst.detail}. `
+    + `These books are wherever the run stopped, not the closing book, so the "now" price is not the close. `
+    + `Backtest-average grading is suppressed for them. `
+    + `If this is the local server, its engine stops whenever the machine sleeps — `
+    + `<a href="?proxy=remote&amp;src=${encodeURIComponent(SRC)}${commonDate ? '&amp;date=' + encodeURIComponent(commonDate) : ''}">load the deployed server's runs</a>.`;
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
@@ -524,6 +567,7 @@ async function load() {
   for (const k of Object.keys(cells)) delete cells[k];
   for (const k of Object.keys(records)) delete records[k];
   for (const k of Object.keys(aliasInfo)) delete aliasInfo[k];   // per-date; a stale badge is a wrong claim
+  for (const k of Object.keys(completeness)) delete completeness[k];
   try {
     if (SRC === 'backtest') {
       let date = WANT_DATE || 'latest';
@@ -583,6 +627,7 @@ async function load() {
       try {
         const rec = await fetchJson(runUrl(symbol, vm[v].expiration, vm[v].date, v));
         records[v] = rec.record || rec;
+        if (window.RunCompleteness) completeness[v] = window.RunCompleteness.assessRun(records[v]);
       } catch (e) { cells[v] = { err: e.status === 404 ? 'no run' : (e.message || 'error') }; }
       status.textContent = `Loading… ${++done}/${targets.length}`;
     });
