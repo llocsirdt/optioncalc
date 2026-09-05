@@ -35,6 +35,15 @@ const OUT = path.join(__dirname, '..', '..', 'data', 'iv-skew-correction.json');
 const argN = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? Number(process.argv[i + 1]) : d; };
 const MIN_QUOTE = argN('--minQuote', 0.30);     // sub-30c mids are noise at these tenors
 const MIN_SAMPLES = argN('--minSamples', 20);
+// A day with a handful of snapshots must not weigh the same as a full session. 2026-08-25 contributed 2
+// snapshots against 25-77 for every other day, was an outlier low-vol regime, and on its own inflated the
+// upside bucket's across-day stdev from 0.005 to 0.045.
+const MIN_SNAPS_PER_DAY = argN('--minSnapshotsPerDay', 10);
+// Beyond |z| = DAMP_Z the buckets are thin AND vol-regime dependent (the -1.5..-1 bucket swings 1.176 in
+// low vol to 1.022 in high vol). Measured on live runs, 99% of our legs sit inside |z| < 1 and 100% inside
+// |z| < 1.5 — so out there we would be extrapolating an unstable estimate into territory we never trade.
+// Fade toward 1.0 instead of trusting it.
+const DAMP_Z = argN('--dampBeyondZ', 1.5);
 
 // bucket edges in expected-move units; finer near the money where the curve bends most
 const EDGES = [-4, -3, -2.5, -2, -1.5, -1.25, -1, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
@@ -58,6 +67,11 @@ for (const f of fs.readdirSync(ARCHIVE).filter(x => /^NDX_.*\.json$/.test(x))) {
   }
 }
 if (!snaps.size) { console.error('no chain snapshots in', ARCHIVE); process.exit(1); }
+const perDay = {};
+for (const s2 of snaps.values()) perDay[s2.date] = (perDay[s2.date] || 0) + 1;
+const thinDays = Object.entries(perDay).filter(([, n]) => n < MIN_SNAPS_PER_DAY).map(([d]) => d);
+for (const [k, v] of [...snaps]) if (thinDays.includes(v.date)) snaps.delete(k);
+if (thinDays.length) console.log(`excluded ${thinDays.length} thin day(s) (<${MIN_SNAPS_PER_DAY} snapshots): ${thinDays.join(', ')}\n`);
 
 // IV of the OTM option at a strike
 function ivAt(s, k, tau) {
@@ -101,16 +115,23 @@ const buckets = perBucket.map(b => ({
 // already sets the level. Letting it drift would double-count the level adjustment.
 const atmB = buckets.find(b => b.lo <= 0 && b.hi > 0);
 if (atmB && atmB.mult) { const a = atmB.mult; for (const b of buckets) if (b.mult != null) b.mult = Math.round(b.mult / a * 1e4) / 1e4; }
+// Fade the far buckets toward 1.0 — thin, regime-dependent, and outside anything we trade.
+for (const b of buckets) {
+  if (b.mult == null) { b.mult = 1; b.damped = 'no-data'; continue; }
+  const z = Math.max(Math.abs(b.lo), Math.abs(b.hi));
+  if (z > DAMP_Z) { const w = Math.max(0, 1 - (z - DAMP_Z) / DAMP_Z); b.mult = Math.round((1 + (b.mult - 1) * w) * 1e4) / 1e4; b.damped = `w=${w.toFixed(2)}`; }
+}
 
 const out = {
   generatedAt: new Date().toISOString(),
   method: 'iv(K) = bandIV * ivMult(timeOfDay) * skewMult(z), z = (K-S)/(S*iv*sqrt(tau)); skewMult = median over SNAPSHOTS of [OTM implied vol / ATM implied vol]; ATM bucket normalised to 1.0',
   buckets,
-  meta: { snapshots: usedSnaps, dates: [...dates].sort(), minQuote: MIN_QUOTE, minSamples: MIN_SAMPLES },
+  meta: { snapshots: usedSnaps, dates: [...dates].sort(), minQuote: MIN_QUOTE, minSamples: MIN_SAMPLES,
+    minSnapshotsPerDay: MIN_SNAPS_PER_DAY, excludedThinDays: thinDays, dampBeyondZ: DAMP_Z },
 };
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
 console.log(`IV SKEW — ${usedSnaps} snapshots across ${dates.size} days\n`);
 console.log('   z range        n    skewMult');
-for (const b of buckets) console.log(`  ${String(b.lo).padStart(5)} .. ${String(b.hi).padEnd(5)} ${String(b.n).padStart(5)}    ${b.mult == null ? '(too few — 1.0)' : b.mult.toFixed(4)}`);
+for (const b of buckets) console.log(`  ${String(b.lo).padStart(5)} .. ${String(b.hi).padEnd(5)} ${String(b.n).padStart(5)}    ${b.mult.toFixed(4)}${b.damped ? '  (' + b.damped + ')' : ''}`);
 console.log(`\nwrote ${path.relative(process.cwd(), OUT)}`);

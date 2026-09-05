@@ -61,6 +61,10 @@ const BASE_RUNS = [
     // best honest lock-pricing model measured; the legacy instant-book-at-target mode was deleted from
     // the engine (it booked below the market whenever the cover marked above the target).
     continuousCover: true, lockCoverMode: 'rest',
+    // MONEYNESS-AWARE IV (skew). Flat ATM vol is biased BY SIDE — measured against 15,028 real chain
+    // quotes it under-prices bull call spreads by $69/contract and over-prices bear put spreads by $50.
+    // Per-leg skew reduces those to +$1 / +$8. Removes bias, not dispersion (~$100 |err| either way).
+    ivSkew: true,
     dryRun: true
   }
 ];

@@ -62,6 +62,24 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 // moneyness consistently off one corrected IV. Default OFF -> byte-identical to the current baseline.
 // LIMITATION: single-IV (NO skew) correction calibrated on ATM vol; covers at other moneyness receive
 // the SAME time-of-day IV mult (best single-IV approximation; moneyness skew is a later refinement).
+// MONEYNESS (SKEW) CORRECTION (opts.ivSkew) — data/iv-skew-correction.json. Real index vol is a smile with
+// a downside tilt, so pricing every leg of a vertical at one ATM vol is biased BY SIDE: measured against
+// 15,028 real chain quotes, flat vol under-prices bull call spreads by $69/contract and over-prices bear
+// put spreads by $50. The correction multiplies the base vol per leg by skewMult(z), z in expected-move
+// units, which reduces those to +$1 and +$8. It removes BIAS, not dispersion (~$100 |err| either way).
+// Default OFF -> byte-identical to the flat-IV baselines.
+let _skew = null;
+function loadSkew() {
+  if (_skew) return _skew;
+  const p = path.join(__dirname, '..', '..', 'data', 'iv-skew-correction.json');
+  _skew = JSON.parse(fs.readFileSync(p, 'utf8')).buckets.filter(b => b.mult != null);
+  return _skew;
+}
+function skewMultAt(z) {
+  const bs2 = loadSkew();
+  for (const b of bs2) if (z >= b.lo && z < b.hi) return b.mult;
+  return 1;   // outside the calibrated range -> no correction (the far buckets are damped to ~1 anyway)
+}
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 function loadIvCorrection() {
   if (_ivCorr) return _ivCorr;
@@ -428,6 +446,13 @@ function runDay5m(bars, signalFn, opts = {}) {
     // the correction flows into every legsMark/bsPrice below. Default OFF -> iv === ivOf(A) (byte-identical).
     let iv = ivOf(A);
     if (opts.intradayIV) iv *= ivMultAt(etMinute(bars[i].dt));
+    // With skew on, `iv` becomes a FUNCTION of (type, strike): the base vol scaled by the smile at that
+    // strike's moneyness. The expected-move band is computed from the BASE vol — one pass, no circularity.
+    // Everything downstream (legsMark, buildOpen, cover pricing, settlement marks) takes it unchanged.
+    if (opts.ivSkew) {
+      const base = iv, band = S * base * Math.sqrt(tau);
+      iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
+    }
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.

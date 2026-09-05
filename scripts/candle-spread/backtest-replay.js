@@ -64,6 +64,7 @@ function optsFor(v) {
   if (v.bidirectional) o.bidirectional = true;
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
   if (v.floorOffset) o.floorOffset = true;
+  if (v.ivSkew) o.ivSkew = true;
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
   if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;

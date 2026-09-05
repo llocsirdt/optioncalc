@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-05T14:58:02.461Z",
+  "generatedAt": "2026-09-05T15:37:12.376Z",
   "method": "iv(K) = bandIV * ivMult(timeOfDay) * skewMult(z), z = (K-S)/(S*iv*sqrt(tau)); skewMult = median over SNAPSHOTS of [OTM implied vol / ATM implied vol]; ATM bucket normalised to 1.0",
   "buckets": [
     {
@@ -7,141 +7,148 @@
       "lo": -4,
       "hi": -3,
       "n": 5,
-      "mult": null
+      "mult": 1,
+      "damped": "no-data"
     },
     {
       "z": -2.75,
       "lo": -3,
       "hi": -2.5,
       "n": 12,
-      "mult": null
+      "mult": 1,
+      "damped": "no-data"
     },
     {
       "z": -2.25,
       "lo": -2.5,
       "hi": -2,
       "n": 29,
-      "mult": 1.3583
+      "mult": 1.1194,
+      "damped": "w=0.33"
     },
     {
       "z": -1.75,
       "lo": -2,
       "hi": -1.5,
-      "n": 61,
-      "mult": 1.2287
+      "n": 60,
+      "mult": 1.1495,
+      "damped": "w=0.67"
     },
     {
       "z": -1.37,
       "lo": -1.5,
       "hi": -1.25,
-      "n": 98,
-      "mult": 1.1635
+      "n": 96,
+      "mult": 1.1612
     },
     {
       "z": -1.12,
       "lo": -1.25,
       "hi": -1,
-      "n": 148,
-      "mult": 1.1304
+      "n": 146,
+      "mult": 1.1296
     },
     {
       "z": -0.87,
       "lo": -1,
       "hi": -0.75,
-      "n": 227,
+      "n": 225,
       "mult": 1.0996
     },
     {
       "z": -0.62,
       "lo": -0.75,
       "hi": -0.5,
-      "n": 333,
+      "n": 331,
       "mult": 1.0701
     },
     {
       "z": -0.37,
       "lo": -0.5,
       "hi": -0.25,
-      "n": 351,
+      "n": 349,
       "mult": 1.0424
     },
     {
       "z": 0,
       "lo": -0.25,
       "hi": 0.25,
-      "n": 358,
+      "n": 356,
       "mult": 1
     },
     {
       "z": 0.38,
       "lo": 0.25,
       "hi": 0.5,
-      "n": 353,
+      "n": 351,
       "mult": 0.9785
     },
     {
       "z": 0.63,
       "lo": 0.5,
       "hi": 0.75,
-      "n": 311,
-      "mult": 0.9759
+      "n": 309,
+      "mult": 0.9755
     },
     {
       "z": 0.88,
       "lo": 0.75,
       "hi": 1,
-      "n": 193,
-      "mult": 0.9945
+      "n": 191,
+      "mult": 0.9944
     },
     {
       "z": 1.13,
       "lo": 1,
       "hi": 1.25,
-      "n": 120,
-      "mult": 1.0417
+      "n": 118,
+      "mult": 1.0406
     },
     {
       "z": 1.38,
       "lo": 1.25,
       "hi": 1.5,
-      "n": 70,
-      "mult": 1.0669
+      "n": 69,
+      "mult": 1.0652
     },
     {
       "z": 1.75,
       "lo": 1.5,
       "hi": 2,
-      "n": 51,
-      "mult": 1.1238
+      "n": 50,
+      "mult": 1.0801,
+      "damped": "w=0.67"
     },
     {
       "z": 2.25,
       "lo": 2,
       "hi": 2.5,
       "n": 14,
-      "mult": null
+      "mult": 1,
+      "damped": "no-data"
     },
     {
       "z": 2.75,
       "lo": 2.5,
       "hi": 3,
       "n": 8,
-      "mult": null
+      "mult": 1,
+      "damped": "no-data"
     },
     {
       "z": 3.5,
       "lo": 3,
       "hi": 4,
       "n": 3,
-      "mult": null
+      "mult": 1,
+      "damped": "no-data"
     }
   ],
   "meta": {
-    "snapshots": 358,
+    "snapshots": 356,
     "dates": [
       "2026-08-20",
       "2026-08-21",
-      "2026-08-25",
       "2026-08-26",
       "2026-08-27",
       "2026-08-28",
@@ -150,6 +157,11 @@
       "2026-09-04"
     ],
     "minQuote": 0.3,
-    "minSamples": 20
+    "minSamples": 20,
+    "minSnapshotsPerDay": 10,
+    "excludedThinDays": [
+      "2026-08-25"
+    ],
+    "dampBeyondZ": 1.5
   }
 }

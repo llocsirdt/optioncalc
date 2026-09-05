@@ -48,6 +48,7 @@ function optsFor(v) {
   // P&L stays byte-identical — it just populates the capital object for the deployed-capital metrics.
   const o = { rthActionOnly: true, trackCapital: true };
   if (INTRADAY_IV) o.intradayIV = true;   // canonical: reprice every leg with the calibrated time-of-day IV mult
+  if (v.ivSkew) o.ivSkew = true;          // canonical: per-leg moneyness (smile) correction on top of it
   if (v.bidirectional) o.bidirectional = true;
   // DAY-LOSS GOVERNOR: lossTarget/lossMax bound the BOOK FLOOR (the day's true max loss); floorOffset
   // enables the low-cost risk-offsetting buys. The `-unc` twins null these out → ungoverned.
