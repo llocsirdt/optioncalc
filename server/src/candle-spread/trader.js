@@ -81,8 +81,14 @@ function resolveLegs(legs, getLeg) {
 // deep-ITM cover) — the live analog of resolveRestingCovers' mark<=target rule. Shared by the
 // reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
 // machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
-async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note) {
+async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note, minLock) {
   const W = cfg.spreadWidth, tick = cfg.tickIncrement;
+  // minLock (price units, 0 unless the caller is CONTINUOUS COVERING): the resting target is the price
+  // that still LOCKS A REAL PROFIT, not bare break-even. Resting at break-even (W − openCost) fills the
+  // instant the cover is barely acceptable, which is a bad trade on a deep winner — measured in backtest
+  // as strictly WORSE than not doing it at all (v6-20 $135,713 -> $105,690). Both the BOOKED target and
+  // the SENT limit must carry it or we would rest at one price and book at another.
+  const ML = minLock || 0;
   // CAPITAL RECAPTURE: prefer a CREDIT cover on a deep-ITM winner (reclaim ~width cash). LEG-UNIQUENESS:
   // resolve so no cover leg is traded the wrong way — ideal → credit twin (same strikes) → WING-SHIFT
   // (anchor cover: long wing out to a free strike) → skip (leave uncovered). The resting-fill BOOKING stays
@@ -103,7 +109,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const bookLegs = (wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, 'debit');
   const brl = resolveLegs(bookLegs, deps.getLeg);
   const bookMark = brl.error ? null : round2(brl.longMid - brl.shortMid);
-  const target = (wing === W) ? round2(W - pos.limit) : (bookMark != null ? round2(Math.max(tick, bookMark)) : round2(W - pos.limit));
+  const target = (wing === W) ? round2(W - pos.limit - ML) : (bookMark != null ? round2(Math.max(tick, bookMark)) : round2(W - pos.limit - ML));
   pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
   pos.coverStatus = 'resting';
   // SEND the resolved cover (debit or credit) at the resolved wing.
@@ -112,7 +118,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
   if (!srl.error) {
     if (style === 'credit') { const cr = round2(srl.shortMid - srl.longMid); if (cr > 0) { sentNet = 'CREDIT'; price = sentCredit = L.roundToTick(Math.min(round2(W - tick), cr), tick); } }
-    else { price = (wing === W) ? L.roundToTick(round2(W - pos.limit), tick)   // ideal debit: rest at the floor target (unchanged)
+    else { price = (wing === W) ? L.roundToTick(round2(W - pos.limit - ML), tick)   // ideal debit: rest at the profit-lock target
                                 : L.roundToTick(Math.max(tick, round2(srl.longMid - srl.shortMid)), tick); }   // wing-shift: the wider cover's mark
     if (price > 0) {
       const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
@@ -123,7 +129,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
   pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
-  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, wing: wing !== W ? wing : undefined, note });
+  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, wing: wing !== W ? wing : undefined, minLock: ML || undefined, note });
 }
 
 // v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
@@ -417,6 +423,28 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       )),
       covered: coverSignal
     });
+
+  // (2b) CONTINUOUS COVERING (deps.continuousCover) — keep a standing resting cover on EVERY uncovered
+  // position, from the moment it opens, at the price that still locks a real profit
+  // (W − openCost − minLockFrac×W). Not signal-triggered and not risk-triggered: the objective is
+  // "open as many tents as possible, lock as often as possible, keep risk low, let the closing price
+  // decide the upside". Measured as the single biggest improvement in backtest — ON beat OFF in 9/9
+  // variants on both fill models, and OFF averaged only 43.9% of achievable.
+  //
+  // PLACED BEFORE the reversal cover ON PURPOSE: step (3) filters out positions that already have a
+  // resting cover working, so continuous covering PRE-EMPTS the reversal cover — which is exactly the
+  // ordering the backtest measured (its continuous-cover pass runs ahead of the signal cover and the
+  // signal cover skips anything already pending). Reversing the order here would silently trade a
+  // different strategy from the one the baselines describe.
+  if (ported && deps.continuousCover === true && cfg.coverFillModel === 'resting') {
+    const minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+    for (const pos of st.positions) {
+      if (!pos.filled || pos.covered || pos.pendingCover) continue;
+      if (round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
+      const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);
+      if (!plan.error) await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock);
+    }
+  }
 
   // (3) COVER — only on a CONFIRMED reversal (see spread-logic.shouldCover): a candle
   // closing opposite our held direction that FAILED to extend the prior candle's extreme
