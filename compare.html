@@ -65,6 +65,13 @@
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <button id="btTableBtn">Backtest table ▾</button>
   <button id="refresh">Refresh</button>
+  <span id="replaybar" style="display:none">
+    <label class="tgl" title="any tradeable day in the 5m dataset; generated on first request (~15s)">replay date
+      <input type="date" id="replayDate" style="margin-left:4px">
+    </label>
+    <button id="replayGo">Load</button>
+    <span id="replayRange" class="meta"></span>
+  </span>
   <div id="timebar">
     <span class="tb-lbl">Time of day</span>
     <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
@@ -411,11 +418,27 @@ async function load() {
   try {
     if (REPLAY) {
       let date = REPLAY;
-      if (date === 'latest') {
-        const l = await fetchJson(replaysUrl());
-        if (!l.dates || !l.dates.length) { status.textContent = 'No backtest replays generated yet (scripts/candle-spread/backtest-replay.js --date ...).'; return; }
-        date = l.dates[l.dates.length - 1];
+      // Show the picker and tell the user what range is replayable. `available` is every tradeable day in
+      // the dataset, not just what has been generated — the server builds a missing one on request.
+      const bar = document.getElementById('replaybar');
+      if (bar) bar.style.display = '';
+      let idx = null;
+      try { idx = await fetchJson(replaysUrl()); } catch (e) { /* older server → no index; direct load still works */ }
+      if (idx) {
+        const d = document.getElementById('replayDate'), r = document.getElementById('replayRange');
+        if (d && idx.first) { d.min = idx.first; d.max = idx.last; }
+        if (r) r.textContent = idx.available && idx.available.length
+          ? `${idx.available.length} days available (${idx.first} … ${idx.last}) · ${(idx.cached || []).length} already built`
+          : `${(idx.cached || []).length} pre-built`;
+        if (date === 'latest') {
+          const pool = (idx.cached && idx.cached.length) ? idx.cached : (idx.available || []);
+          if (!pool.length) { status.textContent = 'No backtest replays available.'; return; }
+          date = pool[pool.length - 1];
+        }
       }
+      const dEl = document.getElementById('replayDate');
+      if (dEl) dEl.value = date;
+      status.textContent = `Loading backtest replay ${date}… (building it takes ~15s the first time)`;
       const bundle = await fetchJson(replayUrl(date));
       symbol = bundle.symbol || 'NDX';
       commonDate = bundle.date;
@@ -479,6 +502,22 @@ document.getElementById('grid').addEventListener('click', (e) => {
   const td = svg.closest('td'), sel = td && td.querySelector('.sel');
   if (sel) sel.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(pnl)}</b>`;
 });
+// Replay date picker: reload the page at the chosen date. A full reload is the honest move here — every
+// cached record, the time index and the slider are all scoped to one day, so rebuilding them in place
+// would be more code and more ways to leave a stale fragment behind.
+(function () {
+  const go = document.getElementById('replayGo'), d = document.getElementById('replayDate');
+  if (!go || !d) return;
+  const load = () => {
+    if (!d.value) return;
+    const u = new URL(location.href);
+    u.searchParams.set('replay', d.value);
+    location.href = u.toString();
+  };
+  go.addEventListener('click', load);
+  d.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
+})();
+
 // Backtest table: toggle the section, loading baselines on first open, then render (sortable by header).
 document.getElementById('btTableBtn').addEventListener('click', async () => {
   const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');

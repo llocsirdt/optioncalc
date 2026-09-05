@@ -1090,22 +1090,45 @@ const REPLAY_DIR = require('path').join(__dirname, '..', '..', 'data', 'backtest
 app.get('/api/v1/candle-spread/replays', (req, res) => {
   try {
     const fs = require('fs');
-    if (!fs.existsSync(REPLAY_DIR)) return res.json({ dates: [] });
-    const dates = fs.readdirSync(REPLAY_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).map(f => f.slice(0, 10)).sort();
-    res.json({ dates });
+    const cached = fs.existsSync(REPLAY_DIR)
+      ? fs.readdirSync(REPLAY_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).map(f => f.slice(0, 10)).sort()
+      : [];
+    // `available` = every tradeable day in the 5m dataset, i.e. everything that CAN be replayed, not just
+    // what has been generated. Read from the dataset directory names so it costs nothing.
+    let available = [];
+    try {
+      const dir = require('path').join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
+      available = fs.readdirSync(dir).map(f => (f.match(/^backtest-[A-Z]+-(\d{4}-\d{2}-\d{2})\.json$/) || [])[1]).filter(Boolean).sort();
+    } catch (e) { /* dataset not present on this host (deployed instance) → cached only */ }
+    res.json({ dates: cached, cached, available, first: available[0] || null, last: available[available.length - 1] || null });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list backtest replays', message: error.message });
   }
 });
+// Serve a replay, GENERATING it on demand if it has not been built yet (~15s, mostly loading the 5m
+// dataset). Without this, "replay any date" would really mean "replay whichever dates someone remembered
+// to pre-build" — the UI could offer a date picker that mostly 404s. Pass ?generate=0 to require a cache
+// hit instead (e.g. to check what exists without paying for a build).
 app.get('/api/v1/candle-spread/replay', (req, res) => {
   const date = String(req.query.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
-  try {
-    const p = require('path').join(REPLAY_DIR, `${date}.json`);
-    res.type('application/json').send(require('fs').readFileSync(p, 'utf8'));
-  } catch (error) {
-    res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: 'Replay not generated for that date', date, message: error.message });
-  }
+  const fs = require('fs'), pathMod = require('path');
+  const file = pathMod.join(REPLAY_DIR, `${date}.json`);
+  const serve = () => res.type('application/json').send(fs.readFileSync(file, 'utf8'));
+  if (fs.existsSync(file)) { try { return serve(); } catch (e) { return res.status(500).json({ error: 'Failed to read replay', message: e.message }); } }
+  if (req.query.generate === '0') return res.status(404).json({ error: 'Replay not generated for that date', date });
+  const script = pathMod.join(__dirname, '..', '..', 'scripts', 'candle-spread', 'backtest-replay.js');
+  if (!fs.existsSync(script)) return res.status(404).json({ error: 'Replay generator not available on this host', date });
+  const child = require('child_process').spawn(process.execPath, [script, '--date', date], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = '';
+  child.stderr.on('data', (d) => { err += d.toString().slice(0, 2000); });
+  child.on('error', (e) => res.status(500).json({ error: 'Failed to launch replay generator', message: e.message }));
+  child.on('close', (code) => {
+    if (code !== 0 || !fs.existsSync(file)) {
+      return res.status(code === 0 ? 500 : 404).json({ error: 'Could not generate that replay', date, exit: code, detail: err.trim().split('\n').pop() });
+    }
+    try { serve(); } catch (e) { res.status(500).json({ error: 'Failed to read generated replay', message: e.message }); }
+  });
 });
 
 // Chains cache management endpoints
