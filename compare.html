@@ -41,7 +41,11 @@
   #timebar input[type=range] { flex:1; cursor:pointer; height:24px; }
   #timebar .tb-time { font:12px ui-monospace, monospace; font-weight:700; min-width:74px; text-align:right; }
   #timebar input:disabled { opacity:.4; }
+  /* padding-right on a horizontal scroller is NOT honoured at the scroll end in Chrome — scrolled fully
+     right, the last column would sit flush against the screen edge. The gap has to come from the scrolled
+     CONTENT, so it goes on the table as a margin. */
   .wrap { overflow:auto; padding:8px 14px 40px; }
+  .wrap > table { margin-right:40px; }
   table.grid { border-collapse:separate; border-spacing:6px; }
   table.grid th { font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
   table.grid th.rowh { text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
