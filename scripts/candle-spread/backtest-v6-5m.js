@@ -617,7 +617,14 @@ function runDay5m(bars, signalFn, opts = {}) {
       // ADAPTIVE geometry can DECLINE: every placement from deep-ITM through straddle priced above the
       // risk/reward ceiling. Skipping is the correct answer — the alternative (buying anyway, or booking a
       // capped sub-market price) is exactly the artifact this geometry exists to avoid.
-      if (o && o.skip) { geoSkip++; sig.openSide = null; }
+      if (o && o.skip) {
+        geoSkip++;
+        // opts.onDecline: report the turned-down spread so a caller can measure whether a resting bid at
+        // the ceiling WOULD have filled later in the day. Declining is a strategy choice; whether the
+        // market would have come to our price is a fact, and facts should be measured, not assumed.
+        if (opts.onDecline && o.legs) opts.onDecline({ i, side: sig.openSide, legs: o.legs, restLimit: o.restLimit, markAtDecline: o.mark });
+        sig.openSide = null;
+      }
       else {
       // LEG-UNIQUENESS: resolve the ideal spread against the day's ledger — ideal → parity twin (same
       // strikes) → shift → skip. P&L stays on the debit-canonical spread at the RESOLVED strikes; the
@@ -821,7 +828,10 @@ function runV5_15m(bars) {
   return eng.runDay(sub, (A, p, ctx) => v5Signal(A, p, { ...ctx, cfg: {} }));
 }
 
-module.exports = { runDay5m, load5mDays };
+// ivMultAt/skewMultAt/etMinute are exported so ANALYSIS scripts can reprice a spread on exactly the same
+// vol surface the engine trades on. Reimplementing the lookups in a caller is how a measurement quietly
+// stops measuring the thing it claims to.
+module.exports = { runDay5m, load5mDays, ivMultAt, skewMultAt, etMinute };
 
 if (require.main === module) {
   const v6fn = (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: CFG });

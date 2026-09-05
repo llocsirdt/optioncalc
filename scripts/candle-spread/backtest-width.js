@@ -45,7 +45,10 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
     // makeAdaptiveGeo is for), so over the ceiling the only honest options are pay the mark or pass —
     // and the user's rule is pass: above ~65% of width the risk/reward isn't there.
     if (!(mark > 0)) return { skip: true, reason: 'non-positive mark', limit: 0 };
-    if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark) };
+    // Carry the LEGS on a decline too. Skipping is the strategy decision, but "would this have filled if
+    // we had rested a bid at the ceiling instead?" is a MEASURABLE question, and it cannot be answered
+    // without knowing which spread was turned down. See measure-declined-opens.js.
+    if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark), legs, shortStrike: side === 'bull' ? hi : lo, restLimit: round2(width * cf) };
     return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, round2(mark)), fracOfWidth: mark / width };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'
