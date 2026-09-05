@@ -1,7 +1,7 @@
 'use strict';
 // Adaptive (time-of-day) strike placement: most-ITM placement still inside the price ceiling.
 const assert = require('assert');
-const { makeAdaptiveGeo } = require('../../scripts/candle-spread/backtest-width');
+const { makeAdaptiveGeo, makeGeo } = require('../../scripts/candle-spread/backtest-width');
 const eng = require('../../scripts/candle-spread/backtest-v4');
 
 let passed = 0;
@@ -68,6 +68,41 @@ t('cover geometry is unchanged (tent off the short strike)', () => {
   const g = makeAdaptiveGeo({ width: 20, incr: 10 });
   const cov = g.coverLegs('bull', 20000);
   assert.deepStrictEqual(cov.map(l => l.type + l.strike), ['P20000', 'P20020']);
+});
+
+// ── makeGeo: the FIXED geometry must never book below the market ───────────────────────────────────
+// Regression for the sub-market booking bug: `limit = min(width x capFrac, mark)` booked a fill at the
+// cap whenever the real mark was above it (59.1% of bars on the ATM-centred geometry), i.e. a price no
+// one offered and that the live engine's own limit order would never have gotten filled at.
+t('makeGeo prices at the real mark when the mark is under the ceiling', () => {
+  const g = makeGeo({ width: 20, incr: 10, shift: 10, capFrac: 0.65 });
+  const o = g.buildOpen('bull', S, hrs(5), IV);
+  assert.ok(!o.skip, 'should open');
+  assert.ok(o.fracOfWidth <= 0.65, `booked ${o.fracOfWidth} of width, over the ceiling`);
+  // the limit IS the mark (round-tripped through the tick), not a capped-down number
+  const capDollars = 20 * 0.65;
+  assert.ok(o.limit < capDollars, `limit ${o.limit} should be the mark, strictly under the cap ${capDollars}`);
+});
+
+t('makeGeo DECLINES instead of booking at the cap when the mark is over the ceiling', () => {
+  // a ceiling below what an ITM spread can possibly cost → the mark always exceeds it
+  const g = makeGeo({ width: 20, incr: 10, shift: 10, capFrac: 0.05 });
+  const o = g.buildOpen('bull', S, hrs(5), IV);
+  assert.strictEqual(o.skip, true, 'expected a decline, not a capped fill');
+  assert.strictEqual(o.limit, 0, 'a declined open must carry no bookable limit');
+  assert.ok(/over 5% of \$20/.test(o.reason), `reason should name the ceiling: ${o.reason}`);
+  // THE BUG: the old code returned limit = 20 x 0.05 = $1.00 here and the engine booked it as a fill.
+  assert.ok(!(o.limit > 0), 'must not return a sub-market limit');
+});
+
+t('makeGeo never books a limit above the ceiling either', () => {
+  for (const cf of [0.4, 0.525, 0.65, 0.8]) {
+    for (const shift of [0, 10]) {
+      const o = makeGeo({ width: 20, incr: 10, shift, capFrac: cf }).buildOpen('bull', S, hrs(4), IV);
+      if (o.skip) continue;
+      assert.ok(o.limit <= 20 * cf + 1e-9, `cf=${cf} shift=${shift}: booked ${o.limit} over ceiling ${20 * cf}`);
+    }
+  }
 });
 
 console.log(`\n${passed} passed\n`);

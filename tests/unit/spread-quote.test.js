@@ -2,6 +2,7 @@
 // Mark-validation gate: parity (exact), neighbour outlier, and the 65%-of-width ceiling.
 const assert = require('assert');
 const SQ = require('../../server/src/candle-spread/spread-quote');
+const L = require('../../server/src/candle-spread/spread-logic');
 const bs = require('../../server/src/candle-spread/bs-pricer');
 
 let passed = 0;
@@ -98,6 +99,30 @@ t('never invents a price better than the market shows', () => {
   const g = chain(20000, { half: 0.25 });
   const v = SQ.validateOpen('bull', 20000, 20020, g, { maxDebitFrac: 0.65, incr: 10 });
   assert.ok(v.limit <= v.quotedMid + 1e-9, `limit ${v.limit} must not exceed the quoted mid ${v.quotedMid}`);
+});
+
+// ── debitLimit: the ceiling GATES the trade, it never prices it ────────────────────────────────────
+// Regression for the sub-market bug. The old code did `limit = min(cap, mark)`, so an over-ceiling
+// spread was sent at the cap — a limit order below the market, which does not fill live while the
+// backtest happily booked it as a fill. Now the ceiling only reports `exceedsCap` and the OPEN path
+// declines (trader.buildOpenAtStrikes -> {declined}, decision 'open-skip-ceiling').
+t('debitLimit prices at the real mark, never below it', () => {
+  const r = L.debitLimit(14.00, 1.00, 20, 0.05, 0.65);   // mark 13.00, cap 13.00 -> at the ceiling
+  assert.strictEqual(r.mark, 13);
+  assert.strictEqual(r.limit, 13, 'limit must be the mark');
+  assert.strictEqual(r.exceedsCap, false, '13.00 is not over a 13.00 cap');
+});
+
+t('debitLimit FLAGS an over-ceiling spread instead of capping the price', () => {
+  const r = L.debitLimit(16.00, 1.00, 20, 0.05, 0.65);   // mark 15.00 vs cap 13.00
+  assert.strictEqual(r.mark, 15);
+  assert.strictEqual(r.cap, 13);
+  assert.strictEqual(r.exceedsCap, true, 'must report the breach');
+  assert.strictEqual(r.limit, 15, 'THE BUG: old code returned 13.00 here — a price nobody offered');
+});
+
+t('debitLimit defaults to the user\'s 65%-of-width ceiling', () => {
+  assert.strictEqual(L.debitLimit(10, 1, 20, 0.05).cap, 13);
 });
 
 console.log(`\n${passed} passed\n`);

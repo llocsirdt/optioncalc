@@ -21,12 +21,17 @@ const legsMark = eng.legsMark, round2 = eng.round2, roundTick = eng.roundTick, T
 //   shift = 0     → ATM straddle (long ITM by width/2, short OTM by width/2 — the classic)
 //   shift = W/2   → just ITM (short leg ~ATM, long leg W deep ITM — the "$40" selection)
 //   shift > W/2   → deeper ITM (short leg ITM by shift−W/2, long even deeper)
-// capFrac (debit ceiling as a fraction of width) auto-derives from how ITM the spread sits, so the
-// real mark binds (never suppressed) for ITM geometries while ATM keeps the legacy 0.525 ceiling.
+// capFrac = the user's RISK/REWARD CEILING (never pay more than ~65% of width for a long debit spread).
+// It GATES THE TRADE, it does not set the price: if the real mark is over the ceiling we DECLINE the open
+// (`{skip:true}`) rather than booking at the cap. The old `limit = min(cap, mark)` booked BELOW MARKET
+// whenever the cap bound — measured at 59.1% of bars for ATM-centred, 2.0%/7.7% for $20/$40 short-ATM —
+// i.e. the backtest counted fills at prices the live engine's own limit order would never have gotten.
+// One ceiling for every geometry now: the old auto-derive (0.525 + shift/width) existed only to stop the
+// cap from binding on ITM spreads, which is unnecessary once the cap refuses instead of prices.
 // Grid note: legs land on the `incr` grid only when W/2 and shift are multiples of incr (e.g. $10 ATM
 // is off a 10-grid → use a shift or incr:5; $20/$40/$60 ATM are fine).
-function makeGeo({ width, incr = 10, shift = 0, capFrac }) {
-  const cf = capFrac != null ? capFrac : Math.min(0.95, 0.525 + Math.max(0, shift) / width);
+function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
+  const cf = capFrac;
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
     let lo, hi;
@@ -35,8 +40,13 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac }) {
     const legs = side === 'bull'
       ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
       : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
-    const limit = round2(Math.min(width * cf, roundTick(legsMark(legs, S, tau, iv))));
-    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, limit) };
+    const mark = roundTick(legsMark(legs, S, tau, iv));
+    // DECLINE, never book sub-market. A fixed geometry has no other strikes to walk to (that is what
+    // makeAdaptiveGeo is for), so over the ceiling the only honest options are pay the mark or pass —
+    // and the user's rule is pass: above ~65% of width the risk/reward isn't there.
+    if (!(mark > 0)) return { skip: true, reason: 'non-positive mark', limit: 0 };
+    if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark) };
+    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, round2(mark)), fracOfWidth: mark / width };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'
     ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
@@ -57,10 +67,9 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac }) {
 // Measured (200d): the median mark for a fixed short-ATM placement rises through the day and crosses 65%
 // at ~14:00 ($20) / ~13:00 ($40), which is exactly the user's "rarely opening ITM by 1-2pm".
 //
-// IMPORTANT: this prices at the REAL mark of the chosen placement. It does NOT cap the price like
-// makeGeo's `min(width x capFrac, mark)`, which books BELOW market whenever the cap binds (measured at
-// 59.1% of bars for the ATM-centred geometry). Here the ceiling changes WHICH STRIKES we trade, which is
-// what the user actually does, rather than pretending we bought at a price nobody offered.
+// IMPORTANT: this prices at the REAL mark of the chosen placement — the ceiling changes WHICH STRIKES we
+// trade, which is what the user actually does. makeGeo now honours the same "never book sub-market" rule,
+// but being a FIXED geometry it can only decline; here we walk the placement toward the money first.
 function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3 }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
@@ -109,7 +118,7 @@ module.exports = { makeGeo, makeAdaptiveGeo };
 
 if (require.main === module) {
   const geos = [
-    ['$20 ATM (baseline)', makeGeo({ width: 20, shift: 0, capFrac: 0.525 })],
+    ['$20 ATM (baseline)', makeGeo({ width: 20, shift: 0 })],
     ['$40 ATM-centered', makeGeo({ width: 40, shift: 0 })],
     ['$40 short-slightly-ITM (+10)', makeGeo({ width: 40, shift: 10 })],
     ['$40 short-ATM (+20)', makeGeo({ width: 40, shift: 20 })],

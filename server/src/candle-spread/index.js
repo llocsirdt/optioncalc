@@ -108,14 +108,16 @@ const FAMILIES = [
 ];
 
 // The width sweep is now uniformly SHORT-ATM (shift = W/2: short leg ≈ ATM, long leg W deeper ITM) at
-// capFrac 0.8 — the geometry the user actually trades, held constant across widths so width is the only
-// variable. All three land on the 10-pt strike grid (W/2 − shift = 0 → short strike = center). The
-// ATM-CENTERED geometry (shift 0, legacy 0.525 cap) is measured separately via the `-ctr` comparators
-// below (width 20/40 only — $10 ATM-centered is off-grid).
+// capFrac 0.65 — the user's real risk/reward ceiling ("never pay more than ~65% of width for a long debit
+// spread"), held constant across widths so width is the only variable. All three land on the 10-pt strike
+// grid (W/2 − shift = 0 → short strike = center). The ATM-CENTERED geometry (shift 0) is measured
+// separately via the `-cATM` comparators below (width 20/40 only — $10 ATM-centered is off-grid).
+// capFrac GATES the trade (over the ceiling → decline); it does NOT cap the price. It was 0.8 here and a
+// legacy 0.525 on cATM back when it set the limit, which booked sub-market on 59% of cATM bars.
 const WIDTHS = [
-  { w: 10, shift: 5,  capFrac: 0.8 },
-  { w: 20, shift: 10, capFrac: 0.8 },
-  { w: 40, shift: 20, capFrac: 0.8 },
+  { w: 10, shift: 5,  capFrac: 0.65 },
+  { w: 20, shift: 10, capFrac: 0.65 },
+  { w: 40, shift: 20, capFrac: 0.65 },
 ];
 
 // ── DAY-LOSS GOVERNOR SIZING ────────────────────────────────────────────────────────────────────────
@@ -240,7 +242,7 @@ function buildAtmComparators() {
         variantLabel: `${f.label} $${w} ATM-centered`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → legacy 0.525 ATM ceiling
+        spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → the same 0.65 ceiling
       };
       if (f.bidirectional) v.bidirectional = true;
       if (f.exemptTrendStack) v.exemptTrendStack = true;

@@ -243,7 +243,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const rr = LL.resolveOpen(openSide, res.lower, res.upper, tempLedger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCreditOpen ? 'credit' : 'debit' });
   if (rr.resolution === 'skip') return false;                      // can't place open cleanly → sequential fallback (real ledger untouched)
   const openBook = rr.resolution === 'shift' ? buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg) : res;
-  if (openBook.error) return false;
+  if (openBook.error || openBook.declined) return false;   // over the risk/reward ceiling → no combo either
   const openSentLegs = rr.legs;
 
   // 4) price + build the atomic CUSTOM order (net mid + marketable slip); merge same-strike legs to qty
@@ -552,6 +552,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     }
     if (legSkipped) {
       // already logged; the leg constraint blocked every placement
+    } else if (res.declined) {
+      decisions.push({ action: 'open-skip-ceiling', side: openSide, reason: res.reason, mark: res.mark, cap: res.cap });
     } else if (res.error) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
@@ -627,8 +629,8 @@ function bandsFor(candle) {
 
 function buildOpen(side, underlying, cfg, getLeg) {
   const center = L.centerStrike(underlying, cfg.strikeIncrement);
-  // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac
-  // (default 0.525 = the $20 ATM cap) rises for wider/deeper spreads whose long leg costs more.
+  // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac is the
+  // risk/reward CEILING (default 0.65 of width) and GATES the trade — it never sets the price.
   const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
   return buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
 }
@@ -638,7 +640,9 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
-  const { mark, cap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
+  const { mark, cap, exceedsCap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
+  // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
+  if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
     mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
@@ -650,6 +654,8 @@ function buildCover(pos, cfg, getLeg) {
   const legs = L.coverLegs(pos.side, pos.shortStrike, cfg.spreadWidth, cfg.coverStyle || 'debit-offset');
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
+  // NOTE: covers deliberately do NOT take the open path's ceiling — a cover is risk reduction, so
+  // "too expensive to open" is not the same decision as "too expensive to de-risk". Priced at the mark.
   const { mark, cap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement);
   return { legs, mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT') };
 }

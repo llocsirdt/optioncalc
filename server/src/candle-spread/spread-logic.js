@@ -218,15 +218,17 @@ function coverLimitFromMark(mark, spreadWidth, tick) {
 
 // Net-debit limit for an OPEN or a debit-offset COVER.
 //   mark  = longMid - shortMid (the spread's net mid)
-//   cap   = spreadWidth/2 * 1.05
-//   limit = min(cap, mark), rounded to the chain's tick, and never allowed to exceed the cap.
-// Returns { mark, cap, limit }. Caller should treat limit <= 0 as invalid (bad quotes).
-function debitLimit(longMid, shortMid, spreadWidth, tick, capFrac = 0.525) {
+//   cap   = spreadWidth * capFrac (the user's risk/reward ceiling, default 65% of width)
+//   limit = the real mark, rounded to the chain's tick.
+// `exceedsCap` reports that the spread costs MORE than the ceiling allows — the caller decides. For an
+// OPEN that means DECLINE (buildOpenAtStrikes returns {declined}); the old behaviour was to silently send
+// at the cap, i.e. a limit order BELOW the market, which does not fill live and which the backtest counted
+// as a fill anyway. Never price a trade you would refuse to make.
+// Returns { mark, cap, exceedsCap, limit }. Caller should treat limit <= 0 as invalid (bad quotes).
+function debitLimit(longMid, shortMid, spreadWidth, tick, capFrac = 0.65) {
   const mark = round2(longMid - shortMid);
-  const cap = round2(spreadWidth * capFrac);   // 0.525 == width/2 × 1.05 (back-compat for $20 ATM);
-  let limit = roundToTick(Math.min(cap, mark), tick); // $40 short-ATM uses ~0.8 (deeper-ITM long costs more)
-  if (limit > cap) limit = Math.floor(cap / tick) * tick; // never exceed the cap
-  return { mark, cap, limit: round2(limit) };
+  const cap = round2(spreadWidth * capFrac);
+  return { mark, cap, exceedsCap: mark > cap, limit: round2(roundToTick(mark, tick)) };
 }
 
 function round2(n) {
