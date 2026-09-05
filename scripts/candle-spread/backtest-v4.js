@@ -36,6 +36,7 @@ function parseCfg() {
 }
 const CFG = parseCfg();
 const WIDTH = 20, INCR = 10, TICK = 0.05, QTY = 1;
+const CAP_FRAC = 0.65;   // user's ceiling: never pay more than ~65% of width for a long debit spread
 const round2 = n => Math.round(n * 100) / 100;
 const roundTick = p => Math.max(TICK, Math.round(p / TICK) * TICK);
 const money = n => (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n));
@@ -61,9 +62,14 @@ function buildOpen(side, S, tau, iv) {
   const legs = side === 'bull'
     ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
     : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
-  const mark = legsMark(legs, S, tau, iv);
-  const limit = round2(Math.min(WIDTH / 2 * 1.05, roundTick(mark)));   // debit cap like the engine
-  return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, limit) };
+  const mark = roundTick(legsMark(legs, S, tau, iv));
+  // RISK/REWARD CEILING (0.65 of width) — it GATES the trade, it does not price it. The old
+  // `min(WIDTH/2 * 1.05, mark)` booked at the cap whenever the mark ran above it, i.e. a fill at a price
+  // nobody offered; 0.525 is structurally below what an ATM-centred spread costs, so it bound constantly.
+  // Same rule as makeGeo in backtest-width.js — keep the two in step.
+  if (!(mark > 0)) return { skip: true, reason: 'non-positive mark', limit: 0 };
+  if (mark > WIDTH * CAP_FRAC) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(CAP_FRAC * 100)}% of $${WIDTH}`, limit: 0, mark: round2(mark) };
+  return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, round2(mark)), fracOfWidth: mark / WIDTH };
 }
 // tent cover legs (offsetting spread sharing the short strike)
 function coverLegs(side, shortStrike) {
@@ -139,8 +145,11 @@ function runDay(bars, signalFn, onBar) {
     let openedThisBar = null;
     if (sig.openSide && (st.dir === 'none' || st.dir === sig.openSide)) {
       const o = buildOpen(sig.openSide, S, tau, iv);
+      if (o.skip) { st.geoSkip = (st.geoSkip || 0) + 1; }                 // over the risk/reward ceiling → no open
+      else {
       st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null });
       st.dir = sig.openSide; openedThisBar = sig.openSide;
+      }
     }
 
     if (onBar) onBar({

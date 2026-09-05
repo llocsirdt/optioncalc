@@ -47,8 +47,8 @@ function runDay10(bars, opts = {}) {
     for (const tf of TFS) {
       const c = A[tf]; if (!c || c.bblower == null) continue;
       const sig = `${c.open}|${c.high}|${c.low}|${c.close}`; if (sig === last[tf]) continue; last[tf] = sig;
-      if (c.low < c.bblower && (nBull - nBear) < maxImb) { const o = buildOpen('bull', S, tau, iv); pos.push({ legs: o.legs, limit: o.limit, side: 'bull', tf, done: false, pl: 0 }); nBull++; }
-      if (c.high > c.bbupper && (nBear - nBull) < maxImb) { const o = buildOpen('bear', S, tau, iv); pos.push({ legs: o.legs, limit: o.limit, side: 'bear', tf, done: false, pl: 0 }); nBear++; }
+      if (c.low < c.bblower && (nBull - nBear) < maxImb) { const o = buildOpen('bull', S, tau, iv); if (!o.skip) { pos.push({ legs: o.legs, limit: o.limit, side: 'bull', tf, done: false, pl: 0 }); nBull++; } }
+      if (c.high > c.bbupper && (nBear - nBull) < maxImb) { const o = buildOpen('bear', S, tau, iv); if (!o.skip) { pos.push({ legs: o.legs, limit: o.limit, side: 'bear', tf, done: false, pl: 0 }); nBear++; } }
     }
   }
   const settle = bars[bars.length - 1].analysis['5m'].close;

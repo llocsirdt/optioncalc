@@ -67,7 +67,11 @@ function optsFor(v) {
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
-  if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
+  // ALWAYS build the geo explicitly. This used to be conditional ((w && w !== 20) || sh || cf != null),
+  // so a $20 shift-0 capFrac-unset variant — i.e. every `-20-cATM` — silently fell through to the base
+  // engine's own buildOpen instead of makeGeo, and quietly missed geometry changes made here. The two are
+  // numerically identical for that case; passing it explicitly keeps them from drifting apart again.
+  o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
   // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.
