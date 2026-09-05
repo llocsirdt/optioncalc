@@ -11,6 +11,7 @@ const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
+const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
 const { v5Signal } = require('./signals/v5-signals');
@@ -664,7 +665,38 @@ function start(deps) {
 }
 
 // --- read accessors for the API -------------------------------------------
-function listRuns() { return store.listRunsSummary(); }
+// Runs, with every recorded variant name resolved onto the CURRENT canonical roster (see
+// variant-alias.js). Pre-2026-09-03 runs used a different naming convention, so without this the
+// comparison grid — which is keyed by canonical name — silently renders those days empty despite the data
+// being right there. `variant` is therefore the name the UI should key off; `recordedVariant` is what the
+// run actually called itself, and `aliasOf`/`aliasNote` are present ONLY on aliased entries so a caller
+// can mark them as approximations rather than showing them as native runs.
+function listRuns() {
+  const roster = new Set(buildRuns().map(r => r.variant));
+  const rows = store.listRunsSummary();
+  // Resolve per (symbol, tradeDate) group — slot competition is only meaningful within one day.
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.symbol}|${r.tradeDate}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const winners = new Map();   // runId -> annotated
+  for (const g of groups.values()) {
+    for (const [, w] of alias.resolveSlots(g.map(r => ({ ...r, config: { variant: r.variant, spreadWidth: r.spreadWidth } })), roster)) {
+      winners.set(w.runId, w);
+    }
+  }
+  return rows.map(r => {
+    const w = winners.get(r.runId);
+    // Not a winner: either unmappable, or it lost its slot to a closer run. Either way it must NOT keep a
+    // canonical-looking `variant`, or the UI would fetch it into a cell that belongs to something else.
+    if (!w) return { ...r, recordedVariant: r.variant, canonical: false };
+    return w.exact
+      ? { ...r, recordedVariant: r.variant, canonical: true }
+      : { ...r, variant: w.variant, recordedVariant: r.variant, canonical: true, aliasOf: w.aliasOf, aliasNote: w.aliasNote };
+  });
+}
 // The CANONICAL variant roster the server is currently configured to trade — name, label, geometry, and
 // which one (if any) is armed for the live pipe. The runs store keeps records for RETIRED variants too
 // (e.g. the removed -10k twins), so any UI that lists strategies must filter against this rather than
@@ -689,7 +721,28 @@ function listVariants() {
 // with no ?date= resolves to that day's run instead of today. variant is optional.
 function getRun(symbol, expiration, date, variant) {
   const tradeDate = date || expiration;
-  return store.readRun(store.makeRunId(symbol, expiration, tradeDate, variant));
+  const direct = store.readRun(store.makeRunId(symbol, expiration, tradeDate, variant));
+  if (direct || !variant) return direct;
+  // No native run under that name — the UI asked for a canonical variant on a day recorded under the old
+  // convention. Re-resolve that day's files and hand back the nearest equivalent, ANNOTATED. The record is
+  // returned as-recorded apart from the added alias fields: nothing about the run itself is rewritten, so
+  // its config still says what it really traded.
+  const roster = new Set(buildRuns().map(r => r.variant));
+  const fam = /^(v\d+)/.exec(variant);
+  if (!fam) return null;
+  const prefix = `${symbol}_${expiration}_${tradeDate}_`;
+  const cands = [];
+  for (const runId of store.listRunFiles()) {
+    // Cheap filename filter first — only same-day, same-family files can possibly alias to this slot,
+    // which keeps this to a handful of reads instead of the whole store.
+    if (!runId.startsWith(prefix)) continue;
+    if (!runId.slice(prefix.length).startsWith(fam[1])) continue;
+    const rec = store.readRun(runId);
+    if (rec) cands.push({ runId, config: rec.config || {}, eventCount: (rec.events || []).length, rec });
+  }
+  const hit = alias.resolveSlots(cands, roster).get(variant);
+  if (!hit || hit.exact) return null;   // exact would have been found by the direct read above
+  return { ...hit.rec, aliasOf: hit.aliasOf, aliasNote: hit.aliasNote, requestedVariant: variant };
 }
 
 // Count today's decisions on a run record (for the status endpoint).

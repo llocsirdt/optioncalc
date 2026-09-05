@@ -34,6 +34,9 @@
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
   .cell .cname .hmax { font:9px ui-monospace, monospace; white-space:nowrap; }
+  /* "≈" — this cell holds a run recorded under the pre-2026-09-03 naming, resolved into its nearest
+     canonical slot. margin-right:auto keeps it beside the name while .hmax stays flush right. */
+  .cell .cname .alias { color:#c79200; font-weight:700; padding-left:3px; margin-right:auto; cursor:help; }
   .cell .cname .hmax i { font-style:normal; font-weight:700; }
   .cell .cname .hmax .p { color:var(--profit); } .cell .cname .hmax .l { color:var(--loss); }
   .cell .chartwrap { position:relative; width:174px; padding-bottom:15px; }
@@ -139,6 +142,11 @@ const records = {}; // variant -> raw run record (kept so the time slider can re
 // Live and backtest run the same strategies on the same session, so where the two curves separate — and at
 // what time on the slider — is the most direct read on WHERE the models diverge, which a table cannot show.
 const recordsB = {}, cellsB = {};
+// variant -> { aliasOf, aliasNote } for runs recorded under the PRE-2026-09-03 naming and resolved
+// forward by the server. They occupy the nearest canonical cell, which is what makes those older days
+// render at all — but an alias is not an equality (a `-10k` run traded a tighter cap, a `-paper` run a
+// different fill model), so the cell is marked rather than passed off as a native run.
+const aliasInfo = {};
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
 let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
@@ -290,9 +298,14 @@ function render() {
         nowlbl = `<div class="nowlbl" style="left:${lx.toFixed(1)}px">${Math.round(d.underlying)}${pnl}</div>`;
       }
       const btTitle = bt ? `\nbacktest avg — max loss ${fmtN(bt.worst)} · max ${fmtN(bt.best)} · ${bt.trades != null ? bt.trades + '/day' : ''} · peak cap ${fmtN(bt.peakCap)}` : '';
+      // "≈" = this day predates the width-sweep naming and the run shown here was recorded under a
+      // different name. Reading it as a native run of this variant would overstate what we know.
+      const al = aliasInfo[v];
+      const aliasTitle = al ? `\n≈ recorded as "${al.aliasOf}" — ${al.aliasNote}` : '';
+      const aliasBadge = al ? `<span class="alias" title="recorded as &quot;${al.aliasOf}&quot; — ${al.aliasNote}">≈</span>` : '';
       const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span><span>${Math.round(d.xMax)}</span></div>`;
-      html += `<td class="cell" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}">`
-        + `<div class="cname"><b>${v}</b>${hmax}</div>`
+      html += `<td class="cell" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}">`
+        + `<div class="cname"><b>${v}</b>${aliasBadge}${hmax}</div>`
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
         + (cellsB[v] && cellsB[v].underPnl != null && d.underPnl != null
@@ -306,7 +319,11 @@ function render() {
   html += '</tbody>';
   grid.innerHTML = html;
   const src = SRC === 'backtest' ? 'BACKTEST REPLAY' : 'LIVE RUN';
-  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants`;
+  // Say it on the page, not only in a tooltip — on a pre-2026-09-03 day EVERY cell is an alias, and that
+  // is the kind of caveat that has to be visible while you are reading the numbers.
+  const nAlias = Object.keys(aliasInfo).filter((v) => cells[v]).length;
+  const aliasMeta = nAlias ? `  ·  ≈ ${nAlias} cell${nAlias === 1 ? '' : 's'} recorded under the older naming (hover for what differs)` : '';
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants${aliasMeta}`;
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
@@ -446,9 +463,30 @@ function applyTime(T) {
   render();
 }
 
+// The epoch the grid should currently be drawn at, or null for the full end-of-day book.
+//
+// Reading the slider's raw DOM value is NOT safe: when a day has no per-position timestamps the slider is
+// disabled but keeps whatever value it last held, and a leftover "1" reads as "the book at epoch 1" —
+// i.e. before anything opened, so every cell renders "no positions". Runs recorded before the replay
+// stamps (openEpoch/openTime) were added have exactly that shape, so full-day is the only view their data
+// supports; say so by returning null rather than inventing a time.
+function currentT() {
+  if (pendingT != null) return pendingT >= dayMax ? null : pendingT;
+  const s = document.getElementById('timeSlider');
+  if (s.disabled || !dayMax) return null;
+  const t = Number(s.value);
+  return Number.isFinite(t) && t < dayMax ? t : null;
+}
+
 function setupSlider() {
   const s = document.getElementById('timeSlider'), lbl = document.getElementById('timeLabel');
-  if (!dayMax || dayMax <= dayMin) { s.disabled = true; lbl.textContent = 'full day'; return; }
+  // Pre-replay-stamp runs carry no openEpoch/openTime, so there is nothing to scrub along. Name the
+  // reason — otherwise a dead slider on an older day just looks broken.
+  if (!dayMax || dayMax <= dayMin) {
+    s.disabled = true;
+    lbl.textContent = Object.keys(records).length ? 'full day (no intraday stamps)' : 'full day';
+    return;
+  }
   s.min = dayMin; s.max = dayMax; s.step = 300000; s.value = dayMax; s.disabled = false;   // 5-min steps
   lbl.textContent = 'full day';
 }
@@ -459,6 +497,7 @@ async function load() {
   document.getElementById('grid').innerHTML = '';
   for (const k of Object.keys(cells)) delete cells[k];
   for (const k of Object.keys(records)) delete records[k];
+  for (const k of Object.keys(aliasInfo)) delete aliasInfo[k];   // per-date; a stale badge is a wrong claim
   try {
     if (SRC === 'backtest') {
       let date = WANT_DATE || 'latest';
@@ -507,6 +546,7 @@ async function load() {
     for (const r of all) {
       if (r.symbol !== symbol || r.tradeDate !== pickDate) continue;
       vm[r.variant] = { expiration: r.expiration || r.tradeDate, date: r.tradeDate };
+      if (r.aliasOf) aliasInfo[r.variant] = { aliasOf: r.aliasOf, aliasNote: r.aliasNote };
     }
     commonDate = pickDate;
     const targets = [];
@@ -568,13 +608,17 @@ async function loadComparisonSource(status) {
       if (!runs.length) { status.textContent = `No live run recorded for ${date} — nothing to compare.`; return; }
       await inBatches(runs, 8, async (r) => {
         try { const rec = await fetchJson(runUrl(symbol, r.expiration || r.tradeDate, r.tradeDate, r.variant)); recordsB[r.variant] = rec.record || rec; } catch (e) { /* skip */ }
+        // The LIVE side is the aliased one here (a backtest replay is always keyed canonically), so the
+        // "≈" has to come from these runs or an older day would compare against a differently-configured
+        // run with nothing on screen saying so.
+        if (r.aliasOf) aliasInfo[r.variant] = { aliasOf: r.aliasOf, aliasNote: r.aliasNote };
       });
     } else {
       const bundle = await fetchJson(replayUrl(date));
       for (const [v, rec] of Object.entries(bundle.runs || {})) recordsB[v] = rec;
     }
     status.textContent = prev;
-    applyTime(pendingT != null ? pendingT : (Number(document.getElementById('timeSlider').value) || dayMax || null));
+    applyTime(currentT());
   } catch (e) {
     status.textContent = `Could not load the ${SRC === 'backtest' ? 'live' : 'backtest'} side for ${date}: ${e.status === 404 ? 'not available' : (e.message || e)}`;
   }

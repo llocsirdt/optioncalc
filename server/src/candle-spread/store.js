@@ -100,6 +100,9 @@ function listRunsSummary() {
       tradeDate: r.tradeDate,
       variant: r.config?.variant || null,
       variantLabel: r.config?.variantLabel || null,
+      // The width is what lets a legacy name (`v6`, `v6-20-10k`) be resolved onto the current roster —
+      // it comes from the run's own config, so the mapping is read from the record, never assumed.
+      spreadWidth: r.config?.spreadWidth ?? null,
       coverSelector: r.config?.coverSelector || null,
       direction: r.state?.direction,
       positionCount: r.state?.positions?.length || 0,
