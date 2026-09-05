@@ -24,8 +24,23 @@
   const strategyExpiration = () => resolvedExp[`${currentSymbol()}:${currentVariant()}`] || currentExpiration();
 
   const sourceKey = (symbol) => `positionsSource_${(symbol || currentSymbol()).toUpperCase()}`;
-  function getPositionsSource(symbol) { try { return localStorage.getItem(sourceKey(symbol)) || 'manual'; } catch (e) { return 'manual'; } }
-  function setStoredSource(s, symbol) { try { localStorage.setItem(sourceKey(symbol), s); } catch (e) {} }
+  // The source is stored PER SYMBOL, but on a fresh page load the symbol input may not be populated yet —
+  // so the symbol-scoped key misses and the tab appears not to restore. Keep a global LAST value as the
+  // fallback, which is what "restore what I was last looking at" actually means across a refresh.
+  const LAST_SOURCE_KEY = 'positionsSource_LAST';
+  const VARIANT_KEY = 'positionsStrategyVariant_LAST';
+  function getPositionsSource(symbol) {
+    try {
+      const scoped = localStorage.getItem(sourceKey(symbol));
+      if (scoped) return scoped;
+      return localStorage.getItem(LAST_SOURCE_KEY) || 'manual';
+    } catch (e) { return 'manual'; }
+  }
+  function setStoredSource(s, symbol) {
+    try { localStorage.setItem(sourceKey(symbol), s); localStorage.setItem(LAST_SOURCE_KEY, s); } catch (e) {}
+  }
+  function getStoredVariant() { try { return localStorage.getItem(VARIANT_KEY) || ''; } catch (e) { return ''; } }
+  function setStoredVariant(v) { try { if (v) localStorage.setItem(VARIANT_KEY, v); } catch (e) {} }
 
   // Source-scoped cache key (Strategy also scopes by variant). oc.js uses this; it falls back to the
   // legacy `${SYMBOL}-${expiration}` key for the Manual source so pre-existing saves aren't lost.
@@ -135,19 +150,34 @@
   // --- Strategy pull ---
   async function fetchJson(url) { const r = await fetch(url); if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; } return r.json(); }
 
+  // The runs store keeps records for RETIRED variants (the removed -10k twins, older namings), so listing
+  // whatever run files exist shows dead strategies. Filter against the server's CANONICAL roster
+  // (data.variants) and keep its ordering, which is already family → width → suffix = version order.
+  // Default selection: the variant actually armed for the live pipe (dryRun 'test'), else the remembered
+  // choice, else v6-20.
   async function populateStrategyVariants() {
     const sel = el('ps-variant-select');
     if (!sel || sel.dataset.loaded === '1') return;
     try {
       const data = await fetchJson(`${PROXY_URL}/api/v1/candle-spread/runs?cb=${Date.now()}`);
       const sym = currentSymbol();
-      const variants = [...new Set((data.runs || []).filter((r) => !sym || r.symbol === sym).map((r) => r.variant))];
-      if (variants.length) {
-        const prev = sel.value;
-        sel.innerHTML = variants.map((v) => `<option value="${v}">${v}</option>`).join('');
-        sel.value = variants.indexOf(prev) >= 0 ? prev : (variants.indexOf('v6-20') >= 0 ? 'v6-20' : variants[0]);
-        sel.dataset.loaded = '1';
-      }
+      const haveRun = new Set((data.runs || []).filter((r) => !sym || r.symbol === sym).map((r) => r.variant));
+      const roster = (data.variants || []).filter((v) => v && v.variant);
+      // Show the FULL canonical roster (every variant the server is configured to trade), marking the ones
+      // with no run today rather than hiding them — a missing run is a state worth seeing, not a reason to
+      // drop a valid strategy. Fall back to the run list only if an older server has no roster.
+      const list = roster.length ? roster : [...haveRun].sort().map((v) => ({ variant: v, label: v }));
+      if (!list.length) return;
+      const liveVariant = (list.find((v) => v.live) || {}).variant;
+      const remembered = getStoredVariant();
+      const has = (v) => v && list.some((x) => x.variant === v);
+      sel.innerHTML = list.map((v) => {
+        const tags = [v.live ? ' ◉ live' : '', haveRun.has(v.variant) ? '' : ' (no run today)'].join('');
+        return `<option value="${v.variant}"${v.live ? ' data-live="1"' : ''}>${v.variant}${tags}</option>`;
+      }).join('');
+      sel.value = has(remembered) ? remembered : (has(liveVariant) ? liveVariant : (has('v6-20') ? 'v6-20' : list[0].variant));
+      sel.dataset.loaded = '1';
+      setStoredVariant(sel.value);
     } catch (e) { /* keep the default option; pull will report a clear error */ }
   }
 
@@ -229,6 +259,7 @@
     const varSel = el('ps-variant-select');
     if (varSel) varSel.addEventListener('change', () => {
       varSel.dataset.loaded = '1';
+      setStoredVariant(varSel.value);   // restore this exact variant on the next page load
       // Changing the variant auto-pulls that variant's positions (no manual Pull click needed).
       if (getPositionsSource() === 'strategy') { pullStrategyPositions(); return; }
       if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());

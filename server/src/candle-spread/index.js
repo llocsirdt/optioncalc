@@ -630,6 +630,26 @@ function start(deps) {
 
 // --- read accessors for the API -------------------------------------------
 function listRuns() { return store.listRunsSummary(); }
+// The CANONICAL variant roster the server is currently configured to trade — name, label, geometry, and
+// which one (if any) is armed for the live pipe. The runs store keeps records for RETIRED variants too
+// (e.g. the removed -10k twins), so any UI that lists strategies must filter against this rather than
+// against whatever run files happen to exist, or it shows dead entries. Ordered by family then width then
+// suffix so callers get version order for free.
+function listVariants() {
+  const rank = v => {
+    const m = /^v(\d+)-(\d+)(?:-(.*))?$/.exec(v.variant) || [];
+    const suffix = m[3] || '';
+    const grp = suffix === '' ? 0 : suffix === 'unc' ? 1 : 2;
+    return [Number(m[1] || 99), grp, Number(m[2] || 0), suffix];
+  };
+  return buildRuns()
+    .map(v => ({
+      variant: v.variant, label: v.variantLabel, spreadWidth: v.spreadWidth,
+      dryRun: v.dryRun, live: v.dryRun === 'test' || v.dryRun === false,
+      lossTarget: v.lossTarget != null ? v.lossTarget : null, lossMax: v.lossMax != null ? v.lossMax : null,
+    }))
+    .sort((a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) { if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; } return 0; });
+}
 // date defaults to the EXPIRATION (0DTE: tradeDate == expiration), so `/runs/NDX/2026-08-18`
 // with no ?date= resolves to that day's run instead of today. variant is optional.
 function getRun(symbol, expiration, date, variant) {
@@ -738,6 +758,7 @@ module.exports = {
   status,
   buildRuns,
   VARIANTS,
+  listVariants,
   // exported for tests
   classifyBoundary,
   msToNextBoundary,

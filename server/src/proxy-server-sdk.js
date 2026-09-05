@@ -1033,7 +1033,10 @@ app.get('/api/v1/positions/offsetting', async (req, res) => {
 // production UI can poll them). The engine itself runs internally; these only read.
 app.get('/api/v1/candle-spread/runs', (req, res) => {
   try {
-    res.json({ runs: candleSpread.listRuns(), timestamp: new Date().toISOString() });
+    // `variants` = the canonical roster the server is configured to trade (with which one is armed for
+    // the live pipe). The runs store also holds records for RETIRED variants, so the UI filters against
+    // this rather than against the run files, and takes its ordering + default selection from it.
+    res.json({ runs: candleSpread.listRuns(), variants: candleSpread.listVariants(), timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list candle-spread runs', message: error.message });
   }
