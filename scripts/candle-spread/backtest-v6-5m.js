@@ -80,6 +80,11 @@ function skewMultAt(z) {
   for (const b of bs2) if (z >= b.lo && z < b.hi) return b.mult;
   return 1;   // outside the calibrated range -> no correction (the far buckets are damped to ~1 anyway)
 }
+// `iv` is a NUMBER normally and a per-leg FUNCTION when opts.ivSkew is on. Any code path that calls
+// bs.bsPrice() DIRECTLY has to resolve it per leg first — handing the function straight in as sigma
+// produces NaN silently. (legsMark and buildOpen accept either form themselves.)
+const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
+
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 function loadIvCorrection() {
   if (_ivCorr) return _ivCorr;
@@ -386,7 +391,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   // clears the ratio / the day budget is spent). Returns how many were bought.
   function buyFloorOffsets(limit, S, tau, iv, force) {
     if (!floorOffset) return 0;
-    const mark = (type, k) => bs.bsPrice(type, S, k, tau, iv);
+    const ivFor = volFn(iv);
+    const mark = (type, k) => bs.bsPrice(type, S, k, tau, ivFor(type, k));
     // FORCE = "must-fix" mode, used only when the floor is through the HARD ceiling: take the best
     // available floor-lift-per-dollar even if it doesn't clear the ratio gate, because lossMax is a
     // ceiling, not a preference. Un-forced, the ratio gate keeps the overlay to outsized-reduction-only.
@@ -453,6 +459,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const base = iv, band = S * base * Math.sqrt(tau);
       iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
     }
+    const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
@@ -560,7 +567,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const band = Math.round(S * iv * Math.sqrt(tau) * wingBandSig);
       if (band > 0) {
         // marketable proxy: buy the long leg above mid, sell the short below (live swaps in real quotes)
-        const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, iv) + (legSide === 'long' ? wingSlip : -wingSlip);
+        const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike)) + (legSide === 'long' ? wingSlip : -wingSlip);
         const bookView = st.positions.map(p => ({ filled: true, legs: p.legs, limit: p.limit, quantity: QTY, covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
         // Budget is a fraction of the CURRENT peak — there has to be a peak worth converting before we
         // spend anything, and a small tent can never justify real premium.
@@ -591,7 +598,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const toCover = st.positions.filter(p => !p.covered && !p.pendingCover && coverSet.includes(p.side));
       let plans = null;
       if (coverSel) {   // v1/v2/v3: reuse the server cover selectors with a BS getLeg (single source of truth)
-        const getLeg = (type, k) => ({ mid: bs.bsPrice(type, S, k, tau, iv), symbol: `x${type}${k}`, bid: 0, ask: 0 });
+        const getLeg = (type, k) => ({ mid: bs.bsPrice(type, S, k, tau, ivFor(type, k)), symbol: `x${type}${k}`, bid: 0, ask: 0 });
         const cfgLike = { spreadWidth: G.WIDTH, strikeIncrement: INCR, tickIncrement: TICK, quantity: QTY, coverSelector: coverSel, coverKCap: 5 };
         const withId = toCover.map((p, k) => ({ ...p, id: 'c' + k, quantity: QTY }));
         plans = trader.selectCovers(withId, cfgLike, getLeg, { underlying: S, reversedDir: sig.openSide || (coverSet[0] === 'bull' ? 'bear' : 'bull'), bbOverride: false });
@@ -622,12 +629,20 @@ function runDay5m(bars, signalFn, opts = {}) {
         const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle });
         if (res.resolution === 'skip') { legSkip++; legSkip1 = true; }
         else {
-          if (res.resolution === 'shift') { legShift++; shiftSum += Math.abs(res.shift); o = G.buildOpen(sig.openSide, S + res.shift * legIncr, tau, iv); }
+          // The REBUILD at the shifted anchor can decline even though the unshifted one did not — the
+          // shift moves the placement and therefore the price. Treat that exactly like the first decline
+          // (skip the open) rather than carrying a legless `o` into the governor's floor projection.
+          if (res.resolution === 'shift') {
+            legShift++; shiftSum += Math.abs(res.shift);
+            const o2 = G.buildOpen(sig.openSide, S + res.shift * legIncr, tau, iv);
+            if (o2 && o2.skip) { geoSkip++; legSkip1 = true; } else o = o2;
+          }
           else if (res.resolution === 'twin') legTwin++; else legIdeal++;
           resolvedLegs = res.legs;
         }
       }
       if (!legSkip1) {
+      let geoDecline = false;   // set if a post-lock ledger re-resolve rebuilt the open above the price ceiling
       const nd = o.limit * 100 * QTY;
       // COVER-TO-CONTINUE-STACKING (opts.coverToStack): if a new open would breach the ACCOUNT ceiling
       // mid-trend, LOCK the deepest-ITM winner(s) first — a covered tent is riskless, so it frees its
@@ -657,12 +672,18 @@ function runDay5m(bars, signalFn, opts = {}) {
           const _s2 = o.legs.map(l => l.strike), _lo2 = Math.min(..._s2), _hi2 = Math.max(..._s2);
           const preferStyle2 = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
           const res2 = LL.resolveOpen(sig.openSide, _lo2, _hi2, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: preferStyle2 });
-          if (res2.resolution === 'shift') { o = G.buildOpen(sig.openSide, S + res2.shift * legIncr, tau, iv); resolvedLegs = res2.legs; }
+          // Same as the first re-resolve: a shifted rebuild can decline on price. Record it and let the
+          // commit gate below drop the open — `o` must never reach floorOf() without legs.
+          if (res2.resolution === 'shift') {
+            const o3 = G.buildOpen(sig.openSide, S + res2.shift * legIncr, tau, iv);
+            if (o3 && o3.skip) { geoSkip++; geoDecline = true; } else { o = o3; resolvedLegs = res2.legs; }
+          }
           else if (res2.resolution !== 'skip') resolvedLegs = res2.legs;
         }
         // Instrumentation hook (opts.onCoverToStack): READ-ONLY — measures 4-leg combo applicability.
         if (opts.onCoverToStack && lockedNow.length) {
-          opts.onCoverToStack({ locked: lockedNow, openLegs: o.legs, openSide: sig.openSide, width: G.WIDTH, mark: (type, k) => bs.bsPrice(type, S, k, tau, iv) });
+          // `iv` is a per-leg FUNCTION when opts.ivSkew is on — the hook's mark() must honour that.
+          opts.onCoverToStack({ locked: lockedNow, openLegs: o.legs, openSide: sig.openSide, width: G.WIDTH, mark: (type, k) => bs.bsPrice(type, S, k, tau, ivFor(type, k)) });
         }
       }
       // soft cap counts only AT-RISK debit (uncovered & NOT deep-ITM); hard cap + legacy count ALL uncovered.
@@ -677,9 +698,9 @@ function runDay5m(bars, signalFn, opts = {}) {
       // GOVERNOR HARD GATE — the projected BOOK FLOOR (rebuilt from the FINAL `o`, which the ledger
       // re-resolve above may have shifted) must stay inside lossMax. Because realized day P&L =
       // bookPayoff(settle) >= floor, and every open is gated here, the day's loss is bounded by lossMax.
-      const govOk = !governed || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
+      const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
       if (!govOk) govBlocked++;
-      if (strategyOk && ceilingOk && govOk) {
+      if (strategyOk && ceilingOk && govOk && !geoDecline) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
         markBookDirty();
         if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
@@ -711,7 +732,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       const band = Math.round(S * iv * Math.sqrt(tau) * hvBandSig);
       const hvMaxPerDay = opts.harvestMaxPerDay != null ? opts.harvestMaxPerDay : Infinity;   // cap churn
       if (band > 0 && hvSpent < hvBudget && hvCount < hvMaxPerDay && RH.reachableFloor(st.positions, S, band, 10) < hvTrigger) {
-        const mark = (type, strike) => bs.bsPrice(type, S, strike, tau, iv);
+        const mark = (type, strike) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike));
         // CONVICTION: only hedge the loss side the underlying is trending TOWARD (15m close vs 9EMA).
         const trend = (opts.harvestDirGate !== false && A['15m'] && A['15m'].ema != null) ? Math.sign(A['15m'].close - A['15m'].ema) : null;
         const plan = RH.harvestPlan(st.positions, mark, S, { band, step: 10, incr: legIncr, widths: [20, 40, 60], depth: 8, minRatio: hvRatio, target: 0, budget: hvBudget - hvSpent, slip: opts.harvestSlip != null ? opts.harvestSlip : 0.5, trend });
