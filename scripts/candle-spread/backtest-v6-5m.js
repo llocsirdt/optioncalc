@@ -173,6 +173,17 @@ function runDay5m(bars, signalFn, opts = {}) {
   // PRICING underlying (opts.priceOf): options are priced/settled off THIS series while the SIGNAL stays on
   // A (the analysis series). Default = the analysis 5m itself → baselines byte-identical. Override to price
   // NDX options off the real NDX close while signalling off NQ (the live model; NDX ≈ NQ − basis, ~44pt).
+  // FOUNDATIONAL GUARD — signals come from /NQ, pricing and settlement from cash NDX. A dataset that
+  // carries a separate NDX price series (`px`) MUST be priced off it. The default below falls back to the
+  // SIGNAL series, which for a dual dataset means silently pricing NDX options off NQ — a violation that
+  // produces plausible-looking numbers and no error. This has already been nearly shipped twice (the
+  // baseline builder and the replay generator each set priceOf only after the omission was caught), so it
+  // is enforced here rather than left to every caller to remember.
+  if (!opts.priceOf && bars.some(b => b && b.px)) {
+    throw new Error('runDay5m: this dataset carries an NDX price series (bars[].px) but opts.priceOf is not set — '
+      + 'pricing would fall back to the /NQ signal series. Pass opts.priceOf = b => b.px. '
+      + 'See feedback: signals from NQ, pricing/action from NDX.');
+  }
   const priceOf = opts.priceOf || (b => { const c = b.analysis['5m']; return { close: c.close, high: c.high, low: c.low }; });
   // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
   // engine (resolveRestingCovers) books at the candle-CLOSE mark. opts.coverFillAtClose matches live.
