@@ -67,6 +67,10 @@ function optsFor(v) {
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
+  // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
+  // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
+  // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.
+  if (HAS_PX) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
   return o;
 }
 
@@ -100,6 +104,8 @@ function rollingDD(daily, W) {
 
 const allDays = load5mDays(DIR);
 if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
+// Does this dataset carry a separate NDX price series? (the dual NQ-signal/NDX-priced set does)
+const HAS_PX = allDays.some(d => d.bars.some(b => b.px));
 
 // A day is TRADEABLE only if it has a real RTH cash session (a bar in 09:30–16:00 ET). The 24h NQ feed
 // includes Sunday-evening/holiday futures sessions with no cash session — untradeable for 0DTE NDX, they
@@ -187,6 +193,7 @@ if (SLICE != null) {
   process.exit(0);
 }
 
+console.log(`  pricing: ${HAS_PX ? 'cash NDX (px series) — signals off /NQ' : 'the signal series itself (single-instrument dataset)'}`);
 console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}\n`);
 console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
 console.log('-'.repeat(78));
@@ -299,12 +306,23 @@ function writeSummaryCsv(file) {
 // The v6 family was renamed to per-width variants (v6-10/-20/-40); they all share the same v6 signalFn +
 // signalCfg, and the anchor forces the DEFAULT $20 ATM geometry (no geo opt) regardless, so any v6-family
 // member reproduces the pure anchor. Use v6-20.
+// The anchor is a FINGERPRINT OF THE ENGINE, not a performance figure: the pure v6 signal with almost no
+// config, summed over the dataset. The expected value is a constant for ONE dataset — the 765-day NQ set —
+// so it is only meaningful there. Run it on any other dataset and you are comparing a different instrument
+// over a different number of days to a hardcoded NQ number, which fails every time and means nothing (the
+// 34-day NDX set gives $72,600). Skip it, say so, and do not fail the build over it.
 const pureV6 = VARIANTS.find(v => v.variant === 'v6-20');
-const anchorTotal = Math.round(days.reduce((a, d) => a + runDay5m(d.bars, wrap(pureV6), { rthActionOnly: true }).terminal, 0));
-const anchorOK = anchorTotal === 1412935;
-console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935'}`);
+const isCanonical = path.resolve(DIR) === path.resolve(DEFAULT_DIR);
+let anchorOK = true, anchorTotal = null;
+if (isCanonical) {
+  anchorTotal = Math.round(days.reduce((a, d) => a + runDay5m(d.bars, wrap(pureV6), { rthActionOnly: true }).terminal, 0));
+  anchorOK = anchorTotal === 1412935;
+  console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935 — the engine\'s core math has changed'}`);
+} else {
+  console.log(`\nengine anchor: SKIPPED — it is a constant for ${path.basename(DEFAULT_DIR)} only, so it says nothing about ${path.basename(DIR)}.`);
+}
 console.log(`graded v6-20 (live config) total = ${usd(out.variants['v6-20'].total)}  avg/day ${usd(out.variants['v6-20'].avgDaily)}`);
-out.engineAnchorPureV6Total = anchorTotal;
+if (anchorTotal != null) out.engineAnchorPureV6Total = anchorTotal;
 
 if (DRY) { console.log('\n--dry: not written'); process.exit(anchorOK ? 0 : 2); }
 const CSV = OUT.replace(/\.json$/, '.csv');

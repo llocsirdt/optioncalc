@@ -256,6 +256,9 @@ function buildAtmComparators() {
 // Validate the env selection against the roster the moment it is built, so a typo is loud, immediate and
 // impossible to mistake for "armed but quiet".
 function reportArming(list) {
+  // Quiet in forked backtest workers — this line is about the LIVE order pipe and has nothing to do with a
+  // backtest slice, but it fires once per worker process and buries the run's real output.
+  if (process.argv.includes('--_slice')) return list;
   const hit = list.find(v => v.variant === ARMED_VARIANT);
   if (hit) console.log(`[candle-spread] ARMED SELECTION: ${ARMED_VARIANT} -> dryRun=${JSON.stringify(ARMED_MODE)} (${ARMED_MODE === false ? 'REAL FILLABLE ORDERS' : 'unfillable test orders'}); still gated by isProd + CANDLE_SPREAD_LIVE`);
   else console.log(`[candle-spread] ARMED SELECTION: "${ARMED_VARIANT}" is NOT on the roster — NOTHING is armed (all runs stay dryRun:true).`);
