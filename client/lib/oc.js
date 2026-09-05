@@ -2790,8 +2790,9 @@ function processInput() {
     const slider = document.getElementById('optionRange');
     
     if (fullOptionArray.length > 1) {
-      // Show the slider if there are multiple options
-      sliderContainer.style.display = 'block';
+      // Show the slider if there are multiple options. 'flex' — the container lays its label and range
+      // out as a flex row now that it sits in the column under the chart; 'block' would override that.
+      sliderContainer.style.display = 'flex';
       slider.min = 1;
       slider.max = fullOptionArray.length;
       slider.value = fullOptionArray.length; // Default to showing all options

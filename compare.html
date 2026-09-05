@@ -342,7 +342,10 @@ function render() {
   // is the kind of caveat that has to be visible while you are reading the numbers.
   const nAlias = Object.keys(aliasInfo).filter((v) => cells[v]).length;
   const aliasMeta = nAlias ? `  ·  ≈ ${nAlias} cell${nAlias === 1 ? '' : 's'} recorded under the older naming (hover for what differs)` : '';
-  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src} · header = book max profit/loss · gray line = now (click to project) · dashes = backtest avg${overlay ? '' : ' (unavailable)'}  ·  ${finite.length} variants${aliasMeta}`;
+  // No chart legend here — how to read the cells is not news to the reader, and the encodings get tweaked
+  // often enough that a written legend just goes stale. What DOES stay is state you cannot see by looking:
+  // whether the dashed backtest-average reference is actually present on this day.
+  document.getElementById('hmeta').textContent = `${symbol} · ${commonDate || '—'} · ${src}${overlay ? '' : ' · no backtest avg'}  ·  ${finite.length} variants${aliasMeta}`;
 }
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
