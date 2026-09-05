@@ -121,6 +121,8 @@ const WORKERS = wi >= 0 ? Math.max(1, Math.min(16, Number(process.argv[wi + 1]) 
 const si = process.argv.indexOf('--_slice');
 const SLICE = si >= 0 ? Number(process.argv[si + 1]) : null;      // set only in a forked worker
 const SLICE_OF = si >= 0 ? Number(process.argv[si + 2]) : null;
+const soi = process.argv.indexOf('--_out');
+const SLICE_OUT = soi >= 0 ? process.argv[soi + 1] : null;
 
 function computeVariant(run) {
   const fn = wrap(run), opts = optsFor(run);
@@ -168,12 +170,16 @@ function printRow(run, v) {
   console.log(run.variant.padEnd(16) + usd(s.avgDaily).padEnd(11) + usd(s.median).padEnd(11) + usd(s.stdevDaily).padEnd(11) + usd(s.worst).padEnd(12) + usd(avgWorstCase).padEnd(12) + `${s.negDays}/${days.length} · ${Math.round(s.winRate * 100)}%` + (gov ? `  gov held ${usd(gov.worstHeldFloor)}/${usd(-gov.lossMax)}${gov.capExceeded ? "  ✗ EXCEEDED x" + gov.capExceeded : "  ✓"}` : "  (uncapped)"));
 }
 
-// ── WORKER MODE: compute this slice, hand the results back, done. ─────────────────────────────────────
+// ── WORKER MODE: compute this slice, hand the results back via a FILE, done. ─────────────────────────
+// NOT via stdout: process.exit() truncates a pending async write, so a payload past the ~64KB pipe buffer
+// arrives as invalid JSON. That is exactly what happened once the per-day series was added to the result
+// (765 numbers x 80 variants) — the parent died on `Expected ',' or ']' at position 65529`. A file has no
+// such boundary and the failure mode if it goes wrong is a missing file, which is obvious.
 if (SLICE != null) {
   const mine = RUNS.filter((_, i) => i % SLICE_OF === SLICE);
   const res = {};
-  for (const run of mine) res[run.variant] = computeVariant(run);
-  process.stdout.write('\u0000RESULT' + JSON.stringify(res));
+  for (const run of mine) { const v = computeVariant(run); delete v.dates; res[run.variant] = v; }   // dates are identical for every variant; the parent holds them once
+  fs.writeFileSync(SLICE_OUT, JSON.stringify(res), 'utf8');
   process.exit(0);
 }
 
@@ -186,20 +192,25 @@ if (WORKERS > 1) {
   // Fan out, then print rows in the CANONICAL order once everything is back — workers finish out of
   // order, and a table whose row order depends on scheduling is not comparable between runs.
   const { spawn } = require('child_process');
+  const os = require('os');
   const base = process.argv.slice(2).filter((a, i, arr) => a !== '--workers' && arr[i - 1] !== '--workers');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-baselines-'));
   const merged = {};
-  await Promise.all(Array.from({ length: WORKERS }, (_, k) => new Promise((resolve, reject) => {
-    const ch = spawn(process.execPath, [__filename, ...base, '--_slice', String(k), String(WORKERS)], { stdio: ['ignore', 'pipe', 'inherit'] });
-    let buf = '';
-    ch.stdout.on('data', d => { buf += d.toString(); });
-    ch.on('error', reject);
-    ch.on('close', (code) => {
-      const at = buf.indexOf('\u0000RESULT');
-      if (code !== 0 || at < 0) return reject(new Error(`worker ${k} failed (exit ${code})`));
-      Object.assign(merged, JSON.parse(buf.slice(at + 7)));
-      resolve();
-    });
-  })));
+  try {
+    await Promise.all(Array.from({ length: WORKERS }, (_, k) => new Promise((resolve, reject) => {
+      const outFile = path.join(tmp, `slice-${k}.json`);
+      const ch = spawn(process.execPath, [__filename, ...base, '--_slice', String(k), String(WORKERS), '--_out', outFile], { stdio: ['ignore', 'inherit', 'inherit'] });
+      ch.on('error', reject);
+      ch.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`worker ${k} exited ${code}`));
+        if (!fs.existsSync(outFile)) return reject(new Error(`worker ${k} produced no result file`));
+        Object.assign(merged, JSON.parse(fs.readFileSync(outFile, 'utf8')));
+        resolve();
+      });
+    })));
+  } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {} }
+  const allDates = days.map(d => d.date);
+  for (const v of Object.values(merged)) if (!v.dates) v.dates = allDates;
   for (const run of RUNS) { out.variants[run.variant] = merged[run.variant]; printRow(run, merged[run.variant]); }
 } else {
   for (const run of RUNS) { const v = computeVariant(run); out.variants[run.variant] = v; printRow(run, v); }
