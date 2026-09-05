@@ -16,6 +16,7 @@
  */
 const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
+const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
@@ -336,6 +337,26 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed });
 }
 
+// ── DAY-LOSS GOVERNOR (deps.lossTarget / deps.lossMax) ──────────────────────────────────────────────
+// Bounds the BOOK FLOOR — the worst terminal P&L of the whole day's book — rather than at-risk debit.
+// riskCap/softCap/hardCap gate `uncovered open debit`, an at-OPEN snapshot that ignores covered pairs'
+// locked P&L and RESETS every time the book is covered, so a day could realize ~2x the cap. Since realized
+// day P&L = bookPnl(settle) >= floor, holding floor >= -lossMax is a true bound on the day's loss.
+//
+// TWO gates make it airtight, and BOTH are needed:
+//   (a) OPEN GATE — refuse an open whose projected floor would breach lossMax.
+//   (b) COVER DEFERRAL — refuse to BOOK a cover that would push the floor through lossMax. Non-obvious
+//       but essential: a naked OPPOSITE-side position is the stack's natural tail hedge (it pays exactly
+//       where the other side loses), so covering it lifts ITS floor to ~0 but can DROP the book floor.
+//       Measured in backtest on 2023-02-21: floor -$6,695 -> -$9,320 with zero new opens, purely from
+//       bears being covered while 8 naked bulls stayed on. We own the resting order, so declining the
+//       fill is free — it stays working and re-checks next candle. Covers that IMPROVE the floor always
+//       book, so this can never trap the book in a worse state.
+const govOn = (deps) => deps && deps.lossMax != null;
+function bookFloorNow(st, extra) {
+  return RC.bookFloor(st.positions.filter(p => p.filled !== false), extra || null, 10);
+}
+
 // --- Core per-tick sequence (testable) ------------------------------------
 // deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
 // async because placeOrder may send a real order to Schwab (awaited network call).
@@ -534,6 +555,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
+    } else if (govOn(deps) && -bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) > deps.lossMax) {
+      // GOVERNOR OPEN GATE — this open would push the day's worst terminal outcome through the ceiling.
+      // Evaluated on the FINAL res, after any leg-uniqueness shift, so we gate what we would actually send.
+      const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
+      decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
     } else if (ported && !capState(st, res, openSide, cfg, deps).ok) {
       // A cap blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM winner
       // and open anyway; else skip (existing v8 behavior). capAllowsOpen logs the FINAL 'open-skip-cap'.
@@ -563,7 +589,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // Resolve any RESTING cover orders against THIS candle's chain (fills a working cover once its real
   // mark reaches its target). Runs after the cover/open steps so a cover placed this candle can also
   // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
-  if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions);
+  if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
@@ -840,7 +866,7 @@ function coverMarkNow(legs, getLeg) {
 // cover is already below target (deep-ITM lock), else fill at the resting target. Books the locked
 // floor (width − open − fill) at the actual fill price. Live analog of the backtest's two-mode fill;
 // here the fill check uses the real per-candle chain mark instead of the pricer/wick.
-function resolveRestingCovers(st, cfg, getLeg, decisions) {
+function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
   const tick = cfg.tickIncrement;
   for (const pos of st.positions) {
     if (!pos.filled || !pos.pendingCover) continue;
@@ -848,6 +874,19 @@ function resolveRestingCovers(st, cfg, getLeg, decisions) {
     const mark = coverMarkNow(pc.legs, getLeg);
     if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
     const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
+    // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
+    // order working and re-check next candle. Covers that improve (or hold) the floor always book.
+    if (govOn(deps)) {
+      const f0 = RC.bookFloor(st.positions.filter(p => p.filled !== false), null, 10);
+      const sv = { covered: pos.covered, coverLegs: pos.coverLegs, coverLimit: pos.coverLimit };
+      pos.covered = true; pos.coverLegs = pc.legs; pos.coverLimit = fill;
+      const f1 = RC.bookFloor(st.positions.filter(p => p.filled !== false), null, 10);
+      pos.covered = sv.covered; pos.coverLegs = sv.coverLegs; pos.coverLimit = sv.coverLimit;
+      if (f1 < f0 && -f1 > deps.lossMax) {
+        decisions.push({ action: 'cover-defer-governor', positionId: pos.id, floorIfBooked: round2(f1), floorNow: round2(f0), lossMax: deps.lossMax });
+        continue;
+      }
+    }
     pos.covered = true;
     pos.coverId = nextId('cov');
     pos.coverLegs = pc.legs;          // kept for EOD terminal-settlement P/L

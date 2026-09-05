@@ -158,5 +158,85 @@ console.log('\ncandle-spread trader — continuous covering');
     assert.strictEqual(rec.state.realizedPnl, Math.round((W - limit - p.coverLimit) * 100 * 100) / 100);
   });
 
+  console.log('\ncandle-spread trader — day-loss governor');
+
+  // A book of N naked bull spreads, each risking `limit` — floor = -N x limit x 100.
+  function stackedRecord(n, limit) {
+    const rec = makeRecord(limit);
+    rec.state.positions = [];
+    for (let i = 0; i < n; i++) rec.state.positions.push({
+      id: 'p' + i, side: 'bull',
+      legs: [{ side: 'long', type: 'C', strike: 19980 - i * 10 }, { side: 'short', type: 'C', strike: 20000 - i * 10 }],
+      quantity: 1, shortStrike: 20000 - i * 10, limit, filled: true, covered: false, pendingCover: null,
+    });
+    return rec;
+  }
+
+  await testAsync('open gate: blocks the open whose projected floor breaches lossMax', async () => {
+    // 6 naked spreads at $10.50 => floor -$6,300. lossMax $7,000. One more (~$10+) would breach it.
+    const rec = stackedRecord(6, 10.5);
+    const deps = makeDeps({ lossTarget: 5000, lossMax: 7000, signalFn: () => ({ openSide: 'bull', cover: false }) });
+    const before = rec.state.positions.length;
+    const out = await trader.processCandleClose(rec, candle('09/04 10:00'), null, deps);
+    const blocked = out.decisions.find(d => d.action === 'open-skip-governor');
+    assert.ok(blocked, 'expected open-skip-governor; got ' + JSON.stringify(out.decisions.map(d => d.action)));
+    assert.ok(-blocked.projectedFloor > 7000, `projected floor ${blocked.projectedFloor} should breach 7000`);
+    assert.strictEqual(rec.state.positions.length, before, 'no position may be added');
+  });
+
+  await testAsync('open gate: allows the open that stays inside lossMax', async () => {
+    const rec = stackedRecord(2, 10.5);   // floor -$2,100; one more is fine under $7,000
+    const deps = makeDeps({ lossTarget: 5000, lossMax: 7000, signalFn: () => ({ openSide: 'bull', cover: false }) });
+    const before = rec.state.positions.length;
+    const out = await trader.processCandleClose(rec, candle('09/04 10:00'), null, deps);
+    assert.ok(!out.decisions.find(d => d.action === 'open-skip-governor'), 'must not block');
+    assert.strictEqual(rec.state.positions.length, before + 1, 'expected the open to be taken');
+  });
+
+  await testAsync('governor OFF: the same book opens freely', async () => {
+    const rec = stackedRecord(6, 10.5);
+    const deps = makeDeps({ signalFn: () => ({ openSide: 'bull', cover: false }) });   // no lossMax
+    const before = rec.state.positions.length;
+    await trader.processCandleClose(rec, candle('09/04 10:00'), null, deps);
+    assert.strictEqual(rec.state.positions.length, before + 1, 'ungoverned must be unchanged behaviour');
+  });
+
+  await testAsync('cover deferral: refuses a fill that would un-hedge the book past lossMax', async () => {
+    // Naked bulls lose to the DOWNSIDE; a naked bear pays there and is their tail hedge. Covering the
+    // bear removes that offset -> book floor drops. With the stack deep enough, the fill must be deferred.
+    const rec = stackedRecord(6, 10.5);
+    const bear = {
+      id: 'bear1', side: 'bear',
+      legs: [{ side: 'long', type: 'P', strike: 20000 }, { side: 'short', type: 'P', strike: 19980 }],
+      quantity: 1, shortStrike: 19980, limit: 10.5, filled: true, covered: false,
+      pendingCover: { legs: [{ side: 'long', type: 'C', strike: 19960 }, { side: 'short', type: 'C', strike: 19980 }], target: 9.5, geometry: 'tent' },
+      coverStatus: 'resting',
+    };
+    rec.state.positions.push(bear);
+    const RCm = require('../../server/src/candle-spread/risk-curve');
+    const f0 = RCm.bookFloor(rec.state.positions.filter(p => p.filled !== false), null, 10);
+    // Set the ceiling exactly AT the current floor. The engine fills at min(target, mark+tick) — not at
+    // the target — so the exact post-fill floor depends on the fill price; anchoring on f0 makes the test
+    // independent of it: ANY cover that lowers the floor at all now breaches.
+    const deps = makeDeps({ lossTarget: 5000, lossMax: Math.floor(-f0), signalFn: () => ({ openSide: null, cover: false }) });
+    // make the bear's cover fillable
+    deps.getLeg = (type, strike) => ({ mid: 0.05, bid: 0, ask: 0.1, symbol: 'x' });
+    const out = await trader.processCandleClose(rec, candle('09/04 10:05'), candle('09/04 10:00'), deps);
+    assert.ok(out.decisions.find(d => d.action === 'cover-defer-governor'), 'expected cover-defer-governor');
+    assert.strictEqual(bear.covered, false, 'the cover must NOT have been booked');
+    assert.ok(bear.pendingCover, 'the order must stay working');
+  });
+
+  await testAsync('cover deferral: a floor-IMPROVING cover always books', async () => {
+    const rec = makeRecord(10.5);
+    const p = rec.state.positions[0];
+    p.pendingCover = { legs: [{ side: 'long', type: 'P', strike: 20000 }, { side: 'short', type: 'P', strike: 20020 }], target: 9.5, geometry: 'tent' };
+    p.coverStatus = 'resting';
+    const deps = makeDeps({ lossTarget: 5000, lossMax: 7000, signalFn: () => ({ openSide: null, cover: false }) });
+    deps.getLeg = (type, strike) => ({ mid: 0.05, bid: 0, ask: 0.1, symbol: 'x' });
+    await trader.processCandleClose(rec, candle('09/04 10:05'), candle('09/04 10:00'), deps);
+    assert.ok(p.covered, 'a cover that lifts the floor must book');
+  });
+
   console.log(`\n${passed} passed\n`);
 })();

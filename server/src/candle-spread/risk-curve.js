@@ -78,4 +78,33 @@ function bookPnl_fromCurve(curve, S) {
   return best == null ? 0 : best;
 }
 
-module.exports = { payoff, positionPnl, bookPnl, riskCurve, analyzeCurve };
+// EXACT book floor — the worst terminal P&L the CURRENT book can produce, and the quantity the day-loss
+// governor bounds. Since realized day P&L = bookPnl(settle), holding floor >= -lossMax is a true bound on
+// the day's loss (unlike a cap on at-risk debit, which is only an at-OPEN snapshot).
+//
+// Exact AND cheap: the terminal payoff is piecewise-linear in the settle price with kinks ONLY at strikes
+// and flat tails beyond the outermost ones, so the minimum is attained at a strike or on a tail —
+// evaluating the distinct strikes plus one point outside each end is exact, with no grid sweep. `extra` is
+// an optional hypothetical position (the PROJECTED floor if we added it), which is what the open gate asks.
+function bookFloor(positions, extra, pad) {
+  const ks = [];
+  const push = (k) => { if (k != null && ks.indexOf(k) < 0) ks.push(k); };
+  for (const p of positions || []) {
+    if (!p || p.filled === false || !p.legs) continue;
+    for (const l of p.legs) push(l.strike);
+    if (p.covered && p.coverLegs) for (const l of p.coverLegs) push(l.strike);
+  }
+  if (extra && extra.legs) for (const l of extra.legs) push(l.strike);
+  if (!ks.length) return 0;
+  let lo = Infinity, hi = -Infinity;
+  for (const k of ks) { if (k < lo) lo = k; if (k > hi) hi = k; }
+  const step = pad || 10;
+  const at = (S) => bookPnl(positions, S) + (extra ? positionPnl(extra, S) : 0);
+  let m = Infinity;
+  for (const k of ks) { const v = at(k); if (v < m) m = v; }
+  const a = at(lo - step); if (a < m) m = a;
+  const b = at(hi + step); if (b < m) m = b;
+  return m;
+}
+
+module.exports = { payoff, positionPnl, bookPnl, riskCurve, analyzeCurve, bookFloor };
