@@ -306,7 +306,13 @@ function writeSummaryCsv(file) {
 }
 
 // ENGINE-INTEGRITY anchor: the PURE v6 signal (no recapture/leg-uniqueness) must still reproduce the known
-// $1,412,935 total — proves the engine + signal are unchanged. The graded v6 above carries the ~0.6% leg-
+// $1,136,230 total — proves the engine + signal are unchanged.
+// RE-BASELINED 2026-09-05, $1,412,935 -> $1,136,230, by commit 89b10ec: the base engine's buildOpen stopped
+// booking below the market (it capped the price at 0.525 of width instead of declining) and now enforces
+// the user's 0.65 ceiling as a GATE. That is a deliberate change to the engine's core geometry, so the
+// fingerprint is supposed to move and the check firing was it doing its job. NOTE what the anchor does and
+// does not cover: it takes NO pricing flags (no intradayIV, no ivSkew), so an accuracy change to PRICING
+// leaves it alone — but GEOMETRY is core math and does move it. Re-baseline only with a stated reason. The graded v6 above carries the ~0.6% leg-
 // uniqueness cost now that it's a live default, so the anchor is checked separately on the pure config.
 // The v6 family was renamed to per-width variants (v6-10/-20/-40); they all share the same v6 signalFn +
 // signalCfg, and the anchor forces the DEFAULT $20 ATM geometry (no geo opt) regardless, so any v6-family
@@ -321,8 +327,8 @@ const isCanonical = path.resolve(DIR) === path.resolve(DEFAULT_DIR);
 let anchorOK = true, anchorTotal = null;
 if (isCanonical) {
   anchorTotal = Math.round(days.reduce((a, d) => a + runDay5m(d.bars, wrap(pureV6), { rthActionOnly: true }).terminal, 0));
-  anchorOK = anchorTotal === 1412935;
-  console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,412,935' : '✗ EXPECTED $1,412,935 — the engine\'s core math has changed'}`);
+  anchorOK = anchorTotal === 1136230;
+  console.log(`\nengine anchor (pure v6, no recap/leg-uniq) = ${usd(anchorTotal)}  ${anchorOK ? '✓ matches $1,136,230' : '✗ EXPECTED $1,136,230 — the engine\'s core math has changed'}`);
 } else {
   console.log(`\nengine anchor: SKIPPED — it is a constant for ${path.basename(DEFAULT_DIR)} only, so it says nothing about ${path.basename(DIR)}.`);
 }
