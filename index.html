@@ -35,7 +35,7 @@
 
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.25</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.26</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
     <a href="compare.html" target="_blank" rel="noopener" title="Open the strategy comparison grid (risk curves for every variant)"
        style="margin-left:10px;font:12px sans-serif;color:#2962ff;text-decoration:none;white-space:nowrap">⊞ Compare strategies ↗</a>
@@ -70,7 +70,8 @@
         <button type="button" class="ps-more" onclick="toggleBrokerImportPanel()" title="paste CSV / format options">⋯</button>
       </span>
       <span id="ps-affordance-strategy" class="ps-affordance" style="display:none">
-        <select id="ps-variant-select" title="which strategy variant's book"><option value="v6">v6</option></select>
+        <button type="button" id="ps-variant-btn" title="pick a strategy — opens the same family x width grid as the engine badge, with each variant's live P&amp;L">v6-20 ▾</button>
+        <select id="ps-variant-select" title="which strategy variant's book" hidden><option value="v6-20">v6-20</option></select>
         <button type="button" onclick="pullStrategyPositions()">⟳ Pull</button>
         <label class="ps-auto"><input type="checkbox" id="ps-autorefresh"> auto</label>
         <label class="ps-auto" title="plot open/cover markers on the NQ chart"><input type="checkbox" id="ps-chart-markers" checked> chart</label>

@@ -178,7 +178,35 @@
       sel.value = has(remembered) ? remembered : (has(liveVariant) ? liveVariant : (has('v6-20') ? 'v6-20' : list[0].variant));
       sel.dataset.loaded = '1';
       setStoredVariant(sel.value);
+      syncVariantButton();
     } catch (e) { /* keep the default option; pull will report a clear error */ }
+  }
+
+  // The visible control is a BUTTON that opens the engine-status grid popover as a picker — the same
+  // family × width grid, so you choose a strategy while seeing its live P&L and activity, which is the
+  // context you actually pick on. The <select> stays as the hidden state holder so currentVariant(), the
+  // source-scoped cache keys and the change handler all keep working untouched.
+  function syncVariantButton() {
+    const btn = el('ps-variant-btn'), sel = el('ps-variant-select');
+    if (!btn || !sel) return;
+    // Before the roster loads the select holds only a placeholder, so fall back to the remembered choice —
+    // otherwise the button briefly advertises the wrong strategy on every page load.
+    const v = (sel.dataset.loaded === '1' && sel.value) ? sel.value : (getStoredVariant() || sel.value || 'v6-20');
+    btn.textContent = v + ' \u25be';
+  }
+  function openVariantPicker() {
+    const btn = el('ps-variant-btn'), sel = el('ps-variant-select');
+    if (!btn || !sel) return;
+    const api = window.CandleSpreadStatus;
+    if (!api || !api.openStrategyPicker) return;   // status module absent → the hidden select still works
+    api.openStrategyPicker(btn, sel.value, (variant) => {
+      if (!variant || variant === sel.value) return;
+      // Reflect the pick into the select and fire its change handler, so picking a strategy behaves
+      // exactly like choosing one from the old dropdown (auto-pull + remember).
+      sel.value = variant;
+      syncVariantButton();
+      sel.dispatchEvent(new Event('change'));
+    });
   }
 
   function setLastPulled(text, isError) {
@@ -260,10 +288,14 @@
     if (varSel) varSel.addEventListener('change', () => {
       varSel.dataset.loaded = '1';
       setStoredVariant(varSel.value);   // restore this exact variant on the next page load
+      syncVariantButton();
       // Changing the variant auto-pulls that variant's positions (no manual Pull click needed).
       if (getPositionsSource() === 'strategy') { pullStrategyPositions(); return; }
       if (typeof restoreAppropriateInput === 'function') restoreAppropriateInput(currentSymbol(), currentExpiration());
     });
+    const vbtn = el('ps-variant-btn');
+    if (vbtn) vbtn.addEventListener('click', (e) => { e.stopPropagation(); openVariantPicker(); });
+    syncVariantButton();
     renderTabs();
   }
 

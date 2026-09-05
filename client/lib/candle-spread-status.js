@@ -19,8 +19,8 @@
   const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9'];
   const COLUMNS = [
     { k: '10', h: '$10' }, { k: '20', h: '$20' }, { k: '40', h: '$40' },
+    { k: '10-unc', h: '$10 unc' }, { k: '20-unc', h: '$20 unc' }, { k: '40-unc', h: '$40 unc' },
     { k: '20-cATM', h: '$20 ctr' }, { k: '40-cATM', h: '$40 ctr' },
-    { k: '20-10k', h: '$20·10k' }, { k: '40-10k', h: '$40·10k' },
   ];
 
   function badgeColor(mode) {
@@ -46,11 +46,16 @@
       + '#csEngineStatusPop .csg .pnl{font-weight:700}'
       + '#csEngineStatusPop .csg .sub{color:#888;font-size:9px}'
       + '#csEngineStatusPop .csg .ord{color:#e67e22;font-size:9px}'
-      + '#csEngineStatusPop .csfoot{color:#888;font-size:10px;margin-top:6px}';
+      + '#csEngineStatusPop .csfoot{color:#888;font-size:10px;margin-top:6px}'
+      // PICKER MODE — the same grid, but every cell is a selectable strategy.
+      + '#csEngineStatusPop.pick .csg td.c{cursor:pointer}'
+      + '#csEngineStatusPop.pick .csg td.c:hover{background:#3a3a3a;border-color:#6ab0f3}'
+      + '#csEngineStatusPop .csg td.sel{border-color:#6ab0f3;box-shadow:0 0 0 2px #6ab0f3}'
+      + '#csEngineStatusPop .csg .vname{color:#bbb;font-size:9px}';
     document.head.appendChild(st);
   }
 
-  let pop = null, lastHtml = '';
+  let pop = null, lastHtml = '', lastStatus = null, pickMode = null;
   function ensurePop() {
     if (pop) return pop;
     ensureGridStyle();
@@ -59,13 +64,23 @@
     pop.style.cssText = 'position:fixed;z-index:99999;display:none;max-width:min(96vw,820px);max-height:80vh;'
       + 'overflow:auto;background:#1e1e1e;color:#eee;border:1px solid #555;border-radius:6px;padding:10px 12px;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,0.45);';
-    pop.addEventListener('click', e => e.stopPropagation());   // clicking inside the popover keeps it open
+    pop.addEventListener('click', (e) => {
+      e.stopPropagation();   // clicking inside the popover keeps it open
+      if (!pickMode) return;
+      const td = e.target.closest && e.target.closest('td[data-variant]');
+      if (!td) return;
+      const cb = pickMode.onPick;
+      hidePop();                       // clears pick mode + styling
+      if (cb) cb(td.dataset.variant);
+    });
     document.body.appendChild(pop);
     return pop;
   }
-  function hidePop() { if (pop) pop.style.display = 'none'; }
+  function hidePop() { if (pop) { pop.style.display = 'none'; pop.classList.remove('pick'); } pickMode = null; }
   function showPop(anchor) {
     const p = ensurePop();
+    p.classList.remove('pick');   // the badge's own popover is read-only, never a picker
+    pickMode = null;
     p.innerHTML = lastHtml || '<div class="cshdr">(no detail yet)</div>';
     p.style.display = 'block';
     const r = anchor.getBoundingClientRect();
@@ -73,7 +88,22 @@
     p.style.top = Math.min(r.bottom + 6, window.innerHeight - p.offsetHeight - 6) + 'px';
   }
   function togglePop(anchor) {
-    if (pop && pop.style.display === 'block') hidePop(); else showPop(anchor);
+    if (pop && pop.style.display === 'block' && !pickMode) hidePop(); else showPop(anchor);
+  }
+
+  // STRATEGY PICKER — the same family × width grid the badge shows, but selectable. Used in place of the
+  // positions-source dropdown so choosing a strategy also shows its live P&L / activity, which is the
+  // context you actually pick on. onPick(variant) fires and the popover closes.
+  function openStrategyPicker(anchor, selected, onPick) {
+    const p = ensurePop();
+    if (!lastStatus) { p.innerHTML = '<div class="cshdr">Engine status not loaded yet — try again in a moment.</div>'; }
+    else p.innerHTML = gridHtml(lastStatus, 0, { pick: true, selected });
+    pickMode = { onPick };
+    p.classList.add('pick');
+    p.style.display = 'block';   // (set after innerHTML so offsetWidth below is measured correctly)
+    const r = anchor.getBoundingClientRect();
+    p.style.left = Math.max(6, Math.min(r.left, window.innerWidth - p.offsetWidth - 6)) + 'px';
+    p.style.top = Math.min(r.bottom + 6, window.innerHeight - p.offsetHeight - 6) + 'px';
   }
 
   // Full per-cell detail (native title on the cell) — the old one-line-per-strategy text.
@@ -88,10 +118,13 @@
   }
 
   // Build the popover: header line + the family×sub-variant grid of execution summaries.
-  function gridHtml(s, tickMin) {
+  function gridHtml(s, tickMin, opts) {
+    const o = opts || {};
     const g = s.gates || {};
-    const hdr = `<div class="cshdr"><b>${s.mode}</b> · next tick ~${tickMin}m · ${s.tradeDate}`
-      + `  ·  gates: prod=${g.isProd} armed=${g.liveArmed} client=${g.hasTradingClient} acct=${g.hasAccountHash}</div>`;
+    const hdr = o.pick
+      ? `<div class="cshdr"><b>Pick a strategy</b> · click a cell to load its book · ${s.tradeDate} · <b>${s.mode}</b></div>`
+      : `<div class="cshdr"><b>${s.mode}</b> · next tick ~${tickMin}m · ${s.tradeDate}`
+        + `  ·  gates: prod=${g.isProd} armed=${g.liveArmed} client=${g.hasTradingClient} acct=${g.hasAccountHash}</div>`;
     const byVar = {};
     (s.runs || []).forEach(r => { byVar[r.variant] = r; });
     const esc = (t) => String(t).replace(/"/g, '&quot;');
@@ -108,7 +141,10 @@
         const col = pnl > 0 ? '#26a69a' : pnl < 0 ? '#ef5350' : '#aaa';
         const armed = r.mode !== 'simulate';
         const ro = r.realOrders || {};
-        body += `<td class="c${armed ? ' armed' : ''}" title="${esc(cellTitle(r))}">`
+        const name = `${f}-${c.k}`;
+        const sel = o.pick && o.selected === name;
+        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+          + (o.pick ? `<div class="vname">${name}</div>` : '')
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`
           + (armed ? `<div class="ord">⚡${ro.sent || 0}/${ro.canceled || 0}x/${ro.filled || 0}f</div>` : '')
@@ -144,6 +180,7 @@
       inline = `gates off: ${gatesOff.join(', ')}`;
     }
 
+    lastStatus = s;
     lastHtml = gridHtml(s, tickMin);   // full grid lives in the click popover
     c.title = `${s.mode} · next tick ~${tickMin}m · ${s.tradeDate} — click for the strategy grid`;
 
@@ -179,4 +216,7 @@
     document.addEventListener('click', hidePop);                 // click elsewhere closes it
     window.addEventListener('resize', hidePop);
   });
+
+  // Exposed so the positions-source bar can use the SAME grid as a strategy picker instead of a dropdown.
+  window.CandleSpreadStatus = { openStrategyPicker, hasStatus: () => !!lastStatus };
 })();
