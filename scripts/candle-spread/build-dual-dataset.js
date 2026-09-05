@@ -67,7 +67,14 @@ for (const date of dates) {
   const ndx = readRaw('NDX', date);
   if (!ndx || !ndx.length) continue;
   const ndx5 = resample(ndx, STEP);
-  const byT = new Map(ndx5.map(c => [c.datetime, c]));
+  // LOOKAHEAD GUARD. A bar labelled T covers [T, T+STEP) and closes at T+STEP, so its close is in the
+  // FUTURE relative to a decision made at T. The live engine at mark T uses the price AT T — the close of
+  // the bar that just COMPLETED, i.e. the one labelled T-STEP. Keying px by the bar's own label gave the
+  // backtest a 5-minute lookahead on pricing and strike selection; measured against the live run it moved
+  // the centre strike on 64% of bars. The `analysis` side was already built as "most recently completed
+  // candle as of T"; this applies the same rule to the price series.
+  const stepMs = STEP * 60000;
+  const byT = new Map(ndx5.map(c => [c.datetime + stepMs, c]));   // key by the time the bar CLOSES
   const out = [];
   for (const c of ndx5) {
     const T = c.datetime;

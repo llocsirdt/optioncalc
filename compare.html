@@ -39,6 +39,8 @@
   .cell .chartwrap { position:relative; width:174px; padding-bottom:15px; }
   .cell .nowlbl { position:absolute; bottom:0; transform:translateX(-50%); font:8px ui-monospace, monospace; text-align:center; line-height:1.05; color:#555; background:rgba(252,252,252,0.82); padding:0 1px; pointer-events:none; white-space:nowrap; }
   .cell .nowlbl i { display:block; font-weight:700; }
+  .cell .cmp { font:9px ui-monospace, monospace; color:#666; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cell .cmp .b { color:#3b82c4; }
   .cell .nums { font:10px ui-monospace, monospace; display:flex; justify-content:space-between; margin-top:1px; }
   .cell .nums .w { color:var(--loss); } .cell .nums .b { color:var(--profit); } .cell .nums .a { color:var(--muted); }
   .cell .btnums { font:9px ui-monospace, monospace; display:flex; justify-content:space-between; opacity:0.75; }
@@ -67,6 +69,7 @@
   <h1>Strategy Risk Curves</h1>
   <span class="meta" id="hmeta">—</span><br/>
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
+  <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> compare live↔backtest</label>
   <button id="btTableBtn">Backtest table ▾</button>
   <button id="refresh">Refresh</button>
   <span id="srcbar">
@@ -132,6 +135,10 @@ const CW = 174, CH = 74;   // mini-chart px
 
 const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
 const records = {}; // variant -> raw run record (kept so the time slider can rebuild the book at any epoch)
+// COMPARE OVERLAY: the OTHER source's records/cells for the same date, drawn on top of the primary curve.
+// Live and backtest run the same strategies on the same session, so where the two curves separate — and at
+// what time on the slider — is the most direct read on WHERE the models diverge, which a table cannot show.
+const recordsB = {}, cellsB = {};
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
 let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
@@ -194,7 +201,7 @@ function analyzeLegs(legs, underlying) {
 // Mini filled risk curve (green above zero, red below) + zero baseline. yMin/yMax let the caller impose a
 // shared scale (magnitude comparison) or pass the cell's own lo/hi (shape-only, auto-scaled per cell). When
 // `bt` (backtest averages {worst,avg,best}) is given, faint dashed reference lines mark those levels.
-function svgCurve(v, d, yMin, yMax, bt) {
+function svgCurve(v, d, yMin, yMax, bt, dB) {
   const xMin = d.xMin, xMax = d.xMax;
   const padY = (yMax - yMin) * 0.08 || 1;
   const y0 = yMin - padY, y1 = yMax + padY;
@@ -225,6 +232,7 @@ function svgCurve(v, d, yMin, yMax, bt) {
     <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}" stroke="var(--zero)" stroke-width="1" stroke-dasharray="3 2"/>
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
+    ${dB && dB.curve ? `<polyline points="${dB.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="#6ab0f3" stroke-width="1.2" stroke-dasharray="4 2" opacity="0.95"/>` : ''}
     ${curLine}${cursor}
   </svg>`;
 }
@@ -237,6 +245,8 @@ const usdK = (n) => {
 };
 
 const fmtN = (n) => Number.isFinite(n) ? usd(n) : '—';
+// [primary, overlay] short labels for the per-cell comparison line — named from the source actually shown.
+const CMP_LABEL = SRC === 'backtest' ? ['bt', 'live'] : ['live', 'bt'];
 
 function render() {
   const grid = document.getElementById('grid');
@@ -246,8 +256,10 @@ function render() {
 
   // A cell's effective lo/hi — widened to include its backtest worst/best so the reference dashes stay
   // on-canvas even when today's book sits well inside the historical envelope.
-  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst); return lo; };
-  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best); return hi; };
+  const cellLo = (v, d) => { let lo = d.lo; const b = overlay && baselines[v]; if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst);
+    const o = cellsB[v]; if (o && Number.isFinite(o.lo)) lo = Math.min(lo, o.lo); return lo; };
+  const cellHi = (v, d) => { let hi = d.hi; const b = overlay && baselines[v]; if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best);
+    const o = cellsB[v]; if (o && Number.isFinite(o.hi)) hi = Math.max(hi, o.hi); return hi; };
 
   let gMin = null, gMax = null;
   if (syncY && finite.length) {
@@ -281,8 +293,11 @@ function render() {
       const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span><span>${Math.round(d.xMax)}</span></div>`;
       html += `<td class="cell" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}">`
         + `<div class="cname"><b>${v}</b>${hmax}</div>`
-        + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt)}${nowlbl}</div>`
+        + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
+        + (cellsB[v] && cellsB[v].underPnl != null && d.underPnl != null
+            ? `<div class="cmp">${CMP_LABEL[0]} ${usd(d.underPnl)} · <span class="b">${CMP_LABEL[1]} ${usd(cellsB[v].underPnl)}</span> · Δ ${usd(cellsB[v].underPnl - d.underPnl)}</div>`
+            : '')
         + '<div class="sel"></div>'
         + '</td>';
     }
@@ -414,13 +429,20 @@ function buildTimeIndex() {
 // Recompute every variant's cell for the book as of epoch T (T null → full end-of-day book).
 function applyTime(T) {
   const under = (T != null) ? underlyingAt(T) : null;
-  for (const v of Object.keys(records)) {
-    try {
-      const res = strategyRunToOptionArray(records[v], T != null ? { asOfEpoch: T } : {});
-      const u = under != null ? under : (records[v].state && records[v].state.lastUnderlying);
-      cells[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
-    } catch (e) { cells[v] = { err: 'calc' }; }
-  }
+  const build = (src, dest) => {
+    for (const v of Object.keys(src)) {
+      try {
+        const res = strategyRunToOptionArray(src[v], T != null ? { asOfEpoch: T } : {});
+        const u = under != null ? under : (src[v].state && src[v].state.lastUnderlying);
+        dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
+      } catch (e) { dest[v] = { err: 'calc' }; }
+    }
+  };
+  build(records, cells);
+  // The overlay is rebuilt at the SAME epoch off the same underlying, so any separation between the two
+  // curves is a difference in the BOOKS, not in where the slider put them.
+  for (const k of Object.keys(cellsB)) delete cellsB[k];
+  if (Object.keys(recordsB).length) build(recordsB, cellsB);
   render();
 }
 
@@ -503,6 +525,7 @@ async function load() {
     buildTimeIndex();
     setupSlider();
     applyTime(dayMax || null);   // full-day book by default; render() runs inside
+    if (document.getElementById('cmpSrc').checked) await loadComparisonSource(status);
   } catch (e) {
     status.textContent = 'Failed to load: ' + (e.message || e);
   }
@@ -529,6 +552,39 @@ document.getElementById('grid').addEventListener('click', (e) => {
   const td = svg.closest('td'), sel = td && td.querySelector('.sel');
   if (sel) sel.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(pnl)}</b>`;
 });
+// Load the OTHER source for the SAME date into recordsB. Failure is non-fatal and reported inline: the
+// most likely cause is simply that this date has no counterpart (a live day with no backtest data, or a
+// backtest date the server never ran), which is information rather than an error.
+async function loadComparisonSource(status) {
+  for (const k of Object.keys(recordsB)) delete recordsB[k];
+  const date = commonDate;
+  if (!date) return;
+  const prev = status.textContent;
+  status.textContent = `Loading ${SRC === 'backtest' ? 'live' : 'backtest'} run for ${date} to compare…`;
+  try {
+    if (SRC === 'backtest') {
+      const idx = await fetchJson(runsUrl());
+      const runs = (idx.runs || []).filter((r) => r.variant && r.tradeDate === date && r.symbol === symbol);
+      if (!runs.length) { status.textContent = `No live run recorded for ${date} — nothing to compare.`; return; }
+      await inBatches(runs, 8, async (r) => {
+        try { const rec = await fetchJson(runUrl(symbol, r.expiration || r.tradeDate, r.tradeDate, r.variant)); recordsB[r.variant] = rec.record || rec; } catch (e) { /* skip */ }
+      });
+    } else {
+      const bundle = await fetchJson(replayUrl(date));
+      for (const [v, rec] of Object.entries(bundle.runs || {})) recordsB[v] = rec;
+    }
+    status.textContent = prev;
+    applyTime(pendingT != null ? pendingT : (Number(document.getElementById('timeSlider').value) || dayMax || null));
+  } catch (e) {
+    status.textContent = `Could not load the ${SRC === 'backtest' ? 'live' : 'backtest'} side for ${date}: ${e.status === 404 ? 'not available' : (e.message || e)}`;
+  }
+}
+document.getElementById('cmpSrc').addEventListener('change', async (e) => {
+  const status = document.getElementById('status');
+  if (e.target.checked) { await loadComparisonSource(status); }
+  else { for (const k of Object.keys(recordsB)) delete recordsB[k]; for (const k of Object.keys(cellsB)) delete cellsB[k]; render(); }
+});
+
 // Replay date picker: reload the page at the chosen date. A full reload is the honest move here — every
 // cached record, the time index and the slider are all scoped to one day, so rebuilding them in place
 // would be more code and more ways to leave a stale fragment behind.
