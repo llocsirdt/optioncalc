@@ -18,6 +18,7 @@ const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
+const SQ = require('./spread-quote');   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
 
@@ -809,7 +810,43 @@ function snapshotChain(getLeg, underlying, incr, windowStrikes) {
       put: p ? { mid: p.mid, bid: p.bid, ask: p.ask } : null
     });
   }
-  return { underlying, center, strikes };
+  return { underlying, center, strikes, spreads: snapshotSpreads(getLeg, center, incr, windowStrikes) };
+}
+
+// COMBO/SPREAD QUOTE CAPTURE. The per-leg chain above cannot answer "what would this spread actually cost
+// to execute" — that needs the NET of the two legs, and the gap between the net mid and the net ask is the
+// execution cost we have been ASSUMING rather than measuring. Capture it for the spreads the engine
+// actually trades: at each width, the placements from short-leg-ITM through straddle, both directions,
+// plus the parity partner (the opposing side at the SAME strikes), which is what makes a bad mark
+// detectable (call mid + put mid must equal the width).
+//
+// Recorded per candle so execution cost can be characterised by moneyness, width and time of day, and so a
+// suspect mark can be reconstructed after the fact. Read-only; never drives an order on its own.
+function snapshotSpreads(getLeg, center, incr, windowStrikes) {
+  const out = [];
+  const reach = Math.max(2, Math.floor(windowStrikes / 2) - 2);
+  for (const W of [10, 20, 40]) {
+    // shift = how far the SHORT leg sits inside the money, in strikes: 0 = straddle, +n = n strikes ITM.
+    for (let sh = 0; sh <= 3; sh++) {
+      const hi = center + W / 2 - sh * incr, lo = hi - W;
+      if (hi - lo !== W) continue;
+      if (Math.abs(hi - center) > reach * incr || Math.abs(lo - center) > reach * incr) continue;
+      const call = SQ.netQuote(SQ.bullCallLegs(lo, hi), getLeg);
+      const put = SQ.netQuote(SQ.bearPutLegs(lo, hi), getLeg);
+      if (!call || !put) continue;
+      const sum = Math.round((call.mid + put.mid) * 100) / 100;
+      out.push({
+        width: W, shiftStrikes: sh, lo, hi,
+        call: { mid: call.mid, bid: call.bid, ask: call.ask, cross: call.crossOverMid, perLeg: call.perLeg },
+        put: { mid: put.mid, bid: put.bid, ask: put.ask, cross: put.crossOverMid, perLeg: put.perLeg },
+        // parity residual: mids must sum to W. Non-zero => friction or a bad quote on the richer side.
+        paritySum: sum, parityExcess: Math.round((sum - W) * 100) / 100,
+        callFracOfWidth: Math.round(call.mid / W * 1000) / 1000,
+        putFracOfWidth: Math.round(put.mid / W * 1000) / 1000,
+      });
+    }
+  }
+  return out;
 }
 
 // --- EOD terminal-settlement P/L ------------------------------------------
@@ -922,5 +959,6 @@ module.exports = {
   priceCoverCandidate,
   snapshotChain,
   computeTerminalPnl,
+  snapshotSpreads,
   tryComboLockAndOpen   // exported for the combo unit test
 };
