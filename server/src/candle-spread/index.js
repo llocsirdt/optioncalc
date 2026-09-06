@@ -587,6 +587,17 @@ async function processGroup(runs, kind) {
         continuousCover: run.continuousCover, continuousCoverMinLockFrac: run.continuousCoverMinLockFrac,
         // DAY-LOSS GOVERNOR — bounds the BOOK FLOOR (the day's true max loss), not at-risk debit.
         lossTarget: run.lossTarget, lossMax: run.lossMax,
+        // LOW-COST RISK OFFSET — the governor's only REPAIR tool (everything else it does is preventive:
+        // block an open, defer a cover). Buys the far-side spread with the best floor-lift per dollar once
+        // the floor is through the target. Tuning knobs fall back to the trader's defaults when unset.
+        floorOffset: run.floorOffset, floorOffsetMinRatio: run.floorOffsetMinRatio,
+        floorOffsetMaxPerDay: run.floorOffsetMaxPerDay, floorOffsetWidths: run.floorOffsetWidths,
+        floorOffsetDepth: run.floorOffsetDepth, floorOffsetSlip: run.floorOffsetSlip,
+        floorOffsetBudget: run.floorOffsetBudget,
+        // COVER ARMING (v1-v3) — when to place the standing cover. NOTE these are read off `deps`, so they
+        // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
+        // which is exactly why the omission was easy to miss.
+        continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
         comboOrders: run.comboOrders, comboSlip: run.comboSlip,   // 4-leg atomic cover+open (default off)
         capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
         enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,

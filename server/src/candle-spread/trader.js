@@ -17,6 +17,7 @@
 const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
+const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
@@ -361,6 +362,83 @@ function bookFloorNow(st, extra) {
   return RC.bookFloor(st.positions.filter(p => p.filled !== false), extra || null, 10);
 }
 
+// LOW-COST RISK OFFSET (deps.floorOffset) — the live port of the backtest's buyFloorOffsets, and the
+// governor's only tool that REPAIRS a bad floor rather than preventing a worse one. Everything else it
+// does is preventive: block an open, defer a cover. This one acts on a book that has ALREADY run through
+// the target, by buying the far-side debit spread with the best FLOOR-LIFT PER DOLLAR.
+//
+// The ratio gate is what keeps it honest: un-forced it only trades an outsized risk reduction for a small
+// slice of the peak (default 3:1 lift per dollar). FORCED mode drops the gate entirely and is used only
+// when the floor is through lossMax, because that is a ceiling rather than a preference — taking the best
+// available repair beats holding out for a good price.
+//
+// Prices off the REAL CHAIN via getLeg rather than a model, so the ratio is measured on quotes the book
+// could actually be repaired at. Respects leg-uniqueness, since a hedge that nets against an existing
+// position is not a hedge. Nothing is sent when the search finds no qualifying candidate — an expensive
+// repair is worse than the exposure it removes, which is the whole point of the gate.
+async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, force) {
+  if (!(deps.floorOffset === true) || !govOn(deps)) return 0;
+  const spot = deps.underlying;
+  if (!(spot > 0)) return 0;
+  const minRatio = force ? 0 : (deps.floorOffsetMinRatio != null ? deps.floorOffsetMinRatio : 3);
+  const maxCount = (deps.floorOffsetMaxPerDay != null ? deps.floorOffsetMaxPerDay : 6) * (force ? 3 : 1);
+  const widths = deps.floorOffsetWidths || [20, 40, 60];
+  const depth = deps.floorOffsetDepth != null ? deps.floorOffsetDepth : 8;
+  const slip = deps.floorOffsetSlip != null ? deps.floorOffsetSlip : 0.25;
+  const budget = deps.floorOffsetBudget != null ? deps.floorOffsetBudget : Infinity;
+  const qty = cfg.quantity || 1;
+  // Real-chain mark for a single leg; null when the strike is not quoted, which drops that candidate.
+  const mark = (type, strike) => { const q = deps.getLeg(type, strike); return q && q.mid != null ? q.mid : null; };
+  let bought = 0;
+  st.offCount = st.offCount || 0; st.offSpent = st.offSpent || 0;
+  while (st.offCount < maxCount && st.offSpent < budget) {
+    const filled = st.positions.filter((p) => p.filled !== false);
+    const f = RC.bookFloor(filled, null, 10);
+    if (-f <= limit) break;                       // floor is back inside the limit — nothing to repair
+    // Which tail carries the loss? The terminal payoff is piecewise-linear with kinks only at strikes, so
+    // the worst point is at one of them — the same scan the backtest does, via the shared bookPnl.
+    let worstX = spot, worstV = Infinity;
+    for (const p of filled) for (const l of p.legs || []) {
+      const v = RC.bookPnl(filled, l.strike);
+      if (v < worstV) { worstV = v; worstX = l.strike; }
+    }
+    const zoneSide = worstX >= spot ? 'above' : 'below';
+    let best = null;
+    for (const cand of RH.candidateHedges(zoneSide, spot, cfg.strikeIncrement, widths, depth)) {
+      if (deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(cand.legs)) continue;
+      const debit = RH.legsDebit(cand.legs, mark, slip);
+      if (debit == null || debit <= 0) continue;
+      const cost = debit * 100 * qty;
+      if (st.offSpent + cost > budget) continue;
+      const hp = { filled: true, side: 'hedge', shortStrike: null, legs: cand.legs, limit: debit,
+        quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true };
+      const lift = RC.bookFloor(filled.concat([hp]), null, 10) - f;
+      if (lift <= 0) continue;
+      const ratio = lift / cost;
+      if (ratio >= minRatio && (!best || ratio > best.ratio)) best = { hp, cost, ratio, debit, lift };
+    }
+    if (!best) break;
+    const resolved = [];
+    for (const l of best.hp.legs) {
+      const q = deps.getLeg(l.type, l.strike);
+      if (!q || !q.symbol) { resolved.length = 0; break; }
+      resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+    }
+    if (!resolved.length) break;
+    const limitPx = round2(best.debit);
+    const payload = buildOrderPayload(resolved, limitPx, qty, 'DEBIT');
+    const placed = await deps.placeOrder(payload, { kind: 'floor-offset', legs: best.hp.legs, net: 'DEBIT', limit: limitPx });
+    if (!placed || placed.filled === false) break;
+    best.hp.id = nextId('off');
+    st.positions.push(best.hp);
+    if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.hp.legs);
+    st.offSpent += best.cost; st.offCount++; bought++;
+    decisions.push({ action: 'floor-offset', id: best.hp.id, legs: best.hp.legs, cost: round2(best.cost),
+      lift: round2(best.lift), ratio: round2(best.ratio), forced: !!force, limit, spentToday: round2(st.offSpent) });
+  }
+  return bought;
+}
+
 // --- Core per-tick sequence (testable) ------------------------------------
 // deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
 // async because placeOrder may send a real order to Schwab (awaited network call).
@@ -621,6 +699,22 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // mark reaches its target). Runs after the cover/open steps so a cover placed this candle can also
   // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
+
+  // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
+  // covers resolve so a cover that just filled already counts toward the floor. Locking winners is the
+  // free step and is handled by cover-to-stack above; what remains is the premium-spending step:
+  //   (1) ratio-gated offsets toward the WORKING TARGET — outsized risk reduction for a small slice of peak
+  //   (2) MUST-FIX toward the HARD CEILING — take the best available lift regardless of ratio, because
+  //       lossMax is a ceiling and not a preference.
+  if (govOn(deps) && deps.floorOffset === true) {
+    const floorNow = () => RC.bookFloor(st.positions.filter((p) => p.filled !== false), null, 10);
+    if (deps.lossTarget != null && -floorNow() > deps.lossTarget) {
+      await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossTarget, false);
+    }
+    if (deps.lossMax != null && -floorNow() > deps.lossMax) {
+      await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossMax, true);
+    }
+  }
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
@@ -1059,6 +1153,7 @@ module.exports = {
   buildOpenAtStrikes,
   selectCoverGeometric,
   selectCoverFixedMark,
+  buyFloorOffsets,
   buildCover,
   resolveLegs,
   selectCovers,

@@ -349,5 +349,49 @@ console.log('\ncandle-spread trader — continuous covering');
     }
   });
 
+  // ── FLOOR OFFSET (the governor's repair tool) ───────────────────────────────────────────────────
+  // Everything else the governor does is preventive — block an open, defer a cover. This is the only
+  // thing that acts on a book already through the target, so its absence is invisible until a bad day.
+  await testAsync('floorOffset buys a hedge when the floor is through the target', async () => {
+    const st = { positions: [], realizedPnl: 0, direction: 'none', legLedger: {} };
+    // A deeply lopsided book: several uncovered bulls, so the downside tail is badly negative.
+    for (let i = 0; i < 6; i++) {
+      st.positions.push({ id: 'p' + i, filled: true, side: 'bull', shortStrike: UNDER + i * INCR,
+        legs: [{ side: 'long', type: 'C', strike: UNDER - W + i * INCR }, { side: 'short', type: 'C', strike: UNDER + i * INCR }],
+        limit: 12, quantity: 1, covered: false, pendingCover: null });
+    }
+    const sent = [];
+    const deps = { getLeg: makeGetLeg(UNDER), underlying: UNDER, floorOffset: true,
+      lossTarget: 1000, lossMax: 2000, floorOffsetMinRatio: 0,
+      placeOrder: async (payload, meta) => { sent.push(meta); return { status: 'simulated', filled: true }; } };
+    const before = require('../../server/src/candle-spread/risk-curve').bookFloor(st.positions, null, 10);
+    const decisions = [];
+    const n = await trader.buyFloorOffsets(st, cfg(), deps, decisions, '09/04 12:00', 1000, false);
+    const after = require('../../server/src/candle-spread/risk-curve').bookFloor(st.positions, null, 10);
+    assert.ok(n > 0, 'should have bought at least one offset on a badly lopsided book');
+    assert.ok(after > before, `the floor must IMPROVE (${before} -> ${after})`);
+    assert.ok(sent.every((m) => m.kind === 'floor-offset'), 'orders tagged as floor-offset');
+    assert.ok(decisions.some((d) => d.action === 'floor-offset' && d.ratio > 0), 'logged with its lift/cost ratio');
+  });
+
+  await testAsync('floorOffset does NOTHING when the floor is already inside the limit', async () => {
+    const st = { positions: [{ id: 'p1', filled: true, side: 'bull', shortStrike: UNDER,
+      legs: [{ side: 'long', type: 'C', strike: UNDER - W }, { side: 'short', type: 'C', strike: UNDER }],
+      limit: 10, quantity: 1, covered: false, pendingCover: null }], realizedPnl: 0 };
+    const sent = [];
+    const deps = { getLeg: makeGetLeg(UNDER), underlying: UNDER, floorOffset: true, lossTarget: 50000, lossMax: 90000,
+      placeOrder: async (p, m) => { sent.push(m); return { status: 'simulated', filled: true }; } };
+    const n = await trader.buyFloorOffsets(st, cfg(), deps, [], '09/04 12:00', 50000, false);
+    assert.strictEqual(n, 0, 'no repair needed, so nothing bought');
+    assert.strictEqual(sent.length, 0, 'and nothing sent');
+  });
+
+  await testAsync('floorOffset is inert unless the variant enables it', async () => {
+    const st = { positions: [], realizedPnl: 0 };
+    const deps = { getLeg: makeGetLeg(UNDER), underlying: UNDER, lossTarget: 1000, lossMax: 2000,
+      placeOrder: async () => { throw new Error('must not send'); } };
+    assert.strictEqual(await trader.buyFloorOffsets(st, cfg(), deps, [], '09/04 12:00', 1000, false), 0);
+  });
+
   console.log(`\n${passed} passed\n`);
 })();
