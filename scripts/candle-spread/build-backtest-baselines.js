@@ -343,6 +343,47 @@ if (isCanonical) {
 console.log(`graded v6-20 (live config) total = ${usd(out.variants['v6-20'].total)}  avg/day ${usd(out.variants['v6-20'].avgDaily)}`);
 if (anchorTotal != null) out.engineAnchorPureV6Total = anchorTotal;
 
+// RUN HISTORY. The two output files are OVERWRITTEN every build, so without this the only record of how
+// the strategies moved is git — which shows the diff but not a progression you can read across runs. Each
+// build is archived under data/baselines-history/ (OUTSIDE server/, so it never enters the deploy zip)
+// with the git commit it was built from, plus one summary row appended to index.csv: the at-a-glance
+// "did that change help" view across every rebuild.
+function archiveRun(jsonPath, csvPath, result) {
+  try {
+    const root = path.join(__dirname, '..', '..');
+    const dir = path.join(root, 'data', 'baselines-history');
+    fs.mkdirSync(dir, { recursive: true });
+    let sha = 'nogit', dirty = '';
+    try {
+      sha = require('child_process').execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
+      if (require('child_process').execSync('git status --porcelain', { cwd: root }).toString().trim()) dirty = '-dirty';
+    } catch (e) { /* not a repo, or git missing — the archive is still worth keeping */ }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+    const tag = `${stamp}_${sha}${dirty}`;
+    fs.copyFileSync(csvPath, path.join(dir, `baselines_${tag}.csv`));
+    fs.copyFileSync(jsonPath, path.join(dir, `baselines_${tag}.json`));
+
+    // One row per run. Track the variants worth watching plus the anchor, so a regression in the engine
+    // and a regression in a strategy are distinguishable at a glance.
+    const idx = path.join(dir, 'index.csv');
+    const watch = ['v0-20', 'v1-20', 'v2-20', 'v3-20', 'v6-20', 'v7-10', 'v7-20'];
+    const retDD = (v) => (v && v.maxDD30 ? Math.round(v.total / -v.maxDD30 * 10) / 10 : '');
+    if (!fs.existsSync(idx)) {
+      fs.writeFileSync(idx, 'generatedAt,commit,days,variants,anchor,'
+        + watch.map((w) => `${w}_total,${w}_retDD`).join(',') + ',note\n', 'utf8');
+    }
+    const row = [result.generatedAt, sha + dirty, result.days, Object.keys(result.variants).length,
+      result.engineAnchorPureV6Total != null ? result.engineAnchorPureV6Total : '']
+      .concat(watch.flatMap((w) => [result.variants[w] ? result.variants[w].total : '', retDD(result.variants[w])]))
+      .concat([process.env.BASELINE_NOTE || '']).join(',');
+    fs.appendFileSync(idx, row + '\n', 'utf8');
+    console.log('archived', path.relative(process.cwd(), path.join(dir, `baselines_${tag}.csv`)), '+ index.csv row');
+    console.log('history:  data/baselines-history/index.csv — one row per rebuild');
+  } catch (e) {
+    console.error('archive failed (build itself is fine):', e && e.message);
+  }
+}
+
 if (DRY) { console.log('\n--dry: not written'); process.exit(anchorOK ? 0 : 2); }
 const CSV = OUT.replace(/\.json$/, '.csv');
 writeSummaryCsv(CSV);
@@ -350,5 +391,6 @@ for (const v of Object.values(out.variants)) { delete v.daily; delete v.dates; }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
 console.log('\nwrote', path.relative(process.cwd(), OUT));
 console.log('wrote', path.relative(process.cwd(), CSV), '(aggregate summary block + per-date rows)');
+archiveRun(OUT, CSV, out);
 process.exit(anchorOK ? 0 : 2);
 })().catch(e => { console.error('baseline build failed:', e.message); process.exit(1); });

@@ -1,0 +1,12 @@
+generatedAt,commit,days,variants,anchor,v0-20_total,v0-20_retDD,v1-20_total,v1-20_retDD,v2-20_total,v2-20_retDD,v3-20_total,v3-20_retDD,v6-20_total,v6-20_retDD,v7-10_total,v7-10_retDD,v7-20_total,v7-20_retDD,note
+2026-09-02T00:54:30.316Z,6263c3d,922,13,,,,,,,,,,,,,,,,[backfilled] Grade live runs against their backtest average daily P&L
+2026-09-02T02:12:03.155Z,9f4ef55,765,14,1412935,,,,,,,,,,,,,,,[backfilled] Default capital recapture + leg-uniqueness for all strategies; add v9-40-10k
+2026-09-02T03:28:16.813Z,b384011,765,14,1412935,,,,,,,,,,,,,,,[backfilled] Add 4-leg combo foundation + fix CTS leg-uniqueness resolution
+2026-09-03T05:28:16.147Z,c241c76,765,60,1412935,577420,,555565,,547875,,577420,,1328670,,1125295,,1615795,,[backfilled] Add backtest potential/risk metrics + regenerate 60-variant baselines
+2026-09-03T06:20:59.239Z,aa63ce5,765,60,1412935,577420,15.9,555565,14.2,547875,14.1,577420,15.9,1328670,16.5,1125295,13.8,1615795,14.4,[backfilled] Add rolling 7/30-day max-drawdown to backtest baselines
+2026-09-03T06:20:59.239Z,211755c,765,60,1412935,577420,15.9,555565,14.2,547875,14.1,577420,15.9,1328670,16.5,1125295,13.8,1615795,14.4,[backfilled] Add size-normalized scores (Profit/Risk/Efficiency/Ret-on-cap) + normalize toggle
+2026-09-05T02:54:08.270Z,d5873ad,765,80,1412935,1189619,72.3,1189249,72.2,1189044,72.2,1189619,72.3,2101686,55.7,1533743,31.1,1946596,51.3,[backfilled] Regenerate 80-variant baselines + first summary CSV
+2026-09-05T16:25:25.484Z,9feea71,765,80,1412935,833533,28,840477,28.3,842462,28.3,833533,28,1455601,27.8,2113258,60.8,1620580,28.8,[backfilled] Rebuild the 80-variant baselines with the IV skew on
+2026-09-05T16:54:38.485Z,550238c,765,80,1136230,940386,34.2,940386,34.2,940386,34.2,940386,34.2,1375468,32.6,2114606,71.6,1735203,32,[backfilled] Re-baseline the engine anchor and rebuild on the corrected geometry
+2026-09-06T01:19:56.759Z,f989637,765,80,1136230,1628018,116.4,1628018,116.4,1628018,116.4,1628018,116.4,2613633,90.3,2792160,137.4,3116516,102.2,[backfilled] Make adaptive placement the default geometry; rebuild the baselines
+2026-09-06T02:42:43.468Z,45fc336,765,80,1136230,1628018,116.4,1301151,58.2,1286491,47,1260638,47.3,2613633,90.3,2792160,137.4,3116516,102.2,[backfilled] Rebuild baselines with v0-v3 re-differentiated

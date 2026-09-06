@@ -89,7 +89,13 @@ const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 // position can be covered cheaply enough to be worth locking on its own merits. Both numbers are first
 // passes to be swept — 0.60 of lossTarget, and a 2:1 locked-profit-to-cover-cost ratio (which is exactly
 // the user's worked example: a $20 spread opened at $11, covered at $3, locks $600 for $300).
-const RISK_ARMED = { continuousCoverArmFrac: 0.60, continuousCoverOppRatio: 2.0 };
+// Risk-armed continuous covering, at the BEST setting found by the 70-combination sweep (2026-09-06):
+// arm early on book risk (0.2 x lossTarget) and take any cover that locks at least what it costs.
+// The first pass was 0.60 / 2.0, which the sweep placed near the BOTTOM of the grid. Two findings drove
+// this: the OPPORTUNITY trigger does nearly all the work (at armFrac 0.8, where the risk arm barely
+// fires, adding oppRatio 1.0 took $606,735 -> $813,960 and ret/DD 61.2 -> 135.3), and a LOWER oppRatio is
+// uniformly better (1.0 > 1.5 > 2.0 > 3.0) because the cheap covers are the ones that pay.
+const RISK_ARMED = { continuousCoverArmFrac: 0.20, continuousCoverOppRatio: 1.0 };
 
 const FAMILIES = [
   // ── v0-v3: ONE signal, four COVER policies ────────────────────────────────────────────────────────
@@ -108,10 +114,16 @@ const FAMILIES = [
   //           up the guaranteed floor entirely — that is the trade being measured).
   // v0 KEEPS the instant tent deliberately: it is the control the other three are read against, and
   // v0-vs-v1 is a clean A/B of the POLICY with geometry held constant.
-  { key: 'v0', label: 'classic tent, instant', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', coverGeometry: 'tent' },
-  { key: 'v1', label: 'classic tent, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'tent' },
-  { key: 'v2', label: 'classic halfway, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'halfway' },
-  { key: 'v3', label: 'classic at-money, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'underlying' },
+  // RE-SLOTTED 2026-09-06. The first arrangement put ALL THREE geometries behind risk-arming, so the
+  // geometry comparison ran with a handicap applied to every arm — and the sweep then showed that arming
+  // config was one of the worst in the grid. Geometry had therefore never been measured under the policy
+  // that actually wins. Now v0/v1/v2 vary GEOMETRY under instant covering (the winning policy), and v3
+  // carries the arming idea at its best measured setting, so v0-vs-v3 is a clean policy A/B with geometry
+  // held at tent. All three geometry ideas keep a slot.
+  { key: 'v0', label: 'classic tent', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', coverGeometry: 'tent' },
+  { key: 'v1', label: 'classic halfway', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', coverGeometry: 'halfway' },
+  { key: 'v2', label: 'classic at-money', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', coverGeometry: 'underlying' },
+  { key: 'v3', label: 'classic tent, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'tent' },
   { key: 'v4', label: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { key: 'v5', label: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
   // v6 is ALSO the live-pipe harness: only its $20 variant (testAtBase + width 20) sends REAL unfillable
