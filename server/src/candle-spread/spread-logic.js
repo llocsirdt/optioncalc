@@ -171,6 +171,37 @@ function coverCandidateLongs(coveredSide, shortStrike, underlying, incr, kCap = 
   return [...set].sort((a, b) => a - b);
 }
 
+// COVER GEOMETRY — WHERE the offsetting spread sits, expressed as its SHORT strike. This is the axis
+// v0-v3 were meant to differ on, and the three named shapes are:
+//   'tent'       — the cover shares the covered position's short strike. Open + cover form a BUTTERFLY:
+//                  one peak, at that strike. Cheapest cover, biggest locked floor, least terminal upside.
+//   'halfway'    — the cover's short sits midway between the position's short and the underlying. The
+//                  pair becomes a CONDOR: a plateau rather than a peak, trading some locked profit for a
+//                  wider region that pays. The balance between locking and terminal potential.
+//   'underlying' — the cover's short sits at the money. Widest tent, most terminal potential, dearest
+//                  cover — and the one that can push open+cover past the width, forfeiting the guaranteed
+//                  floor. That is the trade being tested, not a mistake.
+// Always clamped to the valid side: a cover never moves BACKWARD past the position's own short strike,
+// which would overlap rather than offset.
+function coverShortFor(geometry, coveredSide, posShortStrike, underlying, incr) {
+  const grid = (x) => Math.round(x / incr) * incr;
+  let s;
+  if (geometry === 'underlying') s = grid(underlying);
+  else if (geometry === 'halfway') s = grid((posShortStrike + underlying) / 2);
+  else return posShortStrike;                        // 'tent' (default)
+  return coveredSide === 'bull' ? Math.max(posShortStrike, s) : Math.min(posShortStrike, s);
+}
+
+// Legs of a cover at a chosen SHORT strike — the geometry-aware counterpart of coverLegs (which is this
+// at coverShort = the position's own short strike). Mirrors candidateCoverLegs' long-strike convention:
+// a bull is covered by a put spread whose long leg is coverShort + width; a bear by a call spread whose
+// long leg is coverShort - width.
+function coverLegsAtShort(coveredSide, coverShort, spreadWidth) {
+  return coveredSide === 'bull'
+    ? [ { side: 'short', type: 'P', strike: coverShort }, { side: 'long', type: 'P', strike: coverShort + spreadWidth } ]
+    : [ { side: 'short', type: 'C', strike: coverShort }, { side: 'long', type: 'C', strike: coverShort - spreadWidth } ];
+}
+
 // Legs of a cover with a chosen long strike (width = spreadWidth). Generalizes coverLegs
 // (which is this at longStrike = short ± width, i.e. the tent).
 //   bull cover -> bear put: short P (long−width), long P (long)
@@ -254,6 +285,8 @@ module.exports = {
   shortStrikeOf,
   coverLegs,
   coverAnchorLong,
+  coverShortFor,
+  coverLegsAtShort,
   coverCandidateLongs,
   candidateCoverLegs,
   coverPeakExtra,

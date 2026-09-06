@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const eng = require('./backtest-v4');                         // geometry + pricing + frozen v5 runner
 const trader = require('../../server/src/candle-spread/trader'); // server COVER selectors (pure; BS getLeg)
+const SL = require('../../server/src/candle-spread/spread-logic');  // shared cover GEOMETRY (tent/halfway/underlying)
 const { v6Signal } = require('./v6-signals');
 const { v5Signal } = require('./v5-signals');
 const bs = eng.bs, { WIDTH, INCR, TICK, QTY } = eng;
@@ -478,6 +479,20 @@ function runDay5m(bars, signalFn, opts = {}) {
     // optimistically. WHY IT MATTERS: the engine otherwise only covers on a signal reversal, the v8/v9
     // proactive frac, or governor distress — which is why backtest books end with a non-negative floor on
     // only ~5% of days while the live books do it routinely.
+    // ARMING (opts.continuousCoverArmFrac / continuousCoverOppRatio). Unset => the original behaviour:
+    // rest a cover on EVERY position the moment it opens. That maximises locking but decides the outcome
+    // of every position at birth, so the risk-gated variants arm on one of two conditions instead:
+    //   (a) BOOK RISK — the day's worst case has run to armFrac x lossTarget. The governor's own measure,
+    //       so "start covering as we approach the cap" is literal rather than a proxy.
+    //   (b) OPPORTUNITY — this position can be covered cheaply enough that the locked profit is at least
+    //       oppRatio x what the cover costs. Without this, a couple of deep-ITM winners can sit uncovered
+    //       through a full reversal purely because total book risk never got near the target: two $20
+    //       spreads at $11 hold only $2,200 against a $5,000 target, while a $300 cover on the deeper one
+    //       locks $600. lockDeepWinners does NOT catch that — it is gated on the floor ALREADY being
+    //       through lossTarget, i.e. exactly the case this exists to cover.
+    const armFrac = opts.continuousCoverArmFrac;
+    const oppRatio = opts.continuousCoverOppRatio;
+    const armedByRisk = armFrac == null || (lossTarget < Infinity && -floorNow() >= armFrac * lossTarget);
     if (opts.continuousCover) {
       // continuousCoverMinLockFrac: the resting target is the price that still LOCKS A REAL PROFIT, not
       // merely break-even. Resting at the bare break-even price (W − openCost) fills the instant the cover
@@ -490,7 +505,19 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
         const tgt = round2(G.WIDTH - pos.limit - minLock);
         if (tgt <= 0) continue;
-        pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: tgt };
+        // GEOMETRY: where the offsetting spread sits. 'tent' (default) shares the position's short strike
+        // and reproduces the original legs exactly; 'halfway'/'underlying' walk it toward the money.
+        const legs = opts.coverGeometry && opts.coverGeometry !== 'tent'
+          ? SL.coverLegsAtShort(pos.side, SL.coverShortFor(opts.coverGeometry, pos.side, pos.shortStrike, S, legIncr), G.WIDTH)
+          : G.coverLegs(pos.side, pos.shortStrike);
+        if (!armedByRisk) {
+          // Not armed by book risk — take it only if the cover is cheap enough to be worth it on its own.
+          if (oppRatio == null) continue;
+          const cost = legsMark(legs, S, tau, iv);
+          const locked = G.WIDTH - pos.limit - cost;
+          if (!(cost > 0) || locked < oppRatio * cost) continue;
+        }
+        pos.pendingCover = { legs, target: tgt };
       }
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar

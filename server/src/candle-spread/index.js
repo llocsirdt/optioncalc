@@ -85,11 +85,33 @@ const PORTED_COVER = { coverSelector: 'fixed-mark', coverFillModel: 'resting' };
 // gets a -10 / -20 / -40 variant. v0-v3 = CLASSIC signal (15m price-action breakout/reversal) with the
 // cover SELECTOR varying (fixed / greedy / joint / fixed-mark); v4-v9 = the multi-TF lineage on the
 // mark-priced resting tent (PORTED_COVER). Caps here are the $20 values; buildVariants scales them by width.
+// Risk-armed continuous covering: don't rest a cover until the book is actually at risk, OR until this
+// position can be covered cheaply enough to be worth locking on its own merits. Both numbers are first
+// passes to be swept — 0.60 of lossTarget, and a 2:1 locked-profit-to-cover-cost ratio (which is exactly
+// the user's worked example: a $20 spread opened at $11, covered at $3, locks $600 for $300).
+const RISK_ARMED = { continuousCoverArmFrac: 0.60, continuousCoverOppRatio: 2.0 };
+
 const FAMILIES = [
-  { key: 'v0', label: 'classic fixed-tent', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting' },
-  { key: 'v1', label: 'classic greedy',     signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'greedy', coverFillModel: 'resting' },
-  { key: 'v2', label: 'classic joint',      signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'joint', coverFillModel: 'resting' },
-  { key: 'v3', label: 'classic fixed-mark', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed-mark', coverFillModel: 'resting' },
+  // ── v0-v3: ONE signal, four COVER policies ────────────────────────────────────────────────────────
+  // These four were meant to differ by WHERE the offsetting spread goes, but continuous covering had been
+  // overriding all of them — it rested a TENT on every position the moment it opened, so the selector
+  // never saw a candidate and v0-v3 came out identical to the dollar. Re-differentiated 2026-09-05 on the
+  // two axes that actually matter, which are independent:
+  //   WHEN  — v0 rests a cover instantly (every position is decided at birth); v1-v3 arm only on risk,
+  //           either the book floor reaching 60% of lossTarget or a cover cheap enough to lock 2x its own
+  //           cost (the safety net for a couple of deep winners sitting through a reversal while total
+  //           book risk stays low — lockDeepWinners cannot catch that, being gated on the floor ALREADY
+  //           breaching lossTarget).
+  //   WHERE — tent (butterfly, shares the short strike: cheapest cover, biggest locked floor, least
+  //           upside) -> halfway -> at the underlying (condor: a plateau instead of a peak, more terminal
+  //           potential, dearer cover, and at the far end it can push open+cover past the width and give
+  //           up the guaranteed floor entirely — that is the trade being measured).
+  // v0 KEEPS the instant tent deliberately: it is the control the other three are read against, and
+  // v0-vs-v1 is a clean A/B of the POLICY with geometry held constant.
+  { key: 'v0', label: 'classic tent, instant', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', coverGeometry: 'tent' },
+  { key: 'v1', label: 'classic tent, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'tent' },
+  { key: 'v2', label: 'classic halfway, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'halfway' },
+  { key: 'v3', label: 'classic at-money, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'underlying' },
   { key: 'v4', label: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { key: 'v5', label: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
   // v6 is ALSO the live-pipe harness: only its $20 variant (testAtBase + width 20) sends REAL unfillable
@@ -191,6 +213,30 @@ function buildVariants() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
+        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
+        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
+        // is precisely the consequence of removing the cap, which is what the twin exists to show.
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
       };
       if (capFrac != null) v.capFrac = capFrac;
@@ -223,6 +269,14 @@ function buildUncapped() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}, UNCAPPED`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
+        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
+        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
+        // is precisely the consequence of removing the cap, which is what the twin exists to show.
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         // Same GEOMETRY as the capped sibling — the `-unc` twin isolates the CAPS, so anything that is not
         // a cap (adaptive placement, the covering policy) must match or the comparison measures two things.
         spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
@@ -255,6 +309,14 @@ function buildAtmComparators() {
         variantLabel: `${f.label} $${w} ATM-centered`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
+        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
+        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
+        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
+        // is precisely the consequence of removing the cap, which is what the twin exists to show.
+        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
+        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
+        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         // Deliberately NOT adaptive: `-cATM` is the fixed ATM-centered CONTROL the sweep is measured
         // against, and a control that moves its own strikes is not a control.
         spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → the debitLimit default

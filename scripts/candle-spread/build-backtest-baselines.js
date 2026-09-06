@@ -58,6 +58,10 @@ function optsFor(v) {
   // risk cap — it applies to the `-unc` twins too, so those isolate the CAPS rather than the policy.
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
+  // Cover POLICY (when to arm) + GEOMETRY (where the offsetting spread sits) — the v0-v3 axis.
+  if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
+  if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
+  if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
   if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.coverSelector) o.coverSelector = v.coverSelector;

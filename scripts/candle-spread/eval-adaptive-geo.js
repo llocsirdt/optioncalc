@@ -54,6 +54,10 @@ for (const name of (process.argv[2] || 'v6-20,v6-40,v4-20,v9-20').split(',')) {
     if (v.floorOffset) o.floorOffset = true;
     if (v.continuousCover) o.continuousCover = true;
     if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
+    // Cover POLICY (when to arm) + GEOMETRY (where the offsetting spread sits) — the v0-v3 axis.
+    if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
+    if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
+    if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
     if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
     if (v.exemptTrendStack) o.exemptTrendStack = true;
     if (v.coverSelector) o.coverSelector = v.coverSelector;
