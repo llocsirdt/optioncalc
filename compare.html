@@ -28,6 +28,9 @@
      taller than the 12px text around it, which is what used to push these two chips proudly above their
      neighbours — shrink the box, kill its default margins, and trim the label's own vertical padding. */
   label.tgl { user-select:none; padding:2px 7px; display:inline-flex; align-items:center; line-height:16px; }
+  /* Icon-only button: square, sized to match the text buttons beside it rather than shrinking below them. */
+  button.icon { padding:0; width:26px; height:23px; display:inline-flex; align-items:center; justify-content:center; color:#444; }
+  button.icon:hover { background:#eee; color:#000; }
   label.tgl input[type=checkbox] { width:12px; height:12px; margin:0 5px 0 0; vertical-align:middle; }
   label.tgl select, label.tgl input[type=date] { font:12px sans-serif; padding:0 2px; border:1px solid #ddd;
      border-radius:3px; background:#fff; height:18px; }
@@ -81,11 +84,19 @@
   .cell .term { font:11px ui-monospace, monospace; font-weight:700; text-align:center; margin-top:1px; }
   .cell .sel { font:9px ui-monospace, monospace; color:#666; min-height:12px; margin-top:1px; text-align:center; }
   svg { cursor:crosshair; }
-  #btWrap h2 { font-size:14px; margin:4px 0 8px; font-weight:700; }
+  /* The header row is position:sticky, but sticky resolves against the nearest SCROLLING ancestor — and
+     .wrap already sets overflow:auto, which claims that role without ever scrolling vertically, so the
+     row never stuck to anything. Giving #btWrap a real vertical scroll box makes it the scroll container
+     the sticky row is measured against. */
+  #btWrap { max-height:72vh; overflow:auto; }
+  #btWrap h2 { font-size:14px; margin:4px 0 8px; font-weight:700; position:sticky; left:0; }
   #btWrap h2 .sub { font-weight:400; color:var(--muted); font-size:12px; }
   table.bt { border-collapse:collapse; font:12px ui-monospace, Menlo, monospace; }
   table.bt th, table.bt td { padding:3px 11px; border-bottom:1px solid var(--grid); white-space:nowrap; }
-  table.bt th { position:sticky; top:0; background:var(--bg); cursor:pointer; user-select:none; text-align:right; color:#555; border-bottom:1px solid #ccc; }
+  table.bt th { position:sticky; top:0; z-index:2; background:var(--bg); cursor:pointer; user-select:none;
+                text-align:right; color:#555; border-bottom:1px solid #ccc;
+                /* border-bottom does not paint on a sticky cell in every engine — box-shadow always does */
+                box-shadow:inset 0 -1px 0 #ccc; }
   table.bt th:first-child, table.bt td.v { text-align:left; }
   table.bt td.num { text-align:right; }
   table.bt td.v { font-weight:600; }
@@ -98,7 +109,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.33</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.34</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -106,7 +117,11 @@
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">overlay backtest</span></label>
   <button id="btTableBtn">Backtest table ▾</button>
-  <button id="refresh">Refresh</button>
+  <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
+    </svg>
+  </button>
   <span id="srcbar">
     <label class="tgl" title="LIVE = the server's recorded shadow runs · BACKTEST = the same strategies replayed over a historical day">source
       <select id="srcSelect" style="margin-left:4px">
@@ -257,6 +272,9 @@ function analyzeLegs(legs, underlying) {
 // Mini filled risk curve (green above zero, red below) + zero baseline. yMin/yMax let the caller impose a
 // shared scale (magnitude comparison) or pass the cell's own lo/hi (shape-only, auto-scaled per cell). When
 // `bt` (backtest averages {worst,avg,best}) is given, faint dashed reference lines mark those levels.
+// Grid-wide |extreme| in dollars — the saturation reference for the fill gradient (set in render()).
+let gAbs = 0;
+
 function svgCurve(v, d, yMin, yMax, bt, dB) {
   const xMin = d.xMin, xMax = d.xMax;
   const padY = (yMax - yMin) * 0.08 || 1;
@@ -278,13 +296,37 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
   const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
   const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
+  // FILL DEPTH = HOW BIG THE OUTCOME IS, in dollars. Each gradient runs from break-even (pale) to the
+  // grid-wide extreme (full colour) in USER SPACE — so the full-saturation stop for a small book sits far
+  // OFF the top/bottom of its own chart and only the pale end is ever visible, while the biggest books in
+  // the grid reach deep green / deep red. Anchoring per-cell instead would make every book look equally
+  // extreme, which is the opposite of what the colour is for.
+  // Each gradient spans the cell's OWN area (so the payoff shape stays readable at any size), while how
+  // DEEP it gets encodes the magnitude against the whole grid. sqrt compression keeps small books clearly
+  // tinted rather than washing them out to white — the first version anchored the saturation stop at the
+  // grid extreme in user space, which pushed it so far off a small chart that only near-white remained.
+  const depth = (x) => (gAbs > 0 ? Math.min(1, Math.sqrt(Math.abs(x || 0) / gAbs)) : 1);
+  const upD = depth(d.hi), dnD = depth(d.lo);
+  const o = (frac, k) => (0.13 + 0.5 * frac * k).toFixed(3);   // floor keeps a small book visible
+  const grads = `
+      <linearGradient id="gu${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${zeroY.toFixed(1)}">
+        <stop offset="0" stop-color="#0b6b5b" stop-opacity="${o(upD, 1)}"/>
+        <stop offset="0.6" stop-color="#26a69a" stop-opacity="${o(upD, 0.55)}"/>
+        <stop offset="1" stop-color="#8fd3c7" stop-opacity="0.09"/>
+      </linearGradient>
+      <linearGradient id="gd${id}" gradientUnits="userSpaceOnUse" x1="0" y1="${zeroY.toFixed(1)}" x2="0" y2="${CH}">
+        <stop offset="0" stop-color="#f7b6b4" stop-opacity="0.09"/>
+        <stop offset="0.4" stop-color="#ef5350" stop-opacity="${o(dnD, 0.55)}"/>
+        <stop offset="1" stop-color="#a01916" stop-opacity="${o(dnD, 1)}"/>
+      </linearGradient>`;
   return `<svg data-v="${v}" width="${CW}" height="${CH}" viewBox="0 0 ${CW} ${CH}">
     <defs>
       <clipPath id="up${id}"><rect x="0" y="0" width="${CW}" height="${zeroY}"/></clipPath>
       <clipPath id="dn${id}"><rect x="0" y="${zeroY}" width="${CW}" height="${CH - zeroY}"/></clipPath>
+      ${grads}
     </defs>
-    <path d="${areaUp}" fill="var(--profit)" fill-opacity="0.22" clip-path="url(#up${id})"/>
-    <path d="${areaUp}" fill="var(--loss)" fill-opacity="0.22" clip-path="url(#dn${id})"/>
+    <path d="${areaUp}" fill="url(#gu${id})" clip-path="url(#up${id})"/>
+    <path d="${areaUp}" fill="url(#gd${id})" clip-path="url(#dn${id})"/>
     <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}" stroke="var(--zero)" stroke-width="1" stroke-dasharray="3 2"/>
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
@@ -322,6 +364,16 @@ function render() {
   const cellHi = (v, d) => { let hi = d.hi; const b = btFor(v); if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best);
     const o = cellsB[v]; if (o && Number.isFinite(o.hi)) hi = Math.max(hi, o.hi); return hi; };
 
+  // SHADING REFERENCE: the largest profit and loss anywhere in the grid. The fill gradient is anchored to
+  // THIS, not to each cell's own axis — otherwise every cell would saturate at its own extreme and a $3k
+  // book would look exactly as dangerous as a $30k one. Computed regardless of syncY, which only controls
+  // the axis.
+  gAbs = 0;
+  for (const f of FAMILIES) for (const c of COLUMNS) {
+    const v = `${f}-${c.k}`, d = cells[v];
+    if (!d || !d.curve) continue;
+    gAbs = Math.max(gAbs, Math.abs(cellLo(v, d)), Math.abs(cellHi(v, d)));
+  }
   let gMin = null, gMax = null;
   if (syncY && finite.length) {
     gMin = Infinity; gMax = -Infinity;
