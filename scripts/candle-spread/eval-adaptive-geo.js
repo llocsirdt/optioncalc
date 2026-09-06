@@ -41,18 +41,32 @@ for (const name of (process.argv[2] || 'v6-20,v6-40,v4-20,v9-20').split(',')) {
   if (!v) { console.log(`${name}: not a current variant`); continue; }
   const W = v.spreadWidth;
   const fn = (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
+  // Opts are derived FROM THE SHIPPED VARIANT, the same way build-backtest-baselines.js does it, so these
+  // totals are comparable to the committed baselines and only the GEOMETRY differs between arms.
+  // This used to hand-roll the config and silently dropped `softCap` (so every v8 row was really
+  // "v8 minus softCap") and `coverSelector` (so v0/v1/v2/v3 collapsed into one identical run), while
+  // pinning the fixed arm at capFrac 0.8 — the pre-2026-09-05 ceiling rather than the shipped 0.65.
   const mk = geo => {
-    const o = { rthActionOnly: true, intradayIV: true, ivSkew: true, coverToStack: true, coverToStackVsRisk: true,
-      coverToStackMinFrac: 0.65, recaptureAlternate: true, openAlternateEvery: 3, creditCoverFrac: 0.65,
-      enforceLegUniqueness: true, legMaxShift: 6, legMaxWing: 8, geo, lossTarget: v.lossTarget, lossMax: v.lossMax,
-      floorOffset: true, continuousCover: true, continuousCoverMinLockFrac: v.continuousCoverMinLockFrac, lockCoverMode: 'rest' };
+    const o = { rthActionOnly: true, intradayIV: true, geo };
+    if (v.ivSkew) o.ivSkew = true;
     if (v.bidirectional) o.bidirectional = true;
+    for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+    if (v.floorOffset) o.floorOffset = true;
+    if (v.continuousCover) o.continuousCover = true;
+    if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
+    if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
     if (v.exemptTrendStack) o.exemptTrendStack = true;
-    if (v.proactiveCoverFrac != null) o.proactiveCoverFrac = v.proactiveCoverFrac;
+    if (v.coverSelector) o.coverSelector = v.coverSelector;
+    if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
+    if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
+    if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
     return o;
   };
   const cfgs = [
-    ['fixed short-ATM', makeGeo({ width: W, shift: W / 2, capFrac: 0.8 })],
+    // The SHIPPED fixed geometry (variant's own capFrac — 0.65 since 2026-09-05), plus the 0.8 it used
+    // before, because that is the number every earlier comparison was measured against.
+    ['fixed @shipped', makeGeo({ width: W, shift: v.spreadShift || W / 2, capFrac: v.capFrac != null ? v.capFrac : undefined })],
+    ['fixed @0.80 (old)', makeGeo({ width: W, shift: v.spreadShift || W / 2, capFrac: 0.8 })],
     // env FRACS trims the sweep (e.g. FRACS=0.60) — a full 4-geometry sweep over every variant does not fit
     // in memory alongside other processes, and once the shape is known only the contenders need re-running.
     ...(process.env.FRACS || '0.65,0.60,0.70').split(',').map((f) => Number(f)).filter((f) => f > 0)
