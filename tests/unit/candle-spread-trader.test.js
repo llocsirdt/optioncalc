@@ -238,5 +238,71 @@ console.log('\ncandle-spread trader — continuous covering');
     assert.ok(p.covered, 'a cover that lifts the floor must book');
   });
 
+  // ── ADAPTIVE STRIKE PLACEMENT (live port of makeAdaptiveGeo) ────────────────────────────────────
+  // The rule is "most ITM placement still within the ceiling, floored at straddle, never OTM". These pin
+  // the parts that could drift silently: the ORDER of candidates, the ceiling actually binding, the
+  // straddle floor, and that a gap in the chain is survivable rather than fatal.
+  const acfg = (over) => ({ ...cfg(), capFrac: 0.65, adaptiveGeo: true, maxItmStrikes: 3, ...over });
+
+  test('adaptive picks the MOST ITM placement inside the ceiling', () => {
+    const r = trader.buildOpenAdaptive('bull', UNDER, acfg(), makeGetLeg(UNDER));
+    assert.ok(!r.declined, 'should find a placement: ' + r.reason);
+    assert.ok(r.limit <= 0.65 * W + 1e-9, `booked ${r.limit} over the ceiling`);
+    assert.ok(r.itmStrikes >= 0, 'never OTM on an open');
+    // Anything more ITM than the chosen placement must be over the ceiling, or it was not the MOST ITM.
+    if (r.itmStrikes < 3) {
+      const deeper = trader.buildOpenAtStrikes('bull', r.lower - INCR, r.upper - INCR, acfg(), makeGetLeg(UNDER));
+      assert.ok(deeper.declined || deeper.error, 'a cheaper deeper placement existed and was skipped');
+    }
+  });
+
+  test('a tighter ceiling forces a LESS ITM placement', () => {
+    const loose = trader.buildOpenAdaptive('bull', UNDER, acfg({ capFrac: 0.75 }), makeGetLeg(UNDER));
+    const tight = trader.buildOpenAdaptive('bull', UNDER, acfg({ capFrac: 0.55 }), makeGetLeg(UNDER));
+    assert.ok(!loose.declined && !tight.declined, 'both should place');
+    assert.ok(loose.itmStrikes >= tight.itmStrikes,
+      `looser ceiling should allow >= ITM depth (${loose.itmStrikes} vs ${tight.itmStrikes})`);
+  });
+
+  test('bear places on the mirror side and is also never OTM', () => {
+    const r = trader.buildOpenAdaptive('bear', UNDER, acfg(), makeGetLeg(UNDER));
+    assert.ok(!r.declined, r.reason);
+    assert.strictEqual(r.upper - r.lower, W, 'width preserved');
+    assert.ok(r.itmStrikes >= 0, 'never OTM on an open');
+    assert.strictEqual(r.legs[0].type, 'P', 'bear opens the put side');
+  });
+
+  test('DECLINES rather than overpaying when no placement fits', () => {
+    const r = trader.buildOpenAdaptive('bull', UNDER, acfg({ capFrac: 0.01 }), makeGetLeg(UNDER));
+    assert.strictEqual(r.declined, true);
+    assert.strictEqual(r.limit, 0, 'a declined open must carry no bookable limit');
+    assert.ok(r.placementsTried > 1, 'should have tried the whole ladder, got ' + r.placementsTried);
+    assert.match(r.reason, /no placement within/);
+  });
+
+  test('a missing chain quote skips that placement instead of killing the open', () => {
+    const base = makeGetLeg(UNDER);
+    // Knock a hole in the chain exactly where the deepest ITM candidate would price.
+    const holed = (type, strike) => (strike === UNDER - 3 * INCR ? null : base(type, strike));
+    const r = trader.buildOpenAdaptive('bull', UNDER, acfg(), holed);
+    assert.ok(!r.declined, 'a gap in the chain is not a reason to abandon the signal: ' + r.reason);
+    assert.ok(r.limit > 0);
+  });
+
+  test('maxItmStrikes bounds the search but never forces a WORSE price', () => {
+    const deep = trader.buildOpenAdaptive('bull', UNDER, acfg({ maxItmStrikes: 6 }), makeGetLeg(UNDER));
+    const shallow = trader.buildOpenAdaptive('bull', UNDER, acfg({ maxItmStrikes: 1 }), makeGetLeg(UNDER));
+    assert.ok(!deep.declined && !shallow.declined);
+    assert.ok(deep.itmStrikes >= shallow.itmStrikes, 'a deeper bound can only allow deeper placements');
+    assert.ok(deep.limit <= 0.65 * W + 1e-9 && shallow.limit <= 0.65 * W + 1e-9, 'both respect the ceiling');
+  });
+
+  test('adaptiveGeo OFF leaves the fixed placement untouched', () => {
+    const c = { ...cfg(), capFrac: 0.65, spreadShift: W / 2 };
+    const fixed = trader.buildOpen('bull', UNDER, c, makeGetLeg(UNDER));
+    assert.ok(!fixed.declined, 'the shipped fixed path still works');
+    assert.strictEqual(fixed.itmStrikes, undefined, 'fixed placement reports no adaptive metadata');
+  });
+
   console.log(`\n${passed} passed\n`);
 })();

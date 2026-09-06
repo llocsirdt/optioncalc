@@ -69,8 +69,12 @@ for (const name of (process.argv[2] || 'v6-20,v6-40,v4-20,v9-20').split(',')) {
     ['fixed @0.80 (old)', makeGeo({ width: W, shift: v.spreadShift || W / 2, capFrac: 0.8 })],
     // env FRACS trims the sweep (e.g. FRACS=0.60) — a full 4-geometry sweep over every variant does not fit
     // in memory alongside other processes, and once the shape is known only the contenders need re-running.
+    // ITMS sweeps how DEEP the placement search may go (maxItmStrikes). It is the search BOUND, not a
+    // target: a deeper bound only matters on bars where a deeper strike is still under the ceiling, so
+    // raising it can only add placements, never remove them. Worth knowing where it stops paying.
     ...(process.env.FRACS || '0.65,0.60,0.70').split(',').map((f) => Number(f)).filter((f) => f > 0)
-      .map((f) => [`adaptive ${f.toFixed(2)}`, makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: f, maxItmStrikes: 3 })]),
+      .flatMap((f) => (process.env.ITMS || '3').split(',').map((n) => Number(n)).filter((n) => n > 0)
+        .map((n) => [`adaptive ${f.toFixed(2)} itm${n}`, makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: f, maxItmStrikes: n })])),
   ];
   let base = null;
   for (const [lbl, geo] of cfgs) {

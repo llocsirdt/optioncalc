@@ -335,7 +335,10 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   const cashDelta = (sentNet === 'CREDIT' ? -sentLimit : res.limit) * 100 * cfg.quantity;
   st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
   st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
-  decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed });
+  // itmStrikes/placementsTried are present only under adaptive placement — recording WHICH placement was
+  // taken is what makes maxItmStrikes answerable from live data instead of only from the backtest.
+  decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed,
+    ...(res.itmStrikes != null ? { itmStrikes: res.itmStrikes, placementsTried: res.placementsTried } : {}) });
 }
 
 // ── DAY-LOSS GOVERNOR (deps.lossTarget / deps.lossMax) ──────────────────────────────────────────────
@@ -540,7 +543,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
-    let res = buildOpen(openSide, underlying, cfg, deps.getLeg);
+    // adaptiveGeo (per-variant, default OFF -> byte-identical to the fixed placement) walks the strike
+    // to the most ITM placement still inside the ceiling instead of taking or declining a single one.
+    let res = cfg.adaptiveGeo
+      ? buildOpenAdaptive(openSide, underlying, cfg, deps.getLeg)
+      : buildOpen(openSide, underlying, cfg, deps.getLeg);
     // LEG-UNIQUENESS: resolve strikes + style BEFORE the caps/send so a shifted spread is capped
     // correctly. ideal → parity twin (same strikes) → shift → skip. legStyle drives the actual send.
     let legStyle = null, legSkipped = false;
@@ -553,7 +560,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     if (legSkipped) {
       // already logged; the leg constraint blocked every placement
     } else if (res.declined) {
-      decisions.push({ action: 'open-skip-ceiling', side: openSide, reason: res.reason, mark: res.mark, cap: res.cap });
+      decisions.push({ action: 'open-skip-ceiling', side: openSide, reason: res.reason, mark: res.mark, cap: res.cap, placementsTried: res.placementsTried });
     } else if (res.error) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
@@ -633,6 +640,54 @@ function buildOpen(side, underlying, cfg, getLeg) {
   // risk/reward CEILING (default 0.65 of width) and GATES the trade — it never sets the price.
   const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
   return buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
+}
+
+// ADAPTIVE STRIKE PLACEMENT — the live port of backtest-width.makeAdaptiveGeo.
+//
+// The user's actual discretion: early in the session, when a spread is cheap, put the short leg AT or
+// INSIDE the money; as the day burns, the same placement gets expensive and the choice walks back out
+// toward straddle. ONE RULE reproduces all of it — take the MOST ITM placement whose real price is still
+// within the risk/reward ceiling, floored at straddle — and it is self-adjusting, needing no time input.
+//
+// Why this matters more than it looks: we do not make money on opens, we make money on COVERS, and an ITM
+// spread covers more easily (the offsetting side is cheaper when the short is ITM). Fixed geometry either
+// overpays for one placement or declines and loses the trade entirely; walking the strike keeps the fill
+// AND buys as much ITM as the budget allows. Measured over 765 days it beat fixed on both total and
+// ret/DD in all 30 governed variants.
+//
+// LIVE IS THE BETTER HALF OF THIS. The backtest has to model each candidate's price; here every candidate
+// is priced off the REAL CHAIN through buildOpenAtStrikes/getLeg, so the ceiling is applied to a quote
+// rather than an estimate. Nothing is sent while searching — this is pricing, not ordering.
+//
+// Ordered MOST ITM first, ending at straddle (short leg just OTM). A placement with no chain quote is
+// skipped rather than fatal: a missing strike is a gap in the chain, not a reason to abandon the signal.
+function buildOpenAdaptive(side, underlying, cfg, getLeg) {
+  const incr = cfg.strikeIncrement, W = cfg.spreadWidth;
+  const center = L.centerStrike(underlying, incr);
+  // On a coarse grid the exact straddle can be off-grid, in which case short-at-the-money is the
+  // least-ITM placement available — still never OTM, which is an opening rule, not a preference.
+  const halfOnGrid = Math.floor((W / 2) / incr) * incr;
+  const maxItm = cfg.maxItmStrikes != null ? cfg.maxItmStrikes : 3;
+  let tried = 0, lastDeclined = null, lastError = null;
+  for (let k = -maxItm; k <= halfOnGrid / incr; k++) {
+    const off = k * incr;
+    const shortStrike = side === 'bull' ? center + off : center - off;
+    const lower = side === 'bull' ? shortStrike - W : shortStrike;
+    const upper = side === 'bull' ? shortStrike : shortStrike + W;
+    const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
+    if (res.error) { lastError = res.error; continue; }
+    tried++;
+    if (res.declined) { lastDeclined = res; continue; }
+    // itmStrikes: how many strikes INSIDE the money the short leg sits (0 = straddle placement).
+    return { ...res, itmStrikes: -k, placementsTried: tried };
+  }
+  return {
+    declined: true, placementsTried: tried, limit: 0,
+    reason: tried
+      ? `no placement within ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${W} (tried ${tried}, cheapest ${lastDeclined ? lastDeclined.mark : '?'})`
+      : `no chain quotes for any placement${lastError ? ` (${lastError})` : ''}`,
+    mark: lastDeclined ? lastDeclined.mark : null, cap: lastDeclined ? lastDeclined.cap : null,
+  };
 }
 
 // Build a debit-canonical open at EXPLICIT strikes (used by leg-uniqueness to reprice a shifted spread).
@@ -957,6 +1012,8 @@ module.exports = {
   makeLegAccessor,
   buildOrderPayload,
   buildOpen,
+  buildOpenAdaptive,
+  buildOpenAtStrikes,
   buildCover,
   resolveLegs,
   selectCovers,
