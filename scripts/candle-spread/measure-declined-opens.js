@@ -25,7 +25,7 @@
  */
 const path = require('path');
 const { runDay5m, load5mDays, ivMultAt, skewMultAt, etMinute } = require('./backtest-v6-5m');
-const { makeGeo } = require('./backtest-width');
+const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
 const eng = require('./backtest-v4');
 
@@ -68,7 +68,9 @@ function optsFor(v, onDecline) {
   if (v.coverSelector) o.coverSelector = v.coverSelector;
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
-  o.geo = makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
+  o.geo = v.adaptiveGeo
+    ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
+    : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
   if (HAS_PX) o.priceOf = priceOf;
   return o;
 }

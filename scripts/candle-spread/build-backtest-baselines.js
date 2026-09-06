@@ -16,7 +16,7 @@
 const path = require('path');
 const fs = require('fs');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
-const { makeGeo } = require('./backtest-width');
+const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns, VARIANTS } = require('../../server/src/candle-spread/index');
 // Grade against the ACTUAL merged runs (BASE_RUNS defaults × VARIANTS) the server trades — so shared
 // defaults like capital-recapture + leg-uniqueness are reflected in the baseline, not just per-variant knobs.
@@ -71,7 +71,11 @@ function optsFor(v) {
   // so a $20 shift-0 capFrac-unset variant — i.e. every `-20-cATM` — silently fell through to the base
   // engine's own buildOpen instead of makeGeo, and quietly missed geometry changes made here. The two are
   // numerically identical for that case; passing it explicitly keeps them from drifting apart again.
-  o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
+  // ADAPTIVE PLACEMENT is the shipped default: walk to the most ITM placement still inside the
+  // ceiling instead of always taking one fixed offset. `-cATM` controls keep the fixed geometry.
+  o.geo = v.adaptiveGeo
+    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
+    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
   // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.

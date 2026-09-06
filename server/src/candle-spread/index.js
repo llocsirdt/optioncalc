@@ -107,18 +107,29 @@ const FAMILIES = [
   { key: 'v9', label: 'be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, proactiveCoverFrac: 0.80, ...PORTED_COVER },
 ];
 
-// The width sweep is now uniformly SHORT-ATM (shift = W/2: short leg ≈ ATM, long leg W deeper ITM) at
-// capFrac 0.65 — the user's real risk/reward ceiling ("never pay more than ~65% of width for a long debit
-// spread"), held constant across widths so width is the only variable. All three land on the 10-pt strike
-// grid (W/2 − shift = 0 → short strike = center). The ATM-CENTERED geometry (shift 0) is measured
-// separately via the `-cATM` comparators below (width 20/40 only — $10 ATM-centered is off-grid).
-// capFrac GATES the trade (over the ceiling → decline); it does NOT cap the price. It was 0.8 here and a
-// legacy 0.525 on cATM back when it set the limit, which booked sub-market on 59% of cATM bars.
+// ADAPTIVE STRIKE PLACEMENT is the default geometry (2026-09-05). Rather than always placing the short leg
+// at a FIXED offset, the engine takes the MOST ITM placement whose real price is still inside the ceiling,
+// floored at straddle and never OTM — spending the budget on as much ITM as it can afford early when
+// spreads are cheap, and walking outward only when price forces it. ITM spreads cover more easily, and we
+// make money on COVERS, not opens. Measured over 765 days it beat the fixed short-ATM geometry on BOTH
+// total and ret/DD in ALL 30 governed variants (+$289k to +$1.37M; v6-20 +90%, ret/DD 32.6 → 90.3).
+// `spreadShift` is retained only as the fallback placement when adaptiveGeo is off.
+//
+// capFrac 0.60 — MEASURED, not the 0.65 rule of thumb: 0.60 beat 0.65 at every width and 0.70 was worse
+// than fixed everywhere. ⚠️ It rests on MODELED marks; live reads both sides of the chain (call+put sum
+// ~1.05-1.1 × W, anchor on the cheaper), and that read is what should confirm 0.60 over 0.65 — the gap is
+// worth ~$740k on v6-20. capFrac GATES the trade; it never caps the price.
+//
+// maxItmStrikes 3 — MEASURED as the peak. The ladder saturates at 5 (itm5 == itm6 to the dollar), is
+// effectively saturated at 4, and going deeper than 3 adds ~27 opens out of 20,086 (0.13%) whose
+// risk/reward is the worst of the acceptable set. Beyond 3 the differences are tiny and inconsistent in
+// sign (+7 ret/DD on v7-10, +0.5 on v0-20, −5.7 on v6-20); 2 is clearly worse everywhere.
 const WIDTHS = [
-  { w: 10, shift: 5,  capFrac: 0.65 },
-  { w: 20, shift: 10, capFrac: 0.65 },
-  { w: 40, shift: 20, capFrac: 0.65 },
+  { w: 10, shift: 5,  capFrac: 0.60 },
+  { w: 20, shift: 10, capFrac: 0.60 },
+  { w: 40, shift: 20, capFrac: 0.60 },
 ];
+const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 
 // ── DAY-LOSS GOVERNOR SIZING ────────────────────────────────────────────────────────────────────────
 // TARGET = the ideal max day loss, the SAME $5,000 for every model at every width — the working level the
@@ -180,7 +191,7 @@ function buildVariants() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        spreadWidth: w, spreadShift: shift,
+        spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
       };
       if (capFrac != null) v.capFrac = capFrac;
       if (f.bidirectional) v.bidirectional = true;
@@ -212,7 +223,9 @@ function buildUncapped() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}, UNCAPPED`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        spreadWidth: w, spreadShift: shift,
+        // Same GEOMETRY as the capped sibling — the `-unc` twin isolates the CAPS, so anything that is not
+        // a cap (adaptive placement, the covering policy) must match or the comparison measures two things.
+        spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
         lossTarget: null, lossMax: null, floorOffset: false,   // no governor
         continuousCoverMinLockFrac: minLockFor(f.key, w),      // covering policy is NOT a risk cap — the
         // `-unc` twins isolate the CAPS, so they keep the same covering policy as their capped sibling.
@@ -242,7 +255,9 @@ function buildAtmComparators() {
         variantLabel: `${f.label} $${w} ATM-centered`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → the same 0.65 ceiling
+        // Deliberately NOT adaptive: `-cATM` is the fixed ATM-centered CONTROL the sweep is measured
+        // against, and a control that moves its own strikes is not a control.
+        spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → the debitLimit default
       };
       if (f.bidirectional) v.bidirectional = true;
       if (f.exemptTrendStack) v.exemptTrendStack = true;

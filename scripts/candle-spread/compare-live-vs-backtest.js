@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
-const { makeGeo } = require('./backtest-width');
+const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
 const completeness = require('../../shared/run-completeness.js');
 
@@ -61,7 +61,11 @@ function deployedOpts(v) {
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   // Always explicit — the old conditional let a $20 shift-0 variant fall through to the base engine's own
   // geometry and silently miss changes made here. Same trap as in build-backtest-baselines.js.
-  o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
+  // ADAPTIVE PLACEMENT is the shipped default: walk to the most ITM placement still inside the
+  // ceiling instead of always taking one fixed offset. `-cATM` controls keep the fixed geometry.
+  o.geo = v.adaptiveGeo
+    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
+    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
   return o;
 }
 
