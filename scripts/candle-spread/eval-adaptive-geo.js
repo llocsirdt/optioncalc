@@ -53,9 +53,10 @@ for (const name of (process.argv[2] || 'v6-20,v6-40,v4-20,v9-20').split(',')) {
   };
   const cfgs = [
     ['fixed short-ATM', makeGeo({ width: W, shift: W / 2, capFrac: 0.8 })],
-    ['adaptive 0.65', makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: 0.65, maxItmStrikes: 3 })],
-    ['adaptive 0.60', makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: 0.60, maxItmStrikes: 3 })],
-    ['adaptive 0.70', makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: 0.70, maxItmStrikes: 3 })],
+    // env FRACS trims the sweep (e.g. FRACS=0.60) — a full 4-geometry sweep over every variant does not fit
+    // in memory alongside other processes, and once the shape is known only the contenders need re-running.
+    ...(process.env.FRACS || '0.65,0.60,0.70').split(',').map((f) => Number(f)).filter((f) => f > 0)
+      .map((f) => [`adaptive ${f.toFixed(2)}`, makeAdaptiveGeo({ width: W, incr: 10, maxDebitFrac: f, maxItmStrikes: 3 })]),
   ];
   let base = null;
   for (const [lbl, geo] of cfgs) {

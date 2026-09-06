@@ -74,7 +74,76 @@ function optsFor(v, onDecline) {
 }
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
 
+// LADDER mode: the user's model is that the bump is driven by the UNDERLYING'S MOVE, not the clock —
+// strikes are $10 apart, ~5 points of movement justifies bumping the offer, and by 10 points you are in
+// the next strike range anyway. The 922-day history has no full 1m series (only one 1m candle per 5m
+// mark), so a per-30s ladder cannot be replayed. What IS answerable, and is the thing the ladder is
+// really asking, is: HOW DOES FILL RATE MOVE WITH THE PRICE WE WILL PAY — and is RE-STRIKING one strike
+// out better than paying up, which is the user's own suggestion (a strike further out often costs less
+// than the original attempt).
+const LADDER = process.argv.includes('--ladder');
+const RUNGS = [0.60, 0.625, 0.65, 0.675, 0.70];   // fractions of width we would pay
+const INCR = 10;                                   // strike grid
+
 const RUNS = buildRuns().filter((v) => (ONLY ? v.variant === ONLY : /^v[0-9]-(10|20|40)$/.test(v.variant)));
+
+// Would a resting order at `limit` on `legs` fill later in this session? Returns the bar index or null.
+function fillsAt(day, from, legs, limit, useSkew) {
+  for (let j = from + 1; j < day.bars.length; j++) {
+    const bar = day.bars[j], px = priceOf(bar);
+    if (!px || !(px.close > 0)) continue;
+    const tau = bs.tauFromTime(bar.dt);
+    if (!(tau > 0)) break;
+    const S = EXTREME ? px.low : px.close;
+    if (legsMark(legs, S, tau, volFor(bar, px.close, tau, useSkew)) <= limit) return j;
+  }
+  return null;
+}
+// One strike further OUT of the money (cheaper): a bull call spread moves both strikes UP, a bear put
+// spread moves both DOWN. This is the "cancel and open at the next strike" alternative to paying up.
+function shiftLegs(legs, side) {
+  const d = side === 'bull' ? INCR : -INCR;
+  return legs.map((l) => ({ ...l, strike: l.strike + d }));
+}
+
+if (LADDER) {
+  console.log('LADDER — of the opens the ceiling declines, what fills at each price we are willing to pay,');
+  console.log('and how the RE-STRIKE (one strike further out) compares.\n');
+  for (const v of RUNS) {
+    const width = v.spreadWidth || 20;
+    let declined = 0;
+    const hit = RUNGS.map(() => 0);
+    let reStrikeCheaper = 0, reStrikeInRange = 0, reStrikeFills = 0;
+    const reMarks = [];
+    for (const day of days) {
+      const pending = [];
+      runDay5m(day.bars, wrap(v), optsFor(v, (d) => pending.push(d)));
+      for (const d of pending) {
+        declined++;
+        RUNGS.forEach((f, k) => { if (fillsAt(day, d.i, d.legs, width * f, !!v.ivSkew) != null) hit[k]++; });
+        // Re-strike, priced AT THE MOMENT WE DECLINED (that is when we would switch).
+        const bar = day.bars[d.i], px = priceOf(bar), tau = bs.tauFromTime(bar.dt);
+        if (!(tau > 0) || !px) continue;
+        const alt = shiftLegs(d.legs, d.side);
+        const m = legsMark(alt, px.close, tau, volFor(bar, px.close, tau, !!v.ivSkew));
+        if (!(m > 0)) continue;
+        reMarks.push(m / width);
+        if (m < d.markAtDecline) reStrikeCheaper++;
+        if (m <= width * 0.65) { reStrikeInRange++; reStrikeFills++; }        // in range = fillable at the mark now
+        else if (fillsAt(day, d.i, alt, width * 0.65, !!v.ivSkew) != null) reStrikeFills++;
+      }
+    }
+    const pct = (n) => (declined ? Math.round(n / declined * 100) : 0) + '%';
+    const med = (a) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : 0);
+    console.log(`${v.variant}  (${declined.toLocaleString()} declined opens, median mark at decline 68% of $${width})`);
+    console.log('  pay up to:   ' + RUNGS.map((f) => `${Math.round(f * 100)}%`.padStart(7)).join(''));
+    console.log('  fills:       ' + hit.map((h) => pct(h).padStart(7)).join(''));
+    console.log(`  RE-STRIKE one out: cheaper than the original ${pct(reStrikeCheaper)} · already <=65% ${pct(reStrikeInRange)}`
+      + ` · ultimately fills ${pct(reStrikeFills)} · median price ${Math.round(med(reMarks) * 100)}% of width`);
+    console.log('');
+  }
+  process.exit(0);
+}
 console.log(`\nDECLINED OPENS — would a resting bid at the ceiling have filled?`);
 console.log(`${days.length} days · ${path.basename(DIR)} · fill rule: ${EXTREME ? 'INTRABAR LOW (optimistic)' : 'BAR CLOSE (conservative, matches live)'}\n`);
 console.log('variant'.padEnd(10) + 'declined'.padStart(10) + 'wouldFill'.padStart(11) + 'fill%'.padStart(8)
