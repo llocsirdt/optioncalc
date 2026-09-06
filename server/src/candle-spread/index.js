@@ -213,27 +213,11 @@ function buildVariants() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
-        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
-        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
-        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
-        // is precisely the consequence of removing the cap, which is what the twin exists to show.
-        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
-        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
-        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
-        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
-        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
-        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
-        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
-        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
-        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
-        ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
-        ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
-        ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these).
+        // Cover POLICY + GEOMETRY travel with the family — v0-v3 differ on exactly these. The `-unc`
+        // twins take them too: a twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have, so on
+        // those the risk arm can never trip and covering is opportunity-only — not a mismatch, but the
+        // direct consequence of removing the cap, which is what the twin exists to show.
         ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
@@ -269,11 +253,11 @@ function buildUncapped() {
         variantLabel: `${f.label} $${w}${shift ? ' short-ATM' : ''}, UNCAPPED`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
-        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
-        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
-        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
-        // is precisely the consequence of removing the cap, which is what the twin exists to show.
+        // Cover POLICY + GEOMETRY travel with the family — v0-v3 differ on exactly these. The `-unc`
+        // twins take them too: a twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have, so on
+        // those the risk arm can never trip and covering is opportunity-only — not a mismatch, but the
+        // direct consequence of removing the cap, which is what the twin exists to show.
         ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
@@ -309,11 +293,11 @@ function buildAtmComparators() {
         variantLabel: `${f.label} $${w} ATM-centered`,
         signalFn: f.signalFn, signalCfg: f.signalCfg,
         coverSelector: f.coverSelector, coverFillModel: f.coverFillModel,
-        // Cover POLICY + GEOMETRY travel with the family (v0-v3 differ on exactly these). The `-unc`
-        // twins take them too: the twin isolates the CAPS, so anything that is not a cap must match its
-        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have — so on
-        // those the risk arm can never trip and covering is opportunity-only. That is not a mismatch; it
-        // is precisely the consequence of removing the cap, which is what the twin exists to show.
+        // Cover POLICY + GEOMETRY travel with the family — v0-v3 differ on exactly these. The `-unc`
+        // twins take them too: a twin isolates the CAPS, so anything that is not a cap must match its
+        // capped sibling. Note the risk gate reads lossTarget, which a `-unc` twin does not have, so on
+        // those the risk arm can never trip and covering is opportunity-only — not a mismatch, but the
+        // direct consequence of removing the cap, which is what the twin exists to show.
         ...(f.coverGeometry ? { coverGeometry: f.coverGeometry } : {}),
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),

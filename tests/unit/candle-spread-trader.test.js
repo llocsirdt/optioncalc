@@ -304,5 +304,50 @@ console.log('\ncandle-spread trader — continuous covering');
     assert.strictEqual(fixed.itmStrikes, undefined, 'fixed placement reports no adaptive metadata');
   });
 
+  // ── COVER GEOMETRY + RISK ARMING (live port) ────────────────────────────────────────────────────
+  // These must agree with the backtest's shared helpers, because a live/backtest divergence here means
+  // v1-v3 trade differently from the baselines that describe them.
+  const gcfg = (over) => ({ ...cfg(), capFrac: 0.65, spreadWidth: W, ...over });
+  const POS = () => ({ id: 'p1', side: 'bull', shortStrike: UNDER, limit: 11, filled: true, quantity: 1 });
+
+  test('tent geometry is IDENTICAL to the previous tent-only path (v0 untouched)', () => {
+    const a = trader.selectCoverGeometric(POS(), gcfg({ coverGeometry: 'tent' }), makeGetLeg(UNDER + 40), UNDER + 40);
+    const b = trader.selectCoverFixedMark(POS(), gcfg(), makeGetLeg(UNDER + 40));
+    assert.deepStrictEqual(a.legs, b.legs, 'legs must match the tent path exactly');
+    assert.strictEqual(a.limit, b.limit);
+  });
+
+  test('geometries walk the cover toward the money, in order', () => {
+    const under = UNDER + 60, g = makeGetLeg(under);
+    const shorts = ['tent', 'halfway', 'underlying'].map((geometry) => {
+      const p = trader.selectCoverGeometric(POS(), gcfg({ coverGeometry: geometry }), g, under);
+      assert.ok(!p.error, geometry + ': ' + p.error);
+      return p.legs.find((l) => l.side === 'short').strike;
+    });
+    assert.ok(shorts[0] < shorts[1] && shorts[1] <= shorts[2], `tent<halfway<=underlying, got ${shorts}`);
+    assert.strictEqual(shorts[0], UNDER, 'tent shares the position short strike');
+  });
+
+  test('a geometry cover is cheaper the closer it sits to the tent', () => {
+    const under = UNDER + 60, g = makeGetLeg(under);
+    const tent = trader.selectCoverGeometric(POS(), gcfg({ coverGeometry: 'tent' }), g, under);
+    const atm = trader.selectCoverGeometric(POS(), gcfg({ coverGeometry: 'underlying' }), g, under);
+    assert.ok(atm.mark > tent.mark, `at-the-money cover should cost more (${atm.mark} vs ${tent.mark})`);
+    assert.ok(atm.peakExtra >= tent.peakExtra, 'and buy more terminal upside');
+  });
+
+  test('live geometry agrees with the shared helper the backtest uses', () => {
+    const SL = require('../../server/src/candle-spread/spread-logic');
+    const under = UNDER + 60;
+    for (const geometry of ['tent', 'halfway', 'underlying']) {
+      const p = trader.selectCoverGeometric(POS(), gcfg({ coverGeometry: geometry }), makeGetLeg(under), under);
+      const want = SL.coverLegsAtShort('bull', SL.coverShortFor(geometry, 'bull', UNDER, under, INCR), W);
+      assert.deepStrictEqual(
+        p.legs.map((l) => l.side + l.type + l.strike).sort(),
+        want.map((l) => l.side + l.type + l.strike).sort(),
+        geometry + ': live legs must match the shared helper');
+    }
+  });
+
   console.log(`\n${passed} passed\n`);
 })();

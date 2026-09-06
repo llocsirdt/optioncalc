@@ -463,11 +463,32 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // different strategy from the one the baselines describe.
   if (ported && deps.continuousCover === true && cfg.coverFillModel === 'resting') {
     const minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+    // ARMING (deps.continuousCoverArmFrac / continuousCoverOppRatio) — unset keeps the original
+    // behaviour: rest a cover on EVERY position the instant it opens, which maximises locking but decides
+    // each position's outcome at birth. When set, arm on either:
+    //   (a) BOOK RISK — the day's worst case has reached armFrac x lossTarget, the governor's own measure;
+    //   (b) OPPORTUNITY — this cover is cheap enough to lock at least oppRatio x what it costs. Without
+    //       (b) a couple of deep winners can sit uncovered through a whole reversal purely because total
+    //       book risk never approached the target; lockDeepWinners does not catch that, being gated on the
+    //       floor ALREADY breaching lossTarget.
+    const armFrac = deps.continuousCoverArmFrac, oppRatio = deps.continuousCoverOppRatio;
+    const armedByRisk = armFrac == null
+      || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
     for (const pos of st.positions) {
       if (!pos.filled || pos.covered || pos.pendingCover) continue;
       if (round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
-      const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);
-      if (!plan.error) await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock);
+      const plan = selectCoverGeometric(pos, cfg, deps.getLeg, underlying);
+      if (plan.error) continue;
+      if (!armedByRisk) {
+        // Not armed by book risk — take it only if it stands on its own as a trade.
+        if (oppRatio == null) continue;
+        const cost = plan.mark;
+        const locked = cfg.spreadWidth - pos.limit - cost;
+        if (!(cost > 0) || locked < oppRatio * cost) continue;
+        decisions.push({ action: 'cover-arm-opportunity', positionId: pos.id, cost, locked: round2(locked),
+          ratio: round2(locked / cost), geometry: plan.geometry });
+      }
+      await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock);
     }
   }
 
@@ -777,6 +798,28 @@ function selectCoverFixedMark(pos, cfg, getLeg) {
   return plan;
 }
 
+// GEOMETRY-AWARE cover plan — the live counterpart of the backtest's coverGeometry. WHERE the offsetting
+// spread sits is the axis v0-v3 differ on:
+//   'tent'       shares the covered position's short strike (butterfly: one peak, cheapest cover,
+//                biggest locked floor, least upside) — identical to selectCoverFixedMark, so v0 is
+//                untouched and 'tent' is a no-op relative to the previous behaviour;
+//   'halfway'    puts the cover's short midway to the underlying (condor: a plateau, more terminal
+//                potential for a dearer cover);
+//   'underlying' puts it at the money (widest tent, dearest cover, and far enough out it can push
+//                open+cover past the width and forfeit the guaranteed floor — the trade being measured).
+// priceCoverCandidate takes a LONG strike, and candidateCoverLegs' convention puts the cover's short at
+// long∓width, so the long is the geometry's short strike offset by the width on the covered side.
+function selectCoverGeometric(pos, cfg, getLeg, underlying) {
+  const geometry = cfg.coverGeometry || 'tent';
+  if (geometry === 'tent' || !(underlying > 0)) return selectCoverFixedMark(pos, cfg, getLeg);
+  const coverShort = L.coverShortFor(geometry, pos.side, pos.shortStrike, underlying, cfg.strikeIncrement);
+  const longStrike = pos.side === 'bull' ? coverShort + cfg.spreadWidth : coverShort - cfg.spreadWidth;
+  const plan = priceCoverCandidate(pos.side, pos, longStrike, cfg, getLeg);
+  if (plan.error) return { error: plan.error, positionId: pos.id };
+  plan.payload = buildOrderPayload(plan.resolved, plan.limit, cfg.quantity, 'DEBIT');
+  return plan;
+}
+
 // Weight on retained upside vs guaranteed floor; scaled up when the reversal is high-conviction
 // (prior candle closed outside its Bollinger band).
 function upsideLambda(cfg, ctx) {
@@ -1014,6 +1057,8 @@ module.exports = {
   buildOpen,
   buildOpenAdaptive,
   buildOpenAtStrikes,
+  selectCoverGeometric,
+  selectCoverFixedMark,
   buildCover,
   resolveLegs,
   selectCovers,
