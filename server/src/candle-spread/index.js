@@ -126,9 +126,8 @@ const FAMILIES = [
   { key: 'v3', label: 'classic tent, risk-armed', signalFn: at15(classicSignal), signalCfg: {}, coverSelector: 'fixed', coverFillModel: 'resting', ...RISK_ARMED, coverGeometry: 'tent' },
   { key: 'v4', label: 'multiTF-overext', signalFn: at15(v4Signal), signalCfg: {}, ...PORTED_COVER },
   { key: 'v5', label: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
-  // v6 is ALSO the live-pipe harness: only its $20 variant (testAtBase + width 20) sends REAL unfillable
-  // test orders (dryRun:'test') + auto-cancels when armed; the $10/$40 siblings stay pure paper. INERT
-  // until all three gates: isProd + CANDLE_SPREAD_LIVE=true + that dryRun:'test'.
+  // NOTE `testAtBase` is VESTIGIAL — arming is decided solely by ARMED_VARIANT (env, defaulting to
+  // v7-10). Nothing reads this flag; it is left only so the v6 family definition matches its history.
   // All families inherit the day-loss governor from BASE_RUNS ($5k target, width-scaled max) plus the
   // continuous-covering policy; each also gets an uncapped `-unc` twin via buildUncapped() below.
   { key: 'v6', label: '5m-harness', signalFn: v6Signal, signalCfg: { fiveMin: true }, testAtBase: true, ...PORTED_COVER },
@@ -183,7 +182,16 @@ const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 // default config here is inert in dev and inert in prod until the master switch is deliberately on.
 // An unknown variant name arms nothing and is logged loudly at startup rather than silently falling back,
 // because a typo silently arming the WRONG strategy is the failure mode that matters.
-const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v6-20';
+// Default moved v6-20 -> v7-10 on 2026-09-06. v7-10 beats v6-20 on EVERY axis in the 765-day baselines:
+// total $2,792,160 vs $2,613,633, worst day -$5,990 vs -$7,000, maxDD30 -$20,324 vs -$28,933, ret/DD
+// 137.4 vs 90.3, win 72% vs 64% — while needing roughly HALF the capital (peak $2,041 vs $3,916, ROC 1.8
+// vs 0.9). It is also the variant where the governor is demonstrably load-bearing: uncapped it makes
+// $3,045,845 with a -$11,120 worst day, so the cap nearly halves the worst day for 8% of the total.
+// Its -$5,990 worst is above the $5,000 lossTarget but inside its $6,000 lossMax and well within the
+// stated $5-10k daily tolerance. WATCH: v7 is the be-wrong (bidirectional) signal, the family that
+// suffered in the mid-Feb chop stretch, and it trades ~35/day against v6-20's 26 — more order flow
+// through the pipe, which is what a paper session should be stressing.
+const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
 const LOSS_TARGET = 5000;
