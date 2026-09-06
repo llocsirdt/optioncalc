@@ -70,8 +70,9 @@
   #incompleteBanner b { color:#8a2a2a; }
   .cell .cname .hmax i { font-style:normal; font-weight:700; }
   .cell .cname .hmax .p { color:var(--profit); } .cell .cname .hmax .l { color:var(--loss); }
-  .cell .chartwrap { position:relative; width:174px; padding-bottom:15px; }
-  .cell .nowlbl { position:absolute; bottom:0; transform:translateX(-50%); font:8px ui-monospace, monospace; text-align:center; line-height:1.05; color:#555; background:rgba(252,252,252,0.82); padding:0 1px; pointer-events:none; white-space:nowrap; }
+  /* margin-top pushes the plot off the name row — it was sitting right under it. */
+  .cell .chartwrap { position:relative; width:174px; padding-bottom:17px; margin-top:10px; }
+  .cell .nowlbl { position:absolute; bottom:0; transform:translateX(-50%); font:9.5px ui-monospace, monospace; text-align:center; line-height:1.1; color:#444; background:rgba(252,252,252,0.82); padding:0 1px; pointer-events:none; white-space:nowrap; }
   .cell .nowlbl i { display:block; font-weight:700; }
   .cell .cmp { font:9px ui-monospace, monospace; color:#666; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cell .cmp .b { color:#3b82c4; }
@@ -82,7 +83,9 @@
   .cell .axis { font:8.5px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; margin-top:1px; }
   .cell .axis .cur { color:#666; font-weight:700; }
   .cell .term { font:11px ui-monospace, monospace; font-weight:700; text-align:center; margin-top:1px; }
-  .cell .sel { font:9px ui-monospace, monospace; color:#666; min-height:12px; margin-top:1px; text-align:center; }
+  /* The click readout (projected close + P&L) — sized up alongside the "now" label, since both are
+     numbers you actually read rather than chrome. */
+  .cell .sel { font:10.5px ui-monospace, monospace; color:#555; min-height:14px; margin-top:2px; text-align:center; }
   svg { cursor:crosshair; }
   /* The header row is position:sticky, but sticky resolves against the nearest SCROLLING ancestor — and
      .wrap already sets overflow:auto, which claims that role without ever scrolling vertically, so the
@@ -109,7 +112,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.34</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.35</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -293,6 +296,17 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
       + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="8" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.4" paint-order="stroke">${txt}</text>`;
   };
   const btLines = bt ? btEl(bt.worst, 'var(--loss)', fmtN(bt.worst)) + btEl(bt.best, 'var(--profit)', fmtN(bt.best)) : '';
+  // THIS BOOK's max profit / max loss, on the RIGHT edge at the height of the peak and the valley — the
+  // mirror of the dashed backtest averages on the left, so "mine vs typical" reads across the chart at a
+  // glance instead of between the header and the plot.
+  const exEl = (y, color, txt) => {
+    if (y == null || !Number.isFinite(y)) return '';
+    const ly = Math.max(9, Math.min(CH - 2, Y(y) - 2));
+    return `<text x="${CW - 2}" y="${ly.toFixed(1)}" text-anchor="end" font-size="9.5" font-weight="700"`
+      + ` font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.6" paint-order="stroke">${txt}</text>`;
+  };
+  const exLines = exEl(d.hi, 'var(--profit)', d.unboundedGain ? '+∞' : usdK(d.hi))
+                + exEl(d.lo, 'var(--loss)', d.unboundedLoss ? '−∞' : usdK(d.lo));
   // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
   const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
   const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
@@ -330,6 +344,7 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
     <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}" stroke="var(--zero)" stroke-width="1" stroke-dasharray="3 2"/>
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
+    ${exLines}
     ${dB && dB.curve ? `<polyline points="${dB.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="#6ab0f3" stroke-width="1.2" stroke-dasharray="4 2" opacity="0.95"/>` : ''}
     ${curLine}${cursor}
   </svg>`;
@@ -393,7 +408,7 @@ function render() {
       const wStr = d.unboundedLoss ? '−∞' : usd(d.worst);
       const bStr = d.unboundedGain ? '+∞' : usd(d.best);
       // Header: strategy id (left) + the book's max terminal profit / max loss (right).
-      const hmax = `<span class="hmax"><i class="p">${d.unboundedGain ? '+∞' : usdK(d.best)}</i> <i class="l">${d.unboundedLoss ? '−∞' : usdK(d.worst)}</i></span>`;
+      const hmax = '';   // max profit / max loss now live ON the chart, at the peak and the valley
       // Under-the-line "now" label: current underlying price + its terminal P&L, positioned at the gray line.
       let nowlbl = '';
       if (d.underlying != null) {
