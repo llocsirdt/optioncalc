@@ -37,7 +37,14 @@ const INTRADAY_IV = !process.argv.includes('--noIntradayIV');
 // A NON-DEFAULT dataset writes its own baselines file. The NQ history is the canon the live runs are
 // graded against; an NDX validation run must never overwrite it just because it was pointed elsewhere.
 const DEFAULT_DIR = path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
-const suffix = path.resolve(DIR) === path.resolve(DEFAULT_DIR) ? '' : '-' + path.basename(DIR).replace(/^backtest-data-5m-/, '');
+// --noWings: build the WINGS-OFF CONTROL for the whole roster. Wings are on for every variant, so the
+// committed baseline alone cannot say what they are worth — "this run vs the previous run" only shows the
+// variants that changed BETWEEN those runs, which is not the same question. This produces the other arm of
+// the comparison. It writes to its own `-nowings` files and does NOT archive: it is a control, not a
+// baseline, and must never be mistaken for (or overwrite) the real one.
+const NO_WINGS = process.argv.includes('--noWings');
+const suffix = (path.resolve(DIR) === path.resolve(DEFAULT_DIR) ? '' : '-' + path.basename(DIR).replace(/^backtest-data-5m-/, ''))
+  + (NO_WINGS ? '-nowings' : '');
 const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread',
   (INTRADAY_IV ? 'backtest-baselines' : 'backtest-baselines-flativ') + suffix + '.json');
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
@@ -94,8 +101,14 @@ function optsFor(v) {
   if (HAS_PX) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
   // Fail loudly if this variant carries a capability optsFor does not forward — the failure mode that made
   // wings, floorOffset and exemptTrendStack silent no-ops. extraOk lists fields handled under another name.
+  // In the wings-off control the wing flags are deliberately NOT forwarded; declare that to the guard
+  // rather than letting it pass silently, so the omission stays an explicit choice.
+  const WING_KEYS = ['wingConvert', 'wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingBudget',
+    'wingMaxPerDay', 'wingBandSigmas', 'wingOutSteps', 'wingNaked', 'wingUpsideLambda', 'wingTailSigmas'];
+  if (NO_WINGS) for (const k of WING_KEYS) delete o[k];
   VC.assertForwarded(v, Object.keys(o), 'build-backtest-baselines optsFor',
-    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']
+      .concat(NO_WINGS ? WING_KEYS : []));
   return o;
 }
 
@@ -416,6 +429,6 @@ for (const v of Object.values(out.variants)) { delete v.daily; delete v.dates; }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
 console.log('\nwrote', path.relative(process.cwd(), OUT));
 console.log('wrote', path.relative(process.cwd(), CSV), '(aggregate summary block + per-date rows)');
-archiveRun(OUT, CSV, out);
+if (!NO_WINGS) archiveRun(OUT, CSV, out);   // the control is not a baseline — never archive it
 process.exit(anchorOK ? 0 : 2);
 })().catch(e => { console.error('baseline build failed:', e.message); process.exit(1); });

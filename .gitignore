@@ -203,3 +203,8 @@ candle-spread-archive/
 # is regenerable from raw-1m + code → stays ignored.
 signal-lab-data/*
 !signal-lab-data/raw-1m/
+
+# Wings-off CONTROL artifacts (build with `--noWings`). Deliberately NOT committed: a second baseline
+# file sitting next to the real one is a thing to be misread later, and it goes stale the moment any
+# strategy changes. Regenerate it on demand instead.
+server/src/candle-spread/backtest-baselines-nowings.*
