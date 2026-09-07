@@ -181,6 +181,16 @@ function computeVariant(run) {
   const riskScore = Math.round(maxDD30 * widthNorm);
   const efficiency = maxDD30 ? Math.round(s.total / Math.abs(maxDD30) * 10) / 10 : null;   // Calmar-like return/DD
   const returnOnCapital = avgPeakCapital > 0 ? Math.round(s.avgDaily / avgPeakCapital * 1000) / 1000 : null; // daily $/$ peak cap
+  // WING CONVERSION activity, computed OUTSIDE the governor aggregate. The baseline table alone could not
+  // answer "did wings actually run on this variant?" — a row unchanged from the previous build looks the
+  // same whether wings are firing or silently disabled, which is exactly how the ivSkew NaN bug hid. It
+  // must not hang off `gov`, which is null for every `-unc` twin: that reported no wing activity on 30
+  // variants that were in fact running wings.
+  const wingAgg = {
+    count: results.reduce((a, r) => a + ((r.wings && r.wings.count) || 0), 0),
+    spent: results.reduce((a, r) => a + ((r.wings && r.wings.spent) || 0), 0),
+    days: results.filter(r => ((r.wings && r.wings.count) || 0) > 0).length,
+  };
   // GOVERNOR telemetry + the BOUND CHECK that matters: `capExceeded` counts days whose REALIZED terminal
   // came in worse than −lossMax. It must be 0 — that is the whole claim of the governor (the old hardCap
   // could not make it, routinely realizing ~2× the cap). worstHeldFloor = the worst book floor actually
@@ -197,7 +207,7 @@ function computeVariant(run) {
     offsetSpent: results.reduce((a, r) => a + r.governor.offsetSpent, 0),
     opensBlocked: results.reduce((a, r) => a + r.governor.blocked, 0),
   } : null;
-  return { label: run.variantLabel, daily, dates: days.map(d => d.date), ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov };
+  return { label: run.variantLabel, daily, dates: days.map(d => d.date), ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov, wings: wingAgg };
 }
 
 function printRow(run, v) {
@@ -317,6 +327,9 @@ function writeSummaryCsv(file) {
   row('GOV offsets bought', s2 => s2.governor ? s2.governor.offsets : '');
   row('GOV offset spend $', s2 => s2.governor ? s2.governor.offsetSpent : '');
   row('GOV opens blocked', s2 => s2.governor ? s2.governor.opensBlocked : '');
+  row('WING conversions', s2 => s2.wings ? s2.wings.count : '');
+  row('WING spend $', s2 => s2.wings ? Math.round(s2.wings.spent) : '');
+  row('WING days active', s2 => s2.wings ? s2.wings.days : '');
   lines.push('');
   lines.push(['DATE', ...names].join(','));
   const dates = out.variants[names[0]].dates;

@@ -38,9 +38,11 @@ async function check(name, base) {
     }
     const tok = body.schwabToken;
     if (!tok) {
-      // An older build that predates this field. Say so rather than reporting a false all-clear.
-      return { name, base, reachable: true, level: 'warn',
-        summary: 'server is up but /health has no schwabToken block — deploy is older than this check',
+      // An older build that predates this field. Report it, but at INFO — not `warn`. A pending deploy is
+      // not an incident, and raising it hourly is how a monitor teaches people to ignore it. Say plainly
+      // that the token state is UNKNOWN here rather than implying either a problem or an all-clear.
+      return { name, base, reachable: true, level: 'info',
+        summary: 'token state unknown — deploy predates this check (not an error; redeploy to enable)',
         build: body.build && (body.build.commit || body.build.version) };
     }
     const level = tok.state === 'expired' || tok.state === 'missing' ? 'bad'
@@ -65,7 +67,7 @@ async function check(name, base) {
   const rs = await Promise.all([check('LOCAL', LOCAL), check('PROD', PROD)]);
   if (JSON_OUT) { console.log(JSON.stringify({ checkedAt: new Date().toISOString(), results: rs }, null, 2)); }
   else {
-    const icon = { ok: '✅', warn: '⚠️ ', bad: '❌' };
+    const icon = { ok: '✅', info: 'ℹ️ ', warn: '⚠️ ', bad: '❌' };
     console.log(`SCHWAB TOKEN HEALTH — ${new Date().toISOString()}`);
     for (const r of rs) {
       console.log(`${icon[r.level]} ${r.name.padEnd(6)} ${r.summary}`);
@@ -80,7 +82,9 @@ async function check(name, base) {
     const bad = rs.filter(r => r.level === 'bad'), warn = rs.filter(r => r.level === 'warn');
     if (bad.length) console.log(`\nACTION: renew the token — node scripts/renew-schwab-token.js (then set SCHWAB_REFRESH_TOKEN + SCHWAB_REFRESH_TOKEN_ISSUED_AT on EB too).`);
     else if (warn.length) console.log(`\nNo hard failure, but ${warn.map(r => r.name).join(' + ')} needs a look.`);
-    else console.log('\nBoth environments healthy.');
+    else console.log('\nNothing to act on.');
   }
+  // Exit non-zero ONLY for something actionable. `info` (a pending deploy) is deliberately excluded:
+  // an hourly alert nobody can act on is worse than no alert, because it trains the reader to skip it.
   process.exit(rs.some(r => r.level === 'bad' || r.level === 'warn') ? 1 : 0);
 })();

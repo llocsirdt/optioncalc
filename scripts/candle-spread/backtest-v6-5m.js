@@ -932,6 +932,13 @@ function runDay5m(bars, signalFn, opts = {}) {
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
     harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null,
+    // WING CONVERSION telemetry, emitted UNCONDITIONALLY and at the top level. It used to live only
+    // inside the `governor` block, which is null whenever there is no governor — so every `-unc` twin
+    // reported no wing activity at all while actually running wings, and a reader could not tell "wings
+    // did not fire" from "wings were never measured here". Wings are not part of the governor: the two
+    // are independent mechanisms (the governor bounds the floor; wings convert peak into floor), and
+    // tying one's telemetry to the other's existence is what hid this.
+    wings: { count: wingCount, spent: Math.round(wingSpent) },
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null
