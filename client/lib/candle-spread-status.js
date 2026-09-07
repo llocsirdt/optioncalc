@@ -171,7 +171,10 @@
     bannerEl = document.createElement('div');
     bannerEl.id = 'tradabilityBanner';
     bannerEl.setAttribute('role', 'status');
-    bannerEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:none;'
+    // z-index 100, not a maximal value: the banner must sit UNDER the page's own controls (the submit
+    // button in index.html's top-right sat behind it at 99999). It is a full-width fixed bar, so
+    // anything it overlaps it also blocks from being clicked.
+    bannerEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100;display:none;'
       + 'padding:8px 14px;font:600 13px/1.35 system-ui,sans-serif;text-align:center;'
       + 'box-shadow:0 2px 8px rgba(0,0,0,.25);letter-spacing:.2px';
     document.body.insertBefore(bannerEl, document.body.firstChild);
