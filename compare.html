@@ -6,6 +6,9 @@
 <title>Strategy Comparison — Risk Curves</title>
 <script src="shared/market-calendar.js"></script>
 <script src="shared/run-completeness.js"></script>
+<!-- Live-engine status: brings the TRADABILITY banner (market closed / stale feed) onto this page too.
+     The banner self-injects, so no markup is needed here. -->
+<script src="client/lib/candle-spread-status.js"></script>
 <style>
   :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; }
   * { box-sizing: border-box; }
@@ -112,7 +115,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.35</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.36</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>

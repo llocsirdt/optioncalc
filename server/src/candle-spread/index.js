@@ -12,7 +12,9 @@ const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
 const VC = require('./variant-contract');
-const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)   // fails the boot when a variant flag is not forwarded to the engine
+const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)
+// Last tradability verdict, published to /status so the UI can show WHY the engine is standing down.
+let LAST_TRADABILITY = null;   // fails the boot when a variant flag is not forwarded to the engine
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
@@ -656,6 +658,11 @@ async function processGroup(runs, kind) {
     chainSnapshot: trader.snapshotChain(trader.makeLegAccessor(chainData, expiration), underlying,
       sample.strikeIncrement, sample.snapshotStrikes || 16),
   });
+  // Publish the verdict either way, so the UI can show a live "not trading, and here is why" state
+  // rather than the operator having to infer it from an absence of orders. An absence looks identical to
+  // a quiet signal day, which is exactly the confusion that let a whole holiday session go unnoticed.
+  LAST_TRADABILITY = { ...tradeGate, at: Date.now(), mark: markOf(T), markMs: T,
+    symbol: priceSymbol, expiration, underlying };
   if (!tradeGate.ok) {
     // Log once per tick, not per variant, and keep it visible: this is the difference between "we chose
     // not to trade" and "something is broken", and the two must never be confused in the record.
@@ -976,6 +983,16 @@ function status() {
     : liveV.length ? `LIVE-ARMED (real orders: ${liveV.join(',')})`
     : testV.length ? `TEST-ARMED (unfillable paper orders: ${testV.join(',')})`
     : 'ARMED (all dry-run)';
+  // TRADABILITY — surfaced at the top level because "the market is not open / not quoted" is the single
+  // most important thing to see at a glance: it explains an empty session without the operator having to
+  // guess whether the engine is broken, disarmed, or simply looking at a closed tape.
+  const t = LAST_TRADABILITY;
+  const STALE_MS = 20 * 60 * 1000;   // older than a few marks = we are not currently ticking at all
+  const tradability = t
+    ? { ...t, stale: Date.now() - t.at > STALE_MS,
+        blocked: t.ok === false,
+        checkedAgo: Math.round((Date.now() - t.at) / 1000) }
+    : { ok: null, blocked: false, reason: 'not-checked-yet', detail: 'no tick has run since startup', stale: true };
   const tradeDate = todayEST();
   const runs = RUNS.map(run => {
     const rec = store.readRun(store.makeRunId(run.symbol, run.expiration || tradeDate, tradeDate, run.variant));
@@ -1023,7 +1040,7 @@ function status() {
     };
   });
   return {
-    mode, gates, armedVariants: { live: liveV, test: testV },
+    mode, gates, tradability, armedVariants: { live: liveV, test: testV },
     testConfig: { unfillableFrac: TEST_FRAC, cancelAfterMs: TEST_CANCEL_MS, pollMs: ORDER_POLL_MS },
     tradeDate, started, msToNextTick: msToNextBoundary(), runs, serverTime: new Date().toISOString()
   };

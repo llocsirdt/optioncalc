@@ -158,8 +158,70 @@
     return hdr + body + foot;
   }
 
+
+  // ── TRADABILITY BANNER ───────────────────────────────────────────────────────────────────────────
+  // The engine standing down looks EXACTLY like a quiet signal day from the outside: no orders, no
+  // positions, everything green. That ambiguity is why a whole closed-market session (2026-09-07, Labor
+  // Day) ran unnoticed on a frozen underlying. So when the gate trips, say so loudly and say WHY —
+  // a fixed bar across the top of the page, not a subtle badge someone has to go looking for.
+  // Self-injecting so any page that loads this script gets it with no markup of its own.
+  let bannerEl = null;
+  function bannerNode() {
+    if (bannerEl && document.body.contains(bannerEl)) return bannerEl;
+    bannerEl = document.createElement('div');
+    bannerEl.id = 'tradabilityBanner';
+    bannerEl.setAttribute('role', 'status');
+    bannerEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:none;'
+      + 'padding:8px 14px;font:600 13px/1.35 system-ui,sans-serif;text-align:center;'
+      + 'box-shadow:0 2px 8px rgba(0,0,0,.25);letter-spacing:.2px';
+    document.body.insertBefore(bannerEl, document.body.firstChild);
+    return bannerEl;
+  }
+  // Reasons the gate can give, in the operator's language. `bad` = something is wrong and orders would
+  // have been attempted; the closed-market cases are NORMAL and must read as normal, or the banner
+  // becomes noise every weekend and holiday and stops being believed.
+  const GATE_COPY = {
+    'chain-not-quoted': { t: 'MARKET NOT OPEN', tone: 'closed',
+      why: 'the option chain is listed but carries no live quotes' },
+    'no-chain':         { t: 'NO OPTION CHAIN', tone: 'closed',
+      why: 'no chain returned for today\'s expiration' },
+    'stale-price':      { t: 'STALE PRICE FEED', tone: 'bad',
+      why: 'the underlying has not printed recently' },
+    'no-underlying':    { t: 'NO UNDERLYING PRICE', tone: 'bad',
+      why: 'the pricing instrument returned no value' },
+    'not-checked-yet':  { t: 'ENGINE NOT YET TICKED', tone: 'info',
+      why: 'no tick has run since startup' },
+  };
+  const TONES = {
+    closed: ['#4a4f57', '#fff'],                       // normal + expected (holiday/weekend): calm, not alarming
+    bad:    ['#b3261e', '#fff'],                       // something is actually wrong
+    info:   ['#5b6470', '#fff'],
+    stale:  ['#8a6d1f', '#fff'],
+  };
+  function renderBanner(s) {
+    const b = bannerNode();
+    const t = s && s.tradability;
+    // Only speak when the engine is NOT trading. A tradable market needs no announcement.
+    if (!t || (t.ok !== false && t.reason !== 'not-checked-yet')) { b.style.display = 'none'; document.body.style.paddingTop = ''; return; }
+    const copy = GATE_COPY[t.reason] || { t: 'NOT TRADING', tone: 'bad', why: t.detail || t.reason };
+    const tone = t.stale && t.reason !== 'not-checked-yet' ? 'stale' : copy.tone;
+    const when = t.mark ? ` &middot; last checked ${t.mark}` : '';
+    const staleNote = t.stale && t.reason !== 'not-checked-yet'
+      ? ' — and this check is itself stale, so the engine may not be ticking at all' : '';
+    // Set the tone properties directly. Patching cssText with a regex silently did nothing, because the
+    // base style declares no background/color to replace — the banner rendered as dark-on-white.
+    const [bg, fg] = TONES[tone];
+    b.style.background = bg;
+    b.style.color = fg;
+    b.innerHTML = `<b>${copy.t}</b> &mdash; engine is not placing orders: `
+      + `${copy.why}${staleNote}<span style="opacity:.7;font-weight:400">${when}</span>`;
+    b.style.display = 'block';
+    // Push the page down so the bar never covers content.
+    document.body.style.paddingTop = b.offsetHeight + 'px';
+  }
+
   function render(s) {
-    const c = el(); if (!c) return;
+    const c = el(); if (!c) return;   // inline badge only; the banner is rendered separately in poll()
     const gatesOff = [];
     if (!s.gates.isProd) gatesOff.push('not-prod');
     if (!s.gates.liveArmed) gatesOff.push('CANDLE_SPREAD_LIVE off');
@@ -184,8 +246,12 @@
     lastHtml = gridHtml(s, tickMin);   // full grid lives in the click popover
     c.title = `${s.mode} · next tick ~${tickMin}m · ${s.tradeDate} — click for the strategy grid`;
 
+    // The inline badge carries it as well, so it is visible even when the page is scrolled or the
+    // banner has been pushed off by another fixed element.
+    const blocked = s.tradability && s.tradability.ok === false;
     c.innerHTML =
-      `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`
+      (blocked ? `<span style="background:#b3261e;color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif;margin-right:4px">NOT TRADING</span>` : '')
+      + `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`
       + (inline ? `<span style="font:11px monospace;color:#999"> ${inline}</span>` : '')
       + `<span style="font:11px monospace;color:#bbb"> · ~${tickMin}m</span>`;
 
@@ -194,13 +260,16 @@
   }
 
   async function poll() {
-    const c = el(); if (!c) return;
+    // NOTE: the inline badge element is OPTIONAL. compare.html loads this script for the tradability
+    // banner alone and has no #csEngineStatus, so bailing out here would silently disable the banner on
+    // exactly the page where an operator is comparing live runs against the backtest.
+    const c = el();
     try {
       const r = await fetch(`${apiBase()}/api/v1/candle-spread/status`, { cache: 'no-store' });
-      if (r.ok) render(await r.json());
-      else c.innerHTML = `<span style="font:11px monospace;color:#c0392b">engine status ${r.status}</span>`;
+      if (r.ok) { const s = await r.json(); renderBanner(s); render(s); }
+      else if (c) c.innerHTML = `<span style="font:11px monospace;color:#c0392b">engine status ${r.status}</span>`;
     } catch (e) {
-      c.innerHTML = `<span style="font:11px monospace;color:#999">engine status: offline</span>`;
+      if (c) c.innerHTML = `<span style="font:11px monospace;color:#999">engine status: offline</span>`;
     }
   }
 
