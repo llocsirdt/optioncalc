@@ -393,5 +393,64 @@ console.log('\ncandle-spread trader — continuous covering');
     assert.strictEqual(await trader.buyFloorOffsets(st, cfg(), deps, [], '09/04 12:00', 1000, false), 0);
   });
 
+  // ── WING CONVERSION (peak -> floor) ─────────────────────────────────────────────────────────────
+  // The mirror of floorOffset: that repairs a floor through the target, this banks one already good. Its
+  // failure mode is silence — it did nothing for a week in the backtest because of a NaN band — so these
+  // assert it actually fires and actually lifts the floor.
+  const wingBook = () => {
+    // A tall narrow tent: several covered-ish bulls making a peak near spot with wings falling away.
+    const ps = [];
+    for (let i = 0; i < 5; i++) ps.push({ id: 'w' + i, filled: true, side: 'bull', shortStrike: UNDER + 20 + i * INCR,
+      legs: [{ side: 'long', type: 'C', strike: UNDER + i * INCR }, { side: 'short', type: 'C', strike: UNDER + 20 + i * INCR }],
+      limit: 11, quantity: 1, covered: false, pendingCover: null });
+    return { positions: ps, realizedPnl: 0 };
+  };
+  const A15 = { '15m': { bbupper: UNDER + 130, bblower: UNDER - 130, close: UNDER } };
+  // A fixed intraday instant so tau (and therefore the band) is deterministic rather than depending on
+  // when the suite happens to run — the failure mode that a zero band hides.
+  const NOW = Date.UTC(2026, 8, 4, 15, 0, 0);   // 11:00 ET, 2026-09-04
+
+  await testAsync('wings fire on a tall tent and LIFT the floor', async () => {
+    const st = wingBook();
+    const sent = [];
+    const deps = { getLeg: makeGetLeg(UNDER + 40), underlying: UNDER + 40, A: A15, wingConvert: true,
+      wingMinRatio: 0.1, wingBudgetFrac: 0.5, wingNaked: true, wingUpsideLambda: 1, nowMs: NOW,
+      placeOrder: async (p, m) => { sent.push(m); return { status: 'simulated', filled: true }; } };
+    const RCm = require('../../server/src/candle-spread/risk-curve');
+    const before = RCm.bookFloor(st.positions, null, 10);
+    const decisions = [];
+    const n = await trader.convertWings(st, cfg(), deps, decisions, '09/04 14:30');
+    const after = RCm.bookFloor(st.positions, null, 10);
+    assert.ok(n > 0, 'should buy at least one wing on a tall tent');
+    assert.ok(after > before, `the floor must IMPROVE (${before} -> ${after})`);
+    assert.ok(sent.every((m) => m.kind === 'wing'), 'orders tagged as wing');
+    assert.ok(decisions.some((d) => d.action === 'wing'), 'logged for the run record');
+  });
+
+  await testAsync('the time gate holds wings back until it opens', async () => {
+    const mk = () => ({ getLeg: makeGetLeg(UNDER + 40), underlying: UNDER + 40, A: A15, wingConvert: true,
+      wingMinRatio: 0.1, wingBudgetFrac: 0.5, wingAfterMin: 840, nowMs: NOW, placeOrder: async () => ({ filled: true }) });
+    assert.strictEqual(await trader.convertWings(wingBook(), cfg(), mk(), [], '09/04 10:00'), 0, 'before 14:00');
+    assert.ok(await trader.convertWings(wingBook(), cfg(), mk(), [], '09/04 15:00') >= 0, 'after 14:00 is allowed to run');
+  });
+
+  await testAsync('no peak worth converting => no premium spent', async () => {
+    // A single naked position has no tent to convert; budget is a fraction of the peak, so it is zero.
+    const st = { positions: [{ id: 'p1', filled: true, side: 'bull', shortStrike: UNDER,
+      legs: [{ side: 'long', type: 'C', strike: UNDER - W }, { side: 'short', type: 'C', strike: UNDER }],
+      limit: 18, quantity: 1, covered: false, pendingCover: null }], realizedPnl: 0 };
+    const sent = [];
+    const deps = { getLeg: makeGetLeg(UNDER), underlying: UNDER, A: A15, wingConvert: true, wingMinRatio: 3, nowMs: NOW,
+      placeOrder: async (p, m) => { sent.push(m); return { filled: true }; } };
+    await trader.convertWings(st, cfg(), deps, [], '09/04 15:00');
+    assert.strictEqual(sent.length, 0, 'nothing bought without a peak to convert');
+  });
+
+  await testAsync('wings are inert unless the variant enables them', async () => {
+    const deps = { getLeg: makeGetLeg(UNDER + 40), underlying: UNDER + 40, A: A15, nowMs: NOW,
+      placeOrder: async () => { throw new Error('must not send'); } };
+    assert.strictEqual(await trader.convertWings(wingBook(), cfg(), deps, [], '09/04 15:00'), 0);
+  });
+
   console.log(`\n${passed} passed\n`);
 })();

@@ -18,6 +18,8 @@ const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
+const WC = require('./wing-convert');   // shared peak->floor wing planner (same module the backtest uses)
+const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
@@ -439,6 +441,100 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
   return bought;
 }
 
+// WING CONVERSION (deps.wingConvert) — the live port. Turns PEAK into FLOOR: late in a good day the book
+// is a tall narrow tent, and a cheap OTM wing on the declining side lifts that wing for a premium that
+// costs nothing at the peak. It is the opposite trigger to floorOffset — that repairs a BAD floor, this
+// banks a GOOD one — and the constructive answer to "freeze once locked": it banks floor WITHOUT stopping.
+//
+// Measured over 765 days: ret/DD improves on 7 of 8 $10 variants and the premium pays for itself, with the
+// clear, split-sample-stable gain on the $20 book (v6-20 +$33,929 in the first half, +$30,816 in the
+// second). The candidate set includes NAKED longs — a long option is a spread whose short strike went to
+// infinity — and the score carries an upside term, because floor-lift-per-dollar is structurally blind to
+// the uncapped tail and would never pick one.
+//
+// The band (how far the underlying can plausibly travel by settle) comes from the SAME formula the
+// backtest uses — 15m Bollinger width -> implied vol -> spot·iv·√tau — so live and backtest anchor their
+// wings on the same expected move rather than two different notions of "far".
+async function convertWings(st, cfg, deps, decisions, candleTime) {
+  if (!(deps.wingConvert === true)) return 0;
+  const spot = deps.underlying;
+  const A = deps.A;
+  if (!(spot > 0) || !A || !A['15m'] || !st.positions.length) return 0;
+  const nowMin = etMinutesOf(candleTime);
+  if (deps.wingAfterMin && nowMin != null && nowMin < deps.wingAfterMin) return 0;
+  st.wingCount = st.wingCount || 0; st.wingSpent = st.wingSpent || 0;
+  const maxPerDay = deps.wingMaxPerDay != null ? deps.wingMaxPerDay : 6;
+  if (st.wingCount >= maxPerDay) return 0;
+
+  const b = A['15m'];
+  // Time-to-expiry from the CANDLE being processed, not the wall clock. Live they coincide, but a replay
+  // or a test would otherwise price the band at whatever time the process happens to run — and a tau of
+  // ~0 collapses the band to 0, which silently disables wings exactly like the ivSkew NaN did.
+  const tau = bs.tauFromTime(deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()));
+  const iv = bs.ivFromRelBandWidth((b.bbupper - b.bblower) / b.close);
+  const band = Math.round(spot * iv * Math.sqrt(tau) * (deps.wingBandSigmas != null ? deps.wingBandSigmas : 1.5));
+  if (!(band > 0) || !(tau > 0)) return 0;
+
+  // MARKETABLE pricing off the real chain: pay the ask on a long leg, receive the bid on a short. The
+  // backtest approximates this with mid ± slip; here the actual quotes are available, so use them.
+  const price = (type, strike, legSide) => {
+    const q = deps.getLeg(type, strike);
+    if (!q) return null;
+    const px = legSide === 'long' ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid);
+    return px != null ? px : null;
+  };
+  const filled = st.positions.filter((p) => p.filled !== false);
+  const bookView = filled.map((p) => ({ filled: true, legs: p.legs, limit: p.limit, quantity: p.quantity || cfg.quantity,
+    covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
+  const shape = WC.curveShape(bookView, { step: cfg.strikeIncrement });
+  const peakNow = shape ? shape.peak.pnl : 0;
+  // There has to be a peak worth converting before any premium is spent — a small tent can never justify
+  // it, which is what makes this distinct from floorOffset's must-fix mode.
+  const budget = Math.min(deps.wingBudget != null ? deps.wingBudget : Infinity,
+    (deps.wingBudgetFrac != null ? deps.wingBudgetFrac : 0.10) * peakNow);
+  if (!(peakNow > 0) || !(budget > 0)) return 0;
+
+  const plan = WC.planWings(bookView, {
+    spot, band, incr: cfg.strikeIncrement, price, qty: cfg.quantity, step: cfg.strikeIncrement, budget,
+    maxWings: Math.min(3, maxPerDay - st.wingCount),
+    minRatio: deps.wingMinRatio != null ? deps.wingMinRatio : 3,
+    outSteps: deps.wingOutSteps, naked: deps.wingNaked,
+    upsideLambda: deps.wingUpsideLambda, tailSigmas: deps.wingTailSigmas,
+  });
+  if (!plan || !plan.wings.length) return 0;
+
+  let bought = 0;
+  for (const w of plan.wings) {
+    if (deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(w.legs)) continue;
+    const resolved = [];
+    for (const l of w.legs) {
+      const q = deps.getLeg(l.type, l.strike);
+      if (!q || !q.symbol) { resolved.length = 0; break; }
+      resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+    }
+    if (!resolved.length) continue;
+    const limitPx = round2(w.cost);
+    const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
+    const placed = await deps.placeOrder(payload, { kind: 'wing', legs: w.legs, net: 'DEBIT', limit: limitPx, naked: !!w.naked });
+    if (!placed || placed.filled === false) continue;
+    const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost,
+      quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
+    st.positions.push(pos);
+    if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(w.legs);
+    st.wingCount++; st.wingSpent = round2(st.wingSpent + w.cost * 100 * cfg.quantity);
+    bought++;
+    decisions.push({ action: 'wing', id: pos.id, tag: w.tag, naked: !!w.naked, side: w.side,
+      cost: round2(w.cost * 100 * cfg.quantity), ratio: w.ratio, peakNow: round2(peakNow), spentToday: st.wingSpent });
+  }
+  return bought;
+}
+
+// "MM/DD HH:MM" -> minutes from ET midnight, for the wing time gate.
+function etMinutesOf(candleTime) {
+  const m = /(\d{1,2}):(\d{2})\s*$/.exec(String(candleTime || ''));
+  return m ? (+m[1]) * 60 + (+m[2]) : null;
+}
+
 // --- Core per-tick sequence (testable) ------------------------------------
 // deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
 // async because placeOrder may send a real order to Schwab (awaited network call).
@@ -715,6 +811,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossMax, true);
     }
   }
+  // WING CONVERSION runs after the reduction ladder and is its mirror image: the ladder repairs a floor
+  // that is through the target, this banks a floor that is already good. Deliberately NOT gated on the
+  // governor — a book can be worth converting while nowhere near the cap, which is the case floorOffset
+  // structurally cannot reach.
+  await convertWings(st, cfg, deps, decisions, candleTime);
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
@@ -1154,6 +1255,7 @@ module.exports = {
   selectCoverGeometric,
   selectCoverFixedMark,
   buyFloorOffsets,
+  convertWings,
   buildCover,
   resolveLegs,
   selectCovers,

@@ -157,6 +157,17 @@ const FAMILIES = [
 // effectively saturated at 4, and going deeper than 3 adds ~27 opens out of 20,086 (0.13%) whose
 // risk/reward is the worst of the acceptable set. Beyond 3 the differences are tiny and inconsistent in
 // sign (+7 ret/DD on v7-10, +0.5 on v0-20, −5.7 on v6-20); 2 is clearly worse everywhere.
+// WING CONVERSION — peak->floor, enabled on the WIDER books only. Split-sample stable exactly where the
+// cap binds: v6-20 gained +$33,929 in the first half of the history and +$30,816 in the second, ~10% apart.
+// The $10 books gain far less (v7-10 +$6,158 on $2.79M = 0.2%, and its two halves disagree in sign), and
+// their wings are already cheap enough that the cap rarely matters — so the ARMED variant is deliberately
+// left untouched, where stability matters most and the gain is noise.
+// Shape: NAKED longs allowed with the upside term on, but the short leg NOT swept outward. That arm had the
+// best ret/DD on both variants tested (v6-20 100.1, v7-10 144.4) — keep the cheap anchor-pinned spreads as
+// the floor workhorses and let an uncapped long compete only when the tail justifies it.
+const WINGS = { wingConvert: true, wingMinRatio: 3, wingAfterMin: 0, wingBudgetFrac: 0.10,
+  wingNaked: true, wingUpsideLambda: 1.0 };
+
 const WIDTHS = [
   { w: 10, shift: 5,  capFrac: 0.60 },
   { w: 20, shift: 10, capFrac: 0.60 },
@@ -242,6 +253,7 @@ function buildVariants() {
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
+        ...(w >= 20 ? WINGS : {}),
       };
       if (capFrac != null) v.capFrac = capFrac;
       if (f.bidirectional) v.bidirectional = true;
@@ -598,6 +610,12 @@ async function processGroup(runs, kind) {
         // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
         // which is exactly why the omission was easy to miss.
         continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
+        // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
+        // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
+        wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
+        wingBudgetFrac: run.wingBudgetFrac, wingBudget: run.wingBudget, wingMaxPerDay: run.wingMaxPerDay,
+        wingBandSigmas: run.wingBandSigmas, wingOutSteps: run.wingOutSteps, wingNaked: run.wingNaked,
+        wingUpsideLambda: run.wingUpsideLambda, wingTailSigmas: run.wingTailSigmas,
         comboOrders: run.comboOrders, comboSlip: run.comboSlip,   // 4-leg atomic cover+open (default off)
         capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
         enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
