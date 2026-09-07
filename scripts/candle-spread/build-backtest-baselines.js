@@ -118,10 +118,23 @@ function stats(vals) {
   const n = vals.length, total = vals.reduce((a, b) => a + b, 0), avg = total / n;
   const variance = vals.reduce((a, b) => a + (b - avg) * (b - avg), 0) / n;
   const sorted = [...vals].sort((a, b) => a - b);
+  // WIN/LOSS SPLIT. avgDaily alone cannot distinguish "wins often, small" from "wins rarely, big" —
+  // two strategies with the same average and the same win rate can have completely different shapes, and
+  // the shape is what determines whether a losing streak is survivable. Flat days (exactly 0 — no trade,
+  // or a true scratch) belong to NEITHER bucket, which is why winRate and negDays need not sum to n.
+  const wins = vals.filter(x => x > 0), losses = vals.filter(x => x < 0);
+  const avgWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : null;
+  const avgLoss = losses.length ? losses.reduce((a, b) => a + b, 0) / losses.length : null;
   return {
     days: n, total: Math.round(total), avgDaily: Math.round(avg), stdevDaily: Math.round(Math.sqrt(variance)),
     median: Math.round(sorted[Math.floor(n / 2)]), worst: Math.round(sorted[0]), best: Math.round(sorted[n - 1]),
-    negDays: vals.filter(x => x < 0).length, winRate: Math.round(vals.filter(x => x > 0).length / n * 100) / 100
+    negDays: losses.length, winRate: Math.round(wins.length / n * 100) / 100,
+    flatDays: n - wins.length - losses.length,
+    avgWin: avgWin == null ? null : Math.round(avgWin),
+    avgLoss: avgLoss == null ? null : Math.round(avgLoss),
+    // Payoff ratio: how many dollars a winning day makes per dollar a losing day costs. Combined with the
+    // win rate this is the whole edge — winRate x avgWin + lossRate x avgLoss must reconstruct avgDaily.
+    payoff: (avgWin != null && avgLoss) ? Math.round(avgWin / Math.abs(avgLoss) * 100) / 100 : null
   };
 }
 
@@ -324,6 +337,10 @@ function writeSummaryCsv(file) {
   row('opens/day', s2 => s2.avgTradesPerDay);
   row('NEG days', s2 => `${s2.negDays}/${days.length}`);
   row('WIN %', s2 => Math.round(s2.winRate * 100) + '%');
+  // The SHAPE of the average: what a good day pays vs what a bad day costs. avgDaily alone hides this.
+  row('AVG WIN day $', s2 => R2(s2.avgWin));
+  row('AVG LOSS day $', s2 => R2(s2.avgLoss));
+  row('PAYOFF (win/loss)', s2 => (s2.payoff == null ? '' : s2.payoff));
   row('(context) true MAX DRAWDOWN $', s2 => R2(s2.mdd));
   row('maxDD 7-day $', s2 => R2(s2.maxDD7));
   row('maxDD 30-day $', s2 => R2(s2.maxDD30));

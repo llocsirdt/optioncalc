@@ -118,7 +118,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.40</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.43</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -151,8 +151,9 @@
   <span id="timeLabel" class="tb-time">full day</span>
 </div>
 <div class="wrap" id="btWrap" style="display:none">
-  <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span>
-    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label></h2>
+  <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span><span class="sub" id="btRowCount"></span>
+    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label>
+    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btHideUnc"> hide uncapped (-unc)</label></h2>
   <table class="bt" id="btTable"></table>
 </div>
 
@@ -502,6 +503,7 @@ async function loadBaselines() {
     m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
       trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,
       avgDaily: e.avgDaily, realizedWorst: e.worst,
+      avgWin: e.avgWin, avgLoss: e.avgLoss, payoff: e.payoff,
       // DAY-LOSS CAP. Read from the run's own governor rather than guessed from the variant name: the
       // old `/-10k$/.test(k)` matched no current variant, so every row read $20k regardless of width.
       // lossMax is width-scaled on purpose ($6k/$7k/$9k at $10/$20/$40) and is ABSENT on `-unc` twins,
@@ -541,13 +543,19 @@ const BT_COLS = [
   { k: 'total', h: 'total', t: 'n',
     d: 'Sum of realized daily P&L across every day in the history.' },
   { k: 'winRate', h: 'win%', t: 'n',
-    d: 'Share of traded days that finished positive.' },
-  { k: 'best', h: 'avgBest', t: 'n',
-    d: 'Average across days of the BEST settlement the book held that day could have produced (the maximum of its terminal risk curve). A ceiling the day was exposed to — NOT what was earned.' },
-  { k: 'worst', h: 'avgWorst', t: 'n',
-    d: 'Average across days of the WORST settlement the book held that day could have produced (the minimum of its terminal risk curve). This is the "how risky is this on a normal day" number — NOT what was lost.' },
+    d: 'Share of days that finished positive. Days that finish exactly flat count as neither a win nor a loss, so win% and the loss share need not sum to 100%.' },
+  { k: 'avgWin', h: 'avgWin', t: 'n',
+    d: 'Average P&L on the days that MADE money — what a good day is actually worth. avgDaily blends wins and losses together and so cannot tell "wins often, small" apart from "wins rarely, big"; those are very different strategies to sit through.' },
+  { k: 'avgLoss', h: 'avgLoss', t: 'n',
+    d: 'Average P&L on the days that LOST money — what a bad day actually costs. Note this is the typical loser, not the extreme: the worst single day is `realized worst`, and the worst sustained stretch is maxDD 7d / 30d.' },
+  { k: 'payoff', h: 'payoff', t: 'n',
+    d: 'avgWin / |avgLoss| — dollars made on a winning day per dollar lost on a losing day. Together with win% this IS the edge: win% x avgWin + lossRate x avgLoss reconstructs avgDaily exactly. Above 1 means winners are individually bigger than losers; a strategy can still be strongly profitable below 1 if it wins often enough.' },
+  { k: 'best', h: 'avgPeakPot', t: 'n',
+    d: 'Average PEAK POTENTIAL: across days, the best settlement the book held that day could have produced (the maximum of its terminal risk curve). A ceiling the day was exposed to — NOT money earned. Contrast avgWin, which is realised.' },
+  { k: 'worst', h: 'avgLossPot', t: 'n',
+    d: 'Average LOSS POTENTIAL: across days, the worst settlement the book held that day could have produced (the minimum of its terminal risk curve). The "how exposed is this on a normal day" number — NOT money lost. Contrast avgLoss (a realised losing day) and realized worst (the single worst day that actually happened).' },
   { k: 'avg', h: 'avgTermPot', t: 'n',
-    d: 'Average across days of the MEAN outcome over the whole settlement grid. Rewards a book with a balanced curve over one that is jagged — a high peak next to a deep hole averages out.' },
+    d: 'Average TERMINAL POTENTIAL: across days, the MEAN outcome over the whole settlement grid. Rewards a book with a balanced curve over one that is jagged — a high peak next to a deep hole averages out.' },
   { k: 'trades', h: 'trades/d', t: 'n',
     d: 'Average number of positions opened per day.' },
   { k: 'peakCap', h: 'peakCap', t: 'n',
@@ -570,20 +578,27 @@ const BT_COLS = [
     d: 'avgDaily / peakCap — daily return per dollar of peak capital the strategy requires. The closest thing here to "what does this earn on the money it ties up".' },
 ];
 // $-denominated columns that the "normalize to $20" toggle rescales by widthNorm (scores/ratios excluded).
-const NORM_COLS = new Set(['avgDaily', 'total', 'best', 'worst', 'avg', 'maxDD7', 'maxDD30', 'realizedWorst', 'peakCap', 'deployedCap']);
+const NORM_COLS = new Set(['avgDaily', 'total', 'best', 'worst', 'avg', 'maxDD7', 'maxDD30', 'realizedWorst', 'peakCap', 'deployedCap',
+  'avgWin', 'avgLoss']);   // payoff is a RATIO — width cancels, so normalizing it would be wrong
 let btSort = { k: 'avgDaily', dir: -1 };
 
 function renderBtTable() {
   if (!baselines) return;
-  const rows = Object.entries(baselines).map(([variant, e]) => ({ variant, ...e }));
+  // The `-unc` twins exist to show what the governor COSTS, not as candidates to trade — they run with no
+  // day-loss cap at all. They double the row count and top most sorts, so hiding them is the default-off
+  // way to read the table as a shortlist of things actually runnable.
+  const hideUnc = document.getElementById('btHideUnc') && document.getElementById('btHideUnc').checked;
+  const rows = Object.entries(baselines)
+    .filter(([variant]) => !(hideUnc && variant.endsWith('-unc')))
+    .map(([variant, e]) => ({ variant, ...e }));
   const k = btSort.k;
   rows.sort((a, b) => k === 'variant'
     ? a.variant.localeCompare(b.variant) * btSort.dir
     : (((a[k] == null ? -Infinity : a[k]) - (b[k] == null ? -Infinity : b[k])) * btSort.dir));
   const arrow = (col) => btSort.k === col ? (btSort.dir < 0 ? ' ▼' : ' ▲') : '';
   // Sign-color the P&L columns; worst columns always red; capital/trades neutral.
-  const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total', 'profitScore'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
-    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore'].includes(key) ? 'var(--loss)' : '');
+  const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total', 'profitScore', 'avgWin'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
+    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore', 'avgLoss'].includes(key) ? 'var(--loss)' : '');
   const norm = document.getElementById('btNormalize') && document.getElementById('btNormalize').checked;
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   let h = '<thead><tr>' + BT_COLS.map((c) =>
@@ -599,6 +614,9 @@ function renderBtTable() {
       if (c.k === 'winRate') return `<td class="num">${r.winRate == null ? '—' : Math.round(r.winRate * 100) + '%'}</td>`;
       if (c.k === 'efficiency') return `<td class="num" style="color:${r.efficiency >= 0 ? 'var(--profit)' : ''}">${r.efficiency == null ? '—' : r.efficiency}</td>`;
       if (c.k === 'returnOnCapital') return `<td class="num" style="color:${r.returnOnCapital > 0 ? 'var(--profit)' : ''}">${r.returnOnCapital == null ? '—' : r.returnOnCapital}</td>`;
+      // payoff is a RATIO, not dollars. Running it through fmtN printed "$2" and rounded away the two
+      // decimals that carry the whole comparison — every row looked like $2 or $3 and the sort read as noise.
+      if (c.k === 'payoff') return `<td class="num" style="color:${r.payoff >= 1 ? 'var(--profit)' : ''}">${r.payoff == null ? '—' : r.payoff.toFixed(2) + 'x'}</td>`;
       let val = r[c.k];
       if (norm && NORM_COLS.has(c.k) && val != null) val = Math.round(val * r.widthNorm);   // $20-normalize the $ columns
       const col = colOf(c.k, val);
@@ -606,6 +624,8 @@ function renderBtTable() {
     }).join('') + '</tr>';
   }
   document.getElementById('btTable').innerHTML = h + '</tbody>';
+  const cnt = document.getElementById('btRowCount');
+  if (cnt) cnt.textContent = hideUnc ? ` · showing ${rows.length} of 80 (uncapped hidden)` : '';
 }
 
 async function inBatches(items, n, fn) {
@@ -889,6 +909,7 @@ document.getElementById('btTable').addEventListener('click', (e) => {
   renderBtTable();
 });
 document.getElementById('btNormalize').addEventListener('change', renderBtTable);
+document.getElementById('btHideUnc').addEventListener('change', renderBtTable);
 
 load();
 </script>
