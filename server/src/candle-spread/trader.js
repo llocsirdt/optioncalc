@@ -18,7 +18,8 @@ const L = require('./spread-logic');
 const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
-const WC = require('./wing-convert');   // shared peak->floor wing planner (same module the backtest uses)
+const WC = require('./wing-convert');
+const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest   // shared peak->floor wing planner (same module the backtest uses)
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');   // net spread quotes + mark validation (parity / neighbour / ceiling)
@@ -471,7 +472,13 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
   // or a test would otherwise price the band at whatever time the process happens to run — and a tau of
   // ~0 collapses the band to 0, which silently disables wings exactly like the ivSkew NaN did.
   const tau = bs.tauFromTime(deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()));
-  const iv = bs.ivFromRelBandWidth((b.bbupper - b.bblower) / b.close);
+  // INTRADAY IV TERM STRUCTURE. Vol is not flat across the session (~1.27x the band-width estimate at the
+  // open, ~0.84x into the close), and every backtest baseline is built with this applied. Live omitted it
+  // entirely, because the calibration lived under data/ where the deploy package could not reach it — so
+  // live bands ran ~21% too narrow at the open and ~19% too wide into the close versus the numbers these
+  // strategies were selected on. The band is an expected-move width, so it takes the ATM scalar vol.
+  const ivMult = nowMin != null ? IIV.ivMultAt(nowMin) : 1;
+  const iv = bs.ivFromRelBandWidth((b.bbupper - b.bblower) / b.close) * ivMult;
   const band = Math.round(spot * iv * Math.sqrt(tau) * (deps.wingBandSigmas != null ? deps.wingBandSigmas : 1.5));
   if (!(band > 0) || !(tau > 0)) return 0;
 

@@ -57,7 +57,7 @@ function load5mDays(dir) {
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
 
 // INTRADAY-IV CORRECTION (opts.intradayIV) — a time-of-day IV MULTIPLIER calibrated from the real
-// captured chains (scripts/candle-spread/calibrate-intraday-iv.js -> data/intraday-iv-correction.json).
+// captured chains (scripts/candle-spread/calibrate-intraday-iv.js -> shared/intraday-iv-correction.json).
 // When enabled, the per-bar band-IV is multiplied by ivMult(timeOfDay) BEFORE it flows into every
 // legsMark/bsPrice call (opens, covers, cap checks, cover-to-stack, settlement), so BS reprices ALL
 // moneyness consistently off one corrected IV. Default OFF -> byte-identical to the current baseline.
@@ -87,26 +87,12 @@ function skewMultAt(z) {
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
 
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
-function loadIvCorrection() {
-  if (_ivCorr) return _ivCorr;
-  const p = path.join(__dirname, '..', '..', 'data', 'intraday-iv-correction.json');
-  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-  const pts = Object.entries(j.perBucket)
-    .map(([k, m]) => { const [h, mm] = k.split(':').map(Number); return { min: h * 60 + mm, mult: m }; })
-    .filter(x => x.mult != null)
-    .sort((a, b) => a.min - b.min);
-  _ivCorr = { minutes: pts.map(p => p.min), mults: pts.map(p => p.mult) };
-  return _ivCorr;
-}
-// linear interpolation of the multiplier at ET minute-of-day; clamped to the endpoints outside the table.
-function ivMultAt(minOfDay) {
-  const c = loadIvCorrection(), M = c.minutes, V = c.mults, n = M.length;
-  if (!n) return 1;
-  if (minOfDay <= M[0]) return V[0];
-  if (minOfDay >= M[n - 1]) return V[n - 1];
-  for (let i = 1; i < n; i++) if (minOfDay <= M[i]) { const t = (minOfDay - M[i - 1]) / (M[i] - M[i - 1]); return V[i - 1] + t * (V[i] - V[i - 1]); }
-  return V[n - 1];
-}
+// Delegated to shared/intraday-iv.js so the LIVE engine and the backtest read the SAME calibration from
+// the SAME file. It used to live only under data/, reachable from scripts/ but not from the deploy package
+// (which zips server/ and follows the server/shared symlink), so live could never apply it — and didn't.
+const IIV = require('../../shared/intraday-iv');
+const ivMultAt = IIV.ivMultAt;
+
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)

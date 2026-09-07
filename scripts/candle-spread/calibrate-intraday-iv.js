@@ -33,7 +33,7 @@
  *   band (the 5m-cadence 09-02 run), bandIV is imputed as median(bandIV/openATM)*openATM(day) — a pure
  *   intraday SHAPE contribution (documented in meta.imputedBandIVDates).
  *
- * OUTPUT: data/intraday-iv-correction.json { perBucket:{"09:30":mult,...}, meta:{...} }
+ * OUTPUT: shared/intraday-iv-correction.json { perBucket:{"09:30":mult,...}, meta:{...} }
  * Usage:  node scripts/candle-spread/calibrate-intraday-iv.js
  */
 const fs = require('fs');
@@ -41,7 +41,7 @@ const path = require('path');
 const cc = require('./intraday-cost-curve');            // loadDedupedDays, candleMarks, bucketOf, BUCKETS
 const bs = require('../../server/src/candle-spread/bs-pricer');
 
-const OUT_JSON = path.join(__dirname, '..', '..', 'data', 'intraday-iv-correction.json');
+const OUT_JSON = path.join(__dirname, '..', '..', 'shared', 'intraday-iv-correction.json');
 const WIDTHS = [10, 20, 40];
 const BUCKETS = cc.BUCKETS;                              // 30-min ET bucket START minutes 9:30..15:30
 const bucketKey = t => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;

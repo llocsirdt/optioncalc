@@ -27,7 +27,7 @@ const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
 const DRY = process.argv.includes('--dry');
 // INTRADAY-IV CORRECTION is now CANONICAL (2026-09-04). It reprices every leg with the calibrated
-// time-of-day IV multiplier (data/intraday-iv-correction.json via runDay5m opts.intradayIV), measured off
+// time-of-day IV multiplier (shared/intraday-iv-correction.json via runDay5m opts.intradayIV), measured off
 // the REAL captured chains — band-IV runs ~30% below real ATM IV at the open. Validated on 765 NQ days ×
 // 60 variants: Spearman rho 0.990 vs the plain-BS baselines, 59/60 variants gain (median +9.3%), worst-day
 // unchanged. STANDING RULE (user): any change that improves BACKTEST ACCURACY becomes the new baseline,

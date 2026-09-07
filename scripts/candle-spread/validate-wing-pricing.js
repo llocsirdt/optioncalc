@@ -25,7 +25,7 @@ const path = require('path');
 const bs = require('../../server/src/candle-spread/bs-pricer');
 
 const ARCHIVE = path.join(__dirname, '..', '..', 'candle-spread-archive');
-const CORR = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'data', 'intraday-iv-correction.json'), 'utf8'));
+const CORR = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'shared', 'intraday-iv-correction.json'), 'utf8'));
 const argN = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ? Number(process.argv[i + 1]) : d; };
 const SLIP = argN('--slip', 0.25);
 const WI = process.argv.indexOf('--widths');
