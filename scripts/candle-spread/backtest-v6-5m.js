@@ -430,6 +430,51 @@ function runDay5m(bars, signalFn, opts = {}) {
 
   // The full reduction ladder, cheapest risk-removal first: lock winners (frees a tail for ~free, often
   // at a profit), then spend premium on offsets only if the floor is still through `limit`.
+  // ── LOCK TELEMETRY (measurement only, no behaviour change) ──────────────────────────────────────
+  // Two questions: how often does a day's book reach a GUARANTEED PROFIT (floor >= 0) at the close, and
+  // how often does it reach one at ANY point intraday? The gap between those is days that locked a win
+  // and then traded it back — which is the case for a "freeze once locked" rule.
+  // To judge freezing honestly we cannot just record that it happened: a frozen book still SETTLES
+  // wherever price lands, somewhere between its floor and its peak. So we snapshot the book at the moment
+  // it first qualifies and later evaluate THAT book at the day's actual settle, giving a like-for-like
+  // comparison against what continuing to trade actually produced.
+  let bestFloorSeen = -Infinity, lockBar = -1, lockFloorV = null, lockPeakV = null, lockSnap = null, _bar = -1;
+  // EPISODES: the floor can go positive, be given back as the strategy keeps trading, and be regained —
+  // possibly several times a day. Freezing at the FIRST lock would cut that short, so first/best/last are
+  // all tracked: first and last are implementable live, best is the (unreachable) upper bound that says
+  // how much timing could possibly be worth. `episodes` counts crossings INTO the qualifying state.
+  let episodes = 0, wasQualified = false;
+  let bestLock = null, lastLock = null;   // { bar, floor, peak, snap }
+  const lockFloorAt = opts.lockFloorAt != null ? opts.lockFloorAt : 0;      // floor threshold to qualify
+  const lockPeakMin = opts.lockPeakMin != null ? opts.lockPeakMin : 0;      // and required terminal potential
+  // TIME GATE: don't qualify before this ET minute. Every variant shows later locks being worth far more
+  // than early ones, so "wait until the session is mostly done, THEN lock" is the shape worth testing.
+  const lockAfterMin = opts.lockAfterMin != null ? opts.lockAfterMin : 0;
+  function noteLock() {
+    const f = floorNow();
+    if (f > bestFloorSeen) bestFloorSeen = f;
+    if (lockAfterMin && etMinute(bars[_bar].dt) < lockAfterMin) return;   // too early to consider
+    if (f < lockFloorAt) { wasQualified = false; return; }
+    // Peak of the CURRENT book — the terminal potential being locked in alongside the floor. Scans the
+    // same strike set the floor does: the payoff is piecewise-linear with kinks only at strikes.
+    const ks = [];
+    for (const p of st.positions) { for (const l of p.legs) if (ks.indexOf(l.strike) < 0) ks.push(l.strike);
+      if (p.covered && p.coverLegs) for (const l of p.coverLegs) if (ks.indexOf(l.strike) < 0) ks.push(l.strike); }
+    if (!ks.length) return;
+    let peak = -Infinity;
+    for (const k of ks) { const v = bookAt(k, null); if (v > peak) peak = v; }
+    if (!(peak >= lockPeakMin)) { wasQualified = false; return; }
+    if (!wasQualified) episodes++;          // a fresh crossing INTO the qualifying state
+    wasQualified = true;
+    // Deep-copy just what the payoff needs, so later trading cannot mutate the snapshot.
+    const snap = st.positions.map(p => ({ legs: p.legs.slice(), limit: p.limit,
+      covered: !!p.covered, coverLegs: p.coverLegs ? p.coverLegs.slice() : null, coverLimit: p.coverLimit }));
+    const here = { bar: _bar, floor: f, peak, snap };
+    if (lockBar < 0) { lockBar = _bar; lockFloorV = f; lockPeakV = peak; lockSnap = snap; }   // FIRST
+    if (!bestLock || f > bestLock.floor) bestLock = here;                                     // BEST floor
+    lastLock = here;                                                                          // LAST seen
+  }
+
   function reduceRisk(S, tau, iv) {
     // (1) FREE first — lock deep-ITM winners, but only those that actually lift the book floor.
     floorCovers += lockDeepWinners(() => -floorNow() > lossTarget, S, tau, iv, true).length;
@@ -544,7 +589,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             cLimit = roundTick(legsMark(cLegs, S, tau, iv) + TICK);
           }
         }
-        if (governed) {
+    if (governed) {
           const f0 = floorNow();
           const sv = { covered: pos.covered, coverLegs: pos.coverLegs, coverLimit: pos.coverLimit };
           pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true;
@@ -779,6 +824,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // deployedCapital average: sample the real deployed cash once per (RTH) action step. Overnight bars
     // are `continue`d above under rthOnly, so only true action steps are counted.
     if (trackCap) { sumReal += depR; nSteps++; }
+    _bar = i; noteLock();   // END of the bar: opens, covers and the reduction ladder have all settled
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
@@ -797,6 +843,14 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     return t;
   };
+  // Terminal P&L of a SNAPSHOT book at the day's actual settle — the like-for-like number to compare a
+  // freeze against what continuing to trade produced.
+  const snapPayoff = (snap) => (snap ? Math.round(snap.reduce((t, pos) => {
+    let value = legsPayoff(pos.legs, settle), cost = pos.limit;
+    if (pos.covered && pos.coverLegs) { value += legsPayoff(pos.coverLegs, settle); cost += pos.coverLimit; }
+    return t + (value - cost) * 100 * QTY;
+  }, 0)) : null);
+
   // OFFSET P&L attribution: what the floor-offset hedges actually settled for, vs what they cost. An
   // insurance overlay should be a net COST that buys a better floor — if this is strongly positive the
   // "hedges" are really directional bets and the risk story is not what it appears.
@@ -839,6 +893,34 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, coverPending, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
+    // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
+    // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
+    // is directly comparable to `terminal` (what continuing to trade produced).
+    lock: {
+      // A day that never traded has a floor of exactly 0, which is not a locked profit — require a book.
+      // NOTE the `floor` this function RETURNS is the sum of locked profit on COVERED pairs, ignoring
+      // naked risk — a running conservative bound, not the book's worst case. The guaranteed-profit
+      // question needs the EXACT book floor the governor bounds, which is floorNow().
+      traded: st.positions.length > 0,
+      endBookFloor: st.positions.length ? Math.round(floorNow()) : null,
+      endFloorNoLoss: st.positions.length > 0 && floorNow() >= 0,
+      endFloorProfit: st.positions.length > 0 && floorNow() > 0,
+      bestFloor: Number.isFinite(bestFloorSeen) ? Math.round(bestFloorSeen) : null,
+      everPositive: lockBar >= 0,
+      atBar: lockBar, atTime: lockBar >= 0 ? etStamp(bars[lockBar].dt) : null,
+      lockFloor: lockFloorV != null ? Math.round(lockFloorV) : null,
+      lockPeak: lockPeakV != null ? Math.round(lockPeakV) : null,
+      frozenTerminal: snapPayoff(lockSnap),
+      // How many separate times the day entered the qualifying state, and what freezing at the BEST and
+      // LAST of them would have paid. best is not implementable live (you cannot know it is the best until
+      // the day is over) but it bounds what better timing could ever be worth.
+      episodes,
+      bestFloor2: bestLock ? Math.round(bestLock.floor) : null,
+      bestPeak: bestLock ? Math.round(bestLock.peak) : null,
+      frozenAtBest: snapPayoff(bestLock && bestLock.snap),
+      lastTime: lastLock ? etStamp(bars[lastLock.bar].dt) : null,
+      frozenAtLast: snapPayoff(lastLock && lastLock.snap),
+    },
     capital: trackCap ? { peakDebit: peakD, peakCredit: peakC, peakAlt: peakA, peakReal: peakR, avgReal: nSteps ? round2(sumReal / nSteps) : 0, peakUncov, eodDebit: depD, eodCredit: depC, eodReal: depR, nCredit, nDebitCov } : null,
     legs: enforceLegs ? { ideal: legIdeal, twin: legTwin, shift: legShift, skip: legSkip, coverTwin: legCoverTwin, coverWing: legCoverWing, coverSkip: legCoverSkip, shiftSum, played: ledger.size() } : null,
     harvest: harvest ? { spent: Math.round(hvSpent), count: hvCount } : null,
