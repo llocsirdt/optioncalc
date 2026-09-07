@@ -118,7 +118,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.43</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.44</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -553,7 +553,7 @@ const BT_COLS = [
   { k: 'best', h: 'avgPeakPot', t: 'n',
     d: 'Average PEAK POTENTIAL: across days, the best settlement the book held that day could have produced (the maximum of its terminal risk curve). A ceiling the day was exposed to — NOT money earned. Contrast avgWin, which is realised.' },
   { k: 'worst', h: 'avgLossPot', t: 'n',
-    d: 'Average LOSS POTENTIAL: across days, the worst settlement the book held that day could have produced (the minimum of its terminal risk curve). The "how exposed is this on a normal day" number — NOT money lost. Contrast avgLoss (a realised losing day) and realized worst (the single worst day that actually happened).' },
+    d: 'Average LOSS POTENTIAL: across days, the worst settlement the book held that day could have produced (the minimum of its terminal risk curve). The "how exposed is this on a normal day" number — NOT money lost. A POSITIVE value here is the best thing this table can say about a strategy: it means the average day ends holding a book that cannot lose at any settlement price, i.e. locked profit with zero remaining risk — which is what the day-loss governor and wing conversion exist to produce. Contrast avgLoss (a realised losing day) and realized worst (the single worst day that actually happened).' },
   { k: 'avg', h: 'avgTermPot', t: 'n',
     d: 'Average TERMINAL POTENTIAL: across days, the MEAN outcome over the whole settlement grid. Rewards a book with a balanced curve over one that is jagged — a high peak next to a deep hole averages out.' },
   { k: 'trades', h: 'trades/d', t: 'n',
@@ -597,8 +597,20 @@ function renderBtTable() {
     : (((a[k] == null ? -Infinity : a[k]) - (b[k] == null ? -Infinity : b[k])) * btSort.dir));
   const arrow = (col) => btSort.k === col ? (btSort.dir < 0 ? ' ▼' : ' ▲') : '';
   // Sign-color the P&L columns; worst columns always red; capital/trades neutral.
+  // COLOUR BY SIGN, not by column name. avgLossPot is the headline case: it is the average of the WORST
+  // point on each day's risk curve, and on 20 of 80 variants (every $10 width, v7-10 highest at +$1,090)
+  // that number is POSITIVE — meaning the average day holds a book that cannot lose, whatever the
+  // settlement. That is the single best thing this table can say about a strategy and it is exactly what
+  // the governor and wing conversion exist to produce, so painting it red inverted the signal.
+  // realizedWorst gets the same treatment: it is negative on every variant today, but a strategy with no
+  // losing day at all is not a thing to render as a loss.
+  // maxDD7/maxDD30/riskScore are <= 0 by construction (rollingDD returns 0 when never down), so 0 means
+  // "never drew down" and should read neutral rather than red. avgLoss is the mean of losing days only,
+  // so it is structurally negative and stays red.
+  const signed = (n) => (n == null || n === 0) ? '' : (n > 0 ? 'var(--profit)' : 'var(--loss)');
   const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total', 'profitScore', 'avgWin'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
-    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore', 'avgLoss'].includes(key) ? 'var(--loss)' : '');
+    : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore'].includes(key) ? signed(n)
+    : (key === 'avgLoss' ? 'var(--loss)' : ''));
   const norm = document.getElementById('btNormalize') && document.getElementById('btNormalize').checked;
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   let h = '<thead><tr>' + BT_COLS.map((c) =>
