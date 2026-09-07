@@ -118,7 +118,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.38</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.39</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -501,7 +501,13 @@ async function loadBaselines() {
     const md30 = e.maxDD30;
     m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
       trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,
-      avgDaily: e.avgDaily, realizedWorst: e.worst, cap: /-10k$/.test(k) ? 10000 : 20000,
+      avgDaily: e.avgDaily, realizedWorst: e.worst,
+      // DAY-LOSS CAP. Read from the run's own governor rather than guessed from the variant name: the
+      // old `/-10k$/.test(k)` matched no current variant, so every row read $20k regardless of width.
+      // lossMax is width-scaled on purpose ($6k/$7k/$9k at $10/$20/$40) and is ABSENT on `-unc` twins,
+      // which is the whole point of those twins — null here renders as "none", not as zero.
+      cap: e.governor && e.governor.lossMax != null ? -e.governor.lossMax : null,
+      lossTarget: e.governor && e.governor.lossTarget != null ? -e.governor.lossTarget : null,
       total: e.total, winRate: e.winRate, maxDD7: e.maxDD7, maxDD30: md30, width, widthNorm,
       // size-normalized / size-independent scores — prefer baked fields, else compute client-side.
       profitScore: e.profitScore != null ? e.profitScore : Math.round(e.avgDaily * widthNorm),
@@ -528,8 +534,8 @@ async function ensureBaselines() {
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's',
     d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement).' },
-  { k: 'cap', h: 'cap', t: 'n',
-    d: 'LEGACY COLUMN — always reads $20k. It is derived from a variant-name suffix (-10k) that no current variant uses, so it carries no information about this row. Ignore it.' },
+  { k: 'cap', h: 'lossMax', t: 'n',
+    d: 'The day-loss GOVERNOR cap: the hard bound on the book floor, i.e. the worst the day is allowed to finish. Width-scaled on purpose — $6k / $7k / $9k at $10 / $20 / $40 spreads — because a wider spread carries more risk per position. The working level the engine actively manages back toward is lossTarget, a flat $5k for every variant. Shown as "none" on -unc twins, which run the same strategy with the governor switched off so the pair shows what the cap costs. Not rescaled by the $20-normalize toggle: it is a risk budget, not a P&L figure, and it is already width-aware.' },
   { k: 'avgDaily', h: 'avgDaily', t: 'n',
     d: 'Mean REALIZED profit/loss per trading day across the whole history.' },
   { k: 'total', h: 'total', t: 'n',
@@ -586,7 +592,9 @@ function renderBtTable() {
   for (const r of rows) {
     h += '<tr>' + BT_COLS.map((c) => {
       if (c.k === 'variant') return `<td class="v">${r.variant}</td>`;
-      if (c.k === 'cap') return `<td class="num">$${r.cap / 1000}k</td>`;
+      if (c.k === 'cap') return r.cap == null
+        ? `<td class="num" style="color:var(--muted)" title="no governor — this twin is uncapped">none</td>`
+        : `<td class="num" style="color:var(--loss)" title="working target ${r.lossTarget == null ? '—' : '-$' + Math.abs(r.lossTarget) / 1000 + 'k'}">-$${Math.abs(r.cap) / 1000}k</td>`;
       if (c.k === 'trades') return `<td class="num">${r.trades == null ? '—' : r.trades}</td>`;
       if (c.k === 'winRate') return `<td class="num">${r.winRate == null ? '—' : Math.round(r.winRate * 100) + '%'}</td>`;
       if (c.k === 'efficiency') return `<td class="num" style="color:${r.efficiency >= 0 ? 'var(--profit)' : ''}">${r.efficiency == null ? '—' : r.efficiency}</td>`;
