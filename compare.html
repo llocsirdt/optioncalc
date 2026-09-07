@@ -10,7 +10,11 @@
      The banner self-injects, so no markup is needed here. -->
 <script src="client/lib/candle-spread-status.js"></script>
 <style>
-  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; }
+  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb;
+    /* LOCKED FLOOR — a floor line that sits ABOVE zero, i.e. the book cannot lose at any settlement.
+       Deliberately NOT --profit: the peak line is already that colour, and two green dashes on one chart
+       stop saying which is which. Violet reads as "notable" without competing with either. */
+    --locked:#8b5cf6; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
   /* NOT sticky: the time slider is the control you reach for while reading, and it lives in the sticky
@@ -118,7 +122,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.44</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.45</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -302,7 +306,11 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
     return `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>`
       + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="8" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.4" paint-order="stroke">${txt}</text>`;
   };
-  const btLines = bt ? btEl(bt.worst, 'var(--loss)', fmtN(bt.worst)) + btEl(bt.best, 'var(--profit)', fmtN(bt.best)) : '';
+  // A floor above zero is a different STATE, not a smaller loss: the whole curve is in profit, so there is
+  // no settlement price that loses money. Red said the opposite. Violet marks it without colliding with the
+  // peak line directly above it. Position already conveys the sign; colour is doing identity + state.
+  const floorCol = (y) => (y != null && y > 0 ? 'var(--locked)' : 'var(--loss)');
+  const btLines = bt ? btEl(bt.worst, floorCol(bt.worst), fmtN(bt.worst)) + btEl(bt.best, 'var(--profit)', fmtN(bt.best)) : '';
   // THIS BOOK's max profit / max loss, on the RIGHT edge at the height of the peak and the valley — the
   // mirror of the dashed backtest averages on the left, so "mine vs typical" reads across the chart at a
   // glance instead of between the header and the plot.
@@ -313,7 +321,7 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
       + ` font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.6" paint-order="stroke">${txt}</text>`;
   };
   const exLines = exEl(d.hi, 'var(--profit)', d.unboundedGain ? '+∞' : usdK(d.hi))
-                + exEl(d.lo, 'var(--loss)', d.unboundedLoss ? '−∞' : usdK(d.lo));
+                + exEl(d.lo, d.unboundedLoss ? 'var(--loss)' : floorCol(d.lo), d.unboundedLoss ? '−∞' : usdK(d.lo));
   // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
   const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
   const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
