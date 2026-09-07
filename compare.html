@@ -97,6 +97,9 @@
   #btWrap { max-height:72vh; overflow:auto; }
   #btWrap h2 { font-size:14px; margin:4px 0 8px; font-weight:700; position:sticky; left:0; }
   #btWrap h2 .sub { font-weight:400; color:var(--muted); font-size:12px; }
+  /* Column headers double as sort controls, so the explanation is a native title tooltip rather than a
+     second click target that would fight the sort. The dotted underline is the only hint needed. */
+  table.bt th.hasHelp { text-decoration:underline dotted rgba(125,125,125,.65); text-underline-offset:3px; cursor:help; }
   table.bt { border-collapse:collapse; font:12px ui-monospace, Menlo, monospace; }
   table.bt th, table.bt td { padding:3px 11px; border-bottom:1px solid var(--grid); white-space:nowrap; }
   table.bt th { position:sticky; top:0; z-index:2; background:var(--bg); cursor:pointer; user-select:none;
@@ -115,7 +118,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.36</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.37</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -519,14 +522,46 @@ async function ensureBaselines() {
 }
 
 // The sortable backtest table (all variants). `k` is the baselines-map field; 'n' = numeric column.
+// `d` = the hover explanation. Several of these columns are easy to misread — notably the three
+// risk-curve averages, which describe the SHAPE of the book held that day rather than anything that
+// actually happened — so the definition travels with the header instead of living in someone's memory.
 const BT_COLS = [
-  { k: 'variant', h: 'variant', t: 's' }, { k: 'cap', h: 'cap', t: 'n' }, { k: 'avgDaily', h: 'avgDaily', t: 'n' },
-  { k: 'total', h: 'total', t: 'n' }, { k: 'winRate', h: 'win%', t: 'n' },
-  { k: 'best', h: 'avgBest', t: 'n' }, { k: 'worst', h: 'avgWorst', t: 'n' }, { k: 'avg', h: 'avgTermPot', t: 'n' },
-  { k: 'trades', h: 'trades/d', t: 'n' }, { k: 'peakCap', h: 'peakCap', t: 'n' }, { k: 'deployedCap', h: 'deployCap', t: 'n' },
-  { k: 'realizedWorst', h: 'realized worst', t: 'n' }, { k: 'maxDD7', h: 'maxDD 7d', t: 'n' }, { k: 'maxDD30', h: 'maxDD 30d', t: 'n' },
-  { k: 'profitScore', h: 'ProfitScore', t: 'n' }, { k: 'riskScore', h: 'RiskScore', t: 'n' },
-  { k: 'efficiency', h: 'Efficiency', t: 'n' }, { k: 'returnOnCapital', h: 'Ret/Cap', t: 'n' },
+  { k: 'variant', h: 'variant', t: 's',
+    d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement).' },
+  { k: 'cap', h: 'cap', t: 'n',
+    d: 'LEGACY COLUMN — always reads $20k. It is derived from a variant-name suffix (-10k) that no current variant uses, so it carries no information about this row. Ignore it.' },
+  { k: 'avgDaily', h: 'avgDaily', t: 'n',
+    d: 'Mean REALIZED profit/loss per trading day across the whole history.' },
+  { k: 'total', h: 'total', t: 'n',
+    d: 'Sum of realized daily P&L across every day in the history.' },
+  { k: 'winRate', h: 'win%', t: 'n',
+    d: 'Share of traded days that finished positive.' },
+  { k: 'best', h: 'avgBest', t: 'n',
+    d: 'Average across days of the BEST settlement the book held that day could have produced (the maximum of its terminal risk curve). A ceiling the day was exposed to — NOT what was earned.' },
+  { k: 'worst', h: 'avgWorst', t: 'n',
+    d: 'Average across days of the WORST settlement the book held that day could have produced (the minimum of its terminal risk curve). This is the "how risky is this on a normal day" number — NOT what was lost.' },
+  { k: 'avg', h: 'avgTermPot', t: 'n',
+    d: 'Average across days of the MEAN outcome over the whole settlement grid. Rewards a book with a balanced curve over one that is jagged — a high peak next to a deep hole averages out.' },
+  { k: 'trades', h: 'trades/d', t: 'n',
+    d: 'Average number of positions opened per day.' },
+  { k: 'peakCap', h: 'peakCap', t: 'n',
+    d: 'Average across days of the PEAK real capital committed at any point intraday. This is the account size the policy actually needs to fund, which is why returns are measured against it.' },
+  { k: 'deployedCap', h: 'deployCap', t: 'n',
+    d: 'Average capital actually at work through the day (the mean, not the peak) — how hard the money works versus how much must be on hand.' },
+  { k: 'realizedWorst', h: 'realized worst', t: 'n',
+    d: 'The single worst REALIZED day in the history. Unlike avgWorst this is an outcome that actually happened.' },
+  { k: 'maxDD7', h: 'maxDD 7d', t: 'n',
+    d: 'Worst peak-to-trough fall in cumulative P&L over any rolling 7-day window.' },
+  { k: 'maxDD30', h: 'maxDD 30d', t: 'n',
+    d: 'Worst peak-to-trough fall in cumulative P&L over any rolling 30-day window — the drawdown figure the risk metrics are built on.' },
+  { k: 'profitScore', h: 'ProfitScore', t: 'n',
+    d: 'avgDaily rescaled to a $20-width basis (avgDaily x 20/W), so $10, $20 and $40 variants can be compared without width doing the talking.' },
+  { k: 'riskScore', h: 'RiskScore', t: 'n',
+    d: 'maxDD30 rescaled to a $20-width basis (maxDD30 x 20/W) — the risk counterpart to ProfitScore.' },
+  { k: 'efficiency', h: 'Efficiency', t: 'n',
+    d: 'total / |maxDD30| — return per unit of worst 30-day drawdown, a Calmar-like ratio. Width cancels, so it compares across widths as-is. Higher is better.' },
+  { k: 'returnOnCapital', h: 'Ret/Cap', t: 'n',
+    d: 'avgDaily / peakCap — daily return per dollar of peak capital the strategy requires. The closest thing here to "what does this earn on the money it ties up".' },
 ];
 // $-denominated columns that the "normalize to $20" toggle rescales by widthNorm (scores/ratios excluded).
 const NORM_COLS = new Set(['avgDaily', 'total', 'best', 'worst', 'avg', 'maxDD7', 'maxDD30', 'realizedWorst', 'peakCap', 'deployedCap']);
@@ -544,7 +579,10 @@ function renderBtTable() {
   const colOf = (key, n) => (['avgDaily', 'best', 'avg', 'total', 'profitScore'].includes(key)) ? (n >= 0 ? 'var(--profit)' : 'var(--loss)')
     : (['worst', 'realizedWorst', 'maxDD7', 'maxDD30', 'riskScore'].includes(key) ? 'var(--loss)' : '');
   const norm = document.getElementById('btNormalize') && document.getElementById('btNormalize').checked;
-  let h = '<thead><tr>' + BT_COLS.map((c) => `<th data-k="${c.k}">${c.h}${arrow(c.k)}</th>`).join('') + '</tr></thead><tbody>';
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  let h = '<thead><tr>' + BT_COLS.map((c) =>
+    `<th data-k="${c.k}"${c.d ? ` title="${esc(c.d)}"` : ''}${c.d ? ' class="hasHelp"' : ''}>${c.h}${arrow(c.k)}</th>`).join('')
+    + '</tr></thead><tbody>';
   for (const r of rows) {
     h += '<tr>' + BT_COLS.map((c) => {
       if (c.k === 'variant') return `<td class="v">${r.variant}</td>`;
