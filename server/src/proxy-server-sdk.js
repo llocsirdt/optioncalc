@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const tokenHealth = require('./schwab-token-health');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -231,6 +232,17 @@ function diskUsage() {
 }
 
 // Health check endpoint
+// TOKEN HEALTH. The probe is a real authenticated call, so it runs on its own cadence rather than inside
+// the request: /health must answer instantly (EB pings it constantly) and must still answer when auth is
+// broken. Kick one at boot and every 5 minutes; the handler reports whatever the last probe found.
+const tokenProbe = () => marketClient.quotes(['SPY']);
+function refreshTokenProbe() {
+  tokenHealth.probe(tokenProbe, { force: true }).catch(() => { /* report() surfaces the failure */ });
+}
+refreshTokenProbe();
+const tokenProbeTimer = setInterval(refreshTokenProbe, tokenHealth.PROBE_TTL_MS);
+if (tokenProbeTimer.unref) tokenProbeTimer.unref();
+
 app.get('/health', (req, res) => {
   const m = process.memoryUsage();
   const memory = {
@@ -245,11 +257,18 @@ app.get('/health', (req, res) => {
   if (req.query.mem === 'full') {
     memory.samples = MEM_SAMPLES.map(s => ({ min: Math.round((s.t - memStartedAt) / 60000), rssMB: MB(s.rss) }));
   }
+  const auth = tokenHealth.report(process.env.SCHWAB_REFRESH_TOKEN);
+  // `status` stays the LIVENESS answer (the process is serving), because EB and CloudFront treat a non-OK
+  // health check as an unhealthy instance and would start cycling it — an expired token is not a reason to
+  // replace a perfectly good server. Token trouble is reported in its own field, and `degraded` gives a
+  // monitor one boolean to alert on without having to interpret the whole block.
   res.json({
     status: 'OK',
+    degraded: auth.ok === false,
     timestamp: new Date().toISOString(),
     sdk: 'schwab-client-js',
     build: buildInfo,
+    schwabToken: auth,
     memory,
     disk: diskUsage(),
     endpoints: {

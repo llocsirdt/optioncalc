@@ -76,10 +76,22 @@ function newTokenLooksValid() {
 function updateEnvToken(newToken) {
   const envPath = path.resolve(repoRoot, '.env');
   let contents = fs.readFileSync(envPath, 'utf8');
-  contents = contents.includes('SCHWAB_REFRESH_TOKEN')
+  contents = contents.includes('SCHWAB_REFRESH_TOKEN=')
     ? contents.replace(/^SCHWAB_REFRESH_TOKEN=.*$/m, `SCHWAB_REFRESH_TOKEN=${newToken}`)
     : `${contents}\nSCHWAB_REFRESH_TOKEN=${newToken}`;
+  // Stamp the ISSUE TIME. The refresh token is an opaque string with no embedded expiry, so the ~7-day
+  // clock is unknowable unless we record when it was minted — and THIS is the only moment that is known
+  // for certain. Without it /health can only report when the server first SAW the token, which resets on
+  // every restart and therefore always under-states its age. That is the difference between warning a day
+  // ahead and finding out because the UI broke.
+  const issuedAt = new Date().toISOString();
+  contents = contents.includes('SCHWAB_REFRESH_TOKEN_ISSUED_AT=')
+    ? contents.replace(/^SCHWAB_REFRESH_TOKEN_ISSUED_AT=.*$/m, `SCHWAB_REFRESH_TOKEN_ISSUED_AT=${issuedAt}`)
+    : `${contents}\nSCHWAB_REFRESH_TOKEN_ISSUED_AT=${issuedAt}`;
   fs.writeFileSync(envPath, contents, 'utf8');
+  const expires = new Date(Date.parse(issuedAt) + 7 * 86400000).toISOString();
+  console.log(`Token issued ${issuedAt} — expires ~${expires}`);
+  console.log('NOTE: set the SAME two vars on Elastic Beanstalk (its SCHWAB_REFRESH_TOKEN is separate from local .env).');
 }
 
 // Non-interactive mode: `node renew-schwab-token.js "<redirected-url>"` skips the
