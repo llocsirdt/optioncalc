@@ -636,7 +636,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
     if (wingOn && wingCount < wingMaxPerDay && etMinute(bars[i].dt) >= wingAfterMin && i - wingLastBar >= wingEvery && st.positions.length) {
       wingLastBar = i;
-      const band = Math.round(S * iv * Math.sqrt(tau) * wingBandSig);
+      // `iv` is a per-leg FUNCTION when ivSkew is on, so `S * iv` is NaN and the band silently fails the
+      // `> 0` test — which is why wing conversion never fired once the skew became the default. The band is
+      // an expected-move width, so it wants the ATM scalar vol, not the smile.
+      const ivAtm = typeof iv === 'function' ? iv('C', S) : iv;
+      const band = Math.round(S * ivAtm * Math.sqrt(tau) * wingBandSig);
       if (band > 0) {
         // marketable proxy: buy the long leg above mid, sell the short below (live swaps in real quotes)
         const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike)) + (legSide === 'long' ? wingSlip : -wingSlip);
