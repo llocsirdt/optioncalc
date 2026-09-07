@@ -653,6 +653,10 @@ function runDay5m(bars, signalFn, opts = {}) {
         const plan = peakNow > 0 && budget > 0 ? WG.planWings(bookView, {
           spot: S, band, incr: legIncr, price, qty: QTY, step: legIncr, budget,
           maxWings: Math.min(3, wingMaxPerDay - wingCount), minRatio: wingMinRatio,
+          // Shape of the candidate set + how much the uncapped tail is worth. Defaults reproduce the
+          // capped-at-the-anchor, spreads-only behaviour exactly.
+          outSteps: opts.wingOutSteps, naked: opts.wingNaked,
+          upsideLambda: opts.wingUpsideLambda, tailSigmas: opts.wingTailSigmas,
         }) : null;
         if (plan && plan.wings.length) {
           for (const w of plan.wings) {

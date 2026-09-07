@@ -48,7 +48,12 @@ function optsFor(v) {
   const o = { rthActionOnly: true, intradayIV: true, lockFloorAt: FLOOR, lockPeakMin: peakMin, lockAfterMin: AFTER };
   if (v.ivSkew) o.ivSkew = true;
   if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+  // exemptTrendStack and capitalCeiling belong here too: v8 is the ONLY family carrying
+  // exemptTrendStack, and omitting it applies its softCap WITHOUT the escape hatch, so the control
+  // stopped reproducing v8's committed baseline ($880,590 vs $956,024) while every other variant
+  // matched. Caught by the standing check that an analysis script must reproduce the baseline.
+  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+  if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.floorOffset) o.floorOffset = true;
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;

@@ -40,7 +40,12 @@ function optsFor(v) {
   const o = { rthActionOnly: true, intradayIV: true };
   if (v.ivSkew) o.ivSkew = true;
   if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+  // exemptTrendStack and capitalCeiling belong here too: v8 is the ONLY family carrying
+  // exemptTrendStack, and omitting it applies its softCap WITHOUT the escape hatch, so the control
+  // stopped reproducing v8's committed baseline ($880,590 vs $956,024) while every other variant
+  // matched. Caught by the standing check that an analysis script must reproduce the baseline.
+  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
+  if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.floorOffset) o.floorOffset = true;
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
@@ -86,6 +91,7 @@ function measure(v, extra) {
 }
 
 const RUNS = buildRuns().filter((v) => ONLY.split(',').includes(v.variant));
+const W = { wingConvert: true, wingMinRatio: 3, wingAfterMin: 0, wingBudgetFrac: 0.10 };
 const ARMS = [
   ['OFF (control)', {}],
   ['ratio3 14:00 10%', { wingConvert: true, wingMinRatio: 3, wingAfterMin: 840, wingBudgetFrac: 0.10 }],
@@ -94,7 +100,16 @@ const ARMS = [
   ['ratio10 14:00 10%', { wingConvert: true, wingMinRatio: 10, wingAfterMin: 840, wingBudgetFrac: 0.10 }],
   ['ratio3 12:00 10%', { wingConvert: true, wingMinRatio: 3, wingAfterMin: 720, wingBudgetFrac: 0.10 }],
   ['ratio3 15:00 10%', { wingConvert: true, wingMinRatio: 3, wingAfterMin: 900, wingBudgetFrac: 0.10 }],
-  ['ratio3 anytime 10%', { wingConvert: true, wingMinRatio: 3, wingAfterMin: 0, wingBudgetFrac: 0.10 }],
+  ['ratio3 anytime 10%', { ...W }],
+  // SHAPE OF THE WING. Pinning the short leg at the anchor caps the wing exactly where the book stops
+  // profiting; sweeping it outward raises that cap, and a naked long removes it entirely. But floor-lift
+  // per dollar cannot SEE upside, so naked longs need the lambda term to ever be selected.
+  ['  + short out 3', { ...W, wingOutSteps: 3 }],
+  ['  + naked, lambda 0', { ...W, wingOutSteps: 3, wingNaked: true }],
+  ['  + naked, lambda 0.25', { ...W, wingOutSteps: 3, wingNaked: true, wingUpsideLambda: 0.25 }],
+  ['  + naked, lambda 0.5', { ...W, wingOutSteps: 3, wingNaked: true, wingUpsideLambda: 0.5 }],
+  ['  + naked, lambda 1.0', { ...W, wingOutSteps: 3, wingNaked: true, wingUpsideLambda: 1.0 }],
+  ['  naked only, lambda 1', { ...W, wingNaked: true, wingUpsideLambda: 1.0 }],
 ];
 
 console.log(`\nWING CONVERSION SWEEP — ${days.length} days · first full-history measurement`);

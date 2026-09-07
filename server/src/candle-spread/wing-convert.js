@@ -68,7 +68,7 @@ function curveShape(book, opts) {
 // side 'up' → long CALL spread; 'down' → long PUT spread. The short leg sits at the anchor; the long leg
 // steps INWARD toward spot in `incr` increments, so each candidate starts paying progressively sooner
 // (and costs progressively more) — the trade-off the user makes by eye.
-function candidateWings(shape, side, spot, incr, maxSteps) {
+function candidateWings(shape, side, spot, incr, maxSteps, opts) {
   if (!shape) return [];
   const out = [];
   const steps = maxSteps != null ? maxSteps : 6;
@@ -81,15 +81,27 @@ function candidateWings(shape, side, spot, incr, maxSteps) {
     if (shape.kneeDown != null) anchors.push(round(shape.kneeDown));
     if (shape.zeroDown != null) anchors.push(round(shape.zeroDown));
   }
+  // The short leg used to be PINNED at the anchor, which caps the wing exactly where the book stops
+  // profiting — so past the anchor the wing contributes nothing while an uncapped long keeps paying. Now
+  // the short leg sweeps OUTWARD from the anchor (outSteps), and `naked` adds the limiting case of no
+  // short leg at all: a long option is simply a spread whose short strike went to infinity. Cheaper caps
+  // stay in the set, so this only ADDS candidates — with outSteps 0 and naked off it is the old behaviour.
+  const outSteps = opts && opts.outSteps != null ? opts.outSteps : 0;
+  const allowNaked = !!(opts && opts.naked);
   for (const anchor of [...new Set(anchors)]) {
     for (let s = 1; s <= steps; s++) {
       const longK = side === 'up' ? anchor - s * incr : anchor + s * incr;
       // keep the long leg out of the money — a wing is protection, not a new directional position
       if (side === 'up' && longK <= spot) break;
       if (side === 'down' && longK >= spot) break;
-      out.push(side === 'up'
-        ? { side, tag: `C ${longK}/${anchor}`, legs: [{ side: 'long', type: 'C', strike: longK }, { side: 'short', type: 'C', strike: anchor }] }
-        : { side, tag: `P ${longK}/${anchor}`, legs: [{ side: 'long', type: 'P', strike: longK }, { side: 'short', type: 'P', strike: anchor }] });
+      const T = side === 'up' ? 'C' : 'P';
+      for (let w = 0; w <= outSteps; w++) {
+        const shortK = side === 'up' ? anchor + w * incr : anchor - w * incr;
+        out.push({ side, tag: `${T} ${longK}/${shortK}`,
+          legs: [{ side: 'long', type: T, strike: longK }, { side: 'short', type: T, strike: shortK }] });
+      }
+      if (allowNaked) out.push({ side, naked: true, tag: `${T} ${longK} naked`,
+        legs: [{ side: 'long', type: T, strike: longK }] });
     }
   }
   return out;
@@ -118,6 +130,7 @@ function planWings(book, opts) {
   const budget = o.budget != null ? o.budget : Infinity;
   const maxWings = o.maxWings != null ? o.maxWings : 4;
   const minRatio = o.minRatio != null ? o.minRatio : 3;
+  const tailSig = o.tailSigmas != null ? o.tailSigmas : 3;   // how far out "it really moved" is priced
   const reach = b => {
     let m = Infinity;
     for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(b, S); if (v < m) m = v; }
@@ -142,7 +155,7 @@ function planWings(book, opts) {
     let best = null;
     const r0 = reach(cur);
     for (const side of ['up', 'down']) {
-      for (const cand of candidateWings(shape, side, spot, incr, o.maxSteps)) {
+      for (const cand of candidateWings(shape, side, spot, incr, o.maxSteps, { outSteps: o.outSteps, naked: o.naked })) {
         const cost = wingCost(cand.legs, o.price);
         if (cost == null || !(cost > 0)) continue;
         const dollars = cost * 100 * qty;
@@ -150,13 +163,30 @@ function planWings(book, opts) {
         const trial = cur.concat([{ filled: true, legs: cand.legs, limit: cost, quantity: qty, wing: true }]);
         const lift = reach(trial) - r0;
         if (lift <= 0) continue;
+        // UPSIDE TERM. Scoring purely on floor-lift-per-dollar can never choose an uncapped long: a long
+        // and its equivalent spread lift the floor by about the same amount, but the long costs more
+        // (no short leg offsetting premium) and its whole advantage — the payoff past where the spread
+        // pins out — lives in the curve's MAXIMUM, which the floor cannot see. tailSigmas prices that in:
+        // the gain at spot ± tailSigmas·band, i.e. what the wing is worth if the move really runs.
+        // lambda 0 reproduces the pure floor objective exactly.
+        const lambda = o.upsideLambda != null ? o.upsideLambda : 0;
+        let score = lift;
+        if (lambda > 0 && band > 0) {
+          const far = side === 'up' ? spot + tailSig * band : spot - tailSig * band;
+          score += lambda * (RC.bookPnl(trial, far) - RC.bookPnl(cur, far));
+        }
+        // The RATIO GATE still applies to the floor lift alone, so upside can never buy a wing that fails
+        // to make the book safer — it only decides WHICH of the qualifying wings to take.
         const ratio = lift / dollars;
-        if (ratio >= minRatio && (!best || ratio > best.ratio)) best = { cand, cost, dollars, ratio, trial };
+        if (ratio < minRatio) continue;
+        const rank = score / dollars;
+        if (!best || rank > best.rank) best = { cand, cost, dollars, ratio, rank, trial };
       }
     }
     if (!best) break;
     cur = best.trial; spent += best.dollars;
-    wings.push({ legs: best.cand.legs, cost: best.cost, tag: best.cand.tag, side: best.cand.side, ratio: Math.round(best.ratio * 10) / 10 });
+    wings.push({ legs: best.cand.legs, cost: best.cost, tag: best.cand.tag, side: best.cand.side,
+      naked: !!best.cand.naked, ratio: Math.round(best.ratio * 10) / 10 });
   }
   const shape1 = curveShape(cur, { step });
   return {
