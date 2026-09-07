@@ -62,6 +62,13 @@ function optsFor(v) {
   if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
   if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
   if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
+  // WING CONVERSION (peak->floor). Enumerated like everything else here, which is precisely why enabling
+  // it on 20 variants produced BYTE-IDENTICAL baselines until these lines existed — the variant config
+  // said wingConvert:true and nothing carried it into the engine.
+  if (v.wingConvert) o.wingConvert = true;
+  for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingBudget', 'wingMaxPerDay',
+    'wingBandSigmas', 'wingOutSteps', 'wingUpsideLambda', 'wingTailSigmas']) if (v[k] != null) o[k] = v[k];
+  if (v.wingNaked) o.wingNaked = true;
   if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.coverSelector) o.coverSelector = v.coverSelector;
