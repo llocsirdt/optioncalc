@@ -64,7 +64,11 @@ function evaluate(daily) {
         + 'v7-20 +$5,468/day above its own average (p 0.0085); v4-20 -$54 (nothing)',
       caveat: 'NOT a direction call — next day is green only 41.7% vs a 54.8% base rate, so it leans '
         + 'slightly RED if anything. n=24 and never tested out of sample. The v7 dollar figure does not '
-        + 'clear the strict 5-hypotheses x 6-variants bar (0.0017); the magnitude result is the clean one.',
+        + 'clear the strict 5-hypotheses x 6-variants bar (0.0017); the magnitude result is the clean one. '
+        + 'This is in practice a WICK rule: 19 of the 24 days wicked into the band and closed back inside, '
+        + 'and only 5 closed beyond it — too few to tell the two events apart, though the 5 look stronger. '
+        + 'Firing days also cluster heavily in 2025 (3 in 2023, 4 in 2024, 12 in 2025), so the pattern and '
+        + 'that regime are hard to separate.',
       n: 24, firesPct: 3.4, strength: 'strong', tested: 'in-sample only',
       detail: `low pctB ${lowPctB.toFixed(3)} (<= 0 = touched the band), body ${(bodyFrac * 100).toFixed(0)}% of range`,
     });
@@ -84,7 +88,10 @@ function evaluate(daily) {
         + 'v7-20 -$1,017/day, v4-20 +$337 — the only variant up',
       caveat: 'The market effect clears the bar; the P&L cells do NOT under the rotation null, so treat '
         + 'this as a statement about the DAY, not yet a validated variant switch. The original directional '
-        + 'claim (next day green) is dead: 56.2% vs a 54.8% base rate is nothing.',
+        + 'claim (next day green) is dead: 56.2% vs a 54.8% base rate is nothing. A separate pattern test '
+        + 'points the same way independently: a large GREEN body closing ABOVE the upper band (n=30) also '
+        + 'marks a quiet day (0.75x movement) and is stable across both halves and all four quarters, '
+        + 'though not significant on its own.',
       n: 89, firesPct: 12.6, strength: 'moderate', tested: 'in-sample only',
       detail: `body ${(bodyFrac * 100).toFixed(0)}% of range, close pctB ${closePctB.toFixed(3)}`,
     });
