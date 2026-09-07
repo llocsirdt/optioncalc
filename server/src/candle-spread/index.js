@@ -11,7 +11,8 @@ const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
-const VC = require('./variant-contract');   // fails the boot when a variant flag is not forwarded to the engine
+const VC = require('./variant-contract');
+const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)   // fails the boot when a variant flag is not forwarded to the engine
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
@@ -529,6 +530,14 @@ function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
 
 // Group runs that share live data (candles + chain) so we fetch ONCE per (symbol, expiration)
 // per tick instead of once per variant — the variants must not multiply the Schwab load.
+// Compact ET stamp for log lines about a 5m mark.
+function markOf(t) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return `${p.month}/${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute} ET`;
+}
+
 function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`; }
 
 // Build the per-tick `deps` the engine reads. Extracted from the call site for ONE reason: it is a
@@ -632,6 +641,27 @@ async function processGroup(runs, kind) {
 
   // Option chain for pricing — the price instrument (NDX).
   const chainData = await DEPS.getOrFetchChainData(priceSymbol, expiration);
+
+  // TRADABILITY GATE — is there actually a market to trade right now?
+  // Checked HERE, once per tick before any variant is evaluated, so a closed/halted/unquoted market is a
+  // single explicit decision rather than 80 variants each failing somewhere downstream for their own
+  // reasons. Discovered on 2026-09-07 (Labor Day): NDX was closed, /NQ was open, and the engine ran all
+  // day on a frozen NDX price with a chain of 17 strikes that carried no quotes at all. Nothing stopped
+  // it — both 15m decision points happened to return `neutral`, which is luck, not a safety property.
+  // See tradability.js for why this gates on EVIDENCE (can we see a price, is there a two-sided market)
+  // rather than on a holiday calendar.
+  const tradeGate = tradability.assess({
+    underlying,
+    nowMs: T,
+    chainSnapshot: trader.snapshotChain(trader.makeLegAccessor(chainData, expiration), underlying,
+      sample.strikeIncrement, sample.snapshotStrikes || 16),
+  });
+  if (!tradeGate.ok) {
+    // Log once per tick, not per variant, and keep it visible: this is the difference between "we chose
+    // not to trade" and "something is broken", and the two must never be confused in the record.
+    console.warn(`[candle-spread] NOT TRADABLE (${tradeGate.reason}): ${tradeGate.detail} — skipping tick ${markOf(T)}`);
+    return { pending: `not-tradable:${tradeGate.reason}` };
+  }
 
   // Synthetic 5m candle for the engine's plumbing (de-dupe key, event log, classic simpleDir field).
   // Decisions come from the signal fn off `A`, NOT from this candle. Compact "MM/DD HH:MM" ET time
