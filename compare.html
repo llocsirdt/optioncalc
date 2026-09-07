@@ -118,7 +118,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.39</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.40</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -534,8 +534,8 @@ async function ensureBaselines() {
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's',
     d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement).' },
-  { k: 'cap', h: 'lossMax', t: 'n',
-    d: 'The day-loss GOVERNOR cap: the hard bound on the book floor, i.e. the worst the day is allowed to finish. Width-scaled on purpose — $6k / $7k / $9k at $10 / $20 / $40 spreads — because a wider spread carries more risk per position. The working level the engine actively manages back toward is lossTarget, a flat $5k for every variant. Shown as "none" on -unc twins, which run the same strategy with the governor switched off so the pair shows what the cap costs. Not rescaled by the $20-normalize toggle: it is a risk budget, not a P&L figure, and it is already width-aware.' },
+  { k: 'cap', h: 'riskMax', t: 'n',
+    d: 'The most capital this strategy is allowed to put at risk in a day: the governor\'s hard bound on the BOOK FLOOR, i.e. the worst the day is permitted to finish. Width-scaled on purpose — $6k / $7k / $9k at $10 / $20 / $40 spreads — because a wider spread carries more risk per position. The working level the engine actively manages back toward is lossTarget, a flat $5k everywhere (shown in each cell\'s own tooltip). Reads "none" on -unc twins, which run the identical strategy with the governor off, so the capped/uncapped pair shows exactly what the cap costs. NOT the same as the legacy riskCap/softCap/hardCap settings, which ceiling uncovered OPEN DEBIT at the moment of opening — bounding the realised floor instead of at-risk debit is the whole reason the governor replaced them. Not rescaled by the $20-normalize toggle: it is a risk budget, not a P&L figure, and is already width-aware.' },
   { k: 'avgDaily', h: 'avgDaily', t: 'n',
     d: 'Mean REALIZED profit/loss per trading day across the whole history.' },
   { k: 'total', h: 'total', t: 'n',
