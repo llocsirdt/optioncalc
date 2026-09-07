@@ -13,6 +13,7 @@ const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
 const VC = require('./variant-contract');
 const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)
+const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — same source as the backtest
 // Last tradability verdict, published to /status so the UI can show WHY the engine is standing down.
 let LAST_TRADABILITY = null;   // fails the boot when a variant flag is not forwarded to the engine
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
@@ -683,8 +684,26 @@ async function processGroup(runs, kind) {
   const candle = { timeEST: markTimeEST, datetime: T, open: c5.open, high: c5.high, low: c5.low, close: c5.close };
 
   // Time-to-expiry + IV for the read-only harvest observer's reachable band (spot·iv·√tau·σ).
+  //
+  // TWO CORRECTIONS, and they only work TOGETHER (fixed 2026-09-07, basis marker `iv15m+intraday`):
+  //   1. 15m bands, not 5m. The intraday-IV calibration is defined as
+  //      ivMult(t) = median[ ATM_implied_real(t) / bandIV(day) ] where bandIV is measured from the
+  //      15m band — and the backtest's own ivOf() is 15m too. Applying that multiplier on top of a
+  //      5m-derived IV would be a DIFFERENT wrongness, not a fix, because the multiplier's denominator
+  //      would no longer be the quantity being multiplied.
+  //   2. Apply the multiplier. Without it the band ran ~21% too narrow at the open and ~19% too wide
+  //      into the close. That biased the observer in exactly the dimension it exists to measure: a
+  //      too-narrow band at the open scans a smaller region, finds fewer reachable loss zones, and so
+  //      UNDER-REPORTS how early lopsidedness appears — which is the whole research question.
+  // bandSigmas stays 2.0 (see the observe() call): the observer deliberately casts a wider net than
+  // wing conversion's 1.5, because it is looking for zones to study, not zones to pay to fix.
   let harvestTau = 0, harvestIv = 0;
-  try { harvestTau = bs.tauFromTime(candle.datetime); const c5 = A['5m']; harvestIv = bs.ivFromRelBandWidth((c5.bbupper - c5.bblower) / c5.close); } catch (e) { /* leave 0 → observer skips */ }
+  try {
+    harvestTau = bs.tauFromTime(candle.datetime);
+    const b15 = A['15m'];
+    const etm = (() => { const q = etParts(new Date(candle.datetime)); return q.hour * 60 + q.minute; })();
+    harvestIv = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * IIV.ivMultAt(etm);
+  } catch (e) { /* leave 0 → observer skips */ }
 
   // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
@@ -706,7 +725,12 @@ async function processGroup(runs, kind) {
         if (harvestTau > 0 && harvestIv > 0 && st.positions && st.positions.length) {
           const obs = RH.observe(st.positions, getLeg, underlying, harvestTau, harvestIv, { bandSigmas: 2.0, minRatio: 3, trigger: -500 });
           if (obs) {
-            if (!st.harvestObs) st.harvestObs = { count: 0, firstLopsidedTime: null, worstFloor: 0, samples: [] };
+            // BASIS MARKER. The band definition changed on 2026-09-07 (5m -> 15m bands, intraday IV
+            // multiplier applied). Samples recorded before that are not comparable with samples after,
+            // and a research series whose meaning silently changed mid-collection is worse than no
+            // series at all — so every record says which definition produced it.
+            if (!st.harvestObs) st.harvestObs = { count: 0, firstLopsidedTime: null, worstFloor: 0, samples: [], basis: 'iv15m+intraday' };
+            if (!st.harvestObs.basis) st.harvestObs.basis = 'iv15m+intraday';
             if (obs.lopsided) {
               st.harvestObs.count++;
               if (!st.harvestObs.firstLopsidedTime) st.harvestObs.firstLopsidedTime = candle.timeEST;
