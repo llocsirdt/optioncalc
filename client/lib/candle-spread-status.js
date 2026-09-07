@@ -37,6 +37,16 @@
     st.id = 'csEngineStatusCss';
     st.textContent =
       '#csEngineStatusPop .cshdr{color:#ddd;font-size:11px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #444}'
+      // WATCHLIST diamond vs SETUP triangle, deliberately different marks and colours. The diamond is a
+      // standing choice (amber, quiet); the triangle is a condition true only today (lime, louder). Lime
+      // is reserved for the setup so it never reads as "armed" — armed is the orange the mode badge uses.
+      + '#csEngineStatusPop .wl{color:#e2a33c;margin-left:3px;font-size:9px;cursor:help}'
+      + '#csEngineStatusPop .fav{color:#a3e635;margin-left:2px;font-size:9px;cursor:help}'
+      + '#csEngineStatusPop .csg td.fav{box-shadow:inset 0 0 0 1px #a3e635}'
+      + '#csEngineStatusPop .mk{text-align:right;line-height:1;height:9px}'
+      + '#csEngineStatusPop .cssetup{color:#a3e635;font-size:11px;margin:0 0 5px;padding:3px 5px;'
+      + 'border:1px solid #4d6b1a;border-radius:3px;background:#1e2a10;cursor:help}'
+      + '#csEngineStatusPop .cssetup .n{color:#8a9b6a;font-weight:400}'
       + '#csEngineStatusPop table.csg{border-collapse:separate;border-spacing:3px;font:10px ui-monospace,Menlo,monospace}'
       + '#csEngineStatusPop .csg th{color:#999;font-weight:600;padding:1px 3px;text-align:center;white-space:nowrap}'
       + '#csEngineStatusPop .csg th.rowh{text-align:right;color:#ccc}'
@@ -118,6 +128,30 @@
   }
 
   // Build the popover: header line + the family×sub-variant grid of execution summaries.
+  // Which variants a currently-firing setup points at, and why. Empty when nothing fired — the common case.
+  function favouredSet(s) {
+    const out = new Set();
+    const b = s && s.setups;
+    if (b && b.ok && Array.isArray(b.setups)) for (const st of b.setups) (st.favors || []).forEach(v => out.add(v));
+    return out;
+  }
+  function favourTitle(s, name) {
+    const b = s && s.setups; if (!b || !b.setups) return '';
+    const hit = b.setups.filter(st => (st.favors || []).includes(name));
+    // Carry the SAMPLE SIZE and the caveat into the tooltip. A green mark on a trading screen gets
+    // trusted well past its evidence; the n and the caveat are the only things holding that in check.
+    return hit.map(st => `${st.label}: ${st.expect}\n\nWhy: ${st.why}\nEvidence: ${st.evidence}\n`
+      + `Fires on ${st.firesPct}% of days (n=${st.n}), ${st.tested}.\nCaveat: ${st.caveat}`).join('\n\n');
+  }
+  // One line above the grid when a setup is live, so it is visible without hovering a cell.
+  function setupBanner(s) {
+    const b = s && s.setups;
+    if (!b || !b.ok || !b.setups || !b.setups.length) return '';
+    return b.setups.map(st =>
+      `<div class="cssetup" title="${String(st.caveat).replace(/"/g, '&quot;')}">▲ <b>${st.label}</b> — ${st.expect}`
+      + `<span class="n"> · n=${st.n} (${st.firesPct}% of days), ${st.tested}</span></div>`).join('');
+  }
+
   function gridHtml(s, tickMin, opts) {
     const o = opts || {};
     const g = s.gates || {};
@@ -143,8 +177,15 @@
         const ro = r.realOrders || {};
         const name = `${f}-${c.k}`;
         const sel = o.pick && o.selected === name;
-        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
-          + (o.pick ? `<div class="vname">${name}</div>` : '')
+        // WATCHED = on the six-variant observation list. FAVOURED = a named start-of-day setup fired
+        // today and points at this variant. They are deliberately different marks: one is a standing
+        // choice, the other is a condition that is true right now and will be false tomorrow.
+        const watched = (s.watchlist || []).includes(name);
+        const favoured = favouredSet(s).has(name);
+        const marks = (watched ? '<span class="wl" title="on the watchlist — under active observation against live sessions">◆</span>' : '')
+          + (favoured ? `<span class="fav" title="${esc(favourTitle(s, name))}">▲</span>` : '');
+        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+          + (o.pick ? `<div class="vname">${name}${marks}</div>` : (marks ? `<div class="mk">${marks}</div>` : ''))
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`
           + (armed ? `<div class="ord">⚡${ro.sent || 0}/${ro.canceled || 0}x/${ro.filled || 0}f</div>` : '')
@@ -155,7 +196,7 @@
     body += '</tbody></table>';
     const missing = (s.runs || []).length - shown;
     const foot = missing > 0 ? `<div class="csfoot">+ ${missing} run(s) not on the v0-v9 grid</div>` : '';
-    return hdr + body + foot;
+    return hdr + setupBanner(s) + body + foot;
   }
 
 

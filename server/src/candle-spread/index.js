@@ -13,6 +13,41 @@ const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
 const VC = require('./variant-contract');
 const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)
+const setups = require('./setups');             // named start-of-day setups (informational; never trades)
+const chartSeries = require('./../chart-series');
+
+// THE WATCHLIST. The six variants under active observation against live sessions, chosen 2026-09-07 on
+// efficiency / return-on-capital / total AND on being genuinely DIFFERENT BETS (measured daily-P&L
+// correlation: v7-10 vs v6-20 0.41, v7-40 vs the $10 books 0.16-0.19). Purely a UI marker — the engine
+// does not read this, and every variant keeps running regardless.
+const WATCHLIST = ['v7-10', 'v7-20', 'v6-20', 'v7-40', 'v1-10', 'v6-10'];
+
+// Named setups change only once a day, so evaluating them per tick would re-fetch a daily series for
+// nothing. Cached for 30 minutes; failure is non-fatal and reported rather than thrown, because a setup
+// badge going missing must never be able to disturb trading.
+let setupCache = null, setupCacheAt = 0;
+const SETUP_TTL_MS = 30 * 60 * 1000;
+async function currentSetups(symbol) {
+  const now = Date.now();
+  if (setupCache && now - setupCacheAt < SETUP_TTL_MS) return setupCache;
+  try {
+    const series = await chartSeries.getChartSeries(symbol, 'daily');
+    const rows = (series && (series.candles || series.data || series)) || [];
+    // Drop any bar for TODAY: a setup must read the last COMPLETED day, never the forming candle.
+    const todayKey = todayEST();
+    const done = rows.filter((r) => {
+      if (!r || r.datetime == null) return false;
+      const d = new Date(r.datetime);
+      const k = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+      return k < todayKey;
+    });
+    setupCache = { ...setups.evaluate(done), symbol, evaluatedAt: new Date(now).toISOString() };
+  } catch (e) {
+    setupCache = { ok: false, reason: 'daily series unavailable: ' + ((e && e.message) || e), setups: [] };
+  }
+  setupCacheAt = now;
+  return setupCache;
+}
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — same source as the backtest
 // Last tradability verdict, published to /status so the UI can show WHY the engine is standing down.
 let LAST_TRADABILITY = null;   // fails the boot when a variant flag is not forwarded to the engine
@@ -653,6 +688,7 @@ async function processGroup(runs, kind) {
   // it — both 15m decision points happened to return `neutral`, which is luck, not a safety property.
   // See tradability.js for why this gates on EVIDENCE (can we see a price, is there a two-sided market)
   // rather than on a holiday calendar.
+  currentSetups(priceSymbol).catch(() => { /* cached failure is reported in status(); never blocks a tick */ });
   const tradeGate = tradability.assess({
     underlying,
     nowMs: T,
@@ -1010,6 +1046,9 @@ function status() {
   // TRADABILITY — surfaced at the top level because "the market is not open / not quoted" is the single
   // most important thing to see at a glance: it explains an empty session without the operator having to
   // guess whether the engine is broken, disarmed, or simply looking at a closed tape.
+  // Setups are informational and evaluated asynchronously; status() is sync, so it reports whatever the
+  // last refresh produced. Never blocks, never throws.
+  const setupBlock = setupCache || { ok: null, reason: 'not evaluated yet', setups: [] };
   const t = LAST_TRADABILITY;
   const STALE_MS = 20 * 60 * 1000;   // older than a few marks = we are not currently ticking at all
   const tradability = t
@@ -1064,7 +1103,8 @@ function status() {
     };
   });
   return {
-    mode, gates, tradability, armedVariants: { live: liveV, test: testV },
+    mode, gates, tradability, watchlist: WATCHLIST, setups: setupBlock,
+    armedVariants: { live: liveV, test: testV },
     testConfig: { unfillableFrac: TEST_FRAC, cancelAfterMs: TEST_CANCEL_MS, pollMs: ORDER_POLL_MS },
     tradeDate, started, msToNextTick: msToNextBoundary(), runs, serverTime: new Date().toISOString()
   };
