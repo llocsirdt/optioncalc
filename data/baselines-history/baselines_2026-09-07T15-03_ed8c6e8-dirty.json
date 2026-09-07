@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-07T15:23:04.523Z",
+  "generatedAt": "2026-09-07T14:53:25.659Z",
   "dataDir": "backtest-data-5m-nq",
   "days": 765,
   "calendarDays": 922,
@@ -41,12 +41,10 @@
         "coversDeferred": 0,
         "offsets": 0,
         "offsetSpent": 0,
-        "opensBlocked": 0
-      },
-      "wings": {
-        "count": 294,
-        "spent": 62970,
-        "days": 240
+        "opensBlocked": 0,
+        "wings": 294,
+        "wingSpent": 62970,
+        "wingDays": 240
       }
     },
     "v0-20": {
@@ -84,12 +82,10 @@
         "coversDeferred": 13,
         "offsets": 175,
         "offsetSpent": 72215,
-        "opensBlocked": 68
-      },
-      "wings": {
-        "count": 1239,
-        "spent": 281474,
-        "days": 526
+        "opensBlocked": 68,
+        "wings": 1239,
+        "wingSpent": 281474,
+        "wingDays": 526
       }
     },
     "v0-40": {
@@ -127,12 +123,10 @@
         "coversDeferred": 51,
         "offsets": 1908,
         "offsetSpent": 932099,
-        "opensBlocked": 611
-      },
-      "wings": {
-        "count": 1882,
-        "spent": 478509,
-        "days": 569
+        "opensBlocked": 611,
+        "wings": 1882,
+        "wingSpent": 478509,
+        "wingDays": 569
       }
     },
     "v1-10": {
@@ -170,12 +164,10 @@
         "coversDeferred": 0,
         "offsets": 0,
         "offsetSpent": 0,
-        "opensBlocked": 0
-      },
-      "wings": {
-        "count": 509,
-        "spent": 101105,
-        "days": 355
+        "opensBlocked": 0,
+        "wings": 509,
+        "wingSpent": 101105,
+        "wingDays": 355
       }
     },
     "v1-20": {
@@ -213,12 +205,10 @@
         "coversDeferred": 12,
         "offsets": 185,
         "offsetSpent": 78280,
-        "opensBlocked": 71
-      },
-      "wings": {
-        "count": 1445,
-        "spent": 315357,
-        "days": 556
+        "opensBlocked": 71,
+        "wings": 1445,
+        "wingSpent": 315357,
+        "wingDays": 556
       }
     },
     "v1-40": {
@@ -256,12 +246,10 @@
         "coversDeferred": 44,
         "offsets": 1959,
         "offsetSpent": 948990,
-        "opensBlocked": 597
-      },
-      "wings": {
-        "count": 1931,
-        "spent": 491458,
-        "days": 578
+        "opensBlocked": 597,
+        "wings": 1931,
+        "wingSpent": 491458,
+        "wingDays": 578
       }
     },
     "v2-10": {
@@ -299,12 +287,10 @@
         "coversDeferred": 0,
         "offsets": 0,
         "offsetSpent": 0,
-        "opensBlocked": 0
-      },
-      "wings": {
-        "count": 686,
-        "spent": 129938,
-        "days": 421
+        "opensBlocked": 0,
+        "wings": 686,
+        "wingSpent": 129938,
+        "wingDays": 421
       }
     },
     "v2-20": {
@@ -342,12 +328,10 @@
         "coversDeferred": 2,
         "offsets": 212,
         "offsetSpent": 88491,
-        "opensBlocked": 69
-      },
-      "wings": {
-        "count": 1610,
-        "spent": 345271,
-        "days": 581
+        "opensBlocked": 69,
+        "wings": 1610,
+        "wingSpent": 345271,
+        "wingDays": 581
       }
     },
     "v2-40": {
@@ -385,12 +369,10 @@
         "coversDeferred": 65,
         "offsets": 2050,
         "offsetSpent": 994764,
-        "opensBlocked": 614
-      },
-      "wings": {
-        "count": 1938,
-        "spent": 487525,
-        "days": 579
+        "opensBlocked": 614,
+        "wings": 1938,
+        "wingSpent": 487525,
+        "wingDays": 579
       }
     },
     "v3-10": {
@@ -428,12 +410,10 @@
         "coversDeferred": 0,
         "offsets": 0,
         "offsetSpent": 0,
-        "opensBlocked": 0
-      },
-      "wings": {
-        "count": 359,
-        "spent": 75568,
-        "days": 274
+        "opensBlocked": 0,
+        "wings": 359,
+        "wingSpent": 75568,
+        "wingDays": 274
       }
     },
     "v3-20": {
@@ -471,12 +451,10 @@
         "coversDeferred": 13,
         "offsets": 169,
         "offsetSpent": 69061,
-        "opensBlocked": 76
-      },
-      "wings": {
-        "count": 1268,
-        "spent": 291664,
-        "days": 529
+        "opensBlocked": 76,
+        "wings": 1268,
+        "wingSpent": 291664,
+        "wingDays": 529
       }
     },
     "v3-40": {
@@ -514,12 +492,10 @@
         "coversDeferred": 57,
         "offsets": 1903,
         "offsetSpent": 925260,
-        "opensBlocked": 613
-      },
-      "wings": {
-        "count": 1888,
-        "spent": 481795,
-        "days": 571
+        "opensBlocked": 613,
+        "wings": 1888,
+        "wingSpent": 481795,
+        "wingDays": 571
       }
     },
     "v4-10": {
@@ -557,12 +533,10 @@
         "coversDeferred": 14,
         "offsets": 24,
         "offsetSpent": 9031,
-        "opensBlocked": 233
-      },
-      "wings": {
-        "count": 988,
-        "spent": 225155,
-        "days": 509
+        "opensBlocked": 233,
+        "wings": 988,
+        "wingSpent": 225155,
+        "wingDays": 509
       }
     },
     "v4-20": {
@@ -600,12 +574,10 @@
         "coversDeferred": 487,
         "offsets": 477,
         "offsetSpent": 187616,
-        "opensBlocked": 1448
-      },
-      "wings": {
-        "count": 1919,
-        "spent": 493540,
-        "days": 579
+        "opensBlocked": 1448,
+        "wings": 1919,
+        "wingSpent": 493540,
+        "wingDays": 579
       }
     },
     "v4-40": {
@@ -643,12 +615,10 @@
         "coversDeferred": 1717,
         "offsets": 1833,
         "offsetSpent": 773433,
-        "opensBlocked": 3436
-      },
-      "wings": {
-        "count": 2019,
-        "spent": 579529,
-        "days": 560
+        "opensBlocked": 3436,
+        "wings": 2019,
+        "wingSpent": 579529,
+        "wingDays": 560
       }
     },
     "v5-10": {
@@ -686,12 +656,10 @@
         "coversDeferred": 2,
         "offsets": 5,
         "offsetSpent": 1433,
-        "opensBlocked": 6
-      },
-      "wings": {
-        "count": 822,
-        "spent": 183757,
-        "days": 467
+        "opensBlocked": 6,
+        "wings": 822,
+        "wingSpent": 183757,
+        "wingDays": 467
       }
     },
     "v5-20": {
@@ -729,12 +697,10 @@
         "coversDeferred": 415,
         "offsets": 353,
         "offsetSpent": 141935,
-        "opensBlocked": 441
-      },
-      "wings": {
-        "count": 1780,
-        "spent": 444623,
-        "days": 590
+        "opensBlocked": 441,
+        "wings": 1780,
+        "wingSpent": 444623,
+        "wingDays": 590
       }
     },
     "v5-40": {
@@ -772,12 +738,10 @@
         "coversDeferred": 1203,
         "offsets": 1814,
         "offsetSpent": 790973,
-        "opensBlocked": 1844
-      },
-      "wings": {
-        "count": 2112,
-        "spent": 578238,
-        "days": 588
+        "opensBlocked": 1844,
+        "wings": 2112,
+        "wingSpent": 578238,
+        "wingDays": 588
       }
     },
     "v6-10": {
@@ -815,12 +779,10 @@
         "coversDeferred": 8,
         "offsets": 24,
         "offsetSpent": 9114,
-        "opensBlocked": 42
-      },
-      "wings": {
-        "count": 1431,
-        "spent": 327927,
-        "days": 579
+        "opensBlocked": 42,
+        "wings": 1431,
+        "wingSpent": 327927,
+        "wingDays": 579
       }
     },
     "v6-20": {
@@ -858,12 +820,10 @@
         "coversDeferred": 967,
         "offsets": 592,
         "offsetSpent": 236673,
-        "opensBlocked": 733
-      },
-      "wings": {
-        "count": 2239,
-        "spent": 574057,
-        "days": 636
+        "opensBlocked": 733,
+        "wings": 2239,
+        "wingSpent": 574057,
+        "wingDays": 636
       }
     },
     "v6-40": {
@@ -901,12 +861,10 @@
         "coversDeferred": 4684,
         "offsets": 2168,
         "offsetSpent": 958950,
-        "opensBlocked": 2969
-      },
-      "wings": {
-        "count": 2046,
-        "spent": 571559,
-        "days": 582
+        "opensBlocked": 2969,
+        "wings": 2046,
+        "wingSpent": 571559,
+        "wingDays": 582
       }
     },
     "v7-10": {
@@ -944,12 +902,10 @@
         "coversDeferred": 298,
         "offsets": 72,
         "offsetSpent": 26655,
-        "opensBlocked": 2283
-      },
-      "wings": {
-        "count": 1039,
-        "spent": 259675,
-        "days": 454
+        "opensBlocked": 2283,
+        "wings": 1039,
+        "wingSpent": 259675,
+        "wingDays": 454
       }
     },
     "v7-20": {
@@ -987,12 +943,10 @@
         "coversDeferred": 927,
         "offsets": 1025,
         "offsetSpent": 414750,
-        "opensBlocked": 12072
-      },
-      "wings": {
-        "count": 1881,
-        "spent": 507441,
-        "days": 560
+        "opensBlocked": 12072,
+        "wings": 1881,
+        "wingSpent": 507441,
+        "wingDays": 560
       }
     },
     "v7-40": {
@@ -1030,12 +984,10 @@
         "coversDeferred": 677,
         "offsets": 3007,
         "offsetSpent": 1521454,
-        "opensBlocked": 20097
-      },
-      "wings": {
-        "count": 2114,
-        "spent": 593600,
-        "days": 569
+        "opensBlocked": 20097,
+        "wings": 2114,
+        "wingSpent": 593600,
+        "wingDays": 569
       }
     },
     "v8-10": {
@@ -1073,12 +1025,10 @@
         "coversDeferred": 0,
         "offsets": 10,
         "offsetSpent": 3236,
-        "opensBlocked": 42
-      },
-      "wings": {
-        "count": 945,
-        "spent": 200714,
-        "days": 489
+        "opensBlocked": 42,
+        "wings": 945,
+        "wingSpent": 200714,
+        "wingDays": 489
       }
     },
     "v8-20": {
@@ -1116,12 +1066,10 @@
         "coversDeferred": 0,
         "offsets": 194,
         "offsetSpent": 77518,
-        "opensBlocked": 597
-      },
-      "wings": {
-        "count": 1389,
-        "spent": 325555,
-        "days": 561
+        "opensBlocked": 597,
+        "wings": 1389,
+        "wingSpent": 325555,
+        "wingDays": 561
       }
     },
     "v8-40": {
@@ -1159,12 +1107,10 @@
         "coversDeferred": 0,
         "offsets": 768,
         "offsetSpent": 353075,
-        "opensBlocked": 1946
-      },
-      "wings": {
-        "count": 1648,
-        "spent": 404969,
-        "days": 536
+        "opensBlocked": 1946,
+        "wings": 1648,
+        "wingSpent": 404969,
+        "wingDays": 536
       }
     },
     "v9-10": {
@@ -1202,12 +1148,10 @@
         "coversDeferred": 325,
         "offsets": 73,
         "offsetSpent": 26566,
-        "opensBlocked": 2300
-      },
-      "wings": {
-        "count": 1028,
-        "spent": 257728,
-        "days": 448
+        "opensBlocked": 2300,
+        "wings": 1028,
+        "wingSpent": 257728,
+        "wingDays": 448
       }
     },
     "v9-20": {
@@ -1245,12 +1189,10 @@
         "coversDeferred": 945,
         "offsets": 990,
         "offsetSpent": 404076,
-        "opensBlocked": 12082
-      },
-      "wings": {
-        "count": 1868,
-        "spent": 505071,
-        "days": 551
+        "opensBlocked": 12082,
+        "wings": 1868,
+        "wingSpent": 505071,
+        "wingDays": 551
       }
     },
     "v9-40": {
@@ -1288,12 +1230,10 @@
         "coversDeferred": 709,
         "offsets": 3005,
         "offsetSpent": 1518785,
-        "opensBlocked": 20077
-      },
-      "wings": {
-        "count": 2110,
-        "spent": 592767,
-        "days": 570
+        "opensBlocked": 20077,
+        "wings": 2110,
+        "wingSpent": 592767,
+        "wingDays": 570
       }
     },
     "v0-10-unc": {
@@ -1320,12 +1260,7 @@
       "riskScore": -16590,
       "efficiency": 131.3,
       "returnOnCapital": 0.962,
-      "governor": null,
-      "wings": {
-        "count": 294,
-        "spent": 62970,
-        "days": 240
-      }
+      "governor": null
     },
     "v0-20-unc": {
       "label": "classic tent $20 short-ATM, UNCAPPED",
@@ -1351,12 +1286,7 @@
       "riskScore": -22437,
       "efficiency": 71.7,
       "returnOnCapital": 0.682,
-      "governor": null,
-      "wings": {
-        "count": 1317,
-        "spent": 300028,
-        "days": 549
-      }
+      "governor": null
     },
     "v0-40-unc": {
       "label": "classic tent $40 short-ATM, UNCAPPED",
@@ -1382,12 +1312,7 @@
       "riskScore": -22617,
       "efficiency": 44.9,
       "returnOnCapital": 0.365,
-      "governor": null,
-      "wings": {
-        "count": 2810,
-        "spent": 734687,
-        "days": 672
-      }
+      "governor": null
     },
     "v1-10-unc": {
       "label": "classic halfway $10 short-ATM, UNCAPPED",
@@ -1413,12 +1338,7 @@
       "riskScore": -14140,
       "efficiency": 150,
       "returnOnCapital": 0.947,
-      "governor": null,
-      "wings": {
-        "count": 509,
-        "spent": 101105,
-        "days": 355
-      }
+      "governor": null
     },
     "v1-20-unc": {
       "label": "classic halfway $20 short-ATM, UNCAPPED",
@@ -1444,12 +1364,7 @@
       "riskScore": -20788,
       "efficiency": 76,
       "returnOnCapital": 0.639,
-      "governor": null,
-      "wings": {
-        "count": 1528,
-        "spent": 335733,
-        "days": 572
-      }
+      "governor": null
     },
     "v1-40-unc": {
       "label": "classic halfway $40 short-ATM, UNCAPPED",
@@ -1475,12 +1390,7 @@
       "riskScore": -21676,
       "efficiency": 46,
       "returnOnCapital": 0.351,
-      "governor": null,
-      "wings": {
-        "count": 2876,
-        "spent": 749638,
-        "days": 670
-      }
+      "governor": null
     },
     "v2-10-unc": {
       "label": "classic at-money $10 short-ATM, UNCAPPED",
@@ -1506,12 +1416,7 @@
       "riskScore": -13558,
       "efficiency": 148.2,
       "returnOnCapital": 0.852,
-      "governor": null,
-      "wings": {
-        "count": 686,
-        "spent": 129938,
-        "days": 421
-      }
+      "governor": null
     },
     "v2-20-unc": {
       "label": "classic at-money $20 short-ATM, UNCAPPED",
@@ -1537,12 +1442,7 @@
       "riskScore": -21331,
       "efficiency": 69.4,
       "returnOnCapital": 0.583,
-      "governor": null,
-      "wings": {
-        "count": 1702,
-        "spent": 366571,
-        "days": 601
-      }
+      "governor": null
     },
     "v2-40-unc": {
       "label": "classic at-money $40 short-ATM, UNCAPPED",
@@ -1568,12 +1468,7 @@
       "riskScore": -23188,
       "efficiency": 42.2,
       "returnOnCapital": 0.336,
-      "governor": null,
-      "wings": {
-        "count": 2935,
-        "spent": 755468,
-        "days": 674
-      }
+      "governor": null
     },
     "v3-10-unc": {
       "label": "classic tent, risk-armed $10 short-ATM, UNCAPPED",
@@ -1599,12 +1494,7 @@
       "riskScore": -10790,
       "efficiency": 152.6,
       "returnOnCapital": 0.537,
-      "governor": null,
-      "wings": {
-        "count": 379,
-        "spent": 78473,
-        "days": 283
-      }
+      "governor": null
     },
     "v3-20-unc": {
       "label": "classic tent, risk-armed $20 short-ATM, UNCAPPED",
@@ -1630,12 +1520,7 @@
       "riskScore": -15955,
       "efficiency": 75.5,
       "returnOnCapital": 0.462,
-      "governor": null,
-      "wings": {
-        "count": 1381,
-        "spent": 315630,
-        "days": 561
-      }
+      "governor": null
     },
     "v3-40-unc": {
       "label": "classic tent, risk-armed $40 short-ATM, UNCAPPED",
@@ -1661,12 +1546,7 @@
       "riskScore": -30661,
       "efficiency": 25.5,
       "returnOnCapital": 0.309,
-      "governor": null,
-      "wings": {
-        "count": 2757,
-        "spent": 730149,
-        "days": 675
-      }
+      "governor": null
     },
     "v4-10-unc": {
       "label": "multiTF-overext $10 short-ATM, UNCAPPED",
@@ -1692,12 +1572,7 @@
       "riskScore": -31180,
       "efficiency": 74.6,
       "returnOnCapital": 0.955,
-      "governor": null,
-      "wings": {
-        "count": 1008,
-        "spent": 231106,
-        "days": 519
-      }
+      "governor": null
     },
     "v4-20-unc": {
       "label": "multiTF-overext $20 short-ATM, UNCAPPED",
@@ -1723,12 +1598,7 @@
       "riskScore": -50459,
       "efficiency": 36.3,
       "returnOnCapital": 0.705,
-      "governor": null,
-      "wings": {
-        "count": 2263,
-        "spent": 617020,
-        "days": 654
-      }
+      "governor": null
     },
     "v4-40-unc": {
       "label": "multiTF-overext $40 short-ATM, UNCAPPED",
@@ -1754,12 +1624,7 @@
       "riskScore": -57770,
       "efficiency": 18.9,
       "returnOnCapital": 0.376,
-      "governor": null,
-      "wings": {
-        "count": 2980,
-        "spent": 1000216,
-        "days": 714
-      }
+      "governor": null
     },
     "v5-10-unc": {
       "label": "trend-flip $10 short-ATM, UNCAPPED",
@@ -1785,12 +1650,7 @@
       "riskScore": -32932,
       "efficiency": 84.7,
       "returnOnCapital": 1.159,
-      "governor": null,
-      "wings": {
-        "count": 822,
-        "spent": 183757,
-        "days": 467
-      }
+      "governor": null
     },
     "v5-20-unc": {
       "label": "trend-flip $20 short-ATM, UNCAPPED",
@@ -1816,12 +1676,7 @@
       "riskScore": -30174,
       "efficiency": 76,
       "returnOnCapital": 0.881,
-      "governor": null,
-      "wings": {
-        "count": 1955,
-        "spent": 494751,
-        "days": 616
-      }
+      "governor": null
     },
     "v5-40-unc": {
       "label": "trend-flip $40 short-ATM, UNCAPPED",
@@ -1847,12 +1702,7 @@
       "riskScore": -46499,
       "efficiency": 28.9,
       "returnOnCapital": 0.458,
-      "governor": null,
-      "wings": {
-        "count": 2718,
-        "spent": 818078,
-        "days": 677
-      }
+      "governor": null
     },
     "v6-10-unc": {
       "label": "5m-harness $10 short-ATM, UNCAPPED",
@@ -1878,12 +1728,7 @@
       "riskScore": -36272,
       "efficiency": 99.4,
       "returnOnCapital": 1.361,
-      "governor": null,
-      "wings": {
-        "count": 1441,
-        "spent": 330671,
-        "days": 580
-      }
+      "governor": null
     },
     "v6-20-unc": {
       "label": "5m-harness $20 short-ATM, UNCAPPED",
@@ -1909,12 +1754,7 @@
       "riskScore": -31605,
       "efficiency": 87.9,
       "returnOnCapital": 0.92,
-      "governor": null,
-      "wings": {
-        "count": 2468,
-        "spent": 648307,
-        "days": 668
-      }
+      "governor": null
     },
     "v6-40-unc": {
       "label": "5m-harness $40 short-ATM, UNCAPPED",
@@ -1940,12 +1780,7 @@
       "riskScore": -52731,
       "efficiency": 33.4,
       "returnOnCapital": 0.543,
-      "governor": null,
-      "wings": {
-        "count": 2844,
-        "spent": 900633,
-        "days": 692
-      }
+      "governor": null
     },
     "v7-10-unc": {
       "label": "be-wrong $10 short-ATM, UNCAPPED",
@@ -1971,12 +1806,7 @@
       "riskScore": -35772,
       "efficiency": 168.5,
       "returnOnCapital": 1.88,
-      "governor": null,
-      "wings": {
-        "count": 1126,
-        "spent": 289540,
-        "days": 477
-      }
+      "governor": null
     },
     "v7-20-unc": {
       "label": "be-wrong $20 short-ATM, UNCAPPED",
@@ -2002,12 +1832,7 @@
       "riskScore": -72461,
       "efficiency": 71,
       "returnOnCapital": 1.881,
-      "governor": null,
-      "wings": {
-        "count": 2535,
-        "spent": 798696,
-        "days": 636
-      }
+      "governor": null
     },
     "v7-40-unc": {
       "label": "be-wrong $40 short-ATM, UNCAPPED",
@@ -2033,12 +1858,7 @@
       "riskScore": -181363,
       "efficiency": 19.7,
       "returnOnCapital": 0.944,
-      "governor": null,
-      "wings": {
-        "count": 3292,
-        "spent": 1299146,
-        "days": 707
-      }
+      "governor": null
     },
     "v8-10-unc": {
       "label": "risk-capped $10 short-ATM, UNCAPPED",
@@ -2064,12 +1884,7 @@
       "riskScore": -35040,
       "efficiency": 94,
       "returnOnCapital": 1.435,
-      "governor": null,
-      "wings": {
-        "count": 1197,
-        "spent": 270470,
-        "days": 532
-      }
+      "governor": null
     },
     "v8-20-unc": {
       "label": "risk-capped $20 short-ATM, UNCAPPED",
@@ -2095,12 +1910,7 @@
       "riskScore": -32201,
       "efficiency": 79.9,
       "returnOnCapital": 0.981,
-      "governor": null,
-      "wings": {
-        "count": 2286,
-        "spent": 605537,
-        "days": 643
-      }
+      "governor": null
     },
     "v8-40-unc": {
       "label": "risk-capped $40 short-ATM, UNCAPPED",
@@ -2126,12 +1936,7 @@
       "riskScore": -53248,
       "efficiency": 30.7,
       "returnOnCapital": 0.538,
-      "governor": null,
-      "wings": {
-        "count": 2772,
-        "spent": 891619,
-        "days": 688
-      }
+      "governor": null
     },
     "v9-10-unc": {
       "label": "be-wrong + caps $10 short-ATM, UNCAPPED",
@@ -2157,12 +1962,7 @@
       "riskScore": -34632,
       "efficiency": 170.9,
       "returnOnCapital": 1.922,
-      "governor": null,
-      "wings": {
-        "count": 1121,
-        "spent": 288745,
-        "days": 473
-      }
+      "governor": null
     },
     "v9-20-unc": {
       "label": "be-wrong + caps $20 short-ATM, UNCAPPED",
@@ -2188,12 +1988,7 @@
       "riskScore": -72806,
       "efficiency": 69.3,
       "returnOnCapital": 1.852,
-      "governor": null,
-      "wings": {
-        "count": 2536,
-        "spent": 795636,
-        "days": 632
-      }
+      "governor": null
     },
     "v9-40-unc": {
       "label": "be-wrong + caps $40 short-ATM, UNCAPPED",
@@ -2219,12 +2014,7 @@
       "riskScore": -179482,
       "efficiency": 19.6,
       "returnOnCapital": 0.936,
-      "governor": null,
-      "wings": {
-        "count": 3281,
-        "spent": 1295458,
-        "days": 705
-      }
+      "governor": null
     },
     "v0-20-cATM": {
       "label": "classic tent $20 ATM-centered",
@@ -2261,12 +2051,10 @@
         "coversDeferred": 47,
         "offsets": 232,
         "offsetSpent": 93081,
-        "opensBlocked": 478
-      },
-      "wings": {
-        "count": 860,
-        "spent": 206405,
-        "days": 437
+        "opensBlocked": 478,
+        "wings": 860,
+        "wingSpent": 206405,
+        "wingDays": 437
       }
     },
     "v0-40-cATM": {
@@ -2304,12 +2092,10 @@
         "coversDeferred": 30,
         "offsets": 1586,
         "offsetSpent": 729113,
-        "opensBlocked": 1313
-      },
-      "wings": {
-        "count": 1439,
-        "spent": 396231,
-        "days": 509
+        "opensBlocked": 1313,
+        "wings": 1439,
+        "wingSpent": 396231,
+        "wingDays": 509
       }
     },
     "v1-20-cATM": {
@@ -2347,12 +2133,10 @@
         "coversDeferred": 45,
         "offsets": 253,
         "offsetSpent": 100712,
-        "opensBlocked": 480
-      },
-      "wings": {
-        "count": 941,
-        "spent": 221662,
-        "days": 462
+        "opensBlocked": 480,
+        "wings": 941,
+        "wingSpent": 221662,
+        "wingDays": 462
       }
     },
     "v1-40-cATM": {
@@ -2390,12 +2174,10 @@
         "coversDeferred": 30,
         "offsets": 1624,
         "offsetSpent": 747113,
-        "opensBlocked": 1318
-      },
-      "wings": {
-        "count": 1451,
-        "spent": 394840,
-        "days": 511
+        "opensBlocked": 1318,
+        "wings": 1451,
+        "wingSpent": 394840,
+        "wingDays": 511
       }
     },
     "v2-20-cATM": {
@@ -2433,12 +2215,10 @@
         "coversDeferred": 44,
         "offsets": 272,
         "offsetSpent": 110073,
-        "opensBlocked": 472
-      },
-      "wings": {
-        "count": 1032,
-        "spent": 239314,
-        "days": 475
+        "opensBlocked": 472,
+        "wings": 1032,
+        "wingSpent": 239314,
+        "wingDays": 475
       }
     },
     "v2-40-cATM": {
@@ -2476,12 +2256,10 @@
         "coversDeferred": 29,
         "offsets": 1646,
         "offsetSpent": 758612,
-        "opensBlocked": 1325
-      },
-      "wings": {
-        "count": 1471,
-        "spent": 401785,
-        "days": 510
+        "opensBlocked": 1325,
+        "wings": 1471,
+        "wingSpent": 401785,
+        "wingDays": 510
       }
     },
     "v3-20-cATM": {
@@ -2519,12 +2297,10 @@
         "coversDeferred": 25,
         "offsets": 224,
         "offsetSpent": 89968,
-        "opensBlocked": 463
-      },
-      "wings": {
-        "count": 874,
-        "spent": 211020,
-        "days": 445
+        "opensBlocked": 463,
+        "wings": 874,
+        "wingSpent": 211020,
+        "wingDays": 445
       }
     },
     "v3-40-cATM": {
@@ -2562,12 +2338,10 @@
         "coversDeferred": 30,
         "offsets": 1574,
         "offsetSpent": 724837,
-        "opensBlocked": 1301
-      },
-      "wings": {
-        "count": 1456,
-        "spent": 400212,
-        "days": 506
+        "opensBlocked": 1301,
+        "wings": 1456,
+        "wingSpent": 400212,
+        "wingDays": 506
       }
     },
     "v4-20-cATM": {
@@ -2605,12 +2379,10 @@
         "coversDeferred": 403,
         "offsets": 280,
         "offsetSpent": 109699,
-        "opensBlocked": 1508
-      },
-      "wings": {
-        "count": 1104,
-        "spent": 297606,
-        "days": 443
+        "opensBlocked": 1508,
+        "wings": 1104,
+        "wingSpent": 297606,
+        "wingDays": 443
       }
     },
     "v4-40-cATM": {
@@ -2648,12 +2420,10 @@
         "coversDeferred": 1967,
         "offsets": 1109,
         "offsetSpent": 458419,
-        "opensBlocked": 3098
-      },
-      "wings": {
-        "count": 1514,
-        "spent": 445652,
-        "days": 498
+        "opensBlocked": 3098,
+        "wings": 1514,
+        "wingSpent": 445652,
+        "wingDays": 498
       }
     },
     "v5-20-cATM": {
@@ -2691,12 +2461,10 @@
         "coversDeferred": 579,
         "offsets": 301,
         "offsetSpent": 123826,
-        "opensBlocked": 700
-      },
-      "wings": {
-        "count": 894,
-        "spent": 226811,
-        "days": 407
+        "opensBlocked": 700,
+        "wings": 894,
+        "wingSpent": 226811,
+        "wingDays": 407
       }
     },
     "v5-40-cATM": {
@@ -2734,12 +2502,10 @@
         "coversDeferred": 1109,
         "offsets": 1092,
         "offsetSpent": 476299,
-        "opensBlocked": 1741
-      },
-      "wings": {
-        "count": 1410,
-        "spent": 386058,
-        "days": 480
+        "opensBlocked": 1741,
+        "wings": 1410,
+        "wingSpent": 386058,
+        "wingDays": 480
       }
     },
     "v6-20-cATM": {
@@ -2777,12 +2543,10 @@
         "coversDeferred": 1415,
         "offsets": 435,
         "offsetSpent": 193733,
-        "opensBlocked": 1120
-      },
-      "wings": {
-        "count": 1061,
-        "spent": 272897,
-        "days": 450
+        "opensBlocked": 1120,
+        "wings": 1061,
+        "wingSpent": 272897,
+        "wingDays": 450
       }
     },
     "v6-40-cATM": {
@@ -2820,12 +2584,10 @@
         "coversDeferred": 3463,
         "offsets": 1108,
         "offsetSpent": 486548,
-        "opensBlocked": 2289
-      },
-      "wings": {
-        "count": 1337,
-        "spent": 385013,
-        "days": 484
+        "opensBlocked": 2289,
+        "wings": 1337,
+        "wingSpent": 385013,
+        "wingDays": 484
       }
     },
     "v7-20-cATM": {
@@ -2863,12 +2625,10 @@
         "coversDeferred": 1266,
         "offsets": 721,
         "offsetSpent": 253122,
-        "opensBlocked": 16128
-      },
-      "wings": {
-        "count": 1168,
-        "spent": 329601,
-        "days": 403
+        "opensBlocked": 16128,
+        "wings": 1168,
+        "wingSpent": 329601,
+        "wingDays": 403
       }
     },
     "v7-40-cATM": {
@@ -2906,12 +2666,10 @@
         "coversDeferred": 1079,
         "offsets": 2427,
         "offsetSpent": 1095351,
-        "opensBlocked": 21921
-      },
-      "wings": {
-        "count": 1660,
-        "spent": 496015,
-        "days": 492
+        "opensBlocked": 21921,
+        "wings": 1660,
+        "wingSpent": 496015,
+        "wingDays": 492
       }
     },
     "v8-20-cATM": {
@@ -2949,12 +2707,10 @@
         "coversDeferred": 0,
         "offsets": 135,
         "offsetSpent": 52795,
-        "opensBlocked": 482
-      },
-      "wings": {
-        "count": 820,
-        "spent": 196903,
-        "days": 413
+        "opensBlocked": 482,
+        "wings": 820,
+        "wingSpent": 196903,
+        "wingDays": 413
       }
     },
     "v8-40-cATM": {
@@ -2992,12 +2748,10 @@
         "coversDeferred": 0,
         "offsets": 674,
         "offsetSpent": 306919,
-        "opensBlocked": 2414
-      },
-      "wings": {
-        "count": 1407,
-        "spent": 373993,
-        "days": 497
+        "opensBlocked": 2414,
+        "wings": 1407,
+        "wingSpent": 373993,
+        "wingDays": 497
       }
     },
     "v9-20-cATM": {
@@ -3035,12 +2789,10 @@
         "coversDeferred": 1266,
         "offsets": 716,
         "offsetSpent": 251865,
-        "opensBlocked": 16129
-      },
-      "wings": {
-        "count": 1168,
-        "spent": 329328,
-        "days": 402
+        "opensBlocked": 16129,
+        "wings": 1168,
+        "wingSpent": 329328,
+        "wingDays": 402
       }
     },
     "v9-40-cATM": {
@@ -3078,12 +2830,10 @@
         "coversDeferred": 1079,
         "offsets": 2442,
         "offsetSpent": 1099192,
-        "opensBlocked": 21911
-      },
-      "wings": {
-        "count": 1654,
-        "spent": 494374,
-        "days": 491
+        "opensBlocked": 21911,
+        "wings": 1654,
+        "wingSpent": 494374,
+        "wingDays": 491
       }
     }
   },
