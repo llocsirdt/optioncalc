@@ -27,6 +27,7 @@ const path = require('path');
 const { runDay5m, load5mDays, ivMultAt, skewMultAt, etMinute } = require('./backtest-v6-5m');
 const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
+const VC = require('../../server/src/candle-spread/variant-contract');
 const eng = require('./backtest-v4');
 
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
@@ -76,6 +77,11 @@ function optsFor(v, onDecline) {
     ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
     : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
   if (HAS_PX) o.priceOf = priceOf;
+  // Guard: fail loudly if this variant carries a capability optsFor does not forward. extraOk
+  // lists what this script deliberately controls itself (its swept dimension) or handles under
+  // another name — everything else missing here would be a silent no-op, not a null result.
+  VC.assertForwarded(v, Object.keys(o), 'measure-declined-opens optsFor',
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
   return o;
 }
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });

@@ -18,6 +18,7 @@ const fs = require('fs');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns, VARIANTS } = require('../../server/src/candle-spread/index');
+const VC = require('../../server/src/candle-spread/variant-contract');
 // Grade against the ACTUAL merged runs (BASE_RUNS defaults × VARIANTS) the server trades — so shared
 // defaults like capital-recapture + leg-uniqueness are reflected in the baseline, not just per-variant knobs.
 const RUNS = buildRuns();
@@ -91,6 +92,10 @@ function optsFor(v) {
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
   // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.
   if (HAS_PX) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
+  // Fail loudly if this variant carries a capability optsFor does not forward — the failure mode that made
+  // wings, floorOffset and exemptTrendStack silent no-ops. extraOk lists fields handled under another name.
+  VC.assertForwarded(v, Object.keys(o), 'build-backtest-baselines optsFor',
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
   return o;
 }
 

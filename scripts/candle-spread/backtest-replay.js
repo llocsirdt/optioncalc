@@ -24,6 +24,7 @@ const path = require('path');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
+const VC = require('../../server/src/candle-spread/variant-contract');
 
 const arg = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : d; };
 const OUTDIR = path.join(__dirname, '..', '..', 'data', 'backtest-replays');
@@ -79,6 +80,11 @@ function optsFor(v) {
   // price series (`px`), options MUST be priced off it — without this the engine silently prices off the
   // SIGNAL series, which is the quiet way to violate the rule.
   if (day.bars.some(b => b.px)) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
+  // Guard: fail loudly if this variant carries a capability optsFor does not forward. extraOk
+  // lists what this script deliberately controls itself (its swept dimension) or handles under
+  // another name — everything else missing here would be a silent no-op, not a null result.
+  VC.assertForwarded(v, Object.keys(o), 'backtest-replay optsFor',
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
   return o;
 }
 

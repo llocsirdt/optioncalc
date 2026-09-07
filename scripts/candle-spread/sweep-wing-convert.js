@@ -27,6 +27,7 @@ const path = require('path');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
+const VC = require('../../server/src/candle-spread/variant-contract');
 
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
 const DIR = arg('--dataDir', path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq'));
@@ -61,6 +62,11 @@ function optsFor(v) {
     ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
     : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
   if (HAS_PX) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
+  // Guard: fail loudly if this variant carries a capability optsFor does not forward. extraOk
+  // lists what this script deliberately controls itself (its swept dimension) or handles under
+  // another name — everything else missing here would be a silent no-op, not a null result.
+  VC.assertForwarded(v, Object.keys(o), 'sweep-wing-convert optsFor',
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac', 'wingConvert', 'wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']);
   return o;
 }
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });

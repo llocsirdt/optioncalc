@@ -11,6 +11,7 @@ const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
+const VC = require('./variant-contract');   // fails the boot when a variant flag is not forwarded to the engine
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
@@ -157,11 +158,19 @@ const FAMILIES = [
 // effectively saturated at 4, and going deeper than 3 adds ~27 opens out of 20,086 (0.13%) whose
 // risk/reward is the worst of the acceptable set. Beyond 3 the differences are tiny and inconsistent in
 // sign (+7 ret/DD on v7-10, +0.5 on v0-20, −5.7 on v6-20); 2 is clearly worse everywhere.
-// WING CONVERSION — peak->floor, enabled on the WIDER books only. Split-sample stable exactly where the
-// cap binds: v6-20 gained +$33,929 in the first half of the history and +$30,816 in the second, ~10% apart.
-// The $10 books gain far less (v7-10 +$6,158 on $2.79M = 0.2%, and its two halves disagree in sign), and
-// their wings are already cheap enough that the cap rarely matters — so the ARMED variant is deliberately
-// left untouched, where stability matters most and the gain is noise.
+// WING CONVERSION — peak->floor. Applied to EVERY variant at every width, including the `-unc` twins and
+// the `-cATM` controls.
+//
+// It was first shipped scoped to `w >= 20` on the capped sweep only, which was wrong twice over:
+//   1. The `-unc` twins and `-cATM` controls exist to isolate ONE difference — the caps, and the open
+//      geometry respectively. Wings are neither. Giving the sibling wings and not the twin turned every
+//      twin subtraction into "the governor PLUS wings", which is not what those variants measure.
+//   2. The $10 exclusion generalised from a single variant. v7-10 really is noise (+0.2%, halves disagree
+//      in sign), but v2-10 (+$9,379 / +$2,544) and v3-10 (+$4,135 / +$873) were positive in BOTH halves.
+//      "The armed variant does not benefit" is not evidence that no $10 variant does.
+// The correct default for a capability that is measured to help is ON everywhere, with any exception
+// carried by MEASURED evidence for that specific variant rather than by extrapolation from a neighbour.
+//
 // Shape: NAKED longs allowed with the upside term on, but the short leg NOT swept outward. That arm had the
 // best ret/DD on both variants tested (v6-20 100.1, v7-10 144.4) — keep the cheap anchor-pinned spreads as
 // the floor workhorses and let an uncapped long compete only when the tail justifies it.
@@ -253,7 +262,7 @@ function buildVariants() {
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
-        ...(w >= 20 ? WINGS : {}),
+        ...WINGS,
       };
       if (capFrac != null) v.capFrac = capFrac;
       if (f.bidirectional) v.bidirectional = true;
@@ -296,6 +305,7 @@ function buildUncapped() {
         // Same GEOMETRY as the capped sibling — the `-unc` twin isolates the CAPS, so anything that is not
         // a cap (adaptive placement, the covering policy) must match or the comparison measures two things.
         spreadWidth: w, spreadShift: shift, ...ADAPTIVE_GEO,
+        ...WINGS,   // NOT a cap — it must match the capped sibling or the subtraction measures two things
         lossTarget: null, lossMax: null, floorOffset: false,   // no governor
         continuousCoverMinLockFrac: minLockFor(f.key, w),      // covering policy is NOT a risk cap — the
         // `-unc` twins isolate the CAPS, so they keep the same covering policy as their capped sibling.
@@ -334,7 +344,9 @@ function buildAtmComparators() {
         ...(f.continuousCoverArmFrac != null ? { continuousCoverArmFrac: f.continuousCoverArmFrac } : {}),
         ...(f.continuousCoverOppRatio != null ? { continuousCoverOppRatio: f.continuousCoverOppRatio } : {}),
         // Deliberately NOT adaptive: `-cATM` is the fixed ATM-centered CONTROL the sweep is measured
-        // against, and a control that moves its own strikes is not a control.
+        // against, and a control that moves its own strikes is not a control. Everything that is NOT open
+        // geometry still has to match the sweep, wings included.
+        ...WINGS,
         spreadWidth: w, spreadShift: 0,   // centered; capFrac left unset → the debitLimit default
       };
       if (f.bidirectional) v.bidirectional = true;
@@ -519,6 +531,63 @@ function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
 // per tick instead of once per variant — the variants must not multiply the Schwab load.
 function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`; }
 
+// Build the per-tick `deps` the engine reads. Extracted from the call site for ONE reason: it is a
+// hand-maintained enumeration of every capability a variant can carry, and three separate omissions here
+// (floorOffset, the two cover-arming flags, and the wing flags) each shipped a feature that silently did
+// nothing live while the backtest showed it working. Because it is now a pure function of `run`, start()
+// can replay it for every variant and assert that nothing in the config falls through — see assertDeps().
+// `live` carries the per-tick values (chain accessor, order fn, the analysis objects).
+function buildEngineDeps(run, live) {
+  return Object.assign({
+      dryRun: run.dryRun,
+      signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
+      // v8 risk-cap opts (undefined for other variants → cap logic inert)
+      riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
+      proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
+      coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
+      // CONTINUOUS COVERING (ported from the backtest 2026-09-04) — the covering POLICY, not a risk cap.
+      continuousCover: run.continuousCover, continuousCoverMinLockFrac: run.continuousCoverMinLockFrac,
+      // DAY-LOSS GOVERNOR — bounds the BOOK FLOOR (the day's true max loss), not at-risk debit.
+      lossTarget: run.lossTarget, lossMax: run.lossMax,
+      // LOW-COST RISK OFFSET — the governor's only REPAIR tool (everything else it does is preventive:
+      // block an open, defer a cover). Buys the far-side spread with the best floor-lift per dollar once
+      // the floor is through the target. Tuning knobs fall back to the trader's defaults when unset.
+      floorOffset: run.floorOffset, floorOffsetMinRatio: run.floorOffsetMinRatio,
+      floorOffsetMaxPerDay: run.floorOffsetMaxPerDay, floorOffsetWidths: run.floorOffsetWidths,
+      floorOffsetDepth: run.floorOffsetDepth, floorOffsetSlip: run.floorOffsetSlip,
+      floorOffsetBudget: run.floorOffsetBudget,
+      // COVER ARMING (v1-v3) — when to place the standing cover. NOTE these are read off `deps`, so they
+      // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
+      // which is exactly why the omission was easy to miss.
+      continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
+      // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
+      // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
+      wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
+      wingBudgetFrac: run.wingBudgetFrac, wingBudget: run.wingBudget, wingMaxPerDay: run.wingMaxPerDay,
+      wingBandSigmas: run.wingBandSigmas, wingOutSteps: run.wingOutSteps, wingNaked: run.wingNaked,
+      wingUpsideLambda: run.wingUpsideLambda, wingTailSigmas: run.wingTailSigmas,
+      comboOrders: run.comboOrders, comboSlip: run.comboSlip,   // 4-leg atomic cover+open (default off)
+      capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
+      enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
+    }, live);
+}
+
+// Startup check: every variant's config must be fully represented in buildEngineDeps. Runs once, before
+// any order can be placed, so an unforwarded flag is a boot failure rather than a silent live no-op.
+function assertDeps(runs) {
+  for (const run of runs) {
+    const keys = Object.keys(buildEngineDeps(run, {}));
+    // LIVE-ONLY exemptions. These are deliberately narrow and scoped here rather than added to the shared
+    // NOT_ENGINE_OPTS, because the BACKTEST consumers do have to forward them and must keep being checked.
+    //   coverGeometry / coverSelector — reach the engine through `cfg = record.config` (the persisted run
+    //     config is a spread of the whole variant), so they are forwarded, just on the other channel.
+    //   lockCoverMode / ivSkew — backtest PRICING-MODEL choices with no live counterpart: live reads real
+    //     chain quotes (no modelled skew) and a resting cover either fills or does not (no fill model).
+    VC.assertForwarded(run, keys, 'live deps (buildEngineDeps)',
+      ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew']);
+  }
+}
+
 async function processGroup(runs, kind) {
   const sample = runs[0];
   const expiration = sample.expiration || todayEST(); // 0DTE default
@@ -588,39 +657,9 @@ async function processGroup(runs, kind) {
       const record = store.initRun(cfg, tradeDate);
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
-      await trader.processCandleClose(record, candle, null, {
-        getLeg, placeOrder, dryRun: run.dryRun,
-        signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
-        // v8 risk-cap opts (undefined for other variants → cap logic inert)
-        riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
-        proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
-        coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
-        // CONTINUOUS COVERING (ported from the backtest 2026-09-04) — the covering POLICY, not a risk cap.
-        continuousCover: run.continuousCover, continuousCoverMinLockFrac: run.continuousCoverMinLockFrac,
-        // DAY-LOSS GOVERNOR — bounds the BOOK FLOOR (the day's true max loss), not at-risk debit.
-        lossTarget: run.lossTarget, lossMax: run.lossMax,
-        // LOW-COST RISK OFFSET — the governor's only REPAIR tool (everything else it does is preventive:
-        // block an open, defer a cover). Buys the far-side spread with the best floor-lift per dollar once
-        // the floor is through the target. Tuning knobs fall back to the trader's defaults when unset.
-        floorOffset: run.floorOffset, floorOffsetMinRatio: run.floorOffsetMinRatio,
-        floorOffsetMaxPerDay: run.floorOffsetMaxPerDay, floorOffsetWidths: run.floorOffsetWidths,
-        floorOffsetDepth: run.floorOffsetDepth, floorOffsetSlip: run.floorOffsetSlip,
-        floorOffsetBudget: run.floorOffsetBudget,
-        // COVER ARMING (v1-v3) — when to place the standing cover. NOTE these are read off `deps`, so they
-        // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
-        // which is exactly why the omission was easy to miss.
-        continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
-        // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
-        // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
-        wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
-        wingBudgetFrac: run.wingBudgetFrac, wingBudget: run.wingBudget, wingMaxPerDay: run.wingMaxPerDay,
-        wingBandSigmas: run.wingBandSigmas, wingOutSteps: run.wingOutSteps, wingNaked: run.wingNaked,
-        wingUpsideLambda: run.wingUpsideLambda, wingTailSigmas: run.wingTailSigmas,
-        comboOrders: run.comboOrders, comboSlip: run.comboSlip,   // 4-leg atomic cover+open (default off)
-        capitalRecapture: run.capitalRecapture, openAlternateEvery: run.openAlternateEvery, creditCoverFrac: run.creditCoverFrac,
-        enforceLegUniqueness: run.enforceLegUniqueness, legMaxShift: run.legMaxShift, legMaxWing: run.legMaxWing,
-        A, priorA, isFifteen, underlying, signalSymbol, priceSymbol
-      });
+      await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
+        getLeg, placeOrder, A, priorA, isFifteen, underlying, signalSymbol, priceSymbol,
+      }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs
       // marketable)? Records onto state — NEVER trades, never affects the strategy. Answers: how early it
@@ -757,6 +796,10 @@ function start(deps) {
   }
   DEPS = deps;
   RUNS = buildRuns();
+  // Every variant's capabilities must be forwarded to the engine. Checked HERE, before the scheduler can
+  // place anything, because the failure this catches is invisible at runtime: an unforwarded flag makes the
+  // feature a no-op that still reports success. Three shipped that way before this existed.
+  assertDeps(RUNS);
   started = true;
   scheduleNext();
   // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).
