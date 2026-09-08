@@ -93,6 +93,8 @@
   .cell.is-partial { border-color:#f0b4b2; background:#fffafa; }
   /* Session-open marker. Information, not a warning — it is true all day, so it gets a badge rather than
      a bar, and stays clear of the alarm red so red keeps meaning "something is actually wrong". */
+  /* Toggled-on state for the uncapped button, so its current mode is readable without parsing the label. */
+  #uncBtn.on { background:#e8eef7; border-color:#9fb6d4; color:#24405f; }
   .liveBadge { margin-left:7px; padding:1px 6px; border-radius:3px; background:#2f6f4f; color:#fff;
     font:600 10px/1.6 system-ui,sans-serif; letter-spacing:.4px; vertical-align:middle; cursor:help; }
   #incompleteBanner { margin:0 14px 6px; padding:6px 9px; border:1px solid #f0b4b2; background:#fff5f5;
@@ -150,7 +152,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.55</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.56</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -158,6 +160,7 @@
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">overlay backtest</span></label>
   <button id="btTableBtn">Backtest table ▾</button>
+  <button id="uncBtn" title="The -unc twins run the same strategy with the day-loss governor OFF. They measure what the cap costs; they are not tradable candidates.">Show uncapped</button>
   <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
@@ -184,8 +187,7 @@
 </div>
 <div class="wrap" id="btWrap" style="display:none">
   <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span><span class="sub" id="btRowCount"></span>
-    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label>
-    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btHideUnc"> hide uncapped (-unc)</label></h2>
+    <label class="tgl" style="margin-left:10px;font-weight:400"><input type="checkbox" id="btNormalize"> normalize $ to $20 width</label></h2>
   <table class="bt" id="btTable"></table>
 </div>
 
@@ -226,16 +228,22 @@ const PROXY_URL = BT_BASE;
 const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9'];
 // Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
 // then the 2 tight-cap A/B twins (only v5-v9 have these → empty cells elsewhere).
+// Order: the 3 short-ATM widths (the candidates), the 2 ATM-centered controls, THEN the uncapped twins
+// last and hidden by default. The `-unc` runs are diagnostic — they show what the day-loss governor
+// costs — and are not tradable, so they sit at the end and stay out of the way until asked for.
 const COLUMNS = [
   { k:'10',      h:'$10' },
   { k:'20',      h:'$20' },
   { k:'40',      h:'$40' },
-  { k:'10-unc',  h:'$10 unc' },
-  { k:'20-unc',  h:'$20 unc' },
-  { k:'40-unc',  h:'$40 unc' },
   { k:'20-cATM', h:'$20 ctr' },
   { k:'40-cATM', h:'$40 ctr' },
+  { k:'10-unc',  h:'$10 unc', unc:true },
+  { k:'20-unc',  h:'$20 unc', unc:true },
+  { k:'40-unc',  h:'$40 unc', unc:true },
 ];
+// Uncapped hidden by DEFAULT — the button reveals rather than conceals.
+let showUnc = false;
+const visibleColumns = () => COLUMNS.filter((c) => showUnc || !c.unc);
 const CW = 174, CH = 74;   // mini-chart px
 
 const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
@@ -427,7 +435,7 @@ function render() {
   // book would look exactly as dangerous as a $30k one. Computed regardless of syncY, which only controls
   // the axis.
   gAbs = 0;
-  for (const f of FAMILIES) for (const c of COLUMNS) {
+  for (const f of FAMILIES) for (const c of visibleColumns()) {
     const v = `${f}-${c.k}`, d = cells[v];
     if (!d || !d.curve) continue;
     gAbs = Math.max(gAbs, Math.abs(cellLo(v, d)), Math.abs(cellHi(v, d)));
@@ -435,13 +443,13 @@ function render() {
   let gMin = null, gMax = null;
   if (syncY && finite.length) {
     gMin = Infinity; gMax = -Infinity;
-    for (const f of FAMILIES) for (const c of COLUMNS) { const v = `${f}-${c.k}`, d = cells[v]; if (!d || !d.curve) continue; gMin = Math.min(gMin, cellLo(v, d)); gMax = Math.max(gMax, cellHi(v, d)); }
+    for (const f of FAMILIES) for (const c of visibleColumns()) { const v = `${f}-${c.k}`, d = cells[v]; if (!d || !d.curve) continue; gMin = Math.min(gMin, cellLo(v, d)); gMax = Math.max(gMax, cellHi(v, d)); }
   }
 
-  let html = '<thead><tr><th class="rowh"></th>' + COLUMNS.map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
+  let html = '<thead><tr><th class="rowh"></th>' + visibleColumns().map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
   for (const f of FAMILIES) {
     html += `<tr><th class="rowh">${f}</th>`;
-    for (const c of COLUMNS) {
+    for (const c of visibleColumns()) {
       const v = `${f}-${c.k}`, d = cells[v];
       if (!d) { html += '<td class="empty"></td>'; continue; }
       if (d.err) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="err">${d.err}</div></td>`; continue; }
@@ -698,7 +706,7 @@ function renderBtTable() {
   // The `-unc` twins exist to show what the governor COSTS, not as candidates to trade — they run with no
   // day-loss cap at all. They double the row count and top most sorts, so hiding them is the default-off
   // way to read the table as a shortlist of things actually runnable.
-  const hideUnc = document.getElementById('btHideUnc') && document.getElementById('btHideUnc').checked;
+  const hideUnc = !showUnc;   // ONE control for both views — the grid and the table must not disagree
   const rows = Object.entries(baselines)
     .filter(([variant]) => !(hideUnc && variant.endsWith('-unc')))
     .map(([variant, e]) => ({ variant, ...e }));
@@ -748,7 +756,7 @@ function renderBtTable() {
   }
   document.getElementById('btTable').innerHTML = h + '</tbody>';
   const cnt = document.getElementById('btRowCount');
-  if (cnt) cnt.textContent = hideUnc ? ` · showing ${rows.length} of 80 (uncapped hidden)` : '';
+  if (cnt) cnt.textContent = hideUnc ? ` · showing ${rows.length} of 80 (uncapped hidden)` : ` · all ${rows.length}`;
 }
 
 async function inBatches(items, n, fn) {
@@ -1032,7 +1040,14 @@ document.getElementById('btTable').addEventListener('click', (e) => {
   renderBtTable();
 });
 document.getElementById('btNormalize').addEventListener('change', renderBtTable);
-document.getElementById('btHideUnc').addEventListener('change', renderBtTable);
+document.getElementById('uncBtn').addEventListener('click', () => {
+  showUnc = !showUnc;
+  const b = document.getElementById('uncBtn');
+  b.textContent = showUnc ? 'Hide uncapped' : 'Show uncapped';
+  b.classList.toggle('on', showUnc);
+  try { render(); } catch (e) { /* nothing loaded yet */ }
+  renderBtTable();
+});
 
 load();
 </script>

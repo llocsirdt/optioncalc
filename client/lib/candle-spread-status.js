@@ -21,9 +21,12 @@
 
   // Grid axes — MUST match the server variant naming (family-width[-suffix]) and the compare page.
   const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9'];
+  // The `-unc` twins are DROPPED from this grid entirely. They exist to measure what the day-loss
+  // governor costs, are uncapped and therefore not candidates to trade, and at 30 of 80 runs they were
+  // half the width of the grid — pure distraction on the screen used to watch the live session.
+  // They remain fully available on the compare page behind its own toggle.
   const COLUMNS = [
     { k: '10', h: '$10' }, { k: '20', h: '$20' }, { k: '40', h: '$40' },
-    { k: '10-unc', h: '$10 unc' }, { k: '20-unc', h: '$20 unc' }, { k: '40-unc', h: '$40 unc' },
     { k: '20-cATM', h: '$20 ctr' }, { k: '40-cATM', h: '$40 ctr' },
   ];
 
@@ -262,7 +265,12 @@
     }
     body += '</tbody></table>';
     const missing = (s.runs || []).length - shown;
-    const foot = missing > 0 ? `<div class="csfoot">+ ${missing} run(s) not on the v0-v9 grid</div>` : '';
+    const uncCount = (s.runs || []).filter(r => /-unc$/.test(r.variant)).length;
+    const foot = missing > 0
+      ? `<div class="csfoot">+ ${missing} run(s) not shown`
+        + (uncCount ? ` — includes ${uncCount} uncapped (-unc) twin(s), hidden here; see the compare page` : '')
+        + `</div>`
+      : '';
     return hdr + setupBanner(s) + body + foot;
   }
 
