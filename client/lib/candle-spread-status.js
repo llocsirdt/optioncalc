@@ -53,6 +53,15 @@
       + '#csEngineStatusPop .csg td.favw{box-shadow:inset 0 0 0 1px #4a525c}'
       + '#csEngineStatusPop .cssetup.watch{color:#9aa4b0;border-color:#3a424c;background:#191d22}'
       + '#csEngineStatusPop .cssetup.watch .n{color:#6c7682}'
+      + '#csEngineStatusPop .cssetup .row{font-size:10px;margin-top:2px;font-weight:400}'
+      + '#csEngineStatusPop .cssetup .row.dim{color:#7f8b74}'
+      + '#csEngineStatusPop .cssetup.watch .row.dim{color:#6c7682}'
+      + '#csEngineStatusPop .avo{color:#c98b8b;margin-left:2px;font-size:9px;cursor:help}'
+      + '#csEngineStatusPop .csg td.avo{box-shadow:inset 0 0 0 1px #6b3a3a}'
+      + '#csEngineStatusPop .lift{font-size:8.5px;line-height:1.1;text-align:right}'
+      + '#csEngineStatusPop .lift.f{color:#a3e635}'
+      + '#csEngineStatusPop .lift.w{color:#8f9aa6}'
+      + '#csEngineStatusPop .lift.a{color:#c98b8b}'
       + '#csEngineStatusPop table.csg{border-collapse:separate;border-spacing:3px;font:10px ui-monospace,Menlo,monospace}'
       + '#csEngineStatusPop .csg th{color:#999;font-weight:600;padding:1px 3px;text-align:center;white-space:nowrap}'
       + '#csEngineStatusPop .csg th.rowh{text-align:right;color:#ccc}'
@@ -137,23 +146,35 @@
   // Which variants a currently-firing setup points at, and why. Empty when nothing fired — the common case.
   // TESTED setups (strong/moderate) and WATCH-tier ones are kept apart all the way to the pixels. A
   // speculative flag rendered in the same lime as a tested one would quietly promote it.
-  function favouredSet(s, tier) {
-    const out = new Set();
+  // Returns variant -> measured lift ($/day on firing days minus that variant's own all-days average),
+  // so a cell can show the NUMBER rather than just "this one". `side` picks favours vs avoid.
+  function setupLifts(s, tier, side) {
+    const out = new Map();
     const b = s && s.setups;
     if (!b || !b.ok || !Array.isArray(b.setups)) return out;
     for (const st of b.setups) {
       const watch = st.strength === 'watch';
-      if ((tier === 'watch') === watch) (st.favors || []).forEach(v => out.add(v));
+      if ((tier === 'watch') !== watch) continue;
+      for (const e of (st[side === 'avoid' ? 'avoid' : 'favors'] || [])) {
+        // Keep the largest-magnitude claim if two setups ever name the same variant.
+        if (!out.has(e.v) || Math.abs(e.lift) > Math.abs(out.get(e.v))) out.set(e.v, e.lift);
+      }
     }
     return out;
   }
+  const money0 = (n) => (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n)).toLocaleString();
   function favourTitle(s, name) {
     const b = s && s.setups; if (!b || !b.setups) return '';
-    const hit = b.setups.filter(st => (st.favors || []).includes(name));
+    const hit = b.setups.filter(st => [...(st.favors || []), ...(st.avoid || [])].some(e => e.v === name));
     // Carry the SAMPLE SIZE and the caveat into the tooltip. A green mark on a trading screen gets
     // trusted well past its evidence; the n and the caveat are the only things holding that in check.
-    return hit.map(st => `${st.label}: ${st.expect}\n\nWhy: ${st.why}\nEvidence: ${st.evidence}\n`
-      + `Fires on ${st.firesPct}% of days (n=${st.n}), ${st.tested}.\nCaveat: ${st.caveat}`).join('\n\n');
+    return hit.map(st => {
+      const mine = [...(st.favors || []), ...(st.avoid || [])].find(e => e.v === name);
+      return `${st.label}: ${st.expect}\n\n`
+      + (mine ? `${name} measured lift on these days: ${money0(mine.lift)}/day\n\n` : '')
+      + `Why: ${st.why}\nEvidence: ${st.evidence}\n`
+      + `Fires on ${st.firesPct}% of days (n=${st.n}), ${st.tested}.\nCaveat: ${st.caveat}`;
+    }).join('\n\n');
   }
   // One line above the grid when a setup is live, so it is visible without hovering a cell.
   function setupBanner(s) {
@@ -161,9 +182,16 @@
     if (!b || !b.ok || !b.setups || !b.setups.length) return '';
     return b.setups.map(st => {
       const w = st.strength === 'watch';
+      const list = (arr, sign) => (arr || []).map(e => `${e.v} ${money0(e.lift)}`).join(' · ')
+        || (sign === 'fav' ? 'none — no variant gained on this pattern' : '');
+      const fav = (st.favors && st.favors.length) ? `<div class="row">favours: ${list(st.favors, 'fav')}</div>`
+        : `<div class="row dim">favours: ${list(st.favors, 'fav')}</div>`;
+      const avo = (st.avoid && st.avoid.length) ? `<div class="row dim">avoid: ${list(st.avoid, 'avo')}</div>` : '';
       return `<div class="cssetup${w ? ' watch' : ''}" title="${String(st.caveat).replace(/"/g, '&quot;')}">`
         + `${w ? '△' : '▲'} <b>${st.label}</b> — ${st.expect}`
-        + `<span class="n"> · n=${st.n} (${st.firesPct}% of days), ${st.tested}</span></div>`;
+        + `<span class="n"> · fires on ${st.firesPct}% of days (n=${st.n}), ${st.tested}</span>`
+        + fav + avo
+        + `<div class="row dim">why: ${st.why}</div></div>`;
     }).join('');
   }
 
@@ -196,15 +224,26 @@
         // today and points at this variant. They are deliberately different marks: one is a standing
         // choice, the other is a condition that is true right now and will be false tomorrow.
         const watched = (s.watchlist || []).includes(name);
-        const favoured = favouredSet(s, 'tested').has(name);
-        const watchTier = !favoured && favouredSet(s, 'watch').has(name);
+        const favTested = setupLifts(s, 'tested', 'favors'), favWatch = setupLifts(s, 'watch', 'favors');
+        const avoidAll = new Map([...setupLifts(s, 'tested', 'avoid'), ...setupLifts(s, 'watch', 'avoid')]);
+        const favoured = favTested.has(name);
+        const watchTier = !favoured && favWatch.has(name);
+        const avoided = !favoured && !watchTier && avoidAll.has(name);
+        const lift = favoured ? favTested.get(name) : watchTier ? favWatch.get(name) : avoidAll.get(name);
         const marks = (watched ? '<span class="wl" title="on the watchlist — under active observation against live sessions">◆</span>' : '')
           + (favoured ? `<span class="fav" title="${esc(favourTitle(s, name))}">▲</span>` : '')
-          + (watchTier ? `<span class="favw" title="${esc(favourTitle(s, name))}">△</span>` : '');
-        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+          + (watchTier ? `<span class="favw" title="${esc(favourTitle(s, name))}">△</span>` : '')
+          + (avoided ? `<span class="avo" title="${esc(favourTitle(s, name))}">▽</span>` : '');
+        // The measured lift, on the cell. A badge that says "favoured" without saying BY HOW MUCH invites
+        // the reader to supply their own magnitude, which is how a +$337 edge and a +$5,468 one end up
+        // looking the same.
+        const liftEl = (favoured || watchTier || avoided)
+          ? `<div class="lift ${favoured ? 'f' : watchTier ? 'w' : 'a'}">${money0(lift)}/d</div>` : '';
+        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}${avoided ? ' avo' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
           + (o.pick ? `<div class="vname">${name}${marks}</div>` : (marks ? `<div class="mk">${marks}</div>` : ''))
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`
+          + liftEl
           + (armed ? `<div class="ord">⚡${ro.sent || 0}/${ro.canceled || 0}x/${ro.filled || 0}f</div>` : '')
           + '</td>';
       }

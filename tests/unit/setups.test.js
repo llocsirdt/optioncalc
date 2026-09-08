@@ -132,4 +132,26 @@ t('a normal day inside the bands produces no setups at all', () => {
   assert.deepStrictEqual(keys(S.evaluate([prior, normal])), [], 'silence is the common case');
 });
 
+
+t('every favours/avoid entry carries a MEASURED lift, not just a variant name', () => {
+  for (const day of [bigMove, quiet, redBreak, upBreak]) {
+    for (const st of S.evaluate([prior, day]).setups) {
+      for (const e of [...(st.favors || []), ...(st.avoid || [])]) {
+        assert.ok(typeof e.v === 'string' && e.v, st.key + ': entry must name a variant');
+        assert.ok(Number.isFinite(e.lift), st.key + '/' + e.v + ': must carry a numeric lift — a badge that '
+          + 'says "favoured" without saying by how much lets the reader invent the magnitude');
+      }
+      for (const e of (st.favors || [])) assert.ok(e.lift > 0, st.key + ': a favoured variant must have a POSITIVE lift');
+      for (const e of (st.avoid || [])) assert.ok(e.lift < 0, st.key + ': an avoided variant must have a NEGATIVE lift');
+    }
+  }
+});
+
+t('UPPER_BREAK favours NOTHING — no variant gained on it', () => {
+  const st = S.evaluate([prior, upBreak]).setups[0];
+  assert.strictEqual(st.favors.length, 0,
+    'the measured best was v6-20 at -$268; listing a favourite would invent a recommendation the data lacks');
+  assert.ok(st.avoid.length > 0, 'its entire signal is which variant to avoid');
+});
+
 console.log(`  ${passed} passed`);

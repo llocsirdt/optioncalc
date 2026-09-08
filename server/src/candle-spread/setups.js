@@ -57,7 +57,11 @@ function evaluate(daily) {
   // weaker rule — caught by checking the shipped module's firing rate against the study's count.
   if (green && lowPctB != null && lowPctB <= 0) {
     setups.push({
-      key: 'BIG_MOVE', label: 'Big-move setup', favors: ['v7-10', 'v7-20', 'v9-20'],
+      key: 'BIG_MOVE', label: 'Big-move setup',
+      // MEASURED lift = that variant's avg/day on the firing days minus its own all-days average.
+      favors: [{ v: 'v7-20', lift: 5468 }, { v: 'v9-20', lift: 5287 }, { v: 'v7-10', lift: 2375 },
+               { v: 'v6-20', lift: 2289 }],
+      avoid: [{ v: 'v4-20', lift: -54 }],
       why: 'prior day closed green with its low at the lower daily band',
       expect: 'a LARGE move today, direction unknown — favours the bidirectional (v7/v9) families',
       evidence: 'n=24 of 704 days: next-day |close-open| 290.7 pts vs 132.0 base (2.2x, rotation p 0.0028); '
@@ -90,7 +94,9 @@ function evaluate(daily) {
   // firing count (89 of 704 there; ~92 of 745 here on a slightly longer warm window).
   if (green && bodyFrac >= 0.62 && closePctB != null && closePctB > 0.50 && closePctB <= 1.0) {
     setups.push({
-      key: 'QUIET_DAY', label: 'Quiet-day setup', favors: ['v4-20', 'v4-10'],
+      key: 'QUIET_DAY', label: 'Quiet-day setup',
+      favors: [{ v: 'v4-20', lift: 337 }],          // the ONLY variant with a positive lift here
+      avoid: [{ v: 'v7-10', lift: -1079 }, { v: 'v7-20', lift: -1017 }],
       why: 'prior day was a large green body closing between the band midline and the upper band',
       expect: 'a SMALLER move today — the range-averse (v4) family suffers least',
       evidence: 'n=89 of 704 days: next-day |close-open| 89.0 pts vs 132.0 base (-33%, rotation p 0.0071); '
@@ -117,9 +123,12 @@ function evaluate(daily) {
   // show up is an inversion: the SHORT-the-movement variants won on those days while v7 got nothing.
   if (!green && bodyFrac >= 0.62 && closePctB != null && closePctB < 0) {
     setups.push({
-      key: 'RED_BREAK', label: 'Red break below band', favors: ['v6-20', 'v4-20'],
+      key: 'RED_BREAK', label: 'Red break below band',
+      favors: [{ v: 'v6-20', lift: 4521 }, { v: 'v4-20', lift: 3806 }, { v: 'v4-10', lift: 1624 },
+               { v: 'v6-10', lift: 1374 }],
+      avoid: [{ v: 'v9-20', lift: -138 }],
       why: 'prior day was a large red body that CLOSED below the lower daily band',
-      expect: 'unresolved — historically the range-averse (v4/v6) families did best, NOT v7',
+      expect: 'unresolved — historically the range-averse (v6/v4) families did best, NOT v7',
       evidence: 'n=18 of 704 days: v6-20 +$4,521/day and v4-20 +$3,806 above their own averages, while '
         + 'v7-20 managed +$259. The variant inversion is the only signal-shaped part.',
       caveat: 'FAILED both headline tests. The original expectation (a big green day follows) is wrong: '
@@ -137,9 +146,14 @@ function evaluate(daily) {
   // and all four quarters, and it points the same way as QUIET_DAY from an independent condition.
   if (green && bodyFrac >= 0.62 && closePctB != null && closePctB > 1) {
     setups.push({
-      key: 'UPPER_BREAK', label: 'Green break above band', favors: ['v4-20', 'v4-10'],
+      key: 'UPPER_BREAK', label: 'Green break above band',
+      // NO variant has a positive lift on this pattern — v6-20 is merely the least bad. Listing a
+      // "favours" here would invent a recommendation the data does not contain, so the signal is
+      // carried entirely by `avoid`. (An earlier version listed v4 by inference rather than
+      // measurement; the measured best is v6-20.)
+      favors: [], avoid: [{ v: 'v7-20', lift: -1964 }],
       why: 'prior day was a large green body that CLOSED above the upper daily band',
-      expect: 'a QUIETER day than normal — v7 was the worst variant here, which fits',
+      expect: 'a QUIETER day than normal — no variant gained; v7-20 lost the most, which fits',
       evidence: 'n=30 of 704 days: next-day |close-open| 98.9 vs 132.0 pts (0.75x), and 0.71x after '
         + 'matching on yesterday\'s range. v7-20 -$1,964/day, its only negative-lift pattern.',
       caveat: 'NOT significant (rotation p 0.1818 on magnitude, 0.2472 on direction) — it does not clear '
