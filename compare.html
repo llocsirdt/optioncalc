@@ -91,6 +91,10 @@
   /* This run never reached settlement — a partial day that otherwise renders exactly like a whole one. */
   .cell .cname .partial { color:var(--loss); font-weight:700; padding-left:3px; margin-right:auto; cursor:help; }
   .cell.is-partial { border-color:#f0b4b2; background:#fffafa; }
+  /* In-progress is INFORMATION, not a warning — slate rather than the alarm red, so the red keeps meaning
+     "something is actually wrong with this data". */
+  #incompleteBanner.inProgress { border-color:#c9d2dc; background:#f5f8fb; color:#4a5560; }
+  #incompleteBanner.inProgress b { color:#3d4a57; }
   #incompleteBanner { margin:0 14px 6px; padding:6px 9px; border:1px solid #f0b4b2; background:#fff5f5;
                       border-radius:5px; font-size:11px; color:#a33; }
   #incompleteBanner b { color:#8a2a2a; }
@@ -146,7 +150,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.52</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.54</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -524,9 +528,27 @@ function render() {
 function renderCompletenessBanner() {
   const el = document.getElementById('incompleteBanner');
   if (!el) return;
-  const bad = Object.keys(completeness).filter((v) => cells[v] && !completeness[v].complete);
-  if (!bad.length) { el.hidden = true; el.textContent = ''; return; }
+  // A run for TODAY, mid-session, is not "incomplete" — it is unfinished, which is the normal state of
+  // every run between 09:30 and the close. Warning about it painted a red banner across the whole screen
+  // for the entire trading day and trained the reader to ignore the one thing it exists to say.
+  const unfinished = Object.keys(completeness).filter((v) => cells[v] && completeness[v].status === 'in-progress');
+  const bad = Object.keys(completeness).filter((v) => cells[v]
+    && !completeness[v].complete && completeness[v].status !== 'in-progress');
   const total = Object.keys(completeness).filter((v) => cells[v]).length;
+  if (!bad.length) {
+    // Quiet, factual note while the session runs — grading IS still suppressed, so say so without alarm.
+    if (unfinished.length) {
+      const a = completeness[unfinished[0]];
+      el.hidden = false;
+      el.className = 'inProgress';
+      el.innerHTML = `<b>◷ Session in progress</b> — ${unfinished.length} of ${total} runs are still open; `
+        + `${a.detail}. These books are the CURRENT book, not the closing book, and backtest-average `
+        + `grading stays suspended until the day settles.`;
+      return;
+    }
+    el.hidden = true; el.textContent = ''; el.className = ''; return;
+  }
+  el.className = '';
   const worst = completeness[bad[0]];
   const half = worst.earlyClose ? ' (a 13:00 half day)' : '';
   el.hidden = false;
