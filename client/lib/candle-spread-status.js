@@ -41,6 +41,9 @@
       // standing choice (amber, quiet); the triangle is a condition true only today (lime, louder). Lime
       // is reserved for the setup so it never reads as "armed" — armed is the orange the mode badge uses.
       + '#csEngineStatusPop .wl{color:#e2a33c;margin-left:3px;font-size:9px;cursor:help}'
+      // A 9px diamond was doing all the work of marking six cells out of eighty. Lift the cell ground
+      // as well, so the watched set reads as a GROUP at a glance rather than needing to be hunted for.
+      + '#csEngineStatusPop .csg td.wlc{background:#2f3540}'
       + '#csEngineStatusPop .fav{color:#a3e635;margin-left:2px;font-size:9px;cursor:help}'
       + '#csEngineStatusPop .csg td.fav{box-shadow:inset 0 0 0 1px #a3e635}'
       + '#csEngineStatusPop .mk{text-align:right;line-height:1;height:9px}'
@@ -239,7 +242,7 @@
         // looking the same.
         const liftEl = (favoured || watchTier || avoided)
           ? `<div class="lift ${favoured ? 'f' : watchTier ? 'w' : 'a'}">${money0(lift)}/d</div>` : '';
-        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}${avoided ? ' avo' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${watched ? ' wlc' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}${avoided ? ' avo' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
           + (o.pick ? `<div class="vname">${name}${marks}</div>` : (marks ? `<div class="mk">${marks}</div>` : ''))
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`
@@ -366,7 +369,7 @@
     const c = el();
     try {
       const r = await fetch(`${apiBase()}/api/v1/candle-spread/status`, { cache: 'no-store' });
-      if (r.ok) { const s = await r.json(); renderBanner(s); render(s); }
+      if (r.ok) { const s = await r.json(); lastStatus = s; renderBanner(s); render(s); window.CandleSpreadStatus._emit(s); }
       else if (c) c.innerHTML = `<span style="font:11px monospace;color:#c0392b">engine status ${r.status}</span>`;
     } catch (e) {
       if (c) c.innerHTML = `<span style="font:11px monospace;color:#999">engine status: offline</span>`;
@@ -387,5 +390,13 @@
   });
 
   // Exposed so the positions-source bar can use the SAME grid as a strategy picker instead of a dropdown.
-  window.CandleSpreadStatus = { openStrategyPicker, hasStatus: () => !!lastStatus };
+  // Exposed so compare.html can mark ITS grid from the same payload — one fetch, one interpretation.
+  // `onStatus` fires on every successful poll so a page can re-render when the setups change.
+  const statusListeners = [];
+  window.CandleSpreadStatus = {
+    openStrategyPicker, hasStatus: () => !!lastStatus,
+    getStatus: () => lastStatus,
+    onStatus: (fn) => { statusListeners.push(fn); if (lastStatus) { try { fn(lastStatus); } catch (e) {} } },
+    _emit: (s) => statusListeners.forEach(fn => { try { fn(s); } catch (e) {} }),
+  };
 })();

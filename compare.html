@@ -62,6 +62,25 @@
   table.grid th { font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
   table.grid th.rowh { text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
   td.cell { width:184px; min-height:118px; border:1px solid var(--grid); border-radius:6px; padding:3px 5px; vertical-align:top; background:#fcfcfc; }
+  /* STRATEGY STATE, mirrored from the live engine's /status so this grid says the same things the index
+     header badge does. Four states, deliberately distinguished by DIFFERENT channels rather than four
+     shades of one colour: the watched SET is a background lift, the ARMED one is a border, and today's
+     setups are a coloured header strip (lime = tested, slate = watch-tier, red = avoid). A cell can be
+     several of these at once, which is exactly why they must not compete for the same visual property. */
+  td.cell.wl   { background:#f4f6f9; }
+  td.cell.armed{ border-color:#e2a33c; box-shadow:inset 0 0 0 1px #e2a33c; }
+  td.cell .stateBar { height:3px; border-radius:2px; margin:-1px 0 2px; }
+  td.cell .stateBar.fav  { background:#8bc34a; }
+  td.cell .stateBar.favw { background:#8f9aa6; }
+  td.cell .stateBar.avo  { background:#e57373; }
+  .cell .cname .mk { font-size:9px; letter-spacing:1px; margin-left:3px; }
+  .cell .cname .mk .d { color:#c8901f; }      /* watchlist diamond */
+  .cell .cname .mk .a { color:#e2a33c; }      /* armed */
+  .cell .cname .mk .f { color:#6f9b21; }      /* setup: tested */
+  .cell .cname .mk .w { color:#7c8794; }      /* setup: watch tier */
+  .cell .cname .mk .v { color:#c0564f; }      /* setup: avoid */
+  .cell .lift { font:9px ui-monospace,monospace; text-align:right; margin-top:-1px; }
+  .cell .lift.f { color:#6f9b21; } .cell .lift.w { color:#7c8794; } .cell .lift.v { color:#c0564f; }
   td.empty { border:1px dashed #eee; background:transparent; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
@@ -127,7 +146,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.49</span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.50</span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -450,8 +469,26 @@ function render() {
       const partTitle = partial ? `\n⚠ ${cp.detail}` : '';
       const partBadge = partial ? `<span class="partial" title="${cp.detail}">⚠</span>` : '';
       const axis = `<div class="axis"><span>${Math.round(d.xMin)}</span><span>${Math.round(d.xMax)}</span></div>`;
-      html += `<td class="cell${partial ? ' is-partial' : ''}" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}">`
-        + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${hmax}</div>`
+      // Live-engine state for this variant, mirrored from the index header badge.
+      const isWatch = engineState.watch.has(v), isArmed = engineState.armed.has(v);
+      const fLift = engineState.fav.has(v) ? engineState.fav.get(v)
+                  : engineState.favw.has(v) ? engineState.favw.get(v)
+                  : engineState.avo.has(v) ? engineState.avo.get(v) : null;
+      const fTier = engineState.fav.has(v) ? 'f' : engineState.favw.has(v) ? 'w' : engineState.avo.has(v) ? 'v' : null;
+      const setupNote = fTier ? engineState.setups
+        .filter(x => [...(x.favors || []), ...(x.avoid || [])].some(e => e.v === v))
+        .map(x => `\n${x.label}: ${x.expect}\n  ${v} measured lift ${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/day`
+          + `\n  fires on ${x.firesPct}% of days (n=${x.n}), ${x.tested}\n  ${x.caveat}`).join('') : '';
+      const stateTitle = (isWatch ? '\n◆ on the 6-variant watchlist' : '')
+        + (isArmed ? '\n⚡ ARMED (this variant is sending orders)' : '') + setupNote;
+      const marks = (isWatch || isArmed || fTier)
+        ? `<span class="mk">${isWatch ? '<span class="d">◆</span>' : ''}${isArmed ? '<span class="a">⚡</span>' : ''}`
+          + `${fTier === 'f' ? '<span class="f">▲</span>' : fTier === 'w' ? '<span class="w">△</span>' : fTier === 'v' ? '<span class="v">▽</span>' : ''}</span>`
+        : '';
+      html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${isArmed ? ' armed' : ''}" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
+        + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
+        + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
+        + (fTier ? `<div class="lift ${fTier}">${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d</div>` : '')
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
         + (cellsB[v] && cellsB[v].underPnl != null && d.underPnl != null
@@ -501,6 +538,37 @@ function renderCompletenessBanner() {
           + `<a href="?src=${encodeURIComponent(SRC)}${commonDate ? '&amp;date=' + encodeURIComponent(commonDate) : ''}">use the deployed runs instead</a>.`
         : `These came from the deployed server, so this is a genuine gap in the run itself, not a local-dev artifact.`);
 }
+
+// LIVE ENGINE STATE for the grid — watchlist, which variant is armed, and today's named setups. Read
+// from CandleSpreadStatus rather than fetching /status again here: one fetch, one interpretation, and
+// the two pages cannot drift into disagreeing about what is armed.
+let engineState = { watch: new Set(), armed: new Set(), fav: new Map(), favw: new Map(), avo: new Map(), setups: [] };
+function ingestStatus(st) {
+  if (!st) return;
+  const lifts = (tier, side) => {
+    const m = new Map();
+    const b = st.setups;
+    if (b && b.ok && Array.isArray(b.setups)) for (const x of b.setups) {
+      if ((x.strength === 'watch') !== (tier === 'watch')) continue;
+      for (const e of (x[side] || [])) if (!m.has(e.v) || Math.abs(e.lift) > Math.abs(m.get(e.v))) m.set(e.v, e.lift);
+    }
+    return m;
+  };
+  const armed = new Set();
+  for (const r of (st.runs || [])) if (r.mode && r.mode !== 'simulate') armed.add(r.variant);
+  (st.armedVariants && st.armedVariants.live || []).forEach(v => armed.add(v));
+  (st.armedVariants && st.armedVariants.test || []).forEach(v => armed.add(v));
+  engineState = {
+    watch: new Set(st.watchlist || []), armed,
+    fav: lifts('tested', 'favors'), favw: lifts('watch', 'favors'),
+    avo: new Map([...lifts('tested', 'avoid'), ...lifts('watch', 'avoid')]),
+    setups: (st.setups && st.setups.ok && st.setups.setups) || [],
+  };
+  // Re-draw so a setup appearing mid-session lights the grid without waiting for a reload. render()
+  // is a no-op before the first data load, so this is safe at any time.
+  try { if (typeof render === 'function') render(); } catch (e) { /* nothing loaded yet */ }
+}
+if (window.CandleSpreadStatus && window.CandleSpreadStatus.onStatus) window.CandleSpreadStatus.onStatus(ingestStatus);
 
 // Fetch + index the backtest baselines (per-variant avg potential metrics) for the overlay. Tolerant of the
 // variants living at top level or under a `.variants` key; only keeps entries that carry the new metrics.
