@@ -13,6 +13,10 @@
   const POLL_MS = 12000;
   const apiBase = () => (typeof PROXY_URL !== 'undefined' ? PROXY_URL : 'http://localhost:3001');
   const el = () => document.getElementById('csEngineStatus');
+  // OPTIONAL second host. When a page provides #csEngineInline the activity rollup and tick countdown
+  // render there instead of trailing the badge, so the two can sit on separate lines and the header
+  // stops wrapping raggedly on a narrow screen. Pages without it (compare.html) are unaffected.
+  const inlineEl = () => document.getElementById('csEngineInline');
   const money = n => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US'));
 
   // Grid axes — MUST match the server variant naming (family-width[-suffix]) and the compare page.
@@ -352,11 +356,14 @@
     // The inline badge carries it as well, so it is visible even when the page is scrolled or the
     // banner has been pushed off by another fixed element.
     const blocked = s.tradability && s.tradability.ok === false;
-    c.innerHTML =
+    const badgeHtml =
       (blocked ? `<span style="background:#b3261e;color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif;margin-right:4px">NOT TRADING</span>` : '')
-      + `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`
-      + (inline ? `<span style="font:11px monospace;color:#999"> ${inline}</span>` : '')
-      + `<span style="font:11px monospace;color:#bbb"> · ~${tickMin}m</span>`;
+      + `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`;
+    const statsHtml = (inline ? `<span style="font:11px monospace;color:#999">${inline}</span>` : '')
+      + `<span style="font:11px monospace;color:#bbb">${inline ? ' · ' : ''}~${tickMin}m</span>`;
+    const ie = inlineEl();
+    c.innerHTML = badgeHtml + (ie ? '' : statsHtml);
+    if (ie) { ie.innerHTML = statsHtml; ie.title = c.title; }
 
     // Keep an open popover in sync with the fresh data.
     if (pop && pop.style.display === 'block') pop.innerHTML = lastHtml;
@@ -379,11 +386,13 @@
   window.addEventListener('DOMContentLoaded', () => {
     poll();
     setInterval(poll, POLL_MS);
-    const c = el();
-    if (c) {
-      c.style.cursor = 'pointer';
-      c.title = c.title || 'click for the strategy grid';
-      c.addEventListener('click', (e) => { e.stopPropagation(); togglePop(c); });
+    // Both hosts open the popover — once the stats move to their own line, clicking them must still work
+    // or the affordance silently moves out from under the text people actually read.
+    for (const host of [el(), inlineEl()]) {
+      if (!host) continue;
+      host.style.cursor = 'pointer';
+      host.title = host.title || 'click for the strategy grid';
+      host.addEventListener('click', (e) => { e.stopPropagation(); togglePop(el() || host); });
     }
     document.addEventListener('click', hidePop);                 // click elsewhere closes it
     window.addEventListener('resize', hidePop);

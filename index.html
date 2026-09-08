@@ -35,10 +35,16 @@
 
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.50</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.51</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
+  </div>
+  <!-- Second header line: the engine's activity rollup and the compare link. Kept off the title/badge row
+       because on a narrow screen the rollup wrapped mid-string and pushed the header ~20px taller; these
+       two are short enough to share a line even on a phone. -->
+  <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; max-width:90%; margin-top:1px">
+    <span id="csEngineInline" title="candle-spread engine status"></span>
     <a href="compare.html" target="_blank" rel="noopener" title="Open the strategy comparison grid (risk curves for every variant)"
-       style="margin-left:10px;font:12px sans-serif;color:#2962ff;text-decoration:none;white-space:nowrap">⊞ Compare strategies ↗</a>
+       style="font:12px sans-serif;color:#2962ff;text-decoration:none;white-space:nowrap">⊞ Compare strategies ↗</a>
   </div>
   
   <div id="buttonContainer">
