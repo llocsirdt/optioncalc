@@ -33,18 +33,28 @@
 </head>
 <body>
 
+<style>
+  /* Flush left once the pair has wrapped onto its own line — the desktop spacing would otherwise read
+     as a stray indent. 760px is above the width at which the pair stops fitting beside the badge. */
+  @media (max-width: 760px) { #header .hdrTail { margin-left: 0 !important; } }
+  /* Below ~480px the rollup plus the full link label no longer share a line, and the pair would wrap to
+     a THIRD row — so drop the word "strategies". The icon and "Compare" still say what it is, and this
+     keeps the header to two lines across the common 390-430px phone widths. */
+  @media (max-width: 480px) { #header .lblLong { display: none; } }
+</style>
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.52</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.53</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
-  </div>
-  <!-- Second header line: the engine's activity rollup and the compare link. Kept off the title/badge row
-       because on a narrow screen the rollup wrapped mid-string and pushed the header ~20px taller; these
-       two are short enough to share a line even on a phone. -->
-  <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; max-width:90%; margin-top:1px">
-    <span id="csEngineInline" title="candle-spread engine status"></span>
-    <a href="compare.html" target="_blank" rel="noopener" title="Open the strategy comparison grid (risk curves for every variant)"
-       style="font:12px sans-serif;color:#2962ff;text-decoration:none;white-space:nowrap">⊞ Compare strategies ↗</a>
+    <!-- The activity rollup and the compare link are grouped so they WRAP AS A UNIT. On desktop the whole
+         header sits on one line; when the row runs out of room this pair drops to the next line together
+         and stays there, instead of the rollup breaking mid-string the way it used to. No breakpoint is
+         guessed at — flex-wrap decides from the actual available width. -->
+    <span class="hdrTail" style="display:flex; align-items:baseline; gap:10px; margin-left:8px">
+      <span id="csEngineInline" title="candle-spread engine status"></span>
+      <a href="compare.html" target="_blank" rel="noopener" title="Open the strategy comparison grid (risk curves for every variant)"
+         style="font:12px sans-serif;color:#2962ff;text-decoration:none;white-space:nowrap">⊞ Compare<span class="lblLong"> strategies</span> ↗</a>
+    </span>
   </div>
   
   <div id="buttonContainer">
