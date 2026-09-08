@@ -47,6 +47,12 @@
       + '#csEngineStatusPop .cssetup{color:#a3e635;font-size:11px;margin:0 0 5px;padding:3px 5px;'
       + 'border:1px solid #4d6b1a;border-radius:3px;background:#1e2a10;cursor:help}'
       + '#csEngineStatusPop .cssetup .n{color:#8a9b6a;font-weight:400}'
+      // WATCH tier: hollow mark, muted slate, no cell glow. Present enough to notice, quiet enough that
+      // it never competes with a tested setup.
+      + '#csEngineStatusPop .favw{color:#7c8794;margin-left:2px;font-size:9px;cursor:help}'
+      + '#csEngineStatusPop .csg td.favw{box-shadow:inset 0 0 0 1px #4a525c}'
+      + '#csEngineStatusPop .cssetup.watch{color:#9aa4b0;border-color:#3a424c;background:#191d22}'
+      + '#csEngineStatusPop .cssetup.watch .n{color:#6c7682}'
       + '#csEngineStatusPop table.csg{border-collapse:separate;border-spacing:3px;font:10px ui-monospace,Menlo,monospace}'
       + '#csEngineStatusPop .csg th{color:#999;font-weight:600;padding:1px 3px;text-align:center;white-space:nowrap}'
       + '#csEngineStatusPop .csg th.rowh{text-align:right;color:#ccc}'
@@ -129,10 +135,16 @@
 
   // Build the popover: header line + the family×sub-variant grid of execution summaries.
   // Which variants a currently-firing setup points at, and why. Empty when nothing fired — the common case.
-  function favouredSet(s) {
+  // TESTED setups (strong/moderate) and WATCH-tier ones are kept apart all the way to the pixels. A
+  // speculative flag rendered in the same lime as a tested one would quietly promote it.
+  function favouredSet(s, tier) {
     const out = new Set();
     const b = s && s.setups;
-    if (b && b.ok && Array.isArray(b.setups)) for (const st of b.setups) (st.favors || []).forEach(v => out.add(v));
+    if (!b || !b.ok || !Array.isArray(b.setups)) return out;
+    for (const st of b.setups) {
+      const watch = st.strength === 'watch';
+      if ((tier === 'watch') === watch) (st.favors || []).forEach(v => out.add(v));
+    }
     return out;
   }
   function favourTitle(s, name) {
@@ -147,9 +159,12 @@
   function setupBanner(s) {
     const b = s && s.setups;
     if (!b || !b.ok || !b.setups || !b.setups.length) return '';
-    return b.setups.map(st =>
-      `<div class="cssetup" title="${String(st.caveat).replace(/"/g, '&quot;')}">▲ <b>${st.label}</b> — ${st.expect}`
-      + `<span class="n"> · n=${st.n} (${st.firesPct}% of days), ${st.tested}</span></div>`).join('');
+    return b.setups.map(st => {
+      const w = st.strength === 'watch';
+      return `<div class="cssetup${w ? ' watch' : ''}" title="${String(st.caveat).replace(/"/g, '&quot;')}">`
+        + `${w ? '△' : '▲'} <b>${st.label}</b> — ${st.expect}`
+        + `<span class="n"> · n=${st.n} (${st.firesPct}% of days), ${st.tested}</span></div>`;
+    }).join('');
   }
 
   function gridHtml(s, tickMin, opts) {
@@ -181,10 +196,12 @@
         // today and points at this variant. They are deliberately different marks: one is a standing
         // choice, the other is a condition that is true right now and will be false tomorrow.
         const watched = (s.watchlist || []).includes(name);
-        const favoured = favouredSet(s).has(name);
+        const favoured = favouredSet(s, 'tested').has(name);
+        const watchTier = !favoured && favouredSet(s, 'watch').has(name);
         const marks = (watched ? '<span class="wl" title="on the watchlist — under active observation against live sessions">◆</span>' : '')
-          + (favoured ? `<span class="fav" title="${esc(favourTitle(s, name))}">▲</span>` : '');
-        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+          + (favoured ? `<span class="fav" title="${esc(favourTitle(s, name))}">▲</span>` : '')
+          + (watchTier ? `<span class="favw" title="${esc(favourTitle(s, name))}">△</span>` : '');
+        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
           + (o.pick ? `<div class="vname">${name}${marks}</div>` : (marks ? `<div class="mk">${marks}</div>` : ''))
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`

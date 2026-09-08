@@ -85,4 +85,51 @@ t('pctB places a close inside, below and above the bands', () => {
   assert.strictEqual(S.pctB(105, null, 120), null);
 });
 
+
+// ── WATCH TIER ───────────────────────────────────────────────────────────────────────────────────
+// These fire on patterns that FAILED their significance tests. They exist so live occurrences can be
+// logged — which means the metadata separating them from a tested setup is the whole safety mechanism.
+const redBreak = { datetime: 3, open: 110, high: 111, low: 86, close: 88, bbLower: 90, bbMiddle: 105, bbUpper: 120, ema9: 104 };
+const upBreak  = { datetime: 4, open: 100, high: 124, low: 99,  close: 123, bbLower: 90, bbMiddle: 105, bbUpper: 120, ema9: 104 };
+
+t('RED_BREAK fires on a large red body closing BELOW the lower band', () => {
+  assert.deepStrictEqual(keys(S.evaluate([prior, redBreak])), ['RED_BREAK']);
+});
+
+t('UPPER_BREAK fires on a large green body closing ABOVE the upper band', () => {
+  assert.deepStrictEqual(keys(S.evaluate([prior, upBreak])), ['UPPER_BREAK']);
+});
+
+t('watch-tier setups are marked as such and do NOT claim validation', () => {
+  for (const day of [redBreak, upBreak]) {
+    const st = S.evaluate([prior, day]).setups[0];
+    assert.strictEqual(st.strength, 'watch', st.key + ' must be watch tier');
+    assert.ok(/failed|not significant/i.test(st.tested),
+      st.key + ' must say plainly that it did not pass');
+    assert.ok(/WATCHING ONLY/.test(st.caveat), st.key + ' must be explicit that it is not actionable');
+  }
+});
+
+t('RED_BREAK records that the data CONTRADICTED the original hypothesis', () => {
+  const st = S.evaluate([prior, redBreak]).setups[0];
+  assert.match(st.caveat, /is wrong/i,
+    'the expectation was a big green day; measured 55.6% vs a 54.8% base rate — that correction must survive');
+  assert.match(st.evidence, /v7-20/, 'the variant inversion is the only signal-shaped part; keep it visible');
+});
+
+t('BIG_MOVE distinguishes the rare close-beyond-band form from the common wick form', () => {
+  const wick  = S.evaluate([prior, bigMove]).setups[0];
+  assert.strictEqual(wick.closedBeyondBand, false);
+  assert.match(wick.detail, /common wick form/);
+  // Same shape, but the CLOSE finishes below the band too.
+  const closeBelow = { ...bigMove, open: 86, close: 88, low: 85, high: 95, bbLower: 90 };
+  const r = S.evaluate([prior, closeBelow]).setups.find(x => x.key === 'BIG_MOVE');
+  if (r) { assert.strictEqual(r.closedBeyondBand, true); assert.match(r.detail, /RARE/); }
+});
+
+t('a normal day inside the bands produces no setups at all', () => {
+  const normal = { datetime: 5, open: 104, high: 107, low: 102, close: 105, bbLower: 90, bbMiddle: 105, bbUpper: 120, ema9: 104 };
+  assert.deepStrictEqual(keys(S.evaluate([prior, normal])), [], 'silence is the common case');
+});
+
 console.log(`  ${passed} passed`);
