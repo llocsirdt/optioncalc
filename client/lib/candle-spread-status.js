@@ -47,7 +47,11 @@
       + '#csEngineStatusPop .wl{color:#e2a33c;margin-left:3px;font-size:9px;cursor:help}'
       // A 9px diamond was doing all the work of marking six cells out of eighty. Lift the cell ground
       // as well, so the watched set reads as a GROUP at a glance rather than needing to be hunted for.
-      + '#csEngineStatusPop .csg td.wlc{background:#2f3540}'
+      // TWO class selectors (td.c.wlc), not one: `td.c` sets its own background further down this same
+      // stylesheet, and at equal specificity the later rule wins — so a single-class `td.wlc` silently
+      // lost and the lift never rendered. Also given real contrast against #2a2a2a; the first attempt
+      // was four points of lightness, which is invisible on a phone in daylight.
+      + '#csEngineStatusPop .csg td.c.wlc{background:#3b4351;border-color:#55606f}'
       + '#csEngineStatusPop .fav{color:#a3e635;margin-left:2px;font-size:9px;cursor:help}'
       + '#csEngineStatusPop .csg td.fav{box-shadow:inset 0 0 0 1px #a3e635}'
       + '#csEngineStatusPop .mk{text-align:right;line-height:1;height:9px}'
