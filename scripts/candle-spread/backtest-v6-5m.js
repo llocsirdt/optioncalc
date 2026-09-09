@@ -96,7 +96,8 @@ const ivMultAt = IIV.ivMultAt;
 const CL = require('../../server/src/candle-spread/capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
-const WG = require('../../server/src/candle-spread/wing-convert');   // peak->floor wing conversion (knee-anchored)
+const WG = require('../../server/src/candle-spread/wing-convert');
+const LAD = require('../../server/src/candle-spread/cover-ladder');   // work the cover instead of resting it once   // peak->floor wing conversion (knee-anchored)
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -276,6 +277,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   const wingBudgetFrac = opts.wingBudgetFrac != null ? opts.wingBudgetFrac : 0.10;   // of the current peak
   let wingCount = 0, wingSpent = 0, wingLastBar = -99;
   const lockMode = opts.lockCoverMode || 'rest';
+  // COVER LADDER (off by default so every committed baseline reproduces byte-for-byte).
+  const ladderOn = opts.coverLadder === true;
+  const ladderOpts = {
+    stepSeconds: opts.ladderStepSeconds != null ? opts.ladderStepSeconds : LAD.DEFAULTS.stepSeconds,
+    stepPoints: opts.ladderStepPoints != null ? opts.ladderStepPoints : LAD.DEFAULTS.stepPoints,
+    steps: opts.ladderSteps != null ? opts.ladderSteps : LAD.DEFAULTS.steps,
+    lossCapFrac: opts.ladderLossCapFrac != null ? opts.ladderLossCapFrac : LAD.DEFAULTS.lossCapFrac,
+  };
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
@@ -535,7 +544,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
         const tgt = round2(G.WIDTH - pos.limit - minLock);
-        if (tgt <= 0) continue;
+        // THE `tgt <= 0` REFUSAL IS GONE. It silently placed NO cover at all whenever the open cost plus
+        // the demanded profit exceeded the width — so the positions least able to afford being naked were
+        // exactly the ones left uncovered. With a ladder there is always a fillable band (break-even up to
+        // a bounded loss), so there is no case where declining to place is the right answer.
+        if (!ladderOn && tgt <= 0) continue;
         // GEOMETRY: where the offsetting spread sits. 'tent' (default) shares the position's short strike
         // and reproduces the original legs exactly; 'halfway'/'underlying' walk it toward the money.
         const legs = opts.coverGeometry && opts.coverGeometry !== 'tent'
@@ -548,13 +561,27 @@ function runDay5m(bars, signalFn, opts = {}) {
           const locked = G.WIDTH - pos.limit - cost;
           if (!(cost > 0) || locked < oppRatio * cost) continue;
         }
-        pos.pendingCover = { legs, target: tgt };
+        // Stamp what the ladder needs to walk this order: when it was placed and where the underlying was.
+        pos.pendingCover = { legs, target: tgt, openCost: pos.limit, minLock,
+          placedMs: nowEpoch, placedUnder: S };
       }
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
       const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
-      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= pc.target) {
+      // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
+      // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
+      // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
+      let workingTarget = pc.target;
+      if (ladderOn && pc.openCost != null) {
+        workingTarget = LAD.limitNow({
+          spreadWidth: G.WIDTH, openCost: pc.openCost, minLock: pc.minLock || 0,
+          restingMs: pc.placedMs != null ? (nowEpoch - pc.placedMs) : 0,
+          underlyingMove: pc.placedUnder != null ? (S - pc.placedUnder) : 0,
+          tick: 0.05,
+        }, ladderOpts).limit;
+      }
+      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
         // removes the offset and can push the BOOK floor down (the 2026-02-21 mechanism). Since we own the
