@@ -5,6 +5,8 @@
 <script src="shared/market-calendar.js"></script>
 <script src="shared/run-completeness.js"></script>
 <script src="shared/portfolio-risk.js"></script>
+<script src="client/lib/risk-curve-cell.js"></script>
+<script src="client/lib/strategy-positions.js"></script>
 <style>
   :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb;
     --locked:#8b5cf6; --warn:#c98b8b; }
@@ -30,8 +32,13 @@
     text-decoration:underline dotted rgba(125,125,125,.6); text-underline-offset:3px; }
   table.ord th:first-child, table.ord td:first-child { text-align:left; }
   table.ord td { text-align:right; padding:2px 6px; border-bottom:1px solid #f2f2f2; white-space:nowrap; }
-  tr.unfilled { background:#fff6f6; }
-  tr.unfilled td:first-child { border-left:2px solid var(--loss); }
+  tr.td-unfilled { background:#fff6f6; opacity:.85; }
+  tr.td-unfilled td:first-child { border-left:2px solid var(--loss); }
+  tr.td-uncovered td:first-child { border-left:2px solid #e0a03c; }
+  tr.td-cover td { color:#555; }
+  td.legs { font-size:10.5px; color:#444; text-align:left; }
+  .net { font:600 9px system-ui,sans-serif; padding:0 3px; border-radius:2px; }
+  .net.cr { background:#e6f5f2; color:#1c7f72; } .net.dr { background:#f1f1f1; color:#666; }
   .p { color:var(--profit); } .l { color:var(--loss); } .m { color:var(--muted); }
   .tag { padding:0 5px; border-radius:3px; font:600 9.5px system-ui,sans-serif; }
   .tag.ok { background:#e6f5f2; color:#1c7f72; } .tag.no { background:#fdecea; color:#a5322c; }
@@ -41,7 +48,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.58</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.59</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -57,7 +64,7 @@
   <div class="cols">
     <div class="panel" style="flex:1 1 460px; min-width:380px">
       <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
-      <svg id="curve" width="100%" height="240" viewBox="0 0 620 240" preserveAspectRatio="none"></svg>
+      <div id="curve"></div>
     </div>
     <div class="panel" style="flex:0 0 300px">
       <h2>Day summary</h2>
@@ -193,91 +200,155 @@ function render() {
   renderCurve(pos, se);
 }
 
-// THE TABLE THIS PAGE EXISTS FOR. Per order: what the market was when we placed it, what we sent, and
-// what the rule would allow — so "placed where we expected?" is answerable by looking, not by arguing.
+// THE ORDER TABLE. Built on the SAME data shape the index page's "Strategy Trades" panel uses
+// (strategyRunToOptionArray -> positions), so the columns, the row semantics and the glyphs match:
+// ▲/▼ opens coloured by side, ◇ covers, OPEN* for an open with no FILLED cover, a dimmed
+// "COVER (unfilled)" row for every resting order that was sent and never filled, and CR/DB net tags.
+// Reusing the producer rather than reimplementing it is the point — a lookalike would drift.
+//
+// The diagnostic columns are APPENDED, not substituted: the cover's mark when it was placed, the
+// ceiling the rule allowed, the gap between the two, and whether a profitable cover was available at
+// all. That comparison is what makes "was this order placed where we expected?" answerable by looking.
 function renderOrders(pos, W, ML, se) {
+  const conv = window.strategyRunToOptionArray
+    ? window.strategyRunToOptionArray(record, { includeUnfilled: true }) : null;
+  const P = (conv && conv.positions) || [];
+  const byId = {}; for (const p of (se && se.positions) || []) byId[p.id] = p;
+  const raw = {}; for (const p of pos) raw[p.id] = p;
+
+  // Same numbering rule as the index: #1.. by open time, covers inherit their open's number.
+  const evs = [];
+  P.forEach((p) => {
+    evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0,
+      legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * (p.quantity || 1)), net: p.openNet || 'DEBIT' });
+    if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0,
+      legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * (p.quantity || 1)), net: p.coverNet || 'DEBIT' });
+    else if (p.unfilledCover) evs.push({ id: p.id, type: 'cover', unfilled: true, side: p.side,
+      time: p.unfilledCover.time, epoch: p.unfilledCover.epoch || (p.openEpoch || 0) + 1,
+      legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * (p.quantity || 1)),
+      net: p.unfilledCover.net || 'DEBIT' });
+  });
+  const seq = new Map();
+  evs.filter((e) => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
+  evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1));
+  const coveredIds = new Set(evs.filter((e) => e.type === 'cover' && !e.unfilled).map((e) => e.id));
+
   const COLS = [
-    ['#', 'position order in the day'],
-    ['side', 'bull = long call spread, bear = long put spread'],
-    ['opened', 'ET time the open was placed'],
-    ['short K', 'the short strike — the anchor the geometry is built around'],
-    ['open $', 'what we PAID to open, per share'],
-    ['open %W', 'open cost as a fraction of the width. capFrac caps this; the closer to the cap, the less room the cover has'],
-    ['cover mark', 'the cover spread’s MARK at the moment the resting cover was placed — what it would have cost to cover right then'],
-    ['ceiling', 'W − openCost − minLock: the most we may pay and still lock the demanded profit. THIS is what the engine rests at'],
-    ['sent', 'the limit actually sent to the broker'],
-    ['gap', 'sent − cover mark. Negative means the order rests BELOW the market and only fills if the market comes to it'],
-    ['cover?', 'was a profitable cover even available when we placed it (mark ≤ ceiling)?'],
-    ['filled', 'did the cover fill'],
+    ['Time', 'ET time of the order'],
+    ['Pos', 'position number, chronological by open; a cover carries its open’s number'],
+    ['Event', '▲/▼ open (coloured by side), ◇ cover. OPEN* = no FILLED cover, so still exposed'],
+    ['Legs', 'the spread as actually sent'],
+    ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
+    ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
+    ['cover mark', 'the cover’s MARK when the resting order was placed'],
+    ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
+    ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
+    ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
     ['settle P&L', 'this position’s P&L at settlement'],
   ];
-  let h = '<thead><tr>' + COLS.map(([c, t]) => `<th title="${t.replace(/"/g, '&quot;')}">${c}</th>`).join('') + '</tr></thead><tbody>';
-  const byId = {};
-  for (const p of (se && se.positions) || []) byId[p.id] = p;
-  let i = 0, restingBelow = 0, everCoverable = 0;
-  for (const p of pos) {
-    i++;
-    const pc = p.pendingCover || {};
-    const ceiling = (W != null && p.limit != null) ? +(W - p.limit - ML).toFixed(2) : null;
+  const usdc = (c) => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
+  const color = (sd) => (sd === 'bull' ? 'var(--profit)' : 'var(--loss)');
+  const glyph = (e) => e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
+
+  let restingBelow = 0, everCoverable = 0;
+  const body = evs.map((e) => {
+    const open = e.type === 'open';
+    const isUncov = open && !coveredIds.has(e.id);
+    const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
+    const cr = e.net === 'CREDIT';
+    const r = raw[e.id] || {}, pc = r.pendingCover || {};
+    const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;
     const mark = pc.markAtPlace != null ? pc.markAtPlace : null;
     const sent = pc.target != null ? pc.target : null;
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
-    if (gap != null && gap < 0) restingBelow++;
-    if (coverable) everCoverable++;
-    const sp = byId[p.id];
-    h += `<tr class="${p.covered ? '' : (pc.target != null ? 'unfilled' : '')}">`
-      + `<td>${i}</td><td>${p.side || ''}</td><td>${p.openTime || ''}</td><td>${p.shortStrike != null ? p.shortStrike : ''}</td>`
-      + `<td>${num(p.limit)}</td>`
-      + `<td class="${p.limit / W > 0.55 ? 'l' : 'm'}">${p.limit != null && W ? Math.round(p.limit / W * 100) + '%' : '—'}</td>`
-      + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td><td>${num(sent)}</td>`
-      + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
-      + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`
-      + `<td>${p.covered ? '<span class="tag ok">yes</span>' : (pc.target != null ? '<span class="tag no">no</span>' : '<span class="tag w">none sent</span>')}</td>`
-      + `<td class="${sp ? sgn(sp.pnl) : ''}">${sp ? usd(sp.pnl) : '—'}</td></tr>`;
-  }
-  $('orders').innerHTML = h + '</tbody>';
-  $('ordMeta').textContent = `${pos.length} position(s)`;
-  $('ordNote').innerHTML = `<b>${restingBelow}</b> cover(s) rested BELOW the market, and <b>${everCoverable}</b> `
+    if (!open) { if (gap != null && gap < 0) restingBelow++; if (coverable) everCoverable++; }
+    const sp = byId[e.id];
+    // Diagnostics belong to the COVER order, so they only render on cover rows.
+    const diag = open
+      ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
+        + '<td class="m">—</td><td class="m">—</td><td class="m">—</td><td class="m">—</td>'
+      : '<td class="m">—</td>'
+        + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td>`
+        + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
+        + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;
+    return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}" title="${e.id}">`
+      + `<td>${e.time || '—'}</td><td>#${seq.get(e.id) || '?'}</td>`
+      + `<td style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
+      + `<td class="legs">${e.legs}</td>`
+      + `<td>${cr ? '+' : ''}${usdc(e.cost)} <span class="net ${cr ? 'cr' : 'dr'}">${cr ? 'CR' : 'DB'}</span></td>`
+      + diag
+      + `<td class="${open && sp ? sgn(sp.pnl) : ''}">${open && sp ? usd(sp.pnl) : '—'}</td></tr>`;
+  }).join('');
+
+  $('orders').innerHTML = '<thead><tr>' + COLS.map(([c, t]) => `<th title="${t.replace(/"/g, '&quot;')}">${c}</th>`).join('')
+    + '</tr></thead><tbody>' + body + '</tbody>';
+  const opens = evs.filter((e) => e.type === 'open').length;
+  const covers = evs.filter((e) => e.type === 'cover').length;
+  const unf = evs.filter((e) => e.type === 'cover' && e.unfilled).length;
+  $('ordMeta').textContent = `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`;
+  $('ordNote').innerHTML = `<b>${restingBelow}</b> cover(s) rested BELOW the market; <b>${everCoverable}</b> `
     + `had a profitable cover available at placement. When "cover?" is <span class="tag no">no</span>, the mark `
-    + `had already moved past the ceiling — the rule demands a locked profit, so no fillable price exists and the `
-    + `position rides to expiry uncovered. That is the difference between a small loss and the full one.`;
+    + `had already moved past the ceiling — the rule demands a locked profit, so no fillable price exists and `
+    + `the position rides to expiry uncovered. That is the difference between a small loss and the full one.`;
 }
 
-// Settlement risk curve, drawn from the same portfolio-risk engine the other pages use.
-function renderCurve(pos, se) {
-  const svg = $('curve');
+// THE COMPARE PAGE'S CELL, rendered at full size. Identical code path, so the colouring, the dashed
+// backtest references, the locked-floor violet and the extremes on the right edge all behave the same —
+// a lookalike reimplementation would drift the moment either page changed.
+const CW = 900, CH = 300;
+const fmtN = (n) => n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+const usdK = (n) => n == null ? '—' : (Math.abs(n) >= 1000
+  ? (n < 0 ? '-$' : '+$') + (Math.abs(n) / 1000).toFixed(1) + 'k'
+  : (n < 0 ? '-$' : '+$') + Math.abs(Math.round(n)));
+function pnlAtPrice(curve, x) {
+  if (!curve || !curve.length) return null;
+  let best = curve[0];
+  for (const p of curve) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
+  return best.y;
+}
+let dbgAbs = 0;   // one chart, so the saturation reference is that chart's own magnitude
+const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs });
+
+// Build the same {curve, lo, hi, underlying, underPnl, ...} shape the compare grid feeds its cell.
+function buildCell(pos, se) {
   const legs = [];
   for (const p of pos) {
-    for (const l of (p.legs || [])) legs.push({ ...l, quantity: p.quantity || 1 });
-    if (p.covered) for (const l of (p.coverLegs || [])) legs.push({ ...l, quantity: p.quantity || 1 });
+    for (const l of (p.legs || [])) legs.push({ ...l, quantity: p.quantity || 1, cost: p.limit });
+    if (p.covered) for (const l of (p.coverLegs || [])) legs.push({ ...l, quantity: p.quantity || 1, cost: p.coverLimit });
   }
-  if (!legs.length || !window.PortfolioRisk) { svg.innerHTML = ''; $('curveMeta').textContent = 'no positions'; return; }
+  if (!legs.length) return null;
   const under = se && se.settle != null ? se.settle : null;
-  const lo = (under || 29500) * 0.985, hi = (under || 29500) * 1.015;
-  const pts = [];
-  for (let i = 0; i <= 120; i++) {
-    const x = lo + (hi - lo) * (i / 120);
+  const centre = under || 29500;
+  const lo = centre * 0.985, hi = centre * 1.015;
+  const cost = pos.reduce((a, p) => a + (p.limit || 0) * 100 * (p.quantity || 1)
+    + (p.covered && p.coverLimit ? p.coverLimit * 100 * (p.quantity || 1) : 0), 0);
+  const curve = [];
+  for (let i = 0; i <= 240; i++) {
+    const x = lo + (hi - lo) * (i / 240);
     let v = 0;
     for (const l of legs) {
       const intr = l.type === 'C' ? Math.max(0, x - l.strike) : Math.max(0, l.strike - x);
       v += (l.side === 'long' ? 1 : -1) * intr * 100 * (l.quantity || 1);
     }
-    pts.push([x, v]);
+    curve.push({ x, y: v - cost });
   }
-  const cost = pos.reduce((a, p) => a + (p.limit || 0) * 100 * (p.quantity || 1)
-    + (p.covered && p.coverLimit ? p.coverLimit * 100 * (p.quantity || 1) : 0), 0);
-  const ys = pts.map((p) => p[1] - cost);
-  const yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const W = 620, H = 240, pad = 4;
-  const X = (x) => ((x - lo) / (hi - lo)) * W;
-  const Y = (y) => H - pad - ((y - yMin) / ((yMax - yMin) || 1)) * (H - pad * 2);
-  const poly = pts.map((p, i) => `${X(p[0]).toFixed(1)},${Y(ys[i]).toFixed(1)}`).join(' ');
-  const zero = Y(0);
-  svg.innerHTML = `<line x1="0" y1="${zero.toFixed(1)}" x2="${W}" y2="${zero.toFixed(1)}" stroke="var(--zero)" stroke-dasharray="3 2"/>`
-    + `<polyline points="${poly}" fill="none" stroke="#333" stroke-width="1.4"/>`
-    + (under != null ? `<line x1="${X(under).toFixed(1)}" y1="0" x2="${X(under).toFixed(1)}" y2="${H}" stroke="#888"/>` : '');
-  $('curveMeta').textContent = `min ${usd(yMin)} · max ${usd(yMax)}` + (under != null ? ` · settle ${Math.round(under)}` : '');
+  const ys = curve.map((c) => c.y);
+  return { curve, lo: Math.min(...ys), hi: Math.max(...ys), xMin: lo, xMax: hi,
+    worst: Math.min(...ys), best: Math.max(...ys),
+    underlying: under, underPnl: under != null ? pnlAtPrice(curve, under) : null };
+}
+
+function renderCurve(pos, se) {
+  const host = document.getElementById('curve');
+  const d = buildCell(pos, se);
+  if (!d) { host.outerHTML = '<svg id="curve" width="100%" height="300"></svg>'; $('curveMeta').textContent = 'no positions'; return; }
+  dbgAbs = Math.max(Math.abs(d.lo), Math.abs(d.hi));
+  const bt = (baselines && record && baselines[(record.config || {}).variant]) || null;
+  const btRef = bt ? { worst: bt.avgWorstCase, best: bt.avgBestCase } : null;
+  host.outerHTML = `<div id="curve" style="width:100%">${cellCurve((record.config || {}).variant, d, d.lo, d.hi, btRef, null)}</div>`;
+  $('curveMeta').textContent = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
+    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '');
 }
 
 // ---- boot -------------------------------------------------------------------------------------

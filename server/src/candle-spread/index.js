@@ -1065,9 +1065,17 @@ function status() {
     // TERMINAL (mark-to-market) P&L: value EVERY position (covered + uncovered) at the current NDX
     // underlying — the true P&L (what the UI shows). realizedPnl below is only the covered tents' locked
     // FLOOR (always ~positive; ignores uncovered legs), kept as the conservative lower bound.
-    let terminalPnl = null;
-    if (st && st.lastUnderlying != null && st.positions && st.positions.length) {
-      try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying, rec.events).total); } catch (e) { /* leave null */ }
+    let terminalPnl = null, pnlBasis = null;
+    // ONCE THE DAY HAS SETTLED, THE SETTLEMENT IS THE ANSWER. Re-marking at `lastUnderlying` uses the last
+    // 5m candle the engine acted on (15:55), not the official close — 31 points apart on 2026-09-08, and on
+    // 0DTE that gap flips strikes between ITM and OTM. It reported v7-40 at +$2,374 on a day it lost
+    // $7,920: not merely off, the wrong SIGN. The settlement event already carries the right figure.
+    const settled = [...(rec ? rec.events || [] : [])].reverse()
+      .find((e) => e.type === 'eod_settlement' && e.settle != null);
+    if (settled && settled.terminalPnl != null) {
+      terminalPnl = Math.round(settled.terminalPnl); pnlBasis = 'settled';
+    } else if (st && st.lastUnderlying != null && st.positions && st.positions.length) {
+      try { terminalPnl = Math.round(trader.computeTerminalPnl(st, rec.config, st.lastUnderlying, rec.events).total); pnlBasis = 'mark-to-market'; } catch (e) { /* leave null */ }
     }
     const base = backtestBaselines().variants[run.variant] || null;
     return {
@@ -1076,7 +1084,8 @@ function status() {
       width: run.spreadWidth || 20, shift: run.spreadShift || 0,
       positions: st ? st.positions.length : 0,
       covered: st ? st.positions.filter(p => p.covered).length : 0,
-      terminalPnl,                                    // the real P&L (mark-to-market at the NDX underlying)
+      terminalPnl,                                    // settled terminal when the day is done, else mark-to-market
+      pnlBasis,                                       // 'settled' | 'mark-to-market' — the UI should say which
       realizedPnl: st ? Math.round(st.realizedPnl) : 0,   // conservative FLOOR (covered tents only)
       // How today's live terminal compares to THIS variant's BACKTEST average daily terminal P&L.
       backtestAvg: base ? base.avgDaily : null,
