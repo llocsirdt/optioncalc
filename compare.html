@@ -152,7 +152,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.56</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.57</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -793,6 +793,16 @@ function buildTimeIndex() {
       bestN = cc.length;
       underlyingMap = cc.map((e) => ({ epoch: toEpoch(parseETMin(e.candle.time)), under: e.underlying }))
         .filter((x) => Number.isFinite(x.epoch)).sort((a, b) => a.epoch - b.epoch);
+      // THE CLOSE IS NOT THE LAST CANDLE. candle_close events stop at the last 5m bar the engine acted on
+      // (15:55), but the day settles on the official index close, which the settlement event records as
+      // `settle` with settleSource 'index-close'. On 2026-09-08 those differ by 31 points — 29,476.49 vs
+      // 29,507.70 — so every curve was reading its "now" 31 points away from where the day actually ended.
+      // Appending the settle price as the final point makes the end of the slider the real close.
+      const se = (rec.events || []).filter((e) => e.type === 'eod_settlement' && e.settle != null).pop();
+      if (se) {
+        const t = Date.parse(se.time);
+        if (Number.isFinite(t)) underlyingMap.push({ epoch: t, under: se.settle, settle: true });
+      }
     }
   }
   if (underlyingMap.length) eps.push(underlyingMap[0].epoch, underlyingMap[underlyingMap.length - 1].epoch);
