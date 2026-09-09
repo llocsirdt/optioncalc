@@ -28,6 +28,13 @@
   .col-right { flex:1 1 0; min-width:0; }
   .side-by-side { display:flex; gap:10px; margin-top:10px; }
   .side-by-side .panel { flex:1 1 0; min-width:0; }
+  /* DENSE stat panels: they frame the trades table rather than compete with it, so they trade padding and
+     leading for height. Long labels ellipsize instead of wrapping to a second line. */
+  .side-by-side.dense .panel { padding:5px 7px; }
+  .side-by-side.dense .panel h2 { font-size:11px; margin:0 0 3px; }
+  .side-by-side.dense .kv { font-size:10.5px; line-height:1.25; }
+  .side-by-side.dense .kv div { padding:0; gap:8px; }
+  .side-by-side.dense .kv .k { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* Below ~1100px two columns stop helping — the table gets too narrow to read next to a chart. */
   @media (max-width: 1100px) { .two { flex-direction:column; } .col-right .panel { max-height:none !important; } }
   #nq-chart { height:300px; }
@@ -75,7 +82,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.67</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.68</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -114,8 +121,13 @@
           <div id="nq-chart"></div>
         </div>
       </div>
+    </div>
 
-      <div class="side-by-side">
+    <div class="col-right">
+      <!-- The numbers that frame the table sit directly above it: what this day actually did, against what
+           765 days of backtest say the variant does. Kept deliberately dense — they are a reference while
+           reading the orders, not the main event, so they must not push the table off the screen. -->
+      <div class="side-by-side dense">
         <div class="panel">
           <h2>Day summary</h2>
           <div class="kv" id="summary"></div>
@@ -125,10 +137,7 @@
           <div class="kv" id="baseline"></div>
         </div>
       </div>
-    </div>
-
-    <div class="col-right">
-      <div class="panel" style="display:flex; flex-direction:column; position:sticky; top:8px; max-height:calc(100vh - 96px)">
+      <div class="panel" style="display:flex; flex-direction:column; margin-top:8px; max-height:calc(100vh - 210px)">
         <h2>Orders <span class="meta" id="ordMeta"></span></h2>
         <div id="ordScroll" style="flex:1; overflow:auto; min-height:0">
           <table class="ord" id="orders"></table>
