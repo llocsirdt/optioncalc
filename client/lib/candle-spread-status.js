@@ -11,7 +11,18 @@
  */
 (function () {
   const POLL_MS = 12000;
-  const apiBase = () => (typeof PROXY_URL !== 'undefined' ? PROXY_URL : 'http://localhost:3001');
+  // SPLIT ROUTING, matching compare.html. LIVE RUN state comes from PROD even when developing locally:
+  // the local engine only records while this machine is awake, so its runs stop at whatever ragged time
+  // the Mac slept. On 2026-09-08 local held ~1 position per variant and no settlement event, so the grid
+  // fell back to marking a near-empty book and showed three different strategies all at $305 — which reads
+  // as "the values are wrong" rather than "you are looking at the wrong server".
+  // ?proxy=local forces the local engine when that is genuinely what you want to inspect.
+  const PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
+  const _forced = new URLSearchParams(location.search).get('proxy');
+  const apiBase = () => _forced === 'local'
+    ? 'http://localhost:3001'
+    : (_forced === 'remote' ? PROD_BASE
+      : (typeof PROXY_URL !== 'undefined' && /^https?:\/\/(?!localhost|127\.)/.test(PROXY_URL) ? PROXY_URL : PROD_BASE));
   const el = () => document.getElementById('csEngineStatus');
   // OPTIONAL second host. When a page provides #csEngineInline the activity rollup and tick countdown
   // render there instead of trailing the badge, so the two can sit on separate lines and the header
