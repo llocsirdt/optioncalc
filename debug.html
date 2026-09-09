@@ -1,0 +1,294 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy Debug — one variant, one day</title>
+<script src="shared/market-calendar.js"></script>
+<script src="shared/run-completeness.js"></script>
+<script src="shared/portfolio-risk.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb;
+    --locked:#8b5cf6; --warn:#c98b8b; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px system-ui, sans-serif; }
+  header { padding:8px 14px 6px; border-bottom:1px solid var(--grid); }
+  h1 { font-size:16px; margin:0 0 6px; display:inline-block; }
+  h1 .ver { color:var(--muted); font:400 11px ui-monospace,monospace; margin-left:6px; }
+  .ctl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px; }
+  select, input[type=date], button { font:12px system-ui,sans-serif; padding:3px 6px; border:1px solid #ccc;
+    border-radius:4px; background:#fff; color:inherit; }
+  button { cursor:pointer; }
+  .meta { color:var(--muted); font:11px ui-monospace,monospace; margin-left:2px; }
+  .wrap { padding:10px 14px 40px; }
+  .cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .panel { border:1px solid var(--grid); border-radius:6px; padding:8px 10px; }
+  .panel h2 { font-size:12px; margin:0 0 6px; font-weight:700; }
+  .kv { font:11px ui-monospace,monospace; }
+  .kv div { display:flex; justify-content:space-between; gap:14px; padding:1px 0; }
+  .kv .k { color:var(--muted); }
+  table.ord { border-collapse:collapse; font:11px ui-monospace,monospace; width:100%; }
+  table.ord th { text-align:right; padding:3px 6px; border-bottom:1px solid var(--grid); color:var(--muted);
+    font-weight:600; white-space:nowrap; position:sticky; top:0; background:#fff; cursor:help;
+    text-decoration:underline dotted rgba(125,125,125,.6); text-underline-offset:3px; }
+  table.ord th:first-child, table.ord td:first-child { text-align:left; }
+  table.ord td { text-align:right; padding:2px 6px; border-bottom:1px solid #f2f2f2; white-space:nowrap; }
+  tr.unfilled { background:#fff6f6; }
+  tr.unfilled td:first-child { border-left:2px solid var(--loss); }
+  .p { color:var(--profit); } .l { color:var(--loss); } .m { color:var(--muted); }
+  .tag { padding:0 5px; border-radius:3px; font:600 9.5px system-ui,sans-serif; }
+  .tag.ok { background:#e6f5f2; color:#1c7f72; } .tag.no { background:#fdecea; color:#a5322c; }
+  .tag.w  { background:#f3efff; color:#5b3fa8; }
+  .note { color:var(--muted); font-size:11px; margin:4px 0 0; max-width:900px; line-height:1.45; }
+  #err { color:var(--loss); font:12px ui-monospace,monospace; padding:8px 14px; }
+</style>
+
+<header>
+  <h1>Strategy Debug <span class="ver">v3.8.58</span></h1>
+  <div class="ctl">
+    <label>variant <select id="variant"></select></label>
+    <label>date <input type="date" id="date"></label>
+    <label>source
+      <select id="src"><option value="live">Live runs (prod)</option><option value="backtest">Backtest replay (local)</option></select>
+    </label>
+    <button id="reload">Reload</button>
+    <span class="meta" id="meta"></span>
+  </div>
+</header>
+<div id="err"></div>
+<div class="wrap">
+  <div class="cols">
+    <div class="panel" style="flex:1 1 460px; min-width:380px">
+      <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
+      <svg id="curve" width="100%" height="240" viewBox="0 0 620 240" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="panel" style="flex:0 0 300px">
+      <h2>Day summary</h2>
+      <div class="kv" id="summary"></div>
+    </div>
+    <div class="panel" style="flex:0 0 300px">
+      <h2>Backtest expectation <span class="meta">(this variant, 765d)</span></h2>
+      <div class="kv" id="baseline"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h2>Orders <span class="meta" id="ordMeta"></span></h2>
+    <div style="max-height:60vh; overflow:auto">
+      <table class="ord" id="orders"></table>
+    </div>
+    <p class="note" id="ordNote"></p>
+  </div>
+</div>
+
+<script>
+// STRATEGY DEBUG — one variant, one day, in enough detail to answer "was that order placed where we
+// expected?" without reading a JSON file.
+//
+// It exists because the aggregate views cannot show the thing that actually decides a day: for every
+// cover, what the market was at the moment we placed it, what limit we sent, and what the rule would
+// have allowed. On 2026-09-08 that comparison is the whole story — 43 of 101 covers never filled, and
+// every one of them was resting below a market that had already moved past the profit ceiling.
+//
+// Split routing matches compare.html: LIVE runs come from PROD (the local engine only records while this
+// machine is awake, so its days end at whatever ragged time the Mac slept), BACKTEST replay comes from
+// LOCAL (the deployed box has no 5m datasets).
+const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
+  || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
+const _p = new URLSearchParams(location.search);
+const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
+const forced = _p.get('proxy');
+const LIVE_BASE = forced === 'local' ? LOCAL_BASE : forced === 'remote' ? PROD_BASE : PROD_BASE;
+const BT_BASE   = forced === 'remote' ? PROD_BASE : LOCAL_BASE;
+
+const $ = (id) => document.getElementById(id);
+const usd = (n) => n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+const sgn = (n) => n == null ? 'm' : n > 0 ? 'p' : n < 0 ? 'l' : 'm';
+const num = (n, d = 2) => n == null ? '—' : (+n).toFixed(d);
+const showErr = (m) => { $('err').textContent = m || ''; };
+
+let record = null, baselines = null;
+
+async function getJson(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status} — ${url.split('?')[0]}`);
+  return r.json();
+}
+
+// ---- load -------------------------------------------------------------------------------------
+async function loadVariants() {
+  try {
+    const j = await getJson(`${LIVE_BASE}/api/v1/candle-spread/runs?cb=${Date.now()}`);
+    const list = (j.variants || []).map((v) => (typeof v === 'string' ? v : v.variant)).filter(Boolean);
+    const sel = $('variant');
+    sel.innerHTML = list.map((v) => `<option${v === (_p.get('variant') || 'v7-10') ? ' selected' : ''}>${v}</option>`).join('');
+  } catch (e) { showErr('could not list variants: ' + e.message); }
+}
+
+async function loadBaselines() {
+  for (const base of [BT_BASE, LIVE_BASE]) {
+    try {
+      const j = await getJson(`${base}/api/v1/candle-spread/baselines?cb=${Date.now()}`);
+      baselines = j.variants || j; return;
+    } catch (e) { /* try the other side */ }
+  }
+}
+
+async function load() {
+  showErr('');
+  const variant = $('variant').value, date = $('date').value;
+  if (!variant || !date) return;
+  const base = $('src').value === 'backtest' ? BT_BASE : LIVE_BASE;
+  $('meta').textContent = 'loading…';
+  try {
+    record = await getJson(`${base}/api/v1/candle-spread/runs/NDX/${date}?date=${date}&variant=${variant}&cb=${Date.now()}`);
+  } catch (e) {
+    record = null; showErr(`no run for ${variant} on ${date} (${e.message})`);
+    $('meta').textContent = ''; $('orders').innerHTML = ''; $('summary').innerHTML = '';
+    $('curve').innerHTML = ''; return;
+  }
+  render();
+}
+
+// ---- render -----------------------------------------------------------------------------------
+function settleEvent() {
+  return (record.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
+}
+
+function render() {
+  const st = record.state || {}, cfg = record.config || {};
+  const se = settleEvent();
+  const W = cfg.spreadWidth, ML = (cfg.continuousCoverMinLockFrac || 0) * W;
+  const pos = st.positions || [];
+  const assess = window.RunCompleteness ? window.RunCompleteness.assessRun(record) : null;
+
+  $('meta').innerHTML = `${cfg.variant || ''} · W $${W} · minLock $${num(ML)} · capFrac ${cfg.capFrac != null ? cfg.capFrac : '—'}`
+    + (assess ? ` · <b>${assess.label}</b>` : '');
+
+  // ---- summary
+  const covered = pos.filter((p) => p.covered).length;
+  const unfilled = pos.filter((p) => p.pendingCover && !p.covered).length;
+  const fillPct = (covered + unfilled) ? Math.round(covered / (covered + unfilled) * 100) : null;
+  const rows = [
+    ['opens', pos.length],
+    ['covers filled', covered],
+    ['covers UNFILLED', unfilled],
+    ['cover fill rate', fillPct == null ? '—' : fillPct + '%'],
+    ['floor (covered only)', usd(se && se.floorPnl)],
+    ['TERMINAL', usd(se && se.terminalPnl)],
+    ['naked drag', se && se.terminalPnl != null && se.floorPnl != null ? usd(se.terminalPnl - se.floorPnl) : '—'],
+    ['settle', se && se.settle != null ? num(se.settle, 2) + (se.settleSource ? ` (${se.settleSource})` : '') : '—'],
+  ];
+  $('summary').innerHTML = rows.map(([k, v]) =>
+    `<div><span class="k">${k}</span><span class="${k === 'TERMINAL' || k === 'naked drag' ? sgn(parseFloat(String(v).replace(/[^0-9.-]/g, ''))) : ''}">${v}</span></div>`).join('');
+
+  // ---- backtest expectation for THIS variant, so live and expected sit side by side
+  const b = baselines && baselines[cfg.variant];
+  $('baseline').innerHTML = b ? [
+    ['avg/day', usd(b.avgDaily)], ['win%', b.winRate != null ? Math.round(b.winRate * 100) + '%' : '—'],
+    ['avgWin', usd(b.avgWin)], ['avgLoss', usd(b.avgLoss)],
+    ['trades/day', b.avgTradesPerDay != null ? (+b.avgTradesPerDay).toFixed(1) : '—'],
+    ['avgLossPot', usd(b.avgWorstCase)], ['riskMax', b.governor ? usd(-b.governor.lossMax) : 'none'],
+  ].map(([k, v]) => `<div><span class="k">${k}</span><span>${v}</span></div>`).join('')
+    : '<div class="k">no baseline for this variant</div>';
+
+  renderOrders(pos, W, ML, se);
+  renderCurve(pos, se);
+}
+
+// THE TABLE THIS PAGE EXISTS FOR. Per order: what the market was when we placed it, what we sent, and
+// what the rule would allow — so "placed where we expected?" is answerable by looking, not by arguing.
+function renderOrders(pos, W, ML, se) {
+  const COLS = [
+    ['#', 'position order in the day'],
+    ['side', 'bull = long call spread, bear = long put spread'],
+    ['opened', 'ET time the open was placed'],
+    ['short K', 'the short strike — the anchor the geometry is built around'],
+    ['open $', 'what we PAID to open, per share'],
+    ['open %W', 'open cost as a fraction of the width. capFrac caps this; the closer to the cap, the less room the cover has'],
+    ['cover mark', 'the cover spread’s MARK at the moment the resting cover was placed — what it would have cost to cover right then'],
+    ['ceiling', 'W − openCost − minLock: the most we may pay and still lock the demanded profit. THIS is what the engine rests at'],
+    ['sent', 'the limit actually sent to the broker'],
+    ['gap', 'sent − cover mark. Negative means the order rests BELOW the market and only fills if the market comes to it'],
+    ['cover?', 'was a profitable cover even available when we placed it (mark ≤ ceiling)?'],
+    ['filled', 'did the cover fill'],
+    ['settle P&L', 'this position’s P&L at settlement'],
+  ];
+  let h = '<thead><tr>' + COLS.map(([c, t]) => `<th title="${t.replace(/"/g, '&quot;')}">${c}</th>`).join('') + '</tr></thead><tbody>';
+  const byId = {};
+  for (const p of (se && se.positions) || []) byId[p.id] = p;
+  let i = 0, restingBelow = 0, everCoverable = 0;
+  for (const p of pos) {
+    i++;
+    const pc = p.pendingCover || {};
+    const ceiling = (W != null && p.limit != null) ? +(W - p.limit - ML).toFixed(2) : null;
+    const mark = pc.markAtPlace != null ? pc.markAtPlace : null;
+    const sent = pc.target != null ? pc.target : null;
+    const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
+    const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
+    if (gap != null && gap < 0) restingBelow++;
+    if (coverable) everCoverable++;
+    const sp = byId[p.id];
+    h += `<tr class="${p.covered ? '' : (pc.target != null ? 'unfilled' : '')}">`
+      + `<td>${i}</td><td>${p.side || ''}</td><td>${p.openTime || ''}</td><td>${p.shortStrike != null ? p.shortStrike : ''}</td>`
+      + `<td>${num(p.limit)}</td>`
+      + `<td class="${p.limit / W > 0.55 ? 'l' : 'm'}">${p.limit != null && W ? Math.round(p.limit / W * 100) + '%' : '—'}</td>`
+      + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td><td>${num(sent)}</td>`
+      + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
+      + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`
+      + `<td>${p.covered ? '<span class="tag ok">yes</span>' : (pc.target != null ? '<span class="tag no">no</span>' : '<span class="tag w">none sent</span>')}</td>`
+      + `<td class="${sp ? sgn(sp.pnl) : ''}">${sp ? usd(sp.pnl) : '—'}</td></tr>`;
+  }
+  $('orders').innerHTML = h + '</tbody>';
+  $('ordMeta').textContent = `${pos.length} position(s)`;
+  $('ordNote').innerHTML = `<b>${restingBelow}</b> cover(s) rested BELOW the market, and <b>${everCoverable}</b> `
+    + `had a profitable cover available at placement. When "cover?" is <span class="tag no">no</span>, the mark `
+    + `had already moved past the ceiling — the rule demands a locked profit, so no fillable price exists and the `
+    + `position rides to expiry uncovered. That is the difference between a small loss and the full one.`;
+}
+
+// Settlement risk curve, drawn from the same portfolio-risk engine the other pages use.
+function renderCurve(pos, se) {
+  const svg = $('curve');
+  const legs = [];
+  for (const p of pos) {
+    for (const l of (p.legs || [])) legs.push({ ...l, quantity: p.quantity || 1 });
+    if (p.covered) for (const l of (p.coverLegs || [])) legs.push({ ...l, quantity: p.quantity || 1 });
+  }
+  if (!legs.length || !window.PortfolioRisk) { svg.innerHTML = ''; $('curveMeta').textContent = 'no positions'; return; }
+  const under = se && se.settle != null ? se.settle : null;
+  const lo = (under || 29500) * 0.985, hi = (under || 29500) * 1.015;
+  const pts = [];
+  for (let i = 0; i <= 120; i++) {
+    const x = lo + (hi - lo) * (i / 120);
+    let v = 0;
+    for (const l of legs) {
+      const intr = l.type === 'C' ? Math.max(0, x - l.strike) : Math.max(0, l.strike - x);
+      v += (l.side === 'long' ? 1 : -1) * intr * 100 * (l.quantity || 1);
+    }
+    pts.push([x, v]);
+  }
+  const cost = pos.reduce((a, p) => a + (p.limit || 0) * 100 * (p.quantity || 1)
+    + (p.covered && p.coverLimit ? p.coverLimit * 100 * (p.quantity || 1) : 0), 0);
+  const ys = pts.map((p) => p[1] - cost);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const W = 620, H = 240, pad = 4;
+  const X = (x) => ((x - lo) / (hi - lo)) * W;
+  const Y = (y) => H - pad - ((y - yMin) / ((yMax - yMin) || 1)) * (H - pad * 2);
+  const poly = pts.map((p, i) => `${X(p[0]).toFixed(1)},${Y(ys[i]).toFixed(1)}`).join(' ');
+  const zero = Y(0);
+  svg.innerHTML = `<line x1="0" y1="${zero.toFixed(1)}" x2="${W}" y2="${zero.toFixed(1)}" stroke="var(--zero)" stroke-dasharray="3 2"/>`
+    + `<polyline points="${poly}" fill="none" stroke="#333" stroke-width="1.4"/>`
+    + (under != null ? `<line x1="${X(under).toFixed(1)}" y1="0" x2="${X(under).toFixed(1)}" y2="${H}" stroke="#888"/>` : '');
+  $('curveMeta').textContent = `min ${usd(yMin)} · max ${usd(yMax)}` + (under != null ? ` · settle ${Math.round(under)}` : '');
+}
+
+// ---- boot -------------------------------------------------------------------------------------
+(async function boot() {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  $('date').value = _p.get('date') || today;
+  if (_p.get('src')) $('src').value = _p.get('src');
+  await loadVariants();
+  await loadBaselines();
+  await load();
+  for (const id of ['variant', 'date', 'src']) $(id).addEventListener('change', load);
+  $('reload').addEventListener('click', load);
+})();
+</script>

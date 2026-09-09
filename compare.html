@@ -152,7 +152,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.57</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.58</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -160,6 +160,7 @@
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">overlay backtest</span></label>
   <button id="btTableBtn">Backtest table ▾</button>
+  <button id="dbgBtn" title="Debug one variant on one day — every order with the mark at placement and the limit sent" onclick="window.open('debug.html?date='+encodeURIComponent(document.getElementById('date')?document.getElementById('date').value:'')+'&src='+encodeURIComponent(SRC),'_blank')">⚙ Debug</button>
   <button id="uncBtn" title="The -unc twins run the same strategy with the day-loss governor OFF. They measure what the cap costs; they are not tradable candidates.">Show uncapped</button>
   <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
