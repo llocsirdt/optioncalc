@@ -613,6 +613,10 @@ function buildEngineDeps(run, live) {
       // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
       // which is exactly why the omission was easy to miss.
       continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
+      // OPENING RULE — read off `deps` in the leg-uniqueness resolve, so it MUST be listed here. Adding it
+      // to BASE_RUNS without this line made the engine refuse to start (assertDeps), which is the guard
+      // working: it would otherwise have been a silent no-op live while the backtest measured a gain.
+      openNeverOtm: run.openNeverOtm,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
       // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
       wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
