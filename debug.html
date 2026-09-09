@@ -23,6 +23,20 @@
   .cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
   .panel { border:1px solid var(--grid); border-radius:6px; padding:8px 10px; }
   .panel h2 { font-size:12px; margin:0 0 6px; font-weight:700; }
+  /* The shared cell renderer emits a FIXED-WIDTH svg (it is sized for a grid cell). Dropped into a flex
+     column narrower than that it spilled over the panel and covered the day-summary next to it. Constrain
+     the box and let the svg scale inside its own viewBox instead. */
+  .panel { overflow:hidden; min-width:0; }
+  #curveBox { position:relative; width:100%; }
+  #curveBox svg { display:block; width:100%; height:auto; max-width:100%; }
+  /* The "now" readout, positioned along the curve exactly as the compare cell does it. */
+  .nowlbl { position:absolute; bottom:2px; transform:translateX(-50%); white-space:nowrap;
+    font:11px ui-monospace,monospace; color:#555; background:rgba(255,255,255,.86); padding:0 3px; border-radius:3px; }
+  .nowlbl i { font-style:normal; font-weight:700; margin-left:5px; }
+  /* Time-of-day playback, same control the compare grid uses. */
+  #timebar { display:flex; align-items:center; gap:10px; margin-top:10px; }
+  #timebar input[type=range] { flex:1; }
+  .tb-time { font:11px ui-monospace,monospace; color:var(--muted); min-width:150px; text-align:right; }
   .kv { font:11px ui-monospace,monospace; }
   .kv div { display:flex; justify-content:space-between; gap:14px; padding:1px 0; }
   .kv .k { color:var(--muted); }
@@ -50,7 +64,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.63</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.64</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -66,7 +80,8 @@
   <div class="cols">
     <div class="panel" style="flex:1 1 460px; min-width:380px">
       <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
-      <div id="curve"></div>
+      <div id="curveBox"><div id="curve"></div></div>
+      <div id="timebar"><span style="font-size:11px;color:var(--muted)">Time of day</span><input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled><span id="timeLabel" class="tb-time">full day</span></div>
     </div>
     <div class="panel" style="flex:0 0 300px">
       <h2>Day summary</h2>
@@ -198,8 +213,10 @@ function render() {
   ].map(([k, v]) => `<div><span class="k">${k}</span><span>${v}</span></div>`).join('')
     : '<div class="k">no baseline for this variant</div>';
 
+  buildTimeIndex();
+  setupSlider();
   renderOrders(pos, W, ML, se);
-  renderCurve(pos, se);
+  renderCurve(pos, se, null);
 }
 
 // THE ORDER TABLE. Built on the SAME data shape the index page's "Strategy Trades" panel uses
@@ -349,14 +366,96 @@ function buildCell(pos, se) {
     underlying: under, underPnl: under != null ? pnlAtPrice(curve, under) : null };
 }
 
-function renderCurve(pos, se) {
+// TIME PLAYBACK. strategyRunToOptionArray takes an asOfEpoch and returns the book as it stood at that
+// moment, so scrubbing rebuilds the curve rather than merely moving a marker — the same mechanism the
+// compare grid uses. dayMin/dayMax come from the positions' own stamps (now including hedges, which
+// derive theirs from the id when the record predates stamping).
+let dayMin = 0, dayMax = 0, underMap = [];
+function buildTimeIndex() {
+  dayMin = 0; dayMax = 0; underMap = [];
+  const st = (record && record.state) || {};
+  const eps = [];
+  for (const p of st.positions || []) {
+    const e = p.openEpoch || (/^[a-z]+-(\d{13})-/.exec(p.id || '') || [])[1];
+    if (e) eps.push(+e);
+    if (p.coverEpoch) eps.push(p.coverEpoch);
+  }
+  for (const e of record.events || []) {
+    if (e.type === 'candle_close' && e.underlying != null) {
+      const t = Date.parse(e.time);
+      if (Number.isFinite(t)) { underMap.push({ epoch: t, under: e.underlying }); eps.push(t); }
+    }
+  }
+  const se = settleEvent();
+  if (se && se.settle != null) {
+    const t = Date.parse(se.time);
+    if (Number.isFinite(t)) { underMap.push({ epoch: t, under: se.settle }); eps.push(t); }
+  }
+  underMap.sort((a, b) => a.epoch - b.epoch);
+  if (eps.length) { dayMin = Math.min(...eps); dayMax = Math.max(...eps); }
+}
+function underlyingAt(T) {
+  if (!underMap.length) return null;
+  let u = underMap[0].under;
+  for (const p of underMap) { if (p.epoch <= T) u = p.under; else break; }
+  return u;
+}
+function currentT() {
+  const s = document.getElementById('timeSlider');
+  if (!s || s.disabled || !dayMax) return null;
+  const t = Number(s.value);
+  return Number.isFinite(t) && t < dayMax ? t : null;
+}
+function setupSlider() {
+  const s = document.getElementById('timeSlider'), lbl = document.getElementById('timeLabel');
+  if (!s) return;
+  if (!dayMax || dayMax <= dayMin) { s.disabled = true; lbl.textContent = 'full day (no intraday stamps)'; return; }
+  s.disabled = false; s.min = String(dayMin); s.max = String(dayMax);
+  s.step = String(Math.max(1, Math.round((dayMax - dayMin) / 400)));
+  s.value = String(dayMax);
+  lbl.textContent = 'full day';
+}
+function sliderLabel(T) {
+  const lbl = document.getElementById('timeLabel');
+  if (!lbl) return;
+  if (T == null) { lbl.textContent = 'full day'; return; }
+  lbl.textContent = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit',
+    minute: '2-digit', hour12: false }).format(new Date(T)) + ' ET';
+}
+
+function renderCurve(pos, se, T) {
   const host = document.getElementById('curve');
-  const d = buildCell(pos, se);
-  if (!d) { host.outerHTML = '<svg id="curve" width="100%" height="300"></svg>'; $('curveMeta').textContent = 'no positions'; return; }
+  // Rebuild the book as of T; at full day this is the whole book, so the default path is unchanged.
+  let bookPos = pos;
+  if (T != null && window.strategyRunToOptionArray) {
+    const conv = window.strategyRunToOptionArray(record, { asOfEpoch: T });
+    const keep = new Set((conv.positions || []).map((x) => x.id));
+    bookPos = pos.filter((p) => keep.has(p.id)).map((p) => {
+      const c = (conv.positions || []).find((x) => x.id === p.id);
+      return c && !c.covered ? { ...p, covered: false, coverLegs: null, coverLimit: null } : p;
+    });
+  }
+  const d = buildCell(bookPos, T != null ? null : se);
+  if (d && T != null) {
+    const u = underlyingAt(T);
+    d.underlying = u;
+    d.underPnl = u != null ? pnlAtPrice(d.curve, u) : null;
+  }
+  if (!d) { host.outerHTML = '<div id="curve"></div>'; $('curveMeta').textContent = 'no positions'; return; }
   dbgAbs = Math.max(Math.abs(d.lo), Math.abs(d.hi));
   const bt = (baselines && record && baselines[(record.config || {}).variant]) || null;
   const btRef = bt ? { worst: bt.avgWorstCase, best: bt.avgBestCase } : null;
-  host.outerHTML = `<div id="curve" style="width:100%">${cellCurve((record.config || {}).variant, d, d.lo, d.hi, btRef, null)}</div>`;
+  // The "now" readout — underlying and the P&L AT that underlying — positioned along the curve, exactly
+  // as the compare cell does it. Without it the vertical line says where we are but not what it is worth.
+  let nowlbl = '';
+  if (d.underlying != null) {
+    const xu = ((d.underlying - d.xMin) / ((d.xMax - d.xMin) || 1)) * 100;
+    const lx = Math.max(4, Math.min(96, xu));
+    const pnl = d.underPnl != null
+      ? `<i style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${fmtN(d.underPnl)}</i>` : '';
+    nowlbl = `<div class="nowlbl" style="left:${lx.toFixed(1)}%">${Math.round(d.underlying)}${pnl}</div>`;
+  }
+  host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, d.lo, d.hi, btRef, null)}${nowlbl}</div>`;
   $('curveMeta').textContent = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
     + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '');
 }
@@ -371,5 +470,12 @@ function renderCurve(pos, se) {
   await load();
   for (const id of ['variant', 'date', 'src']) $(id).addEventListener('change', load);
   $('reload').addEventListener('click', load);
+  const sl = $('timeSlider');
+  if (sl) sl.addEventListener('input', () => {
+    if (!record) return;
+    const T = currentT();
+    sliderLabel(T);
+    renderCurve((record.state || {}).positions || [], settleEvent(), T);
+  });
 })();
 </script>
