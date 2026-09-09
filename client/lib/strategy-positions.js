@@ -53,6 +53,28 @@
 
   // run: the record from /api/v1/candle-spread/runs/:symbol/:expiration. opts.includeUnfilled (default
   // false) keeps never-filled opens out. Returns { optionArrayString, legs, positions, count, source }.
+  // RECOVER A TIME FROM THE POSITION ID. Every id is `${prefix}-${Date.now()}-${seq}` (trader.nextId), so
+  // a position written without openTime/openEpoch still carries its creation instant. Hedge positions
+  // (floorOffset `off-*`, wing conversion `wing-*`) were created without those fields until 2026-09-08, so
+  // every record before that sorts them to the top of the day with a blank timestamp — they look like the
+  // first trades placed when they were bought mid-session. Stamping new positions fixes it going forward;
+  // this recovers the ones already written. Verified against a position that HAS both: pos-1788875112380
+  // derives to 09:45 ET, matching its recorded openTime exactly.
+  function epochFromId(id) {
+    const m = /^[a-z]+-(\d{13})-/.exec(String(id || ''));
+    return m ? +m[1] : null;
+  }
+  function etCandleFromEpoch(ms) {
+    if (!ms) return null;
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+      .formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+    const h = p.hour === '24' ? '00' : p.hour;
+    // Floor to the 5m grid so it lines up with the candle times every other row shows.
+    const mins = Math.floor(parseInt(p.minute, 10) / 5) * 5;
+    return `${p.month}/${p.day} ${h}:${String(mins).padStart(2, '0')}`;
+  }
+
   function strategyRunToOptionArray(run, opts) {
     const o = opts || {};
     // TIME SLICE (opts.asOfEpoch): reconstruct the book AS OF a 5m-mark epoch — include a position's OPEN
@@ -83,7 +105,7 @@
     for (const pos of ordered) {
       if (!pos || !pos.legs || !pos.legs.length) continue;
       if (!pos.filled && !o.includeUnfilled) continue;
-      const oEpoch = pos.openEpoch || epochFrom5m(pos.openedAt);
+      const oEpoch = pos.openEpoch || epochFrom5m(pos.openedAt) || epochFromId(pos.id);
       if (asOf != null && oEpoch != null && oEpoch > asOf) continue;   // not opened yet at asOf
       const coverByT = asOf == null || (pos.coverEpoch != null && pos.coverEpoch <= asOf);   // has it booked by asOf?
       const qty = pos.quantity || cfg.quantity || 1;
@@ -118,10 +140,10 @@
       for (let i = 0; i < legs.length; i++) allLegEpochs.push(i < openLegCount ? oEpoch : cEpoch);
       positions.push({
         id: pos.id, side: pos.side, covered: !!(pos.covered && coverByT), shortStrike: pos.shortStrike, unfilledCover,
-        openTime: pos.openTime || null, coverTime: pos.coverTime || null,       // human CANDLE times (log/tooltip)
+        openTime: pos.openTime || etCandleFromEpoch(epochFromId(pos.id)), coverTime: pos.coverTime || null,   // human CANDLE times (log/tooltip)
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).
-        openEpoch: pos.openEpoch || epochFrom5m(pos.openedAt), coverEpoch: pos.coverEpoch || null,
+        openEpoch: oEpoch, coverEpoch: pos.coverEpoch || null,   // oEpoch already carries the id-derived fallback
         openLimit: oAmt, coverLimit: pos.covered ? cAmt : null, legs,           // ACTUAL sent amounts (magnitude)
         // Per-side leg strings (AS SENT) + qty for the trade-details validation panel.
         quantity: qty, openLegs: fmtSpread(oLegs, qty),
