@@ -287,6 +287,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   };
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;
+  // WHICH MECHANISM IS ACTUALLY COVERING? On 2026-09-08 live, 101 of 101 covers came from `continuous`,
+  // because it stakes a pendingCover on every position the moment it opens and the other three triggers
+  // only consider positions that do not already have one. Counting them here makes that visible in the
+  // backtest instead of only in a day's live record.
+  const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0 };
+  const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
@@ -332,7 +338,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the latter by ~$1,070/contract. Deleted rather than left reachable so it cannot be selected by
       // accident; prior baselines built with it are superseded, not reproducible.
       if (lockMode === 'rest') {
-        p.pendingCover = { legs: G.coverLegs(p.side, p.shortStrike), target: round2(G.WIDTH - p.limit) };
+        p.pendingCover = { legs: G.coverLegs(p.side, p.shortStrike), target: round2(G.WIDTH - p.limit), src: 'lock' };
         lockRested++;
         continue;   // frees no risk NOW — that is the honest cost of resting rather than crossing
       }
@@ -507,7 +513,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (pFrac != null) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
-        if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit) };
+        if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit), src: 'proactive' };
       }
     }
     // (a0b) CONTINUOUS COVER (opts.continuousCover) — the user's ACTUAL policy, and a different shape of
@@ -562,8 +568,19 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (!(cost > 0) || locked < oppRatio * cost) continue;
         }
         // Stamp what the ladder needs to walk this order: when it was placed and where the underlying was.
-        pos.pendingCover = { legs, target: tgt, openCost: pos.limit, minLock,
-          placedMs: nowEpoch, placedUnder: S };
+        pos.pendingCover = { legs, target: tgt, openCost: pos.limit, minLock, src: 'continuous',
+          placedMs: nowEpoch, placedUnder: S, placedET: nowET };
+      }
+    }
+    // Record newly-placed covers once, at the moment they appear, tagged with the trigger that made them.
+    for (const pos of st.positions) {
+      if (pos.pendingCover && !pos.pendingCover._seen) {
+        pos.pendingCover._seen = true;
+        const src = pos.pendingCover.src || 'continuous';
+        if (coverBySrc[src] != null) coverBySrc[src]++;
+        coverPicks.push({ id: pos.id || null, short: pos.shortStrike, side: pos.side,
+          at: pos.pendingCover.placedET || null,
+          legs: (pos.pendingCover.legs || []).map(l => `${l.side[0]}${l.type}${l.strike}`).join(' ') });
       }
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
@@ -704,7 +721,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         const pos = toCover[k];
         let legs = G.coverLegs(pos.side, pos.shortStrike);
         if (plans) { const pl = plans.find(x => x.positionId === 'c' + k); if (pl && !pl.error && pl.legs) legs = pl.legs; }
-        pos.pendingCover = { legs, target: round2(G.WIDTH - pos.limit) };
+        pos.pendingCover = { legs, target: round2(G.WIDTH - pos.limit), src: 'reversal', placedET: nowET };
       }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
@@ -912,11 +929,12 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
   }
   const coverPending = st.positions.filter(p => !p.covered && p.pendingCover).length;   // placed but never filled
+  st.positions.forEach(p => { if (p.pendingCover) delete p.pendingCover._seen; });
   // REPLAY: the RTH bar series (epoch + ET stamp + underlying), so a backtest day can be rebuilt at any
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
