@@ -36,6 +36,8 @@
   tr.td-unfilled td:first-child { border-left:2px solid var(--loss); }
   tr.td-uncovered td:first-child { border-left:2px solid #e0a03c; }
   tr.td-cover td { color:#555; }
+  tr.td-hedge td { color:#6b5ea8; background:#faf9ff; }
+  tr.td-hedge td:first-child { border-left:2px solid #8b5cf6; }
   td.legs { font-size:10.5px; color:#444; text-align:left; }
   .net { font:600 9px system-ui,sans-serif; padding:0 3px; border-radius:2px; }
   .net.cr { background:#e6f5f2; color:#1c7f72; } .net.dr { background:#f1f1f1; color:#666; }
@@ -48,7 +50,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.59</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.60</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -248,13 +250,18 @@ function renderOrders(pos, W, ML, se) {
   ];
   const usdc = (c) => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
   const color = (sd) => (sd === 'bull' ? 'var(--profit)' : 'var(--loss)');
-  const glyph = (e) => e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
+  const glyph = (e) => (/^off-|^wing-/.test(e.id)) ? '⬡'
+    : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
 
   let restingBelow = 0, everCoverable = 0;
   const body = evs.map((e) => {
     const open = e.type === 'open';
-    const isUncov = open && !coveredIds.has(e.id);
-    const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
+    // Hedges (floorOffset `off-*`, wing conversion `wing-*`) reshape the risk curve; they are not strategy
+    // opens and are never covered, so "OPEN*" misrepresented them as exposed positions awaiting a cover.
+    const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : null;
+    const isUncov = open && !hedge && !coveredIds.has(e.id);
+    const label = hedge ? hedge
+      : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
     const cr = e.net === 'CREDIT';
     const r = raw[e.id] || {}, pc = r.pendingCover || {};
     const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;
@@ -272,7 +279,7 @@ function renderOrders(pos, W, ML, se) {
         + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;
-    return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}" title="${e.id}">`
+    return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
       + `<td>${e.time || '—'}</td><td>#${seq.get(e.id) || '?'}</td>`
       + `<td style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
       + `<td class="legs">${e.legs}</td>`
@@ -283,10 +290,13 @@ function renderOrders(pos, W, ML, se) {
 
   $('orders').innerHTML = '<thead><tr>' + COLS.map(([c, t]) => `<th title="${t.replace(/"/g, '&quot;')}">${c}</th>`).join('')
     + '</tr></thead><tbody>' + body + '</tbody>';
-  const opens = evs.filter((e) => e.type === 'open').length;
+  const isHedge = (e) => /^off-|^wing-/.test(e.id);
+  const opens = evs.filter((e) => e.type === 'open' && !isHedge(e)).length;
+  const hedges = evs.filter((e) => e.type === 'open' && isHedge(e)).length;
   const covers = evs.filter((e) => e.type === 'cover').length;
   const unf = evs.filter((e) => e.type === 'cover' && e.unfilled).length;
-  $('ordMeta').textContent = `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`;
+  $('ordMeta').textContent = `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`
+    + (hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : '');
   $('ordNote').innerHTML = `<b>${restingBelow}</b> cover(s) rested BELOW the market; <b>${everCoverable}</b> `
     + `had a profitable cover available at placement. When "cover?" is <span class="tag no">no</span>, the mark `
     + `had already moved past the ceiling — the rule demands a locked profit, so no fillable price exists and `

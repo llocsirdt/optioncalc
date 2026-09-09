@@ -413,7 +413,11 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
       if (debit == null || debit <= 0) continue;
       const cost = debit * 100 * qty;
       if (st.offSpent + cost > budget) continue;
+      // STAMP THE TIME. Hedges were the only positions created without openTime/openEpoch, so every UI
+      // that orders by time sorted them to the very top with a blank timestamp — they appeared to be the
+      // first two trades of the day when they were bought mid-session.
       const hp = { filled: true, side: 'hedge', shortStrike: null, legs: cand.legs, limit: debit,
+        openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
         quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true };
       const lift = RC.bookFloor(filled.concat([hp]), null, 10) - f;
       if (lift <= 0) continue;
@@ -525,6 +529,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     const placed = await deps.placeOrder(payload, { kind: 'wing', legs: w.legs, net: 'DEBIT', limit: limitPx, naked: !!w.naked });
     if (!placed || placed.filled === false) continue;
     const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost,
+      openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(w.legs);

@@ -1753,3 +1753,7 @@ pre {
 .ps-affordance .ps-auto { display: inline-flex; align-items: center; gap: 3px; color: #555; cursor: pointer; }
 .ps-muted { color: #888; font-style: italic; }
 .ps-error { color: #c0392b; font-style: normal; }
+
+/* Hedge rows in Strategy Trades — floorOffset and wing-conversion positions. Violet, matching the
+   locked-floor colour used on the risk curves, so a hedge reads as a hedge and not as a strategy open. */
+.trade-detail-table tr.td-hedge td { color: #6b5ea8; background: #faf9ff; }

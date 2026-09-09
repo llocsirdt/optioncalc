@@ -105,24 +105,35 @@
     evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1));
     const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
     const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
-    const glyph = e => e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
+    // ⬡ for a hedge: visually distinct from both the open triangles and the cover diamond.
+    const glyph = e => (/^off-|^wing-/.test(e.id)) ? '⬡'
+      : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
     const coveredIds = new Set(evs.filter(e => e.type === 'cover' && !e.unfilled).map(e => e.id));   // FILLED covers only
-    const opens = evs.filter(e => e.type === 'open').length, covers = evs.filter(e => e.type === 'cover').length;
+    const isHedge = (e) => /^off-|^wing-/.test(e.id);
+    const opens = evs.filter(e => e.type === 'open' && !isHedge(e)).length;
+    const hedges = evs.filter(e => e.type === 'open' && isHedge(e)).length;
+    const covers = evs.filter(e => e.type === 'cover').length;
     const unfilled = evs.filter(e => e.type === 'cover' && e.unfilled).length;
     const rows = evs.map(e => {
       const open = e.type === 'open';
-      const isUncov = open && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
-      const label = open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
+      // HEDGES ARE NOT OPENS. A floorOffset spread (id off-*) and a wing conversion (id wing-*) are bought
+      // to reshape the risk curve, not as strategy positions — they are never covered, so labelling them
+      // "OPEN*" claimed they were exposed positions awaiting a cover. A wing may also be a SINGLE leg
+      // (wingNaked buys an uncapped long), which reads as malformed next to two-legged spreads.
+      const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : null;
+      const isUncov = open && !hedge && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
+      const label = hedge ? hedge
+        : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
       const cr = e.net === 'CREDIT';
       const costStr = cr ? `+${usd(e.cost)}` : usd(e.cost);   // credit = cash received → leading +
-      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}" title="${e.id}">`
+      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`
         + `<td class="td-ev" style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
         + `<td class="td-legs">${e.legs}</td>`
         + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
     }).join('');
-    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}</span></h4>`
+    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}${hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : ''}</span></h4>`
       + `<table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
       + `<tbody>${rows}</tbody></table>`;
   }

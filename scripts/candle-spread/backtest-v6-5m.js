@@ -592,7 +592,11 @@ function runDay5m(bars, signalFn, opts = {}) {
         // would book: ideal tent → credit twin (same strikes) → wing-shift (anchor cover) → skip. The
         // governor then simulates exactly what would be booked (the anchor cover's limit is NOT capped at
         // the tent target, so simulating the ideal tent instead would under-state the floor hit).
-        let cLegs = pc.legs, cLimit = roundTick(Math.min(pc.target, legsMark(pc.legs, S, tau, iv) + TICK)), rc = null;
+        // BOOK AT THE WORKING LIMIT, not the original target. The ladder RAISES the price we are willing
+        // to pay, so it must raise what we actually pay — booking at the stale ideal while filling on the
+        // raised trigger buys at a price that was never available. That bug turned v6-20 into $14.9M with
+        // a worst day of -$710 (eff 21,011), which is what a free-money leak looks like from the outside.
+        let cLegs = pc.legs, cLimit = roundTick(Math.min(workingTarget, legsMark(pc.legs, S, tau, iv) + TICK)), rc = null;
         if (enforceLegs) {
           rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
