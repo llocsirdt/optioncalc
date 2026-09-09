@@ -102,6 +102,12 @@ const BASE_RUNS = [
     // best honest lock-pricing model measured; the legacy instant-book-at-target mode was deleted from
     // the engine (it booked below the market whenever the cover marked above the target).
     continuousCover: true, lockCoverMode: 'rest',
+    // OPENING RULE: an initial order never STARTS fully out of the money. Adaptive placement already
+    // guaranteed it; a leg-uniqueness shift rebuilt at the shifted strikes without re-checking, which
+    // put 7 of 1,382 opens out on 2026-09-08 (each exactly one increment past the boundary). Measured
+    // over 765 days it is free-to-positive: +$737 v0-10, +$2,135 v1-10, +$21,582 v6-20, +$13,326
+    // v7-10, +$24,418 v7-20, +$4,630 v6-40, -$64 v7-40, with ZERO extra skipped opens.
+    openNeverOtm: true,
     // MONEYNESS-AWARE IV (skew). Flat ATM vol is biased BY SIDE — measured against 15,028 real chain
     // quotes it under-prices bull call spreads by $69/contract and over-prices bear put spreads by $50.
     // Per-leg skew reduces those to +$1 / +$8. Removes bias, not dispersion (~$100 |err| either way).

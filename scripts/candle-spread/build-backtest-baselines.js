@@ -84,6 +84,7 @@ function optsFor(v) {
   // capital-recapture cash is P&L-neutral (parity), but its debit/credit ALTERNATION spreads legs across
   // both ladders, so under leg-uniqueness it changes which opens shift/skip → must be modeled to match live.
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
+  if (v.openNeverOtm) o.openNeverOtm = true;
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   // ALWAYS build the geo explicitly. This used to be conditional ((w && w !== 20) || sh || cf != null),

@@ -28,15 +28,32 @@ function makeLegLedger(backing) {
   };
 }
 
+// Is a spread at these strikes NOT fully out of the money? A call is ITM when spot > strike, a put when
+// spot < strike, so a bull (long C lo / short C hi) is fully OTM at spot <= lo and a bear (long P hi /
+// short P lo) is fully OTM at spot >= hi. Shared so live and backtest cannot drift on the definition.
+function notFullyOtm(side, lo, hi, underlying) {
+  if (!(underlying > 0)) return true;                 // no price to judge against -> don't veto
+  return side === 'bull' ? underlying > lo : underlying < hi;
+}
+
 // Resolve an OPEN. side 'bull'|'bear'; lo/hi the ideal strikes (hi = lo + width). preferStyle 'debit'|
 // 'credit' = the cash-alternation preference. Order: preferred@ideal → other-style@ideal (parity twin,
 // same strikes) → strike shifts ±incr, nearest first, both styles. Returns { legs (actual, style-specific),
 // style, lo, hi, shift, resolution: 'ideal'|'twin'|'shift' } or { resolution: 'skip' }.
+//
+// opts.allow(lo, hi) — optional VETO on a placement. The opening rule is that an initial order never
+// STARTS fully out of the money; adaptive placement already guarantees that, but a leg-uniqueness shift
+// rebuilt at the shifted strikes without re-checking it, which is how 7 of 1,382 opens on 2026-09-08 went
+// out (each exactly one increment past the boundary — a single shift). Passing `allow` closes that hole
+// for both engines at once. It is deliberately a HARD veto, not a penalty: crossing OTM later while
+// working an order is fine, starting there is not.
 function resolveOpen(side, lo, hi, ledger, opts) {
   const incr = opts.incr, maxShift = opts.maxShift != null ? opts.maxShift : 6;
   const prefer = opts.preferStyle || 'debit';
+  const allow = opts.allow || (() => true);
   const styles = prefer === 'credit' ? ['credit', 'debit'] : ['debit', 'credit'];
   const tryAt = (l, h, shift) => {
+    if (!allow(l, h)) return null;
     for (const style of styles) {
       const legs = CL.openLegsFor(side, l, h, style);
       if (!ledger.conflicts(legs)) return { legs, style, lo: l, hi: h, shift, resolution: shift === 0 ? (style === prefer ? 'ideal' : 'twin') : 'shift' };
@@ -45,6 +62,9 @@ function resolveOpen(side, lo, hi, ledger, opts) {
   };
   let r = tryAt(lo, hi, 0);
   if (r) return r;
+  // Nearest-first, and +k (deeper in the money) BEFORE -k (back toward and past the money) at each
+  // distance — so the resolver spends strikes toward the money-side the strategy wants before it spends
+  // them the other way. With `allow` supplied the -k branch simply runs out of legal placements first.
   for (let k = 1; k <= maxShift; k++) {
     r = tryAt(lo + k * incr, hi + k * incr, k) || tryAt(lo - k * incr, hi - k * incr, -k);
     if (r) return r;
@@ -76,4 +96,4 @@ function resolveCover(coveredSide, shortStrike, width, ledger, opts) {
   return { resolution: 'skip' };
 }
 
-module.exports = { makeLegLedger, resolveOpen, resolveCover };
+module.exports = { makeLegLedger, resolveOpen, resolveCover, notFullyOtm };

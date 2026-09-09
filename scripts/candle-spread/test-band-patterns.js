@@ -178,6 +178,7 @@ function optsFor(v) {
   if (v.coverSelector) o.coverSelector = v.coverSelector;
   if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
+  if (v.openNeverOtm) o.openNeverOtm = true;
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   o.geo = v.adaptiveGeo

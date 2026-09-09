@@ -73,7 +73,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
 // IMPORTANT: this prices at the REAL mark of the chosen placement — the ceiling changes WHICH STRIKES we
 // trade, which is what the user actually does. makeGeo now honours the same "never book sub-market" rule,
 // but being a FIXED geometry it can only decline; here we walk the placement toward the money first.
-function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3 }) {
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1 }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
   // the least-ITM placement available — still never OTM.
@@ -92,6 +92,24 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
       const mark = legsMark(legs, S, tau, iv);
       if (!(mark > 0)) continue;
       if (mark <= maxDebitFrac * width) {
+        // PRICE-FOR-STRIKES FLEX — mirrors trader.buildOpenAdaptive. The ceiling pays for a rising market
+        // entirely in strikes; this gives a little on price instead to keep the placement nearer where the
+        // geometry wanted it. Bounded on both axes: at most capFlexStrikes further in, at most
+        // capFlexFrac of width dearer. capFlexFrac 0 (default) is byte-identical to before.
+        if (capFlexFrac > 0) {
+          for (let j = Math.max(-maxItmStrikes, k - capFlexStrikes); j < k; j++) {
+            const offJ = j * incr;
+            const sJ = side === 'bull' ? center + offJ : center - offJ;
+            const loJ = side === 'bull' ? sJ - width : sJ;
+            const hiJ = side === 'bull' ? sJ : sJ + width;
+            const legsJ = side === 'bull'
+              ? [{ side: 'long', type: 'C', strike: loJ }, { side: 'short', type: 'C', strike: hiJ }]
+              : [{ side: 'long', type: 'P', strike: hiJ }, { side: 'short', type: 'P', strike: loJ }];
+            const markJ = legsMark(legsJ, S, tau, iv);
+            if (!(markJ > 0) || markJ > (maxDebitFrac + capFlexFrac) * width) continue;
+            return { legs: legsJ, shortStrike: sJ, limit: Math.max(TICK, roundTick(markJ)), itmStrikes: -j, fracOfWidth: markJ / width, capFlexed: true };
+          }
+        }
         return { legs, shortStrike, limit: Math.max(TICK, roundTick(mark)), itmStrikes: -k, fracOfWidth: mark / width };
       }
     }

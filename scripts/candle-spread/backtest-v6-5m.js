@@ -758,7 +758,10 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (enforceLegs) {
         const _s = o.legs.map(l => l.strike), _lo = Math.min(..._s), _hi = Math.max(..._s);
         const preferStyle = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
-        const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle });
+        // openNeverOtm mirrors the live rule: an initial order must not START fully out of the money.
+        // Opt-in so the committed baselines reproduce with it off.
+        const legAllow = opts.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(sig.openSide, lo, hi, S)) : undefined;
+        const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle, allow: legAllow });
         if (res.resolution === 'skip') { legSkip++; legSkip1 = true; }
         else {
           // The REBUILD at the shifted anchor can decline even though the unshifted one did not — the
@@ -803,7 +806,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (enforceLegs && lockedNow.length) {
           const _s2 = o.legs.map(l => l.strike), _lo2 = Math.min(..._s2), _hi2 = Math.max(..._s2);
           const preferStyle2 = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
-          const res2 = LL.resolveOpen(sig.openSide, _lo2, _hi2, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: preferStyle2 });
+          const legAllow2 = opts.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(sig.openSide, lo, hi, S)) : undefined;
+          const res2 = LL.resolveOpen(sig.openSide, _lo2, _hi2, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle: preferStyle2, allow: legAllow2 });
           // Same as the first re-resolve: a shifted rebuild can decline on price. Record it and let the
           // commit gate below drop the open — `o` must never reach floorOf() without legs.
           if (res2.resolution === 'shift') {

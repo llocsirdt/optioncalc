@@ -760,9 +760,26 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     let legStyle = null, legSkipped = false;
     if (deps.enforceLegUniqueness && deps._ledger && !res.error && res.limit > 0) {
       const wantCredit = deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1;
-      const rr = LL.resolveOpen(openSide, res.lower, res.upper, deps._ledger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCredit ? 'credit' : 'debit' });
+      // openNeverOtm: an initial order must not START fully out of the money. Adaptive placement already
+      // guarantees it; without this the shift below rebuilt at the shifted strikes and could cross out.
+      const allow = deps.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(openSide, lo, hi, underlying)) : undefined;
+      const rr = LL.resolveOpen(openSide, res.lower, res.upper, deps._ledger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCredit ? 'credit' : 'debit', allow });
       if (rr.resolution === 'skip') { decisions.push({ action: 'open-skip-leg', side: openSide, lower: res.lower, upper: res.upper }); legSkipped = true; }
-      else { if (rr.resolution === 'shift') { res = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg); } legStyle = rr.style; }
+      else {
+        if (rr.resolution === 'shift') {
+          // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
+          // legs as if the geometry had chosen them — which is why strikes landing off-placement went
+          // unnoticed. Record where it wanted to be, where it went, and what that cost.
+          const before = res;
+          res = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg);
+          decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
+            fromLower: before.lower, fromUpper: before.upper, toLower: rr.lo, toUpper: rr.hi,
+            shift: rr.shift, style: rr.style, underlying,
+            markBefore: before.mark != null ? before.mark : null,
+            markAfter: res && res.mark != null ? res.mark : null });
+        }
+        legStyle = rr.style;
+      }
     }
     if (legSkipped) {
       // already logged; the leg constraint blocked every placement
@@ -896,16 +913,35 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
   // least-ITM placement available — still never OTM, which is an opening rule, not a preference.
   const halfOnGrid = Math.floor((W / 2) / incr) * incr;
   const maxItm = cfg.maxItmStrikes != null ? cfg.maxItmStrikes : 3;
-  let tried = 0, lastDeclined = null, lastError = null;
-  for (let k = -maxItm; k <= halfOnGrid / incr; k++) {
+  const strikesAt = (k) => {
     const off = k * incr;
     const shortStrike = side === 'bull' ? center + off : center - off;
-    const lower = side === 'bull' ? shortStrike - W : shortStrike;
-    const upper = side === 'bull' ? shortStrike : shortStrike + W;
+    return side === 'bull' ? { lower: shortStrike - W, upper: shortStrike } : { lower: shortStrike, upper: shortStrike + W };
+  };
+  let tried = 0, lastDeclined = null, lastError = null;
+  for (let k = -maxItm; k <= halfOnGrid / incr; k++) {
+    const { lower, upper } = strikesAt(k);
     const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
     if (res.error) { lastError = res.error; continue; }
     tried++;
     if (res.declined) { lastDeclined = res; continue; }
+    // PRICE-FOR-STRIKES FLEX (cfg.capFlexFrac, default 0 = off, byte-identical to before). The ceiling
+    // walks the placement OUT until the debit fits, so a rising market is paid for entirely in strikes.
+    // The user's preference is to split it: give a little on price to keep the strikes near where the
+    // geometry wanted them. So before accepting this placement, look at up to capFlexStrikes candidates
+    // that are MORE ITM and take the most ITM one that fits the FLEXED cap (capFrac + capFlexFrac).
+    // Bounded on both axes on purpose — a little of each, not much of either.
+    const flex = cfg.capFlexFrac || 0;
+    if (flex > 0) {
+      const back = cfg.capFlexStrikes != null ? cfg.capFlexStrikes : 1;
+      const flexCfg = { ...cfg, capFrac: (cfg.capFrac != null ? cfg.capFrac : 0.65) + flex };
+      for (let j = Math.max(-maxItm, k - back); j < k; j++) {
+        const st = strikesAt(j);
+        const alt = buildOpenAtStrikes(side, st.lower, st.upper, flexCfg, getLeg);
+        if (alt.error || alt.declined) continue;
+        return { ...alt, itmStrikes: -j, placementsTried: tried, capFlexed: true, flexedFrom: -k };
+      }
+    }
     // itmStrikes: how many strikes INSIDE the money the short leg sits (0 = straddle placement).
     return { ...res, itmStrikes: -k, placementsTried: tried };
   }
