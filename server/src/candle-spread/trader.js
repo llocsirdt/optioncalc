@@ -932,9 +932,13 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   };
 }
 
-function buildCover(pos, cfg, getLeg) {
+function buildCover(pos, cfg, getLeg, coverShort) {
   // Default debit-offset cover. (credit style parked — needs its own pricing rule.)
-  const legs = L.coverLegs(pos.side, pos.shortStrike, cfg.spreadWidth, cfg.coverStyle || 'debit-offset');
+  // `coverShort` moves the cover's short leg off the position's own strike (the non-tent geometries).
+  // Only the LEGS move; the pricing below is untouched, so geometry and price stay separable.
+  const legs = (coverShort != null && coverShort !== pos.shortStrike)
+    ? L.coverLegsAtShort(pos.side, coverShort, cfg.spreadWidth)
+    : L.coverLegs(pos.side, pos.shortStrike, cfg.spreadWidth, cfg.coverStyle || 'debit-offset');
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
   // NOTE: covers deliberately do NOT take the open path's ceiling — a cover is risk reduction, so
@@ -954,7 +958,7 @@ function selectCovers(uncovered, cfg, getLeg, ctx) {
   return uncovered.map(pos => {
     if (sel === 'greedy') return selectCoverGreedy(pos, cfg, getLeg, ctx);
     if (sel === 'fixed-mark') return selectCoverFixedMark(pos, cfg, getLeg);
-    return selectCoverFixed(pos, cfg, getLeg);
+    return selectCoverFixed(pos, cfg, getLeg, ctx && ctx.underlying);
   });
 }
 
@@ -979,17 +983,29 @@ function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
   };
 }
 
-// V0 baseline: the current fixed tent, priced with the old debitLimit (so V0 reproduces the
-// deployed behavior exactly for a clean A/B against the smarter variants).
-function selectCoverFixed(pos, cfg, getLeg) {
-  const res = buildCover(pos, cfg, getLeg);
+// V0 baseline: the fixed geometry priced with the old debitLimit (so V0 reproduces the deployed
+// behavior exactly for a clean A/B against the smarter variants).
+//
+// GEOMETRY. This selector used to build the TENT unconditionally, but v1 and v2 declare
+// coverGeometry 'halfway' / 'underlying' while riding coverSelector 'fixed' — so every 'fixed' variant
+// placed the SAME cover and the geometry axis those variants exist to test never expressed. Measured on
+// the live 2026-09-08 session: v0/v1/v2/v3 cover legs identical. It now honours cfg.coverGeometry, using
+// the same capped pricing as before, so the only thing that changes is WHERE the cover sits.
+// v0/v3 carry geometry 'tent', so this is a no-op for them and their baselines are unmoved.
+function selectCoverFixed(pos, cfg, getLeg, underlying) {
+  const geometry = cfg.coverGeometry || 'tent';
+  const coverShort = (geometry === 'tent' || !(underlying > 0))
+    ? pos.shortStrike
+    : L.coverShortFor(geometry, pos.side, pos.shortStrike, underlying, cfg.strikeIncrement);
+  const res = buildCover(pos, cfg, getLeg, coverShort);
   if (res.error) return { error: res.error, positionId: pos.id };
-  const tentLong = pos.side === 'bull' ? pos.shortStrike + cfg.spreadWidth : pos.shortStrike - cfg.spreadWidth;
+  const longStrike = pos.side === 'bull' ? coverShort + cfg.spreadWidth : coverShort - cfg.spreadWidth;
   return {
     positionId: pos.id, legs: res.legs, mark: res.mark, limit: res.limit,
     floor: round2((cfg.spreadWidth - pos.limit - res.limit) * 100 * cfg.quantity),
-    peakExtra: round2(L.coverPeakExtra(pos.shortStrike, tentLong, cfg.spreadWidth) * 100 * cfg.quantity),
-    geometry: 'tent', longStrike: tentLong, payload: res.payload
+    peakExtra: round2(L.coverPeakExtra(pos.shortStrike, longStrike, cfg.spreadWidth) * 100 * cfg.quantity),
+    geometry: coverGeometryLabel(pos.side, pos.shortStrike, longStrike, cfg.spreadWidth),
+    longStrike, payload: res.payload
   };
 }
 

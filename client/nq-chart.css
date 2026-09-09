@@ -1,0 +1,135 @@
+/* NQ chart (candles + Bollinger + 9EMA + strategy trade markers).
+   Split out of styles.css so a page can load the chart WITHOUT inheriting the index page's global
+   body/button/h1 rules — the debug view needs the chart and its own typography. */
+/* Custom NQ chart (candles + Bollinger + 9EMA) */
+#nq-chart-container {
+  border: 1px solid #e0e3eb;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  background: #fff;
+  overflow: hidden;
+  position: relative;
+}
+/* NDX-skew toggle, bottom-right of the chart area */
+.nq-ndx-toggle {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #555;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #e0e3eb;
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.nq-ndx-toggle input { margin: 0; cursor: pointer; }
+.nq-ndx-basis { color: #888; font-variant-numeric: tabular-nums; }
+#nq-chart-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #eee;
+  font-size: 11px;
+}
+.nq-chart-title { font-weight: bold; color: #333; }
+#nq-chart-tf-buttons { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.nq-tf-group { display: flex; align-items: center; gap: 2px; }
+.nq-tf-line { margin: 0; cursor: pointer; }
+.nq-tf-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  background: #f1f3f5;
+  color: #555;
+  border: 1px solid #dcdfe3;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.nq-tf-btn.active { background: #2196F3; color: #fff; border-color: #2196F3; }
+.nq-multi-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #555;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nq-multi-toggle input { margin: 0; cursor: pointer; }
+.nq-date-jump {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #555;
+}
+.nq-date-jump .nq-date-ic { opacity: 0.6; font-size: 12px; }
+.nq-date-jump input {
+  font-size: 11px;
+  padding: 1px 4px;
+  color: #444;
+  background: #f1f3f5;
+  border: 1px solid #dcdfe3;
+  border-radius: 3px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.nq-date-jump input.nq-date-hist { border-color: #e0803a; background: #fff4ea; }  /* viewing a historical window */
+.nq-live-btn {
+  font-size: 10px;
+  font-weight: bold;
+  padding: 1px 6px;
+  color: #fff;
+  background: #e0803a;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+}
+.nq-live-btn:hover { background: #cf6f2c; }
+.nq-overlay path.nq-ol { fill: none; pointer-events: none; }
+.nq-chart-ohlc {
+  margin-left: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.nq-ro-time { color: #888; }
+.nq-up-t { color: #26a69a; }
+.nq-down-t { color: #ef5350; }
+.nq-ro-bb { color: #7e57c2; }
+.nq-ro-ema { color: #ff9800; }
+#nq-chart { height: 320px; width: 100%; touch-action: none; user-select: none; }
+.nq-svg { display: block; }
+.nq-candle .nq-wick { stroke-width: 1; }
+.nq-candle.nq-up .nq-wick, .nq-candle.nq-up .nq-body { stroke: #26a69a; }
+.nq-candle.nq-down .nq-wick, .nq-candle.nq-down .nq-body { stroke: #ef5350; }
+.nq-candle.nq-up .nq-body { fill: #26a69a; }
+.nq-candle.nq-down .nq-body { fill: #ef5350; }
+.nq-bb { fill: none; stroke: #5c6bc0; stroke-width: 1; }
+.nq-bb-middle { stroke-dasharray: 4 3; opacity: 0.8; }
+.nq-bb-upper, .nq-bb-lower { opacity: 0.9; }
+.nq-bb-band { fill: #5c6bc0; opacity: 0.06; stroke: none; }
+.nq-ema { fill: none; stroke: #ff9800; stroke-width: 1.5; }
+.nq-axis text { font-size: 10px; fill: #666; }
+.nq-axis path, .nq-axis line { stroke: #ddd; }
+.nq-cross line { stroke: #999; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.nq-hit { fill: transparent; }
+
+/* Crosshair axis labels (price on the right, time on the bottom) */
+.nq-axis-lab rect { fill: #2b2b2b; rx: 2; }
+.nq-axis-lab text { fill: #fff; font: 10px ui-monospace, Menlo, monospace; dominant-baseline: middle; }
+.nq-x-lab text { dominant-baseline: auto; }
+/* Colored BB/EMA value tags on the right y-axis */
+.nq-val-tags, .nq-axis-labels { pointer-events: none; }
+.nq-val-tag text { font: 9px ui-monospace, Menlo, monospace; dominant-baseline: middle; }
+.nq-zoom-hit { cursor: crosshair; }

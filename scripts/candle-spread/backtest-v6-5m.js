@@ -713,13 +713,24 @@ function runDay5m(bars, signalFn, opts = {}) {
       let plans = null;
       if (coverSel) {   // v1/v2/v3: reuse the server cover selectors with a BS getLeg (single source of truth)
         const getLeg = (type, k) => ({ mid: bs.bsPrice(type, S, k, tau, ivFor(type, k)), symbol: `x${type}${k}`, bid: 0, ask: 0 });
-        const cfgLike = { spreadWidth: G.WIDTH, strikeIncrement: INCR, tickIncrement: TICK, quantity: QTY, coverSelector: coverSel, coverKCap: 5 };
+        // coverGeometry has to reach the selector too, not just the fallback legs below: with a
+        // coverSelector configured the plan's legs WIN, so leaving it out of cfgLike made the geometry
+        // fix a no-op for exactly the v0/v1/v2 variants it was written for.
+        const cfgLike = { spreadWidth: G.WIDTH, strikeIncrement: INCR, tickIncrement: TICK, quantity: QTY, coverSelector: coverSel, coverKCap: 5,
+          ...(opts.coverGeometryOnReversal && opts.coverGeometry ? { coverGeometry: opts.coverGeometry } : {}) };
         const withId = toCover.map((p, k) => ({ ...p, id: 'c' + k, quantity: QTY }));
         plans = trader.selectCovers(withId, cfgLike, getLeg, { underlying: S, reversedDir: sig.openSide || (coverSet[0] === 'bull' ? 'bear' : 'bull'), bbOverride: false });
       }
       for (let k = 0; k < toCover.length; k++) {
         const pos = toCover[k];
-        let legs = G.coverLegs(pos.side, pos.shortStrike);
+        // GEOMETRY ON THE REVERSAL PATH. The reversal cover has always been hardcoded TENT (share the
+        // short strike), while only the CONTINUOUS path honoured opts.coverGeometry. That is why arming —
+        // which shifts covers from continuous to reversal — made v0/v1/v2 MORE identical rather than less
+        // (35% -> 79% identical legs): it was routing covers into the one path that discards the very
+        // thing those variants exist to differ on. Opt-in so the committed baselines still reproduce.
+        let legs = (opts.coverGeometryOnReversal && opts.coverGeometry && opts.coverGeometry !== 'tent')
+          ? SL.coverLegsAtShort(pos.side, SL.coverShortFor(opts.coverGeometry, pos.side, pos.shortStrike, S, legIncr), G.WIDTH)
+          : G.coverLegs(pos.side, pos.shortStrike);
         if (plans) { const pl = plans.find(x => x.positionId === 'c' + k); if (pl && !pl.error && pl.legs) legs = pl.legs; }
         pos.pendingCover = { legs, target: round2(G.WIDTH - pos.limit), src: 'reversal', placedET: nowET };
       }

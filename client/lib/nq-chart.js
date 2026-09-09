@@ -45,6 +45,7 @@
   let ndxMode = false;                      // show values skewed to NDX terms (subtract the basis)
   let serverBasis = null;                   // { basis, source, asOf, ndx, nq } from the server
   let transform = d3.zoomIdentity;
+  let pendingDate = null;   // date requested by the host page before the chart finished loading
   let yZoom = 1;                           // manual vertical scale factor (1 = auto-fit)
   let visibleBars = INIT_BARS;             // how many bars to fit on reset / timeframe change
   let refreshTimer = null;
@@ -797,6 +798,10 @@
       else if (seriesSig() !== lastSig) render();
       lastSig = seriesSig();
       if (hoverIndex == null) updateReadout(data[data.length - 1]);
+      // A host page can ask for a date before the first load resolves (the debug view calls jumpToDate as
+      // soon as its run record arrives). Apply it here rather than dropping it on the floor — otherwise the
+      // initial load lands on the live tape and silently wins the race.
+      if (pendingDate) { const d = pendingDate; pendingDate = null; goToDate(d.ymd, d.opts); }
     } catch (e) { console.error('[nq-chart] load failed:', e && e.message); }
   }
 
@@ -852,7 +857,22 @@
     window.addEventListener('resize', () => render());
   }
 
-  window.NQChart = { init, setTimeframe, refresh: () => load(false), setTrades, setShowTrades };
+  // jumpToDate is exported so a host page pinned to ONE session (the debug view) can park the chart on
+  // that day's candles instead of the live tape. It keeps the toolbar's date field in step so the
+  // built-in ● LIVE button still returns the chart to the front.
+  async function goToDate(ymd, opts) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return;
+    if (!els || !data.length) { pendingDate = { ymd, opts }; return; }   // asked before the first load; load() applies it
+    if (els.dateInput) els.dateInput.value = ymd;
+    const inWindow = ymd >= etDayISO(data[0].t) && ymd <= etDayISO(data[data.length - 1].t);
+    if (inWindow) { const i = indexForDay(ymd); if (i >= 0) jumpToIndex(i); }
+    else await enterHistorical(ymd);   // awaited, so the focus below acts on the NEW window
+    // Centering on the day lands on the futures session's 18:00 ET open — hours before any RTH trade.
+    // When markers are set, pan to THEM instead: the point of pinning the chart to a run's date is to see
+    // the candles its orders were placed against.
+    if (opts && opts.focusTrades && trades.length) focusTrades();
+  }
+  window.NQChart = { init, setTimeframe, refresh: () => load(false), setTrades, setShowTrades, jumpToDate: goToDate };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();

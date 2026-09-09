@@ -7,6 +7,9 @@
 <script src="shared/portfolio-risk.js"></script>
 <script src="client/lib/risk-curve-cell.js"></script>
 <script src="client/lib/strategy-positions.js"></script>
+<link rel="stylesheet" href="client/nq-chart.css">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="client/lib/nq-chart.js"></script>
 <style>
   :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb;
     --locked:#8b5cf6; --warn:#c98b8b; }
@@ -20,7 +23,15 @@
   button { cursor:pointer; }
   .meta { color:var(--muted); font:11px ui-monospace,monospace; margin-left:2px; }
   .wrap { padding:10px 14px 40px; }
-  .cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .two { display:flex; gap:14px; align-items:flex-start; }
+  .col-left { flex:1 1 0; min-width:0; }
+  .col-right { flex:1 1 0; min-width:0; }
+  .side-by-side { display:flex; gap:10px; margin-top:10px; }
+  .side-by-side .panel { flex:1 1 0; min-width:0; }
+  /* Below ~1100px two columns stop helping — the table gets too narrow to read next to a chart. */
+  @media (max-width: 1100px) { .two { flex-direction:column; } .col-right .panel { max-height:none !important; } }
+  #nq-chart { height:300px; }
+  #nq-chart-container { border:0; }
   .panel { border:1px solid var(--grid); border-radius:6px; padding:8px 10px; }
   .panel h2 { font-size:12px; margin:0 0 6px; font-weight:700; }
   /* The shared cell renderer emits a FIXED-WIDTH svg (it is sized for a grid cell). Dropped into a flex
@@ -64,7 +75,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.64</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.67</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -77,28 +88,54 @@
 </header>
 <div id="err"></div>
 <div class="wrap">
-  <div class="cols">
-    <div class="panel" style="flex:1 1 460px; min-width:380px">
-      <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
-      <div id="curveBox"><div id="curve"></div></div>
-      <div id="timebar"><span style="font-size:11px;color:var(--muted)">Time of day</span><input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled><span id="timeLabel" class="tb-time">full day</span></div>
-    </div>
-    <div class="panel" style="flex:0 0 300px">
-      <h2>Day summary</h2>
-      <div class="kv" id="summary"></div>
-    </div>
-    <div class="panel" style="flex:0 0 300px">
-      <h2>Backtest expectation <span class="meta">(this variant, 765d)</span></h2>
-      <div class="kv" id="baseline"></div>
-    </div>
-  </div>
+  <!-- TWO COLUMNS. Left: the risk curve with the NQ candles directly beneath it, so the price action and
+       the curve share one eye-line — the point is to see WHICH candle pattern was forming when a trade went
+       on, and what that trade did to the curve. Right: the trades, scrolling independently so the table can
+       be read against a chart that stays put. -->
+  <div class="two">
+    <div class="col-left">
+      <div class="panel">
+        <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
+        <div id="curveBox"><div id="curve"></div></div>
+        <div id="timebar"><span style="font-size:11px;color:var(--muted)">Time of day</span>
+          <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
+          <span id="timeLabel" class="tb-time">full day</span></div>
+      </div>
 
-  <div class="panel" style="margin-top:14px">
-    <h2>Orders <span class="meta" id="ordMeta"></span></h2>
-    <div style="max-height:60vh; overflow:auto">
-      <table class="ord" id="orders"></table>
+      <!-- The same NQ chart the index page uses. Trade markers are pushed in via NQChart.setTrades, so the
+           opens and covers in the table appear on the candles at the times they were placed. -->
+      <div class="panel" style="margin-top:10px">
+        <h2>NQ futures <span class="meta">— trade markers from this run</span></h2>
+        <div id="nq-chart-container">
+          <div id="nq-chart-toolbar">
+            <span id="nq-chart-tf-buttons"></span>
+            <span id="nq-chart-ohlc" class="nq-chart-ohlc"></span>
+          </div>
+          <div id="nq-chart"></div>
+        </div>
+      </div>
+
+      <div class="side-by-side">
+        <div class="panel">
+          <h2>Day summary</h2>
+          <div class="kv" id="summary"></div>
+        </div>
+        <div class="panel">
+          <h2>Backtest expectation <span class="meta">(765d)</span></h2>
+          <div class="kv" id="baseline"></div>
+        </div>
+      </div>
     </div>
-    <p class="note" id="ordNote"></p>
+
+    <div class="col-right">
+      <div class="panel" style="display:flex; flex-direction:column; position:sticky; top:8px; max-height:calc(100vh - 96px)">
+        <h2>Orders <span class="meta" id="ordMeta"></span></h2>
+        <div id="ordScroll" style="flex:1; overflow:auto; min-height:0">
+          <table class="ord" id="orders"></table>
+        </div>
+        <p class="note" id="ordNote"></p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -121,6 +158,9 @@ const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.
 const forced = _p.get('proxy');
 const LIVE_BASE = forced === 'local' ? LOCAL_BASE : forced === 'remote' ? PROD_BASE : PROD_BASE;
 const BT_BASE   = forced === 'remote' ? PROD_BASE : LOCAL_BASE;
+// nq-chart.js reads its API base off this global. Candles always come from LIVE_BASE: the chartseries
+// endpoint is a PROD service, independent of whether the run record itself is live or a local backtest.
+const PROXY_URL = LIVE_BASE;
 
 const $ = (id) => document.getElementById(id);
 const usd = (n) => n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
@@ -217,6 +257,24 @@ function render() {
   setupSlider();
   renderOrders(pos, W, ML, se);
   renderCurve(pos, se, null);
+  syncNQ();
+}
+
+// Park the NQ chart on THIS run's session and mark its opens/covers on the candles — the same marker
+// shape the index page pushes (open triangle by side, cover diamond), so a trade in the table can be
+// found on the tape. Markers come from the same converter the order table uses, so the two agree.
+function syncNQ() {
+  if (!(window.NQChart && window.NQChart.setTrades)) return;
+  const conv = window.strategyRunToOptionArray
+    ? window.strategyRunToOptionArray(record, { includeUnfilled: true }) : null;
+  const trades = [];
+  for (const p of (conv && conv.positions) || []) {
+    if (p.openEpoch) trades.push({ epoch: p.openEpoch, side: p.side, type: 'open' });
+    if (p.covered && p.coverEpoch) trades.push({ epoch: p.coverEpoch, side: p.side, type: 'cover' });
+  }
+  window.NQChart.setTrades(trades);          // markers first, so the date jump can pan to them
+  const date = $('date').value;
+  if (date) window.NQChart.jumpToDate(date, { focusTrades: true });
 }
 
 // THE ORDER TABLE. Built on the SAME data shape the index page's "Strategy Trades" panel uses
