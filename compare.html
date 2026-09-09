@@ -157,7 +157,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.61</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.62</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -334,7 +334,16 @@ let gAbs = 0;
 
 // Rendered by the shared cell renderer (client/lib/risk-curve-cell.js) so the debug page draws the
 // IDENTICAL chart rather than a lookalike that drifts. The helpers it closes over are injected.
-const svgCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => gAbs });
+// LAZY, and it has to be. The original was a hoisted `function svgCurve()`, so it only reached fmtN /
+// usdK / pnlAtPrice when CALLED — by which time they exist. Building it eagerly here runs make() during
+// module evaluation, at a point where those `const`s are still in their temporal dead zone, which threw
+// "Cannot access 'fmtN' before initialization" and took the whole page down. Deferring to first call
+// restores the original timing.
+let _svgCurve = null;
+const svgCurve = (...args) => {
+  if (!_svgCurve) _svgCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => gAbs });
+  return _svgCurve(...args);
+};
 
 // Compact $ for the tight cell header: +$13.8k / −$4.9k.
 const usdK = (n) => {
