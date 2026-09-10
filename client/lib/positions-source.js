@@ -129,7 +129,10 @@
       return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`
-        + `<td class="td-ev" style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
+        // A hedge's event text takes the row's PURPLE, not the side colour. The inline style wins over
+        // tr.td-hedge's colour, so without this the one cell that names the row as OFFSET/WING was the
+        // only cell still tinted bull-green or bear-red — the label fighting the row it labels.
+        + `<td class="td-ev" style="color:${hedge ? '#6b5ea8' : color(e.side)}">${glyph(e)} ${label}</td>`
         + `<td class="td-legs">${e.legs}</td>`
         + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
     }).join('');

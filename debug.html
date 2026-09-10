@@ -82,7 +82,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.69</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.70</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -365,7 +365,8 @@ function renderOrders(pos, W, ML, se) {
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;
     return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
       + `<td>${e.time || '—'}</td><td>#${seq.get(e.id) || '?'}</td>`
-      + `<td style="color:${color(e.side)}">${glyph(e)} ${label}</td>`
+      // Hedge rows take the row's purple here too (the inline colour otherwise beats tr.td-hedge).
+      + `<td style="color:${hedge ? '#6b5ea8' : color(e.side)}">${glyph(e)} ${label}</td>`
       + `<td class="legs">${e.legs}</td>`
       + `<td>${cr ? '+' : ''}${usdc(e.cost)} <span class="net ${cr ? 'cr' : 'dr'}">${cr ? 'CR' : 'DB'}</span></td>`
       + diag
