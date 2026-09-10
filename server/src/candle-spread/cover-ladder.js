@@ -48,6 +48,20 @@ const DEFAULTS = {
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
+// MERGE THAT IGNORES undefined. `{ ...DEFAULTS, ...opts }` copies keys whose value is undefined, so a
+// caller that builds its options positionally — `{ stepPoints: deps.ladderStepPoints }` where that dep is
+// simply unset — OVERWRITES the default with undefined rather than falling back to it. That happened
+// live on 2026-09-10: stepPoints arrived undefined, `Math.floor(move / undefined)` produced NaN,
+// stepsEarned returned NaN, limitNow returned a NaN limit, and shouldReprice's `NaN >= tick` is false —
+// so the ladder silently never repriced a single order while reporting itself enabled. The backtest was
+// unaffected because its ladderOpts uses `!= null ? x : DEFAULT` for every field. Merge defensively here
+// so no caller can reintroduce it.
+function withDefaults(opts) {
+  const out = { ...DEFAULTS };
+  for (const k of Object.keys(opts || {})) if (opts[k] !== undefined) out[k] = opts[k];
+  return out;
+}
+
 /**
  * The price band this cover may work within.
  *   ideal  = W - openCost            → locks exactly 0
@@ -57,7 +71,7 @@ const r2 = (n) => Math.round(n * 100) / 100;
  * lives in the TENT the cover forms, not in what the cover itself banks.
  */
 function band(W, openCost, opts) {
-  const o = { ...DEFAULTS, ...(opts || {}) };
+  const o = withDefaults(opts);
   const ideal = r2(W - openCost);
   const maxPay = r2(ideal + o.lossCapFrac * W);
   return { ideal, maxPay, lossAtMax: r2(-(o.lossCapFrac * W)) };
@@ -68,7 +82,7 @@ function band(W, openCost, opts) {
  * they are alternative evidence for the same thing (the market has moved on and our price has not).
  */
 function stepsEarned(restingMs, underlyingMovePts, opts) {
-  const o = { ...DEFAULTS, ...(opts || {}) };
+  const o = withDefaults(opts);
   const byTime = Math.floor(Math.max(0, restingMs) / (o.stepSeconds * 1000));
   const byMove = Math.floor(Math.abs(underlyingMovePts || 0) / o.stepPoints);
   return Math.min(o.steps, Math.max(byTime, byMove));
@@ -86,7 +100,7 @@ function stepsEarned(restingMs, underlyingMovePts, opts) {
  * @returns { limit, step, ideal, maxPay, start, capped, atMax }
  */
 function limitNow(p, opts) {
-  const o = { ...DEFAULTS, ...(opts || {}) };
+  const o = withDefaults(opts);
   const W = p.spreadWidth, tick = p.tick || 0.05;
   const { ideal, maxPay } = band(W, p.openCost, o);
   // Where this trigger begins. A profit-demanding start sits BELOW ideal; it can never start above it.
