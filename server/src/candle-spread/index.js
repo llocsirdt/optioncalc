@@ -257,6 +257,11 @@ const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 // suffered in the mid-Feb chop stretch, and it trades ~35/day against v6-20's 26 — more order flow
 // through the pipe, which is what a paper session should be stressing.
 const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
+// Variants carrying the cover ladder live. Env override so the experiment can be widened or shut off
+// with a config change instead of a deploy: CANDLE_SPREAD_LADDER='v9-20,v8-20' (or '' to disable all).
+const LADDER_LIVE = new Set(
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v3-20,v8-20,v9-20')
+    .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
 const LOSS_TARGET = 5000;
@@ -319,6 +324,21 @@ function buildVariants() {
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
+      // COVER LADDER — LIVE A/B, 2026-09-10. Enabled on ONE of each correlated PAIR so its twin is a
+      // matched control running the same signal without the ladder:
+      //     v3-20  (ladder)  vs  v0-20   — v3 is v0 + risk-arming
+      //     v8-20  (ladder)  vs  v6-20   — v8 is v6 + softCap/exemptTrendStack/proactive
+      //     v9-20  (ladder)  vs  v7-20   — v9 is v7 + proactive 0.8, and live 2026-09-08/09 the two were
+      //                                    byte-identical (proactive never fires), so this is the
+      //                                    cleanest pair of the three.
+      // $20 only: measured over 765 days the ladder helps at $10/$20 and degrades ret/DD at $40 in every
+      // family but v7/v9. stepDollars 0.25 fixes the CONCESSION PER STEP rather than the step count, so
+      // one setting means the same thing at every width; lossCapFrac 0 never pays past break-even.
+      // Evidence at these settings: v9-20 -$2,236 for ret/DD 98.7->145.9 and fill 74->82%;
+      // v8-20 +$131,241 for ret/DD 21.9->29.9 and fill 56->73%; v3-20 -$145,756 for 95.4->101, fill 63->72%.
+      if (LADDER_LIVE.has(v.variant)) {
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+      }
       out.push(v);
     }
   }
