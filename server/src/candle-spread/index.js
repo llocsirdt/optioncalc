@@ -515,6 +515,45 @@ const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
 // DECOUPLING: even on a real send we return filled:true so the state machine keeps simulating the
 // INTENDED strategy (the run record stays complete). What actually happens at the broker is tracked
 // separately by the order-manager poller (real fills, test cancels). See order-manager.js.
+// REPLACE an already-resting order (the cover ladder's send path). Schwab exposes updateOrderById,
+// which cancel/replaces atomically — safer than cancel-then-place, which can leave the book naked in
+// between. Mirrors makePlaceOrder's gating exactly: the same dryRun / isProd / LIVE_ARMED conditions
+// decide whether anything actually reaches the broker, so a disarmed run still records its intent.
+function makeReplaceOrder(run, record) {
+  const mode = run.dryRun;
+  const wantsRealSend = mode === false || mode === 'test';
+  return async function replaceOrder(orderId, payload, meta) {
+    const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
+      && DEPS.tradingClient && DEPS.accountHash && orderId;
+    if (!canSend) {
+      const why = !orderId ? 'no-order-id'
+        : mode === true ? 'dryRun'
+        : !(DEPS && DEPS.isProd) ? 'dev-mode'
+        : !LIVE_ARMED ? 'disarmed' : 'no-client';
+      store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `replace not sent (${why})` });
+      return { status: `simulated:${why}`, orderId };
+    }
+    const isTest = mode === 'test';
+    const sendPayload = isTest
+      ? { ...payload, price: om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) }
+      : payload;
+    try {
+      const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
+      const newId = (resp && resp.orderId) ? resp.orderId : orderId;
+      store.appendEvent(record, {
+        type: 'order_replaced', meta, payload: sendPayload, orderId, newOrderId: newId, testMode: isTest,
+        note: `reprice ${meta && meta.fromLimit} -> ${payload.price}`
+      });
+      console.log(`[candle-spread] ${run.variant} REPRICE #${orderId} ${meta && meta.fromLimit} -> ${sendPayload.price}`);
+      return { status: isTest ? 'test-replaced' : 'replaced', orderId: newId };
+    } catch (e) {
+      store.appendEvent(record, { type: 'order_error', meta, payload: sendPayload, note: `Schwab replace failed: ${e && e.message}` });
+      console.error(`[candle-spread] ${run.variant} REPRICE FAILED #${orderId}: ${e && e.message}`);
+      return { status: 'error', orderId, error: e && e.message };
+    }
+  };
+}
+
 function makePlaceOrder(run, record) {
   const mode = run.dryRun;                        // true | 'test' | false
   const wantsRealSend = mode === false || mode === 'test';
@@ -617,6 +656,12 @@ function buildEngineDeps(run, live) {
       // to BASE_RUNS without this line made the engine refuse to start (assertDeps), which is the guard
       // working: it would otherwise have been a silent no-op live while the backtest measured a gain.
       openNeverOtm: run.openNeverOtm,
+      // COVER PRICING MODE — 'lock' (historical) vs 'mark'. Read off `deps`, so it must be listed here.
+      coverPriceMode: run.coverPriceMode, coverSlipTicks: run.coverSlipTicks,
+      // COVER LADDER — work a resting cover toward the market instead of leaving it untouched all day.
+      // Read off `deps`, so it must be listed here. Default OFF; see the note in BASE_RUNS.
+      coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
+      ladderSteps: run.ladderSteps, ladderLossCapFrac: run.ladderLossCapFrac,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
       // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
       wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
@@ -759,8 +804,9 @@ async function processGroup(runs, kind) {
       const record = store.initRun(cfg, tradeDate);
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
+      const replaceOrder = makeReplaceOrder(run, record);
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
-        getLeg, placeOrder, A, priorA, isFifteen, underlying, signalSymbol, priceSymbol,
+        getLeg, placeOrder, replaceOrder, A, priorA, isFifteen, underlying, signalSymbol, priceSymbol,
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs

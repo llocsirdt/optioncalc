@@ -15,7 +15,8 @@
  * deliberate future step (see placeOrder()).
  */
 const L = require('./spread-logic');
-const CL = require('./capital-legs');   // proven debit/credit leg foundation (capital recapture)
+const CL = require('./capital-legs');
+const LAD = require('./cover-ladder');   // works a resting cover toward the market (opt-in: deps.coverLadder)   // proven debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
 const WC = require('./wing-convert');
@@ -115,8 +116,25 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const bookLegs = (wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, 'debit');
   const brl = resolveLegs(bookLegs, deps.getLeg);
   const bookMark = brl.error ? null : round2(brl.longMid - brl.shortMid);
-  const target = (wing === W) ? round2(W - pos.limit - ML) : (bookMark != null ? round2(Math.max(tick, bookMark)) : round2(W - pos.limit - ML));
-  pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike, markAtPlace: plan.mark, placedAt: candleTime };
+  // COVER PRICING (deps.coverPriceMode, default 'lock' = the historical behaviour).
+  //   'lock' — rest at W - openCost - minLock: a price derived from a HOPED-FOR profit, not from the
+  //            market. Measured on the real 2026-09-09 session this put 733 of 735 unfilled covers BELOW
+  //            the market at placement, a median 64% below the mark; they could never have filled, and
+  //            the ones that did fill only filled after the cover decayed to the target.
+  //   'mark' — rest at the cover's CURRENT mark (+ coverSlipTicks). A cover placed on a signal is there
+  //            to protect capital, so it must not assume a profit; a proactive cover may vary its price
+  //            but still off the mark. This is the user's rule, 2026-09-09.
+  const markMode = deps.coverPriceMode === 'mark';
+  const slip = (deps.coverSlipTicks != null ? deps.coverSlipTicks : 1) * tick;
+  const lockTarget = round2(W - pos.limit - ML);
+  const target = markMode
+    ? (bookMark != null ? round2(Math.max(tick, bookMark)) : lockTarget)
+    : ((wing === W) ? lockTarget : (bookMark != null ? round2(Math.max(tick, bookMark)) : lockTarget));
+  // placedEpoch / placedUnder are what the ladder walks on: how long this has rested and how far the
+  // underlying has travelled since. Without them a resting order has no way to know it has gone stale.
+  pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike,
+    markAtPlace: plan.mark, placedAt: candleTime, placedEpoch: Date.now(), placedUnder: deps.underlying != null ? deps.underlying : null,
+    minLock: ML, openCost: pos.limit };
   pos.coverStatus = 'resting';
   // SEND the resolved cover (debit or credit) at the resolved wing.
   const sendLegs = (style === 'debit' && wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, style);
@@ -124,6 +142,12 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
   if (!srl.error) {
     if (style === 'credit') { const cr = round2(srl.shortMid - srl.longMid); if (cr > 0) { sentNet = 'CREDIT'; price = sentCredit = L.roundToTick(Math.min(round2(W - tick), cr), tick); } }
+    else if (markMode) {
+      // Pay the market. The sent limit is the SENT legs' own mark plus the slip, independent of the
+      // booked target above (they can differ when a wing-shift moved the legs).
+      const m = round2(srl.longMid - srl.shortMid);
+      price = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
+    }
     else { price = (wing === W) ? L.roundToTick(round2(W - pos.limit - ML), tick)   // ideal debit: rest at the profit-lock target
                                 : L.roundToTick(Math.max(tick, round2(srl.longMid - srl.shortMid)), tick); }   // wing-shift: the wider cover's mark
     if (price > 0) {
@@ -823,6 +847,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // Resolve any RESTING cover orders against THIS candle's chain (fills a working cover once its real
   // mark reaches its target). Runs after the cover/open steps so a cover placed this candle can also
   // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
+  // Work the orders BEFORE testing for fills: a repriced limit should be eligible to fill on this very
+  // candle, not the next one.
+  if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
@@ -1266,6 +1293,58 @@ function coverMarkNow(legs, getLeg) {
 // cover is already below target (deep-ITM lock), else fill at the resting target. Books the locked
 // floor (width − open − fill) at the actual fill price. Live analog of the backtest's two-mode fill;
 // here the fill check uses the real per-candle chain mark instead of the pricer/wick.
+// WORK THE RESTING COVERS (deps.coverLadder, default OFF). Recompute what limit each live cover order
+// should be showing given how long it has rested and how far the underlying has moved, and REPLACE the
+// order at the broker when that has changed by at least a tick.
+//
+// Measured on the real 2026-09-08/09 sessions: of the covers that never filled, 42% sat at a price the
+// underlying DID reach and another quarter came within 10 index points — the median miss was 20-27
+// points on a ~29,400 index. So most unfilled covers were marginally, not wildly, mispriced, which is
+// exactly the gap a ladder closes.
+//
+// COUNTER-EVIDENCE, recorded honestly: the backtest sweep of this ladder raised fill from 47% to 83% and
+// LOST $461k-$863k across all 36 arms, because paying up to fill an order the market was going to come
+// to anyway is a worse trade than waiting. That result is why this ships DEFAULT OFF. It is wired so it
+// can be enabled deliberately and measured live, not because the backtest endorses it.
+async function workRestingCovers(st, cfg, decisions, deps) {
+  if (!deps.coverLadder) return;
+  const tick = cfg.tickIncrement, W = cfg.spreadWidth;
+  const opts = {
+    stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
+    steps: deps.ladderSteps, lossCapFrac: deps.ladderLossCapFrac,
+  };
+  for (const pos of st.positions) {
+    if (!pos.filled || pos.covered || !pos.pendingCover) continue;
+    const pc = pos.pendingCover;
+    if (pc.sentNet === 'CREDIT') continue;         // credit covers price off a different rule; not laddered
+    const mark = coverMarkNow(pc.legs, deps.getLeg);
+    const next = LAD.limitNow({
+      spreadWidth: W, openCost: pc.openCost != null ? pc.openCost : pos.limit, minLock: pc.minLock || 0,
+      restingMs: pc.placedEpoch ? (Date.now() - pc.placedEpoch) : 0,
+      underlyingMove: (pc.placedUnder != null && deps.underlying != null) ? (deps.underlying - pc.placedUnder) : 0,
+      mark, tick,
+    }, opts);
+    // Gate on the ladder ESCALATING, not on any price wiggle. Bounds this to at most `steps` replaces
+    // per order per day; the minMove guard below covers the pinned-to-mark case.
+    const stepChanged = pc.ladderStep == null || next.step !== pc.ladderStep;
+    if (!LAD.shouldReprice(pc.target, next.limit, tick, { stepChanged, spreadWidth: W, minMoveFrac: deps.ladderMinMoveFrac })) continue;
+    const from = pc.target;
+    pc.ladderStep = next.step;
+    pc.target = next.limit;                        // the booked target moves with the working limit, or we
+                                                   // would fill on one price and book at another
+    if (deps.replaceOrder && pc.orderId) {
+      const srl = resolveLegs(pc.legs, deps.getLeg);
+      if (!srl.error) {
+        const payload = buildOrderPayload(srl.resolved, next.limit, pos.quantity || cfg.quantity, 'DEBIT');
+        const r = await deps.replaceOrder(pc.orderId, payload, { kind: 'cover-reprice', of: pos.id, fromLimit: from, legs: pc.legs });
+        if (r && r.orderId) pc.orderId = r.orderId;
+      }
+    }
+    decisions.push({ action: 'cover-reprice', positionId: pos.id, from, to: next.limit,
+      step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax });
+  }
+}
+
 function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
   const tick = cfg.tickIncrement;
   for (const pos of st.positions) {
@@ -1311,6 +1390,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   processCandleClose,
+  workRestingCovers,
   makeLegAccessor,
   buildOrderPayload,
   buildOpen,

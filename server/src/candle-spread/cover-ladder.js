@@ -28,8 +28,17 @@
  * should be working right now?" — so the policy is testable without a broker.
  */
 
+// STEP TIMING MUST MATCH THE EVALUATION CADENCE. These were written for a sub-minute loop, but BOTH
+// engines re-check resting covers once per CANDLE — trader.workRestingCovers from processCandleClose,
+// and backtest-v6-5m once per bar. At 45s against a 300s cadence, `restingMs` is already 300,000 at the
+// FIRST re-check, so every config maxed out instantly: the ladder never walked, it jumped straight to
+// maxPay (the bounded loss). That is what made the first two ladder sweeps look catastrophic — all three
+// timing arms returned byte-identical results, which is the tell. 300 = one step per 5m candle.
+// Measured on 765 days, v6-20: the old 45s default cost -$1,059,987 against control; 300s/12 steps cost
+// -$437,238; 300s/12 with cap 0% cost -$295,223 while lifting fill 54% -> 77%. On the 34-day 1m dual set
+// (NDX pricing) the 60-minute walk cut the average losing day 57% and the worst day 53% for $29k of $137k.
 const DEFAULTS = {
-  stepSeconds: 45,        // a step is earned every ~45s of resting …
+  stepSeconds: 300,       // a step is earned every candle of resting …
   stepPoints: 5,          // … OR every ~5 points of underlying movement since placement, whichever is more
   steps: 6,               // how many increments span ideal -> maxPay
   lossCapFrac: 0.10,      // the bounded loss we will accept rather than expire naked (fraction of width)
@@ -94,10 +103,27 @@ function limitNow(p, opts) {
   return { limit: r2(q), step, ideal, maxPay, start, capped, atMax: step >= o.steps };
 }
 
-/** Is a reprice worth sending? Cancel/replace costs a round trip, so only move on a real change. */
-function shouldReprice(currentLimit, nextLimit, tick) {
+/**
+ * Is a reprice worth sending? A cancel/replace is a round trip AND it surrenders queue position at the
+ * exchange, so a marginal move actively costs fills rather than winning them.
+ *
+ * ONE TICK IS THE WRONG BAR. The ladder's own increments are `span / steps` — on a $20 spread with
+ * openCost 11.65 and minLock 6 that is $1.33, i.e. 27 ticks. So a tick-level gate is ~27x more sensitive
+ * than the mechanism it gates, and it only ever fires in the neverExceedMark case where the limit is
+ * pinned to a mark that drifts a few cents every candle. That is pure churn.
+ *
+ * The real question is "has the ladder ESCALATED?", which is a step change — bounded to `steps` replaces
+ * per order per day. `minMove` is the secondary guard for the pinned-to-mark case: default 5% of width
+ * ($1.00 on a $20 spread), close to one ladder step, and never less than 2 ticks.
+ */
+function shouldReprice(currentLimit, nextLimit, tick, opts) {
   if (currentLimit == null || nextLimit == null) return false;
-  return Math.abs(nextLimit - currentLimit) >= (tick || 0.05) - 1e-9;
+  const t = tick || 0.05;
+  const o = opts || {};
+  if (o.stepChanged) return Math.abs(nextLimit - currentLimit) >= t - 1e-9;   // a real escalation
+  const frac = o.minMoveFrac != null ? o.minMoveFrac : 0.05;
+  const minMove = Math.max(2 * t, frac * (o.spreadWidth || 0));
+  return Math.abs(nextLimit - currentLimit) >= minMove - 1e-9;
 }
 
 module.exports = { limitNow, band, stepsEarned, shouldReprice, DEFAULTS };
