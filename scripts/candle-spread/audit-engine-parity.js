@@ -66,6 +66,12 @@ const NA = {
   coverFillAtClose: 'fill-model bound (pessimistic); meaningless live',
   coverFillHaircut: 'fill-model robustness knob; meaningless live',
   coverAtClose: 'alias of the fill-model bound',
+  // Not a gap but the FIX for one: the backtest used to settle terminal P&L on the last 5m bar (15:55),
+  // which differed from the official 16:00 index close by 31.2 points on 2026-09-08 — more than a $20
+  // spread's width. Live never had this problem; it reads the $NDX quote's lastPrice and stamps
+  // settleSource 'index-close'. settlePrice exists so a caller can TELL the backtest what that close was,
+  // which is why it is one-sided by construction.
+  settlePrice: 'live already settles on the official index close; this only lets the backtest be told it',
   priceOf: 'dataset accessor (which series prices the book)',
   geo: 'dataset/geometry factory injected by the harness',
   recordReplay: 'harness output option',
