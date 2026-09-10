@@ -157,7 +157,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.68</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.69</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -270,6 +270,7 @@ const completeness = {};
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
 let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
+let daySettle = null;   // the official index close for the day (eod_settlement.settle), or null if unsettled
 let pendingT = null, sliderRAF = null;             // rAF-coalesced slider recompute
 
 const usd = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
@@ -726,7 +727,7 @@ function underlyingAt(T) {
 // underlying, but no epoch — so anchor ET-minute→epoch off a position's own openEpoch↔openTime pair (same
 // day, so it's a clean linear map, no timezone/DST guessing). Uses the record with the most candles.
 function buildTimeIndex() {
-  underlyingMap = []; dayMin = 0; dayMax = 0;
+  underlyingMap = []; dayMin = 0; dayMax = 0; daySettle = null;
   let bestN = -1; const eps = [];
   for (const v of Object.keys(records)) {
     const rec = records[v]; const st = rec.state || {};
@@ -747,6 +748,7 @@ function buildTimeIndex() {
       // Appending the settle price as the final point makes the end of the slider the real close.
       const se = (rec.events || []).filter((e) => e.type === 'eod_settlement' && e.settle != null).pop();
       if (se) {
+        daySettle = se.settle;
         const t = Date.parse(se.time);
         if (Number.isFinite(t)) underlyingMap.push({ epoch: t, under: se.settle, settle: true });
       }
@@ -763,7 +765,12 @@ function applyTime(T) {
     for (const v of Object.keys(src)) {
       try {
         const res = strategyRunToOptionArray(src[v], T != null ? { asOfEpoch: T } : {});
-        const u = under != null ? under : (src[v].state && src[v].state.lastUnderlying);
+        // THE FULL-DAY VIEW MUST USE THE SETTLE. Appending the settle to underlyingMap fixed the slider
+        // path but NOT this one: with T null the code fell straight through to state.lastUnderlying, which
+        // is the last 5m candle the engine acted on (15:55), not the official close. On 2026-09-09 that is
+        // 29,414.77 vs a settle of 29,421.55. lastUnderlying stays the fallback for an UNSETTLED run
+        // (mid-session, or a truncated record from a server that was down at the close).
+        const u = under != null ? under : (daySettle != null ? daySettle : (src[v].state && src[v].state.lastUnderlying));
         dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
       } catch (e) { dest[v] = { err: 'calc' }; }
     }

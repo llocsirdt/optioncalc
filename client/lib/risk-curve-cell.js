@@ -13,6 +13,10 @@
 (function (root) {
   function make(deps) {
     const { fmtN, usdK, pnlAtPrice, CW, CH } = deps;
+    // FONT SCALE. The compare grid draws ~60 of these at thumbnail size, where 8-9.5px labels are right.
+    // A page showing ONE chart at full width needs them proportionally larger to be readable, so the host
+    // scales rather than the renderer guessing from CW. Default 1 keeps the grid byte-identical.
+    const FS = deps.fontScale || 1;
     // gAbs is the LARGEST absolute P&L across every cell being drawn — it sets the gradient saturation so
     // a small book stays pale and only the biggest reaches full colour. It is a property of the whole
     // GRID, not of one cell, so the host supplies it: the compare page passes its running max, and a
@@ -33,7 +37,7 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
     if (y == null || !Number.isFinite(y)) return '';
     const ly = Math.max(8, Math.min(CH - 1, Y(y) - 1.5));
     return `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>`
-      + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="8" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.4" paint-order="stroke">${txt}</text>`;
+      + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="${(8 * FS).toFixed(1)}" font-weight="${FS > 1 ? 700 : 400}" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${txt}</text>`;
   };
   // A floor above zero is a different STATE, not a smaller loss: the whole curve is in profit, so there is
   // no settlement price that loses money. Red said the opposite. Violet marks it without colliding with the
@@ -46,8 +50,8 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   const exEl = (y, color, txt) => {
     if (y == null || !Number.isFinite(y)) return '';
     const ly = Math.max(9, Math.min(CH - 2, Y(y) - 2));
-    return `<text x="${CW - 2}" y="${ly.toFixed(1)}" text-anchor="end" font-size="9.5" font-weight="700"`
-      + ` font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="2.6" paint-order="stroke">${txt}</text>`;
+    return `<text x="${CW - 2}" y="${ly.toFixed(1)}" text-anchor="end" font-size="${(9.5 * FS).toFixed(1)}" font-weight="700"`
+      + ` font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="${(2.6 * FS).toFixed(1)}" paint-order="stroke">${txt}</text>`;
   };
   const exLines = exEl(d.hi, 'var(--profit)', d.unboundedGain ? '+∞' : usdK(d.hi))
                 + exEl(d.lo, d.unboundedLoss ? 'var(--loss)' : floorCol(d.lo), d.unboundedLoss ? '−∞' : usdK(d.lo));
@@ -89,7 +93,8 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
     ${exLines}
-    ${dB && dB.curve ? `<polyline points="${dB.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="#6ab0f3" stroke-width="1.2" stroke-dasharray="4 2" opacity="0.95"/>` : ''}
+    ${dB && dB.curve ? `<polyline points="${dB.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="#6ab0f3" stroke-width="${(1.2 * FS).toFixed(1)}" stroke-dasharray="4 2" opacity="0.95"/>`
+      + (dB.label ? `<text x="2" y="${(11 * FS).toFixed(1)}" font-size="${(8 * FS).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="#3d86c6" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${dB.label}</text>` : '') : ''}
     ${curLine}${cursor}
   </svg>`;
 }

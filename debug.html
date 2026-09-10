@@ -82,7 +82,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.68</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.69</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -402,7 +402,10 @@ function pnlAtPrice(curve, x) {
   return best.y;
 }
 let dbgAbs = 0;   // one chart, so the saturation reference is that chart's own magnitude
-const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs });
+// fontScale 2.1: this page draws ONE chart at full width, where the compare grid's thumbnail-sized
+// 8-9.5px labels are unreadable. The peak, the floor and the dashed backtest averages are the numbers
+// this page exists to show, so they get to be legible.
+const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs, fontScale: 2.1 });
 
 // Build the same {curve, lo, hi, underlying, underPnl, ...} shape the compare grid feeds its cell.
 function buildCell(pos, se) {
@@ -490,6 +493,23 @@ function sliderLabel(T) {
     minute: '2-digit', hour12: false }).format(new Date(T)) + ' ET';
 }
 
+// THE COUNTERFACTUAL BOOK: every resting cover that never filled, treated as filled at the price it was
+// resting at. Drawn as the dashed blue line against the solid actual curve, so the gap between them IS
+// the execution shortfall — the two lines converge as the fill problem gets fixed. Positions the engine
+// never even placed a cover on are left alone; this measures unfilled ORDERS, not missing decisions.
+function filledBook(pos) {
+  let any = false;
+  const out = pos.map((p) => {
+    const pc = p.pendingCover;
+    if (p.covered || !pc || !pc.legs) return p;
+    any = true;
+    return { ...p, covered: true, coverLegs: pc.legs, coverLimit: pc.target };
+  });
+  return any ? out : null;
+}
+
+let curveCell = null, curveCellFilled = null;   // kept for the click readout
+
 function renderCurve(pos, se, T) {
   const host = document.getElementById('curve');
   // Rebuild the book as of T; at full day this is the whole book, so the default path is unchanged.
@@ -522,9 +542,20 @@ function renderCurve(pos, se, T) {
       ? `<i style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${fmtN(d.underPnl)}</i>` : '';
     nowlbl = `<div class="nowlbl" style="left:${lx.toFixed(1)}%">${Math.round(d.underlying)}${pnl}</div>`;
   }
-  host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, d.lo, d.hi, btRef, null)}${nowlbl}</div>`;
-  $('curveMeta').textContent = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
-    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '');
+  // Counterfactual overlay: same book with every unfilled resting cover treated as filled.
+  const fb = filledBook(bookPos);
+  let dF = fb ? buildCell(fb, T != null ? null : se) : null;
+  if (dF) { dF.label = 'if all covers filled'; }
+  curveCell = d; curveCellFilled = dF;
+  // Both curves must share one y-scale or the comparison is meaningless.
+  const yLo = Math.min(d.lo, dF ? dF.lo : d.lo), yHi = Math.max(d.hi, dF ? dF.hi : d.hi);
+  dbgAbs = Math.max(Math.abs(yLo), Math.abs(yHi));
+  host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, yLo, yHi, btRef, dF)}${nowlbl}</div>`;
+  const gap = (dF && d.underPnl != null && dF.underPnl != null) ? dF.underPnl - d.underPnl : null;
+  $('curveMeta').innerHTML = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
+    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '')
+    + (dF ? ` · <span style="color:#3d86c6">if filled ${fmtN(dF.lo)} / ${fmtN(dF.hi)}` + (gap != null ? ` (${gap >= 0 ? '+' : ''}${fmtN(gap)} at settle)` : '') + '</span>' : '')
+    + ` <span id="curvePick" style="margin-left:8px"></span>`;
 }
 
 // ---- boot -------------------------------------------------------------------------------------
@@ -536,6 +567,24 @@ function renderCurve(pos, se, T) {
   await loadBaselines();
   await load();
   for (const id of ['variant', 'date', 'src']) $(id).addEventListener('change', load);
+  // Click anywhere on the curve to read the P&L at that settlement price — same interaction as the
+  // compare grid. Reports BOTH the actual book and the if-all-filled book so the execution gap is
+  // readable at any price, not only at the settle.
+  document.getElementById('curveBox').addEventListener('click', (e) => {
+    const svg = e.target.closest('svg[data-v]'); if (!svg || !curveCell) return;
+    const rect = svg.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / (rect.width || 1)));
+    const price = curveCell.xMin + frac * (curveCell.xMax - curveCell.xMin);
+    const pnl = pnlAtPrice(curveCell.curve, price);
+    const cur = svg.querySelector('line.cursor');
+    if (cur) { const cx = (frac * CW).toFixed(1); cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.setAttribute('visibility', 'visible'); }
+    const pick = document.getElementById('curvePick');
+    if (pick) {
+      const alt = curveCellFilled ? pnlAtPrice(curveCellFilled.curve, price) : null;
+      pick.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${fmtN(pnl)}</b>`
+        + (alt != null ? ` · <span style="color:#3d86c6">if filled <b>${fmtN(alt)}</b></span>` : '');
+    }
+  });
   $('reload').addEventListener('click', load);
   const sl = $('timeSlider');
   if (sl) sl.addEventListener('input', () => {
