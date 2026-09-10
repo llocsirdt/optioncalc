@@ -40,7 +40,8 @@
 const DEFAULTS = {
   stepSeconds: 300,       // a step is earned every candle of resting …
   stepPoints: 5,          // … OR every ~5 points of underlying movement since placement, whichever is more
-  steps: 6,               // how many increments span ideal -> maxPay
+  steps: 6,               // how many increments span ideal -> maxPay (ignored when stepDollars is set)
+  stepDollars: null,      // WIDTH-NEUTRAL alternative to `steps`: concede at most this much per step
   lossCapFrac: 0.10,      // the bounded loss we will accept rather than expire naked (fraction of width)
   neverExceedMark: true,  // don't bid above the market; the fill happens at the market anyway
 };
@@ -90,17 +91,27 @@ function limitNow(p, opts) {
   const { ideal, maxPay } = band(W, p.openCost, o);
   // Where this trigger begins. A profit-demanding start sits BELOW ideal; it can never start above it.
   const start = r2(Math.min(ideal, ideal - (p.minLock || 0)));
-  const step = stepsEarned(p.restingMs, p.underlyingMove, o);
-  // Linear walk from `start` to `maxPay` across `steps` increments.
+  // WIDTH NEUTRALITY. The span is W x (lossCapFrac + minLockFrac), so it scales linearly with width while
+  // a fixed `steps` does not — on v6 that is $0.29 per step at $10 and $1.17 at $40, a 4x difference in
+  // what each step concedes. The same schedule is therefore far more aggressive on wide spreads, which is
+  // what the sweeps kept showing: the ladder helped at $10/$20 and hurt badly at $40 (v6-40 ret/DD 51->28
+  // on 765 days, -$70,014 on the 1m dual set). `stepDollars` fixes the CONCESSION PER STEP instead of the
+  // step COUNT, so one setting means the same thing at every width; a wider spread simply takes more
+  // steps, and so escalates more slowly in time — which is the right instinct for a spread with more room.
   const span = maxPay - start;
-  let limit = r2(start + (span * step) / o.steps);
+  const nSteps = (o.stepDollars > 0)
+    ? Math.max(1, Math.ceil(span / o.stepDollars))
+    : o.steps;
+  const step = stepsEarned(p.restingMs, p.underlyingMove, { ...o, steps: nSteps });
+  // Linear walk from `start` to `maxPay` across `nSteps` increments.
+  let limit = r2(start + (span * step) / nSteps);
   // Never bid above the market: the fill happens at the market anyway, and a limit above it just
   // advertises how much we were willing to overpay.
   let capped = false;
   if (o.neverExceedMark && p.mark != null && limit > p.mark) { limit = r2(p.mark); capped = true; }
   if (limit > maxPay) { limit = maxPay; capped = true; }
   const q = Math.max(tick, Math.round(limit / tick) * tick);
-  return { limit: r2(q), step, ideal, maxPay, start, capped, atMax: step >= o.steps };
+  return { limit: r2(q), step, steps: nSteps, ideal, maxPay, start, capped, atMax: step >= nSteps };
 }
 
 /**

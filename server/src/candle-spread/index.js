@@ -662,6 +662,7 @@ function buildEngineDeps(run, live) {
       // Read off `deps`, so it must be listed here. Default OFF; see the note in BASE_RUNS.
       coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
       ladderSteps: run.ladderSteps, ladderLossCapFrac: run.ladderLossCapFrac,
+      ladderStepDollars: run.ladderStepDollars,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
       // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
       wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,

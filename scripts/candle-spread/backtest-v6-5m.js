@@ -296,6 +296,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     stepPoints: opts.ladderStepPoints != null ? opts.ladderStepPoints : LAD.DEFAULTS.stepPoints,
     steps: opts.ladderSteps != null ? opts.ladderSteps : LAD.DEFAULTS.steps,
     lossCapFrac: opts.ladderLossCapFrac != null ? opts.ladderLossCapFrac : LAD.DEFAULTS.lossCapFrac,
+    // Width-neutral step sizing: fixes the CONCESSION PER STEP rather than the step count, so one
+    // setting means the same thing at $10, $20 and $40.
+    stepDollars: opts.ladderStepDollars != null ? opts.ladderStepDollars : LAD.DEFAULTS.stepDollars,
   };
   const lockGate = opts.lockFloorGate || 'improve';   // 'improve' | 'cap' | 'target'
   let lockUnfillable = 0, lockFillable = 0, lockRested = 0;

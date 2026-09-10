@@ -1312,6 +1312,7 @@ async function workRestingCovers(st, cfg, decisions, deps) {
   const opts = {
     stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
     steps: deps.ladderSteps, lossCapFrac: deps.ladderLossCapFrac,
+    stepDollars: deps.ladderStepDollars,   // width-neutral step sizing (see cover-ladder)
   };
   for (const pos of st.positions) {
     if (!pos.filled || pos.covered || !pos.pendingCover) continue;
