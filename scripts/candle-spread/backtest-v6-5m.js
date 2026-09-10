@@ -108,6 +108,18 @@ const LAD = require('../../server/src/candle-spread/cover-ladder');   // work th
 //   marks >= frac*WIDTH = deep ITM → locks the leader, and it stops counting toward the soft cap);
 //   softCap = "churn cap" on AT-RISK (uncovered AND not-deep-ITM) debit — freed as leaders go deep ITM;
 //   hardCap = absolute backstop on TOTAL uncovered debit (deep-ITM included). Any cap default Infinity.
+
+// COVER PRICING helper. 'mark' rests at the cover's CURRENT mark (+1 tick) rather than a price derived
+// from a hoped-for profit (W - openCost - minLock). Mirrors trader.placeRestingCover's coverPriceMode.
+// NOTE what this does to the fill model: a limit AT the mark clears on the same bar, so a mark-priced
+// cover fills immediately. That is not an artefact — it is what paying the market means, and it is why
+// mark pricing and covering-at-birth cannot both be right.
+function coverTarget(opts, legs, S, tau, iv, fallback) {
+  if (opts.coverPriceMode !== 'mark') return fallback;
+  const m = legsMark(legs, S, tau, iv);
+  return roundTick(Math.max(TICK, m + TICK));
+}
+
 function runDay5m(bars, signalFn, opts = {}) {
   const riskCap = opts.riskCap != null ? opts.riskCap : Infinity;   // legacy single cap (v7)
   const softCap = opts.softCap != null ? opts.softCap : Infinity;   // v8 churn cap (at-risk only)
@@ -291,7 +303,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // because it stakes a pendingCover on every position the moment it opens and the other three triggers
   // only consider positions that do not already have one. Counting them here makes that visible in the
   // backtest instead of only in a day's live record.
-  const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0 };
+  const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0, ladder: 0 };
   const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
@@ -338,7 +350,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the latter by ~$1,070/contract. Deleted rather than left reachable so it cannot be selected by
       // accident; prior baselines built with it are superseded, not reproducible.
       if (lockMode === 'rest') {
-        p.pendingCover = { legs: G.coverLegs(p.side, p.shortStrike), target: round2(G.WIDTH - p.limit), src: 'lock' };
+        { const _l = G.coverLegs(p.side, p.shortStrike);
+          p.pendingCover = { legs: _l, target: coverTarget(opts, _l, S, tau, iv, round2(G.WIDTH - p.limit)), src: 'lock' }; }
         lockRested++;
         continue;   // frees no risk NOW — that is the honest cost of resting rather than crossing
       }
@@ -513,7 +526,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (pFrac != null) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
-        if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) pos.pendingCover = { legs: G.coverLegs(pos.side, pos.shortStrike), target: round2(G.WIDTH - pos.limit), src: 'proactive' };
+        if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) { const _l = G.coverLegs(pos.side, pos.shortStrike);
+          pos.pendingCover = { legs: _l, target: coverTarget(opts, _l, S, tau, iv, round2(G.WIDTH - pos.limit)), src: 'proactive' }; }
       }
     }
     // (a0b) CONTINUOUS COVER (opts.continuousCover) — the user's ACTUAL policy, and a different shape of
@@ -567,8 +581,17 @@ function runDay5m(bars, signalFn, opts = {}) {
           const locked = G.WIDTH - pos.limit - cost;
           if (!(cost > 0) || locked < oppRatio * cost) continue;
         }
+        // minLock AS A GATE, NOT A PRICE (opts.coverLockGate). Priced, minLock produces an order resting
+        // far under the market that cannot fill — measured live 2026-09-09 at a median 64% below the mark
+        // on 733 of 735 unfilled covers. But the CONDITION it encodes is sound: only cover once the
+        // offsetting spread has become cheap enough to bank a real profit, i.e. once the position has run
+        // deep enough ITM. So gate on it and then pay the MARK: right timing, fillable price.
+        if (opts.coverLockGate) {
+          const cost = legsMark(legs, S, tau, iv);
+          if (!(cost > 0) || (G.WIDTH - pos.limit - cost) < minLock) continue;
+        }
         // Stamp what the ladder needs to walk this order: when it was placed and where the underlying was.
-        pos.pendingCover = { legs, target: tgt, openCost: pos.limit, minLock, src: 'continuous',
+        pos.pendingCover = { legs, target: coverTarget(opts, legs, S, tau, iv, tgt), openCost: pos.limit, minLock, src: 'continuous',
           placedMs: nowEpoch, placedUnder: S, placedET: nowET };
       }
     }
@@ -585,7 +608,16 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
-      const pc = pos.pendingCover, ext = pos.side === 'bull' ? px.high : px.low;
+      // FILL MODEL. A resting cover is a real order at the broker, so it fills if the underlying TRADED
+      // THROUGH the level that makes the cover cheap enough — i.e. price it at the bar's most favourable
+      // extreme (high for a bull, whose put-spread cover cheapens as price rises; low for a bear). That is
+      // the honest model, not an optimistic one; coverFillAtClose (a single point in time) is a strict
+      // pessimistic BOUND, not a candidate.
+      // coverFillHaircut pulls the extreme back toward the close by N index points, so the market must
+      // trade N points BEYOND the fill level — the user's "skew it by a strike" robustness knob.
+      const pc = pos.pendingCover;
+      const _hc = opts.coverFillHaircut || 0;
+      const ext = pos.side === 'bull' ? (px.high - _hc) : (px.low + _hc);
       // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
       // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
       // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
@@ -732,7 +764,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           ? SL.coverLegsAtShort(pos.side, SL.coverShortFor(opts.coverGeometry, pos.side, pos.shortStrike, S, legIncr), G.WIDTH)
           : G.coverLegs(pos.side, pos.shortStrike);
         if (plans) { const pl = plans.find(x => x.positionId === 'c' + k); if (pl && !pl.error && pl.legs) legs = pl.legs; }
-        pos.pendingCover = { legs, target: round2(G.WIDTH - pos.limit), src: 'reversal', placedET: nowET };
+        pos.pendingCover = { legs, target: coverTarget(opts, legs, S, tau, iv, round2(G.WIDTH - pos.limit)), src: 'reversal', placedET: nowET };
       }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
@@ -838,6 +870,36 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (!govOk) govBlocked++;
       if (strategyOk && ceilingOk && govOk && !geoDecline) {
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
+        // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
+        // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
+        // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
+        // comes, cover on the signal; if instead another OPEN signal comes, cover the earlier position
+        // (now deeper in the money) as the new one goes on. Same family as cover-to-stack — free capital
+        // by locking a winner — but paced by the open cadence instead of waiting for the risk cap.
+        // Priced at the MARK: a cover placed to protect capital must not assume a profit.
+        if (opts.coverPriorOnOpen) {
+          const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge && p.openEpoch !== nowEpoch);
+          if (cands.length) {
+            // 'oldest' (the user's description: cover the first one) or 'deepest' (most ITM = biggest
+            // winner to bank, which is what cover-to-stack picks). Swept, not assumed.
+            let pick = cands[0];
+            if (opts.coverPriorPick === 'deepest') {
+              let bestM = -Infinity;
+              for (const c of cands) { const m = legsMark(c.legs, S, tau, iv); if (m > bestM) { bestM = m; pick = c; } }
+            }
+            const plegs = opts.coverGeometry && opts.coverGeometry !== 'tent'
+              ? SL.coverLegsAtShort(pick.side, SL.coverShortFor(opts.coverGeometry, pick.side, pick.shortStrike, S, legIncr), G.WIDTH)
+              : G.coverLegs(pick.side, pick.shortStrike);
+            // Same gate as the continuous path: the ladder is meant to bank a prior position that the
+            // market has carried deeper ITM, so require that there is something to bank before placing.
+            const pcost = legsMark(plegs, S, tau, iv);
+            const pml = (opts.coverLockGate ? (opts.continuousCoverMinLockFrac || 0) * G.WIDTH : 0);
+            if (!opts.coverLockGate || (pcost > 0 && (G.WIDTH - pick.limit - pcost) >= pml)) {
+              pick.pendingCover = { legs: plegs, target: coverTarget(opts, plegs, S, tau, iv, round2(G.WIDTH - pick.limit)),
+                openCost: pick.limit, minLock: 0, src: 'ladder', placedMs: nowEpoch, placedUnder: S, placedET: nowET };
+            }
+          }
+        }
         markBookDirty();
         if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
         st.dir = sig.openSide;
