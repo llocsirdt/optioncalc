@@ -58,6 +58,20 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // Underlying price lines are GRAY: solid = current underlying, dashed = the click cursor (P&L projection).
   const curLine = d.underlying != null ? `<line x1="${X(d.underlying).toFixed(1)}" y1="0" x2="${X(d.underlying).toFixed(1)}" y2="${CH}" stroke="#888" stroke-width="1.2"/>` : '';
   const cursor = `<line class="cursor" x1="0" y1="0" x2="0" y2="${CH}" stroke="#555" stroke-width="1" stroke-dasharray="3 2" visibility="hidden"/>`;
+  // OVERLAY CURVES. `dB` began as a single counterfactual book (compare's backtest twin, debug's "if all
+  // covers filled") and is now either that object or an ARRAY of them, because the debug page draws two:
+  // the if-all-filled counterfactual AND the same day as the backtest engine ran it. Each may carry its
+  // own colour/dash; the defaults reproduce the original single blue dashed line byte-for-byte, so every
+  // existing caller renders exactly as before. Labels stack down the top-left in their own colour, which
+  // is also the key — no separate legend to keep in sync.
+  const overlays = (Array.isArray(dB) ? dB : [dB]).filter((o) => o && o.curve && o.curve.length);
+  let ovRow = 0;
+  const ovEl = (o) => {
+    const col = o.color || '#6ab0f3', txt = o.labelColor || o.color || '#3d86c6', dash = o.dash || '4 2';
+    const y = (11 * FS) + (ovRow++) * (10 * FS);
+    return `<polyline points="${o.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="${col}" stroke-width="${(1.2 * FS).toFixed(1)}" stroke-dasharray="${dash}" opacity="0.95"/>`
+      + (o.label ? `<text x="2" y="${y.toFixed(1)}" font-size="${(8 * FS).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="${txt}" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${o.label}</text>` : '');
+  };
   // FILL DEPTH = HOW BIG THE OUTCOME IS, in dollars. Each gradient runs from break-even (pale) to the
   // grid-wide extreme (full colour) in USER SPACE — so the full-saturation stop for a small book sits far
   // OFF the top/bottom of its own chart and only the pale end is ever visible, while the biggest books in
@@ -93,8 +107,7 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
     ${btLines}
     <polyline points="${pts}" fill="none" stroke="#333" stroke-width="1.3"/>
     ${exLines}
-    ${dB && dB.curve ? `<polyline points="${dB.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="#6ab0f3" stroke-width="${(1.2 * FS).toFixed(1)}" stroke-dasharray="4 2" opacity="0.95"/>`
-      + (dB.label ? `<text x="2" y="${(11 * FS).toFixed(1)}" font-size="${(8 * FS).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="#3d86c6" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${dB.label}</text>` : '') : ''}
+    ${overlays.map(ovEl).join('')}
     ${curLine}${cursor}
   </svg>`;
 }

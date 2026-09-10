@@ -959,7 +959,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
   let settleBar = bars[bars.length - 1];
   if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
-  const settle = priceOf(settleBar).close;
+  // THE LAST BAR IS NOT THE CLOSE. 0DTE options settle on the OFFICIAL index close at 16:00, but the last
+  // RTH bar this engine sees closes at 15:55 — and those differ materially: 29,476.49 vs 29,507.70 on
+  // 2026-09-08, 31.2 points, more than a $20 spread's whole width. Marking terminal P&L at the 15:55 bar
+  // therefore settles near-the-money positions on the wrong side of their strikes. The live engine already
+  // gets this right (it reads the $NDX quote's lastPrice and records settleSource 'index-close'); the
+  // backtest had no way to know it, so opts.settlePrice lets a caller supply the real close. Unset keeps
+  // the old behaviour so committed baselines reproduce.
+  const settle = (opts.settlePrice > 0) ? opts.settlePrice : priceOf(settleBar).close;
   // bookPayoff(X): the FINAL EOD book's terminal P&L as a function of a hypothetical settle X — exactly the
   // terminal accumulation below but parameterized on X (same order + per-position round2), so terminal and
   // the risk-curve metrics can't drift. terminal = bookPayoff(settle).

@@ -1155,6 +1155,50 @@ app.get('/api/v1/candle-spread/replay', (req, res) => {
   });
 });
 
+// ON-DEMAND BACKTEST for ONE variant on ONE day, returned as a run record in the LIVE record shape.
+//   GET /api/v1/candle-spread/backtest?symbol=NDX&date=YYYY-MM-DD&variant=v6-20
+//
+// WHY a second endpoint next to /replay: /replay builds EVERY variant for a day and writes the bundle to
+// disk (~15s, megabytes). The debug page wants one variant, immediately, to lay over the live run it is
+// already showing — so this runs just that variant in-process (~30ms once the 5m dataset is parsed) and
+// answers with the same record shape the live /runs endpoint serves. Same shape is the whole trick: the
+// page needs no new curve or table code to draw the backtest beside the live day.
+//
+// This is a DEV-MACHINE endpoint by nature, exactly like /replay: the 5m datasets it reads are local-only
+// and gitignored, so the deployed instance answers 404 with the reason rather than pretending.
+const _btRunCache = new Map();   // `${variant}|${date}` -> record; the datasets are static, so a repeat UI call is free
+app.get('/api/v1/candle-spread/backtest', (req, res) => {
+  const date = String(req.query.date || ''), variant = String(req.query.variant || '');
+  const symbol = String(req.query.symbol || 'NDX');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
+  if (!variant) return res.status(400).json({ error: 'variant required' });
+  const key = `${symbol}|${variant}|${date}`;
+  if (_btRunCache.has(key)) return res.json(_btRunCache.get(key));
+  let mod;
+  try {
+    mod = require(require('path').join(__dirname, '..', '..', 'scripts', 'candle-spread', 'run-day-record.js'));
+  } catch (e) {
+    return res.status(404).json({ error: 'Backtest engine not available on this host', message: e.message });
+  }
+  try {
+    const { record } = mod.runDayRecord({ date, variant, symbol });
+    _btRunCache.set(key, record);
+    res.json(record);
+  } catch (e) {
+    // NO_DATASET is the common, expected case (most dates have no 5m capture) — say WHICH dates exist so
+    // the UI can tell the user "no backtest data" instead of "something broke".
+    if (e.code === 'NO_DATASET') {
+      let available = [];
+      try { available = mod.availableDates(); } catch (e2) { /* datasets unreadable — the 404 still stands */ }
+      return res.status(404).json({ error: 'No 5m dataset covers that date', date, checked: e.checked || [],
+        first: available[0] || null, last: available[available.length - 1] || null, count: available.length });
+    }
+    if (e.code === 'NO_VARIANT') return res.status(404).json({ error: 'Unknown variant', variant });
+    if (e.code === 'BAD_DATE') return res.status(400).json({ error: e.message });
+    res.status(500).json({ error: 'Backtest run failed', message: e.message });
+  }
+});
+
 // Chains cache management endpoints
 app.get('/api/v1/admin/chains', async (req, res) => {
   try {

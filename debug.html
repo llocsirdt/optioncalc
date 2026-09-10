@@ -77,12 +77,27 @@
   .tag { padding:0 5px; border-radius:3px; font:600 9.5px system-ui,sans-serif; }
   .tag.ok { background:#e6f5f2; color:#1c7f72; } .tag.no { background:#fdecea; color:#a5322c; }
   .tag.w  { background:#f3efff; color:#5b3fa8; }
+  /* LIVE vs BACKTEST strip. Four columns (metric / backtest / live / Δ) rather than two stacked panels:
+     the whole point is reading ACROSS one row, and a gap you have to compute in your head is a gap you
+     do not notice. --bt is the backtest's identity colour and is used for the curve, this table's header
+     and the backtest order rows, so the three always refer to the same thing. */
+  :root { --bt:#c9781f; }
+  table.cmp { border-collapse:collapse; font:11px ui-monospace,monospace; width:100%; }
+  table.cmp th { text-align:right; padding:2px 6px; border-bottom:1px solid var(--grid); color:var(--muted); font-weight:600; }
+  table.cmp th.bt { color:var(--bt); }
+  table.cmp td { text-align:right; padding:2px 6px; border-bottom:1px solid #f6f6f6; }
+  table.cmp td:first-child, table.cmp th:first-child { text-align:left; color:var(--muted); }
+  /* The fill rate IS the gap — it gets the emphasis so the eye lands there first. */
+  table.cmp tr.hero td { font-weight:700; background:#fffaf2; }
+  tr.td-bt td { background:#fffaf3; }
+  tr.td-bt td:first-child { border-left:2px solid var(--bt); }
+  td.srcTag { font:700 9.5px system-ui,sans-serif; }
   .note { color:var(--muted); font-size:11px; margin:4px 0 0; max-width:900px; line-height:1.45; }
   #err { color:var(--loss); font:12px ui-monospace,monospace; padding:8px 14px; }
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.70</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.71</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -137,8 +152,21 @@
           <div class="kv" id="baseline"></div>
         </div>
       </div>
+      <!-- THE EXECUTION GAP, in one strip. Same day, same candles, same signal — so every number that
+           differs here is execution or pricing, never market luck. Hidden until a backtest for this
+           variant+date actually loads; most dates have no 5m capture and the live side must still read
+           normally on its own. -->
+      <div class="panel" id="cmpPanel" style="margin-top:8px; display:none">
+        <h2>Live vs backtest <span class="meta" id="cmpMeta"></span></h2>
+        <table class="cmp" id="cmp"></table>
+      </div>
       <div class="panel" style="display:flex; flex-direction:column; margin-top:8px; max-height:calc(100vh - 210px)">
-        <h2>Orders <span class="meta" id="ordMeta"></span></h2>
+        <h2>Orders <span class="meta" id="ordMeta"></span>
+          <span id="ordSrcWrap" style="float:right; font-weight:400; display:none">
+            <select id="ordSrc" style="font-size:10.5px; padding:1px 4px">
+              <option value="live">live only</option><option value="bt">backtest only</option>
+              <option value="both">both, interleaved</option>
+            </select></span></h2>
         <div id="ordScroll" style="flex:1; overflow:auto; min-height:0">
           <table class="ord" id="orders"></table>
         </div>
@@ -178,6 +206,10 @@ const num = (n, d = 2) => n == null ? '—' : (+n).toFixed(d);
 const showErr = (m) => { $('err').textContent = m || ''; };
 
 let record = null, baselines = null;
+// The SAME day re-run by the backtest engine, in the same record shape (see the /candle-spread/backtest
+// endpoint). Null whenever there is no 5m dataset for the date, the local server is down, or we are
+// already looking at a backtest — every one of those is normal and the live side must render regardless.
+let btRecord = null, btNote = '';
 
 async function getJson(url) {
   const r = await fetch(url, { cache: 'no-store' });
@@ -204,6 +236,24 @@ async function loadBaselines() {
   }
 }
 
+// The BACKTEST twin of the run on screen: the same variant, the same date, run from the 5m candles by
+// the backtest engine and returned in the LIVE record shape. It is an OVERLAY, never a mode — the live
+// run stays the subject of the page and this answers "what should the candles have produced?".
+// Local-only by nature (the 5m datasets are gitignored), so a failure here is expected, not an error:
+// it records a note and leaves btRecord null.
+async function loadBacktest(variant, date) {
+  btRecord = null; btNote = '';
+  // Overlaying a backtest on a backtest compares nothing.
+  if ($('src').value === 'backtest') { btNote = 'viewing the backtest replay'; return; }
+  try {
+    btRecord = await getJson(`${BT_BASE}/api/v1/candle-spread/backtest?symbol=NDX&date=${date}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`);
+  } catch (e) {
+    btNote = /404/.test(e.message) ? 'no 5m dataset for this date'
+      : /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'local backtest server not running'
+      : e.message;
+  }
+}
+
 async function load() {
   showErr('');
   const variant = $('variant').value, date = $('date').value;
@@ -215,9 +265,16 @@ async function load() {
   } catch (e) {
     record = null; showErr(`no run for ${variant} on ${date} (${e.message})`);
     $('meta').textContent = ''; $('orders').innerHTML = ''; $('summary').innerHTML = '';
-    $('curve').innerHTML = ''; return;
+    // curveMeta too: it carries the previous day's min/max and its backtest line, which reads as though
+    // the failed day had those numbers.
+    $('curve').innerHTML = ''; $('curveMeta').textContent = ''; $('ordMeta').textContent = '';
+    $('cmpPanel').style.display = 'none'; $('ordSrcWrap').style.display = 'none'; return;
   }
+  // Render the live side FIRST and let the backtest arrive after: the engine run is fast but the dataset
+  // parse on a cold server is not, and the page must never sit blank waiting on an optional overlay.
   render();
+  await loadBacktest(variant, date);
+  if (record) render();
 }
 
 // ---- render -----------------------------------------------------------------------------------
@@ -264,9 +321,65 @@ function render() {
 
   buildTimeIndex();
   setupSlider();
-  renderOrders(pos, W, ML, se);
+  renderCmp();
+  renderOrders();
   renderCurve(pos, se, null);
   syncNQ();
+}
+
+// ---- live vs backtest -------------------------------------------------------------------------
+// Pull the five numbers that decide a day out of a run record, the SAME way for both sides. The fill
+// rate in particular is per POSITION (covered vs covered+still-resting) on both sides — the engine's own
+// coverBySrc counter uses a different denominator (every placement, including re-placements), so mixing
+// the two would invent a gap that is not there.
+function statsOf(rec) {
+  if (!rec) return null;
+  const pos = ((rec.state || {}).positions) || [];
+  const se = (rec.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
+  const covered = pos.filter((p) => p.covered).length;
+  const unfilled = pos.filter((p) => p.pendingCover && !p.covered).length;
+  const isHedge = (p) => p.hedge || /^off-|^wing-/.test(p.id || '');
+  return {
+    terminal: se && se.terminalPnl != null ? se.terminalPnl : null,
+    floor: se && se.floorPnl != null ? se.floorPnl : null,
+    opens: pos.filter((p) => !isHedge(p)).length,
+    placed: covered + unfilled, covered, unfilled,
+    fill: (covered + unfilled) ? Math.round(covered / (covered + unfilled) * 100) : null,
+    settle: se && se.settle != null ? se.settle : null,
+  };
+}
+function renderCmp() {
+  const panel = $('cmpPanel');
+  const B = statsOf(btRecord), L = statsOf(record);
+  $('ordSrcWrap').style.display = B ? '' : 'none';
+  // No backtest for this date (the usual case) — the strip disappears entirely and renderCurve's header
+  // says why in one phrase. A missing overlay must never look like a broken page.
+  if (!B || !L) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  // Δ is LIVE − BACKTEST throughout, so a negative number always means "live did worse than the candles
+  // said it should" — one direction to learn, on every row.
+  const d = (l, b, fmt, goodHigh = true) => {
+    if (l == null || b == null) return '<td class="m">—</td>';
+    const g = l - b, cls = g === 0 ? 'm' : (g > 0) === goodHigh ? 'p' : 'l';
+    return `<td class="${cls}">${g > 0 ? '+' : ''}${fmt(g)}</td>`;
+  };
+  const pct = (n) => (n == null ? '—' : n + '%');
+  const rows = [
+    ['terminal P&L', usd(B.terminal), usd(L.terminal), d(L.terminal, B.terminal, usd), ''],
+    ['floor (covered only)', usd(B.floor), usd(L.floor), d(L.floor, B.floor, usd), ''],
+    ['opens', B.opens, L.opens, d(L.opens, B.opens, (n) => String(n), true), ''],
+    ['covers placed', B.placed, L.placed, d(L.placed, B.placed, (n) => String(n), true), ''],
+    ['cover FILL RATE', pct(B.fill), pct(L.fill), d(L.fill, B.fill, (n) => n + 'pt'), 'hero'],
+  ];
+  $('cmp').innerHTML = '<thead><tr><th>metric</th><th class="bt">backtest</th><th>live</th><th>Δ live−bt</th></tr></thead><tbody>'
+    + rows.map(([k, b, l, dd, cls]) => `<tr class="${cls}"><td>${k}</td><td>${b}</td><td>${l}</td>${dd}</tr>`).join('')
+    + '</tbody>';
+  // A settle that differs between the two sides means they are not actually comparing the same day —
+  // worth saying out loud rather than quietly producing a plausible-looking gap.
+  const dsettle = (B.settle != null && L.settle != null) ? Math.abs(B.settle - L.settle) : null;
+  $('cmpMeta').innerHTML = `same day, same candles — the gap is execution + pricing`
+    + (btRecord.model ? ` · <span style="color:var(--bt)">${btRecord.model}</span>` : '')
+    + (dsettle != null && dsettle > 1 ? ` · <b class="l">settle differs by ${num(dsettle, 1)}</b>` : '');
 }
 
 // Park the NQ chart on THIS run's session and mark its opens/covers on the candles — the same marker
@@ -295,14 +408,27 @@ function syncNQ() {
 // The diagnostic columns are APPENDED, not substituted: the cover's mark when it was placed, the
 // ceiling the rule allowed, the gap between the two, and whether a profitable cover was available at
 // all. That comparison is what makes "was this order placed where we expected?" answerable by looking.
-function renderOrders(pos, W, ML, se) {
+//
+// TWO SOURCES, ONE TABLE (interleaved by time, with a src column) rather than two tables or a swap.
+// The question this view answers is "the backtest covered here — where was live?", and that is a
+// question about ORDER and TIMING: side-by-side tables force you to match timestamps by eye across a
+// gap, and a toggle shows one sequence while you try to remember the other. Interleaved, a backtest
+// cover that booked at 11:05 sits directly above the live cover that was still resting at 11:10, and
+// the Cost column puts the two prices on adjacent lines. The selector still offers each side alone,
+// because once you know WHERE the divergence is you want to read one sequence without the other.
+function orderEvents(rec, src) {
   const conv = window.strategyRunToOptionArray
-    ? window.strategyRunToOptionArray(record, { includeUnfilled: true }) : null;
+    ? window.strategyRunToOptionArray(rec, { includeUnfilled: true }) : null;
   const P = (conv && conv.positions) || [];
+  const cfg = rec.config || {};
+  const W = cfg.spreadWidth, ML = (cfg.continuousCoverMinLockFrac || 0) * W;
+  const se = (rec.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
   const byId = {}; for (const p of (se && se.positions) || []) byId[p.id] = p;
-  const raw = {}; for (const p of pos) raw[p.id] = p;
+  const raw = {}; for (const p of ((rec.state || {}).positions) || []) raw[p.id] = p;
 
-  // Same numbering rule as the index: #1.. by open time, covers inherit their open's number.
+  // Same numbering rule as the index: #1.. by open time, covers inherit their open's number. Numbering is
+  // PER SOURCE, so live #7 and backtest #7 are each side's seventh open — pairing them by index would be a
+  // fiction the moment the two engines open a different number of positions.
   const evs = [];
   P.forEach((p) => {
     evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0,
@@ -316,10 +442,31 @@ function renderOrders(pos, W, ML, se) {
   });
   const seq = new Map();
   evs.filter((e) => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
-  evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1));
   const coveredIds = new Set(evs.filter((e) => e.type === 'cover' && !e.unfilled).map((e) => e.id));
+  for (const e of evs) {
+    e.src = src; e.W = W; e.ML = ML; e.raw = raw[e.id] || {}; e.sp = byId[e.id] || null;
+    e.seq = seq.get(e.id); e.isCovered = coveredIds.has(e.id);
+    // Hedge kind: live encodes it in the id prefix (off-/wing-), the backtest record carries explicit
+    // hedge/wing flags (its ids are bt-N). Read BOTH so a backtest offset is not mislabelled "OPEN*",
+    // i.e. an exposed position waiting on a cover it will never get.
+    e.hedgeKind = (e.raw.wing || /^wing-/.test(e.id)) ? 'WING' : (e.raw.hedge || /^off-/.test(e.id)) ? 'OFFSET' : null;
+  }
+  return evs;
+}
 
-  const COLS = [
+function renderOrders() {
+  const mode = btRecord ? $('ordSrc').value : 'live';
+  const showBt = btRecord && mode !== 'live', showLive = mode !== 'bt';
+  let evs = [];
+  if (showLive) evs = evs.concat(orderEvents(record, 'live'));
+  if (showBt) evs = evs.concat(orderEvents(btRecord, 'bt'));
+  // Time first, then opens before covers at the same stamp, then live before backtest — so a shared
+  // 5m mark reads live-then-backtest consistently instead of shuffling per bar.
+  evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1) - (b.type === 'open' ? -1 : 1)
+    || (a.src === 'live' ? -1 : 1) - (b.src === 'live' ? -1 : 1));
+  const both = showBt && showLive;
+
+  const COLS = (both ? [['src', 'which engine placed this order — LIVE (real broker) or BT (backtest engine, same candles)']] : []).concat([
     ['Time', 'ET time of the order'],
     ['Pos', 'position number, chronological by open; a cover carries its open’s number'],
     ['Event', '▲/▼ open (coloured by side), ◇ cover. OPEN* = no FILLED cover, so still exposed'],
@@ -331,10 +478,10 @@ function renderOrders(pos, W, ML, se) {
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
     ['settle P&L', 'this position’s P&L at settlement'],
-  ];
+  ]);
   const usdc = (c) => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
   const color = (sd) => (sd === 'bull' ? 'var(--profit)' : 'var(--loss)');
-  const glyph = (e) => (/^off-|^wing-/.test(e.id)) ? '⬡'
+  const glyph = (e) => e.hedgeKind ? '⬡'
     : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
 
   let restingBelow = 0, everCoverable = 0;
@@ -342,19 +489,19 @@ function renderOrders(pos, W, ML, se) {
     const open = e.type === 'open';
     // Hedges (floorOffset `off-*`, wing conversion `wing-*`) reshape the risk curve; they are not strategy
     // opens and are never covered, so "OPEN*" misrepresented them as exposed positions awaiting a cover.
-    const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : null;
-    const isUncov = open && !hedge && !coveredIds.has(e.id);
+    const hedge = e.hedgeKind;
+    const isUncov = open && !hedge && !e.isCovered;
     const label = hedge ? hedge
       : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
     const cr = e.net === 'CREDIT';
-    const r = raw[e.id] || {}, pc = r.pendingCover || {};
+    const r = e.raw, pc = r.pendingCover || {}, W = e.W, ML = e.ML;
     const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;
     const mark = pc.markAtPlace != null ? pc.markAtPlace : null;
     const sent = pc.target != null ? pc.target : null;
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
-    if (!open) { if (gap != null && gap < 0) restingBelow++; if (coverable) everCoverable++; }
-    const sp = byId[e.id];
+    if (!open && e.src === 'live') { if (gap != null && gap < 0) restingBelow++; if (coverable) everCoverable++; }
+    const sp = e.sp;
     // Diagnostics belong to the COVER order, so they only render on cover rows.
     const diag = open
       ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
@@ -363,8 +510,12 @@ function renderOrders(pos, W, ML, se) {
         + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;
-    return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
-      + `<td>${e.time || '—'}</td><td>#${seq.get(e.id) || '?'}</td>`
+    // The backtest tint sits UNDER the live semantics: a backtest row still shows unfilled-red / hedge-purple
+    // where those apply, so the two sides are read with the same vocabulary and only the ground colour and
+    // the src tag say which engine placed the order.
+    return `<tr class="td-${e.type}${e.src === 'bt' ? ' td-bt' : ''}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.src}:${e.id}">`
+      + (both ? `<td class="srcTag" style="color:${e.src === 'bt' ? 'var(--bt)' : '#555'}">${e.src === 'bt' ? 'BT' : 'LIVE'}</td>` : '')
+      + `<td>${e.time || '—'}</td><td>#${e.seq || '?'}</td>`
       // Hedge rows take the row's purple here too (the inline colour otherwise beats tr.td-hedge).
       + `<td style="color:${hedge ? '#6b5ea8' : color(e.side)}">${glyph(e)} ${label}</td>`
       + `<td class="legs">${e.legs}</td>`
@@ -375,17 +526,26 @@ function renderOrders(pos, W, ML, se) {
 
   $('orders').innerHTML = '<thead><tr>' + COLS.map(([c, t]) => `<th title="${t.replace(/"/g, '&quot;')}">${c}</th>`).join('')
     + '</tr></thead><tbody>' + body + '</tbody>';
-  const isHedge = (e) => /^off-|^wing-/.test(e.id);
-  const opens = evs.filter((e) => e.type === 'open' && !isHedge(e)).length;
-  const hedges = evs.filter((e) => e.type === 'open' && isHedge(e)).length;
-  const covers = evs.filter((e) => e.type === 'cover').length;
-  const unf = evs.filter((e) => e.type === 'cover' && e.unfilled).length;
-  $('ordMeta').textContent = `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`
-    + (hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : '');
-  $('ordNote').innerHTML = `<b>${restingBelow}</b> cover(s) rested BELOW the market; <b>${everCoverable}</b> `
+  const tally = (s) => {
+    const E = evs.filter((e) => e.src === s);
+    const opens = E.filter((e) => e.type === 'open' && !e.hedgeKind).length;
+    const hedges = E.filter((e) => e.type === 'open' && e.hedgeKind).length;
+    const covers = E.filter((e) => e.type === 'cover').length;
+    const unf = E.filter((e) => e.type === 'cover' && e.unfilled).length;
+    return E.length ? `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`
+      + (hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : '') : '';
+  };
+  $('ordMeta').innerHTML = (showLive ? tally('live') : '')
+    + (both ? ' &nbsp;·&nbsp; <span style="color:var(--bt)">BT ' + tally('bt') + '</span>'
+      : showBt ? '<span style="color:var(--bt)">' + tally('bt') + '</span>' : '');
+  // The mark/gap diagnostics only exist on the LIVE side — the backtest engine does not record a cover's
+  // mark at placement — so this footer stays about the live execution even when both are on screen.
+  $('ordNote').innerHTML = `<b>${restingBelow}</b> LIVE cover(s) rested BELOW the market; <b>${everCoverable}</b> `
     + `had a profitable cover available at placement. When "cover?" is <span class="tag no">no</span>, the mark `
     + `had already moved past the ceiling — the rule demands a locked profit, so no fillable price exists and `
-    + `the position rides to expiry uncovered. That is the difference between a small loss and the full one.`;
+    + `the position rides to expiry uncovered. That is the difference between a small loss and the full one.`
+    + (showBt ? ` <span style="color:var(--bt)">Backtest rows carry no mark/gap: the engine prices from the model `
+      + `and never records what the market was showing, so those columns are blank by construction, not missing.</span>` : '');
 }
 
 // THE COMPARE PAGE'S CELL, rendered at full size. Identical code path, so the colouring, the dashed
@@ -409,7 +569,10 @@ let dbgAbs = 0;   // one chart, so the saturation reference is that chart's own 
 const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs, fontScale: 2.1 });
 
 // Build the same {curve, lo, hi, underlying, underPnl, ...} shape the compare grid feeds its cell.
-function buildCell(pos, se) {
+// `dom` PINS the x-domain to another cell's. Overlay curves must be sampled over the SAME price range as
+// the curve they sit on, or the two polylines are drawn in different coordinate systems and the picture
+// silently lies (the backtest's settle can differ from live's by a fraction, which is enough).
+function buildCell(pos, se, dom) {
   const legs = [];
   for (const p of pos) {
     for (const l of (p.legs || [])) legs.push({ ...l, quantity: p.quantity || 1, cost: p.limit });
@@ -418,7 +581,7 @@ function buildCell(pos, se) {
   if (!legs.length) return null;
   const under = se && se.settle != null ? se.settle : null;
   const centre = under || 29500;
-  const lo = centre * 0.985, hi = centre * 1.015;
+  const lo = dom ? dom.xMin : centre * 0.985, hi = dom ? dom.xMax : centre * 1.015;
   const cost = pos.reduce((a, p) => a + (p.limit || 0) * 100 * (p.quantity || 1)
     + (p.covered && p.coverLimit ? p.coverLimit * 100 * (p.quantity || 1) : 0), 0);
   const curve = [];
@@ -509,20 +672,25 @@ function filledBook(pos) {
   return any ? out : null;
 }
 
-let curveCell = null, curveCellFilled = null;   // kept for the click readout
+let curveCell = null, curveCellFilled = null, curveCellBt = null;   // kept for the click readout
+
+// The book as it stood at T, for ANY record (live or backtest) — the backtest record carries the same
+// openEpoch/coverEpoch stamps, so the slider rewinds both curves together rather than freezing one.
+function bookAsOf(rec, T) {
+  const pos = ((rec && rec.state && rec.state.positions) || []);
+  if (T == null || !window.strategyRunToOptionArray) return pos;
+  const conv = window.strategyRunToOptionArray(rec, { asOfEpoch: T });
+  const keep = new Set((conv.positions || []).map((x) => x.id));
+  return pos.filter((p) => keep.has(p.id)).map((p) => {
+    const c = (conv.positions || []).find((x) => x.id === p.id);
+    return c && !c.covered ? { ...p, covered: false, coverLegs: null, coverLimit: null } : p;
+  });
+}
 
 function renderCurve(pos, se, T) {
   const host = document.getElementById('curve');
   // Rebuild the book as of T; at full day this is the whole book, so the default path is unchanged.
-  let bookPos = pos;
-  if (T != null && window.strategyRunToOptionArray) {
-    const conv = window.strategyRunToOptionArray(record, { asOfEpoch: T });
-    const keep = new Set((conv.positions || []).map((x) => x.id));
-    bookPos = pos.filter((p) => keep.has(p.id)).map((p) => {
-      const c = (conv.positions || []).find((x) => x.id === p.id);
-      return c && !c.covered ? { ...p, covered: false, coverLegs: null, coverLimit: null } : p;
-    });
-  }
+  const bookPos = T != null ? bookAsOf(record, T) : pos;
   const d = buildCell(bookPos, T != null ? null : se);
   if (d && T != null) {
     const u = underlyingAt(T);
@@ -543,19 +711,34 @@ function renderCurve(pos, se, T) {
       ? `<i style="color:${d.underPnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${fmtN(d.underPnl)}</i>` : '';
     nowlbl = `<div class="nowlbl" style="left:${lx.toFixed(1)}%">${Math.round(d.underlying)}${pnl}</div>`;
   }
-  // Counterfactual overlay: same book with every unfilled resting cover treated as filled.
+  // THREE CURVES, one y-scale:
+  //   solid black       what the book ACTUALLY is
+  //   dashed blue       the same book if every resting cover had filled  (the execution ceiling)
+  //   dashed amber      the same day as the BACKTEST engine ran it       (what the candles alone imply)
+  // The blue line isolates fills; the amber line includes everything — different opens, different cover
+  // prices, model marks instead of a crossed spread — so blue sitting well short of amber says the gap is
+  // more than fills, and blue reaching amber says fills were the whole of it.
   const fb = filledBook(bookPos);
-  let dF = fb ? buildCell(fb, T != null ? null : se) : null;
+  let dF = fb ? buildCell(fb, T != null ? null : se, d) : null;
   if (dF) { dF.label = 'if all covers filled'; }
-  curveCell = d; curveCellFilled = dF;
-  // Both curves must share one y-scale or the comparison is meaningless.
-  const yLo = Math.min(d.lo, dF ? dF.lo : d.lo), yHi = Math.max(d.hi, dF ? dF.hi : d.hi);
+  // The backtest twin is sampled on the LIVE curve's x-domain (see buildCell's `dom`) so the polylines
+  // share a coordinate system.
+  const btSe = btRecord ? ((btRecord.events || []).filter((e) => e.type === 'eod_settlement').pop() || null) : null;
+  let dB = btRecord ? buildCell(bookAsOf(btRecord, T), T != null ? null : btSe, d) : null;
+  if (dB) { dB.label = 'backtest, same day'; dB.color = '#c9781f'; dB.labelColor = '#a35f13'; dB.dash = '8 3'; }
+  curveCell = d; curveCellFilled = dF; curveCellBt = dB;
+  // All curves must share one y-scale or the comparison is meaningless.
+  const all = [d, dF, dB].filter(Boolean);
+  const yLo = Math.min(...all.map((c) => c.lo)), yHi = Math.max(...all.map((c) => c.hi));
   dbgAbs = Math.max(Math.abs(yLo), Math.abs(yHi));
-  host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, yLo, yHi, btRef, dF)}${nowlbl}</div>`;
+  host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, yLo, yHi, btRef, [dF, dB])}${nowlbl}</div>`;
   const gap = (dF && d.underPnl != null && dF.underPnl != null) ? dF.underPnl - d.underPnl : null;
+  const bgap = (dB && d.underPnl != null && dB.underPnl != null) ? dB.underPnl - d.underPnl : null;
   $('curveMeta').innerHTML = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
     + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '')
     + (dF ? ` · <span style="color:#3d86c6">if filled ${fmtN(dF.lo)} / ${fmtN(dF.hi)}` + (gap != null ? ` (${gap >= 0 ? '+' : ''}${fmtN(gap)} at settle)` : '') + '</span>' : '')
+    + (dB ? ` · <span style="color:var(--bt)">backtest ${fmtN(dB.lo)} / ${fmtN(dB.hi)}` + (bgap != null ? ` (${bgap >= 0 ? '+' : ''}${fmtN(bgap)} at settle)` : '') + '</span>'
+      : btNote ? ` · <span class="m">backtest: ${btNote}</span>` : '')
     + ` <span id="curvePick" style="margin-left:8px"></span>`;
 }
 
@@ -582,11 +765,17 @@ function renderCurve(pos, se, T) {
     const pick = document.getElementById('curvePick');
     if (pick) {
       const alt = curveCellFilled ? pnlAtPrice(curveCellFilled.curve, price) : null;
+      const btp = curveCellBt ? pnlAtPrice(curveCellBt.curve, price) : null;
       pick.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${fmtN(pnl)}</b>`
-        + (alt != null ? ` · <span style="color:#3d86c6">if filled <b>${fmtN(alt)}</b></span>` : '');
+        + (alt != null ? ` · <span style="color:#3d86c6">if filled <b>${fmtN(alt)}</b></span>` : '')
+        // The backtest at the SAME hypothetical settle — the point being that the two books have different
+        // shapes, so the gap between them is a function of price, not one number.
+        + (btp != null ? ` · <span style="color:var(--bt)">backtest <b>${fmtN(btp)}</b></span>` : '');
     }
   });
   $('reload').addEventListener('click', load);
+  // Re-render only the table: the source choice changes nothing about the curves or the strip.
+  $('ordSrc').addEventListener('change', () => { if (record) renderOrders(); });
   const sl = $('timeSlider');
   if (sl) sl.addEventListener('input', () => {
     if (!record) return;

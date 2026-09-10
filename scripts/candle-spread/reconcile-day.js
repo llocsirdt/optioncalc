@@ -92,18 +92,13 @@ const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.rou
   if (!day) { console.error(`No backtest dataset covers ${DATE}. Checked:\n  ` + DIRS.map(d => d.dir).join('\n  ')); process.exit(2); }
 
   const runs = buildRuns().filter(v => !ONLY || ONLY.split(',').includes(v.variant));
-  const bt = {};
-  for (const v of runs) {
-    try {
-      const r = runDay5m(day.bars, wrap(v), optsFor(v, picked.days));
-      const placed = r.coverBySrc ? Object.values(r.coverBySrc).reduce((a, b) => a + b, 0) : 0;
-      bt[v.variant] = { total: Math.round(r.terminal), floor: Math.round(r.floor || 0), opens: r.opens || 0,
-        placed, pending: r.coverPending || 0, fill: placed ? Math.round((placed - (r.coverPending || 0)) / placed * 100) : null };
-    } catch (e) { bt[v.variant] = { err: (e && e.message || 'run failed').slice(0, 60) }; }
-  }
 
-  // --- live side
+  // --- live side FIRST: its official index close is fed to the backtest so terminal P&L is marked at the
+  // same price on both sides. Without this the backtest settles on the 15:55 bar (29,476.49 on
+  // 2026-09-08) while live settles on the 16:00 index close (29,507.70) — a 31.2-point difference that
+  // is pure marking, nothing to do with execution, and would swamp the gap this report exists to measure.
   const live = {};
+  let liveSettle = null;
   for (const v of runs) {
     try {
       const res = await fetch(`${BASE}/api/v1/candle-spread/runs/NDX/${DATE}?date=${DATE}&variant=${v.variant}&cb=${Date.now()}`);
@@ -111,6 +106,7 @@ const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.rou
       const j = await res.json();
       if (!j || !j.state) continue;
       const se = (j.events || []).filter(e => e.type === 'eod_settlement').pop();
+      if (se && se.settle > 0 && liveSettle == null) liveSettle = se.settle;
       const pos = j.state.positions || [];
       const covered = pos.filter(p => p.covered).length, unf = pos.filter(p => p.pendingCover && !p.covered).length;
       live[v.variant] = { total: se && se.terminalPnl != null ? se.terminalPnl : null,
@@ -120,8 +116,26 @@ const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.rou
     } catch (e) { /* skip */ }
   }
 
+  const bt = {};
+  for (const v of runs) {
+    try {
+      const o = optsFor(v, picked.days);
+      if (liveSettle > 0) o.settlePrice = liveSettle;   // mark both sides at the same close
+      o.recordReplay = true;                            // need positions for a per-position fill rate
+      const r = runDay5m(day.bars, wrap(v), o);
+      // FILL RATE MUST USE THE SAME DENOMINATOR ON BOTH SIDES. coverBySrc counts every PLACEMENT
+      // (including re-placements on the same position); live counts POSITIONS. Mixing them reported
+      // v7-10 at 69% against a per-position 59% — a 10-point artefact in the headline number.
+      const pos = (r.positions || []).filter(p => !p.hedge && p.side !== 'wing');
+      const covered = pos.filter(p => p.covered).length, unf = pos.filter(p => p.pendingCover && !p.covered).length;
+      bt[v.variant] = { total: Math.round(r.terminal), floor: Math.round(r.floor || 0), opens: r.opens || 0,
+        placed: covered + unf, pending: unf, fill: (covered + unf) ? Math.round(covered / (covered + unf) * 100) : null };
+    } catch (e) { bt[v.variant] = { err: (e && e.message || 'run failed').slice(0, 60) }; }
+  }
+
   const both = runs.map(v => v.variant).filter(v => bt[v] && !bt[v].err && live[v] && live[v].total != null);
   console.log(`\nDAY RECONCILIATION — ${DATE}   backtest model: ${picked.model}`);
+  console.log(`settle: ${liveSettle > 0 ? liveSettle + ' (official index close, applied to BOTH sides)' : 'live settle unavailable — backtest marks at the 15:55 bar'}`);
   console.log(`live source: ${BASE}\n`);
   if (!both.length) { console.log('  no variant has BOTH a backtest run and a settled live run for this date.'); process.exit(0); }
 
