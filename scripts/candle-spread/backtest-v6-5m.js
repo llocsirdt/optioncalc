@@ -623,10 +623,17 @@ function runDay5m(bars, signalFn, opts = {}) {
       // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
       let workingTarget = pc.target;
       if (ladderOn && pc.openCost != null) {
+        // `mark` MUST be passed: cover-ladder's neverExceedMark defaults to TRUE, so omitting it let the
+        // backtest walk the working limit ABOVE the current market. With the fill test being
+        // `legsMark(...) <= workingTarget`, a limit above the mark fills instantly AND books at a price
+        // the market never asked for — the ladder overpaying on every step. That is very likely what the
+        // first ladder sweep measured when it reported all 36 arms losing $461k-$863k. Live passes the
+        // mark (trader.workRestingCovers), so omitting it here also broke isomorphism.
         workingTarget = LAD.limitNow({
           spreadWidth: G.WIDTH, openCost: pc.openCost, minLock: pc.minLock || 0,
           restingMs: pc.placedMs != null ? (nowEpoch - pc.placedMs) : 0,
           underlyingMove: pc.placedUnder != null ? (S - pc.placedUnder) : 0,
+          mark: legsMark(pc.legs, S, tau, iv),
           tick: 0.05,
         }, ladderOpts).limit;
       }
