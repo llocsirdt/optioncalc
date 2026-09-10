@@ -12,6 +12,22 @@ REPO_ROOT="$(pwd)"
 SERVER_DIR="$REPO_ROOT/server"
 OUTPUT_ZIP="$REPO_ROOT/schwab-proxy-deploy.zip"
 
+# PREFLIGHT — a deploy is the moment the live engine starts running whatever the baselines claim to
+# describe, so this is where the two must be proven to agree. Blocks on an ACTIVE parity divergence (a
+# field a live run sets but only one engine implements) or on two variants being behaviourally identical.
+# Override with SKIP_PREFLIGHT=1 for an emergency deploy, deliberately and knowing what it hides.
+if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
+  echo "Running engine preflight..."
+  if ! node "$REPO_ROOT/scripts/candle-spread/preflight.js"; then
+    echo ""
+    echo "DEPLOY BLOCKED: the live engine and the backtest disagree on a field a live run sets."
+    echo "Reconcile them, or re-run with SKIP_PREFLIGHT=1 if you accept shipping without that guarantee."
+    exit 1
+  fi
+else
+  echo "!! SKIP_PREFLIGHT=1 — packaging WITHOUT the live/backtest parity check."
+fi
+
 echo "Writing server/build-info.json..."
 GIT_COMMIT="$(git rev-parse HEAD)"
 GIT_COMMIT_SHORT="$(git rev-parse --short HEAD)"
