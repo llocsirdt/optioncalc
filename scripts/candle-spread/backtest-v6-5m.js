@@ -568,7 +568,31 @@ function runDay5m(bars, signalFn, opts = {}) {
       // (W − openCost) whenever it stays past its short strike, whereas covering at break-even leaves 0 in
       // both tails and only pays at the shared strike. Requiring the lock to secure `frac × W` makes the
       // order fill only when the offsetting spread is genuinely cheap — the CROSS case.
-      const minLock = (opts.continuousCoverMinLockFrac || 0) * G.WIDTH;
+      // DYNAMIC minLock (opts.minLockRamp, default OFF = the constant it has always been).
+      //
+      // THE PROBLEM (user, 2026-09-11): `W - openCost - minLock` is a FIXED price, but the premium it has
+      // to compete against DECAYS through the day. Early on that target sits far below a rich mark and
+      // simply cannot fill, so the position sits naked for two or three hours with no protection from an
+      // adverse move; by afternoon the same target is reachable. Two independent measurements line up
+      // with that: 42% of unfilled covers sat at prices the underlying DID reach (they were fillable,
+      // just far too late), and peak book floors cluster at 13:00-14:10 — exactly when the first covers
+      // start landing. The occasional early cover that DOES fill is the reversal path, which prices off
+      // the MARK (selectCoverGeometric -> selectCoverFixedMark), not off minLock.
+      //
+      // THE RAMP: ask for almost nothing early, when the aim is to put on as many tents as possible at
+      // the best floor, and demand the full lock later when the price is actually achievable. `to` above
+      // 1.0 lets the late demand exceed today's constant, since if early fills are the problem then a
+      // MORE aggressive late minLock may pay.
+      let minLock = (opts.continuousCoverMinLockFrac || 0) * G.WIDTH;
+      if (opts.minLockRamp) {
+        const a = opts.minLockRampStart != null ? opts.minLockRampStart : 9 * 60 + 30;
+        const b = opts.minLockRampEnd != null ? opts.minLockRampEnd : 12 * 60 + 30;
+        const from = opts.minLockRampFrom != null ? opts.minLockRampFrom : 0;
+        const to = opts.minLockRampTo != null ? opts.minLockRampTo : 1;
+        const now = etMinute(bars[i].dt);
+        const prog = b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1;
+        minLock = minLock * (from + (to - from) * prog);
+      }
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
         const tgt = round2(G.WIDTH - pos.limit - minLock);
