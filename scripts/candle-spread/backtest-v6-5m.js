@@ -97,6 +97,7 @@ const CL = require('../../server/src/candle-spread/capital-legs');   // proven d
 const LL = require('../../server/src/candle-spread/leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../../server/src/candle-spread/risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
 const WG = require('../../server/src/candle-spread/wing-convert');
+const FY = require('../../server/src/candle-spread/fly-convert');   // valley repair: flies/condors (opt-in)
 const LAD = require('../../server/src/candle-spread/cover-ladder');   // work the cover instead of resting it once   // peak->floor wing conversion (knee-anchored)
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
@@ -312,6 +313,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let gateCutoff = 0, gateFloor = 0;   // opens blocked by the stop-opening gates
+  let flyCount = 0, flySpent = 0;      // valley-repair structures bought
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
@@ -778,6 +780,49 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
       }
     }
+    // FLY / CONDOR VALLEY REPAIR (opts.flyConvert, default OFF).
+    //
+    // The complement to wingConvert, not a replacement. Wings and offsets only BUY, so they need cheap
+    // OTM premium and have little potential until late; a fly SELLS THE BODY to fund its wings, so its
+    // net cost stays small when premium is rich. Validated against 231 real chain snapshots: a 30-wide
+    // fly is $175 (17:1) at 09:30 rising to $720 (4.2:1) at 15:00 — an early/mid-day tool by its own
+    // economics, and the mirror image of when wings work.
+    //
+    // It also targets the biggest measured leak. Blocking late opens (time cutoff OR positive-floor gate)
+    // lost total AND ret/DD in all 42 arms, so the late opens that erode the floor are net-positive and
+    // "stop trading" is the wrong answer. Repairing the curve while continuing to trade is what is left.
+    if (opts.flyConvert && st.positions.length >= 2) {
+      const afterMin = opts.flyAfterMin != null ? opts.flyAfterMin : 0;
+      const beforeMin = opts.flyBeforeMin != null ? opts.flyBeforeMin : 15 * 60;   // cost/ratio collapses late
+      const nowMin = etMinute(bars[i].dt);
+      if (nowMin >= afterMin && nowMin < beforeMin && flyCount < (opts.flyMaxPerDay != null ? opts.flyMaxPerDay : 4)) {
+        const ivAtm0 = typeof iv === 'function' ? iv('C', S) : iv;
+        const fband = Math.round(S * ivAtm0 * Math.sqrt(tau) * (opts.flyBandSig != null ? opts.flyBandSig : 1.5));
+        if (fband > 0) {
+          const fslip = opts.flySlip != null ? opts.flySlip : 0.05;
+          const fprice = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike)) + (legSide === 'long' ? fslip : -fslip);
+          const fBook = st.positions.map(p => ({ filled: true, legs: p.legs, limit: p.limit, quantity: QTY, covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
+          const fplan = FY.planFlies(fBook, {
+            spot: S, band: fband, incr: legIncr, price: fprice, qty: QTY, step: legIncr,
+            budget: opts.flyBudget != null ? opts.flyBudget : 1500,
+            maxFlies: Math.min(2, (opts.flyMaxPerDay != null ? opts.flyMaxPerDay : 4) - flyCount),
+            minRatio: opts.flyMinRatio != null ? opts.flyMinRatio : 3,
+            widths: opts.flyWidths || [2 * legIncr, 3 * legIncr, 4 * legIncr],
+            condors: opts.flyCondors !== false,
+          });
+          if (fplan && fplan.flies.length) {
+            for (const f of fplan.flies) {
+              st.positions.push({ side: 'fly', shortStrike: null, legs: f.legs, limit: f.cost, covered: false,
+                pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, fly: true,
+                openEpoch: nowEpoch, openTime: nowET });
+              flySpent += f.cost * 100 * QTY; flyCount++;
+            }
+            markBookDirty();
+          }
+        }
+      }
+    }
+
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
@@ -1109,7 +1154,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, gateCutoff, gateFloor, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
