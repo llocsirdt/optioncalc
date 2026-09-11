@@ -572,18 +572,48 @@ const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gA
 // `dom` PINS the x-domain to another cell's. Overlay curves must be sampled over the SAME price range as
 // the curve they sit on, or the two polylines are drawn in different coordinate systems and the picture
 // silently lies (the backtest's settle can differ from live's by a fraction, which is enough).
-function buildCell(pos, se, dom) {
+// THE ACTUAL ORDER, NOT THE DEBIT-CANONICAL ONE. A position's `coverLegs`/`coverLimit` are the
+// debit-canonical booking — the economics for the position's own style — but when capitalRecapture sends
+// a cover as a CREDIT, the REAL order has different legs and the cash flows the other way. The engine's
+// computeTerminalPnl handles this by preferring the actual order from the log; this page did not, and
+// always used the debit-canonical fallback with a POSITIVE cost. On v7-10 for 2026-09-10 that produced
+// -$2,083 against the record's -$4,943, a $2,860 error, because 5 of 21 covers were sent as CREDIT.
+// capitalRecapture is on for all 80 variants, so this affected every strategy on every day.
+function coverOrdersByPosition(rec) {
+  const m = new Map();
+  for (const e of (rec && rec.events) || []) {
+    if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs
+        && /cover/.test(e.meta.kind || '')) m.set(e.meta.of, e.meta);
+  }
+  return m;
+}
+
+function buildCell(pos, se, dom, rec) {
+  const orders = coverOrdersByPosition(rec || record);
   const legs = [];
+  let cost = 0;
   for (const p of pos) {
-    for (const l of (p.legs || [])) legs.push({ ...l, quantity: p.quantity || 1, cost: p.limit });
-    if (p.covered) for (const l of (p.coverLegs || [])) legs.push({ ...l, quantity: p.quantity || 1, cost: p.coverLimit });
+    const qty = p.quantity || 1;
+    // The OPEN can be a credit too (capitalRecapture alternates debit/credit opens to reclaim cash), in
+    // which case the real order is pos.sentLegs at pos.sentLimit and the cash flows IN, not out.
+    const oCredit = p.sentNet === 'CREDIT' && p.sentLegs && p.sentLegs.length;
+    const oLegs = oCredit ? p.sentLegs : (p.legs || []);
+    const oCost = oCredit ? -(p.sentLimit || 0) : (p.limit || 0);
+    for (const l of oLegs) legs.push({ ...l, quantity: qty, cost: p.limit });
+    cost += oCost * 100 * qty;
+    if (p.covered) {
+      const ord = orders.get(p.id);
+      const cl = (ord && ord.legs) ? ord.legs : (p.coverLegs || []);
+      const climit = (ord && ord.limit != null) ? ord.limit : (p.coverLimit || 0);
+      const isCredit = ord ? ord.net === 'CREDIT' : (p.coverSentNet === 'CREDIT');
+      for (const l of cl) legs.push({ ...l, quantity: qty, cost: climit });
+      cost += (isCredit ? -climit : climit) * 100 * qty;   // a credit cover RECLAIMS cash
+    }
   }
   if (!legs.length) return null;
   const under = se && se.settle != null ? se.settle : null;
   const centre = under || 29500;
   const lo = dom ? dom.xMin : centre * 0.985, hi = dom ? dom.xMax : centre * 1.015;
-  const cost = pos.reduce((a, p) => a + (p.limit || 0) * 100 * (p.quantity || 1)
-    + (p.covered && p.coverLimit ? p.coverLimit * 100 * (p.quantity || 1) : 0), 0);
   const curve = [];
   for (let i = 0; i <= 240; i++) {
     const x = lo + (hi - lo) * (i / 240);
