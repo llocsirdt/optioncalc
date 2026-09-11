@@ -280,13 +280,25 @@ const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
 // NO `-unc` TWINS (user, 2026-09-10): uncapped variants swing far harder by construction, so their
 // deltas look disproportionate and they are not strategies anyone would actually trade. The cATM set
 // gives the same clean same-family control without that distortion.
-// Both sets are $20 only: the ladder degrades ret/DD at $40 in every family but v7/v9, and give-up was
-// measured at $20 except for a single $40 check.
+// $40 EXTENSION (user, 2026-09-10): the $40s trail anyway so there is less to lose, and a wider spread
+// with deeper-ITM strikes might fill more readily from a ladder. Measured, that fill hypothesis HOLDS —
+// the ladder lifts v9-40 fill 45% -> 52% — but it costs more than the fills are worth, while GIVE-UP
+// lifts fill too AND pays: v9-40-cATM +$789,050 (ret/DD 26.1 -> 42.8, fill 42 -> 50%), v9-40 +$287,694,
+// v8-40-cATM +$40,669. So the $40 split follows the evidence: give-up on the v9 names where it is
+// strongest, ladder on the v8 names where it is least bad (v8-40 -$11,063, the smallest ladder loss at
+// that width) and the family already trails, which is the user's "least to lose" argument.
+//   v8-40 / v8-40-cATM (ladder)  vs v6-40 / v6-40-cATM
+//   v9-40 / v9-40-cATM (give-up) vs v7-40 / v7-40-cATM
+//
+// STEP SIZE IS WIDTH-DEPENDENT DESPITE stepDollars. $0.10/step beats $0.25 at $40 on every variant
+// tested (v8-40-cATM -$23,125 vs -$143,511), because span = W x (lossCapFrac + minLockFrac) still scales
+// and a fixed dollar step is a smaller FRACTION of a wider span. Fixing the concession per step removed
+// most of the width dependence, not all of it.
 const LADDER_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v2-20,v5-20,v8-20-cATM,v9-20-cATM')
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v2-20,v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
 const GIVEUP_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20')
+  (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20,v9-40,v9-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
@@ -352,7 +364,8 @@ function buildVariants() {
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
       // Applied per variant; see LADDER_LIVE / GIVEUP_LIVE above for the pairing and the evidence.
       if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
+        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
       }
       // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30%
       // is a rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is
@@ -405,7 +418,8 @@ function buildUncapped() {
       // its control (v9-20-unc) is behaviourally identical to it, which the capped set cannot offer once
       // v9-20 is taken by give-up. Without this hook the flag was silently dropped for every -unc name.
       if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
+        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
       }
       if (GIVEUP_LIVE.has(v.variant)) {
         v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
@@ -453,7 +467,8 @@ function buildAtmComparators() {
       // cATM builder hook — the live experiments must reach the -cATM comparators too, or the flag is
       // silently dropped for every cATM name exactly as it was for -unc.
       if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
+        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
       }
       if (GIVEUP_LIVE.has(v.variant)) {
         v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
