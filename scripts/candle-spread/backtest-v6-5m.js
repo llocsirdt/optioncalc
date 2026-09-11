@@ -309,6 +309,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0, ladder: 0 };
   const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
+  let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
+  let giveUps = 0;   // covers forced to the market because the position turned against us
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
@@ -624,7 +626,33 @@ function runDay5m(bars, signalFn, opts = {}) {
       // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
       // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
       // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
+      // GIVE-UP RULE (opts.coverGiveUp). The user's framing, 2026-09-10: "better to fill at a small
+      // locked profit or even a small loss than to let an open position expire worthless."
+      //
+      // The ladder concedes price on a SCHEDULE. This watches the POSITION and forces the fill when the
+      // trade is going against us — which is the case minLock handles worst, because a deteriorating
+      // position makes its cover DEARER exactly as our optimistic target becomes least reachable. It is
+      // the mechanism that makes an optimistic opening ask survivable: minLock can stay where it is as
+      // the price we ASK, because there is now something that stops it becoming a permanent unfilled order.
+      //
+      // TRIGGER: the underlying has crossed back through the position's own short strike by giveUpPoints
+      // — i.e. the position that was winning is now losing. That is a statement about the POSITION, not
+      // the clock, so a fast reversal triggers immediately and a quiet drift never does.
+      // ACTION: pay the mark (+1 tick), bounded by giveUpMaxLoss x W so it can never become a rout.
+      let giveUp = false;
+      if (opts.coverGiveUp && pos.shortStrike != null) {
+        const pts = opts.giveUpPoints != null ? opts.giveUpPoints : 10;
+        // bull loses as price FALLS below its short strike; bear loses as price RISES above it
+        const through = pos.side === 'bull' ? (pos.shortStrike - S) : (S - pos.shortStrike);
+        if (through >= pts) giveUp = true;
+      }
       let workingTarget = pc.target;
+      if (giveUp) {
+        const cap = (opts.giveUpMaxLoss != null ? opts.giveUpMaxLoss : 0.15) * G.WIDTH;
+        const mk = legsMark(pc.legs, S, tau, iv);
+        // never pay more than break-even + the bounded loss, and never chase above the mark
+        workingTarget = roundTick(Math.min(mk + TICK, round2(G.WIDTH - pc.openCost + cap)));
+      }
       if (ladderOn && pc.openCost != null) {
         // `mark` MUST be passed: cover-ladder's neverExceedMark defaults to TRUE, so omitting it let the
         // backtest walk the working limit ABOVE the current market. With the fill test being
@@ -640,6 +668,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           tick: 0.05,
         }, ladderOpts).limit;
       }
+      if (giveUp) giveUps++;
       if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
@@ -879,6 +908,28 @@ function runDay5m(bars, signalFn, opts = {}) {
       const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
       if (!govOk) govBlocked++;
       if (strategyOk && ceilingOk && govOk && !geoDecline) {
+        // OPEN FILL MODEL (opts.openFillModel, default 'immediate' = the historical assumption).
+        // Until now an open was assumed FILLED AT THE LIMIT, always — the engine simply pushed the
+        // position. That is the one order in the system whose execution was never modelled, and it is
+        // not obviously safe: we price the open at the mark (+ a tick), so it fills only if the market
+        // does not immediately run away from us. A bull call spread costs MORE as the underlying rises,
+        // so an adverse move between the decision and the fill leaves our limit too low.
+        // 'resting' models it the same way covers are modelled: the order works during the NEXT bar and
+        // fills if the spread's price reached our limit at any point in it — i.e. price the legs at that
+        // bar's FAVOURABLE extreme (low for a bull open, high for a bear) and compare. A miss is a
+        // MISSED TRADE, not a loss; it is dropped and counted.
+        if (opts.openFillModel === 'resting') {
+          openTried++;
+          const nb = bars[i + 1];
+          if (nb) {
+            const npx = priceOf(nb);
+            const fav = sig.openSide === 'bull' ? npx.low : npx.high;
+            const ntau = bs.tauFromTime(nb.dt);
+            // Reuse THIS bar's vol surface rather than rebuilding next bar's: the fill happens within
+            // minutes, and rebuilding would fold a vol change into what is meant to be a price test.
+            if (legsMark(o.legs, fav, ntau, iv) > o.limit) { openMissed++; continue; }
+          }
+        }
         st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
@@ -1028,7 +1079,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
