@@ -647,13 +647,18 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (through >= pts) giveUp = true;
       }
       let workingTarget = pc.target;
+      // PRECEDENCE: give-up SUPERSEDES the ladder. The ladder is a schedule for conceding price while the
+      // trade is still fine; once the position has turned, the schedule is the wrong answer and we go to
+      // the market. Live (trader.workRestingCovers) does exactly this via an early `continue`, and the
+      // first version here had the opposite order — the ladder overwrote the give-up price, which made
+      // the two-feature arm byte-identical to ladder-only and hid give-up entirely.
       if (giveUp) {
         const cap = (opts.giveUpMaxLoss != null ? opts.giveUpMaxLoss : 0.15) * G.WIDTH;
         const mk = legsMark(pc.legs, S, tau, iv);
         // never pay more than break-even + the bounded loss, and never chase above the mark
         workingTarget = roundTick(Math.min(mk + TICK, round2(G.WIDTH - pc.openCost + cap)));
       }
-      if (ladderOn && pc.openCost != null) {
+      if (!giveUp && ladderOn && pc.openCost != null) {
         // `mark` MUST be passed: cover-ladder's neverExceedMark defaults to TRUE, so omitting it let the
         // backtest walk the working limit ABOVE the current market. With the fill test being
         // `legsMark(...) <= workingTarget`, a limit above the mark fills instantly AND books at a price

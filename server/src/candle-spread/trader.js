@@ -849,7 +849,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
   // Work the orders BEFORE testing for fills: a repriced limit should be eligible to fill on this very
   // candle, not the next one.
-  if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps);
+  if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
@@ -1306,8 +1306,10 @@ function coverMarkNow(legs, getLeg) {
 // LOST $461k-$863k across all 36 arms, because paying up to fill an order the market was going to come
 // to anyway is a worse trade than waiting. That result is why this ships DEFAULT OFF. It is wired so it
 // can be enabled deliberately and measured live, not because the backtest endorses it.
-async function workRestingCovers(st, cfg, decisions, deps) {
-  if (!deps.coverLadder) return;
+async function workRestingCovers(st, cfg, decisions, deps, underlying) {
+  // Either mechanism can be enabled alone: the ladder walks price on a schedule, give-up reacts to the
+  // position turning. They compose — give-up supersedes the ladder for a position it fires on.
+  if (!deps.coverLadder && !deps.coverGiveUp) return;
   const tick = cfg.tickIncrement, W = cfg.spreadWidth;
   const opts = {
     stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
@@ -1319,6 +1321,48 @@ async function workRestingCovers(st, cfg, decisions, deps) {
     const pc = pos.pendingCover;
     if (pc.sentNet === 'CREDIT') continue;         // credit covers price off a different rule; not laddered
     const mark = coverMarkNow(pc.legs, deps.getLeg);
+
+    // GIVE-UP RULE (deps.coverGiveUp) — "better to fill at a small locked profit or even a small loss
+    // than to let an open position expire worthless" (user, 2026-09-10).
+    //
+    // The ladder concedes price on a SCHEDULE. This watches the POSITION: once the underlying has crossed
+    // back THROUGH the position's own short strike by giveUpPoints, the trade that was winning is now
+    // losing, and we take the fill rather than keep asking. That is precisely where minLock is worst — a
+    // deteriorating position makes its cover DEARER exactly as the optimistic target becomes least
+    // reachable — so this is what makes an optimistic ask survivable rather than permanent.
+    //
+    // THE LOSS CAP IS THE WHOLE BALL GAME. Measured over 765 days at 10 points: a 5% cap is a clear win
+    // (v6-20 +$324,393, v7-20 +$643,090, and win rate / cover fill / ret-DD up on all four tested), 15%
+    // is mixed, 30% is a rout (-$1.5M to -$2.0M). Force the exit, but CHEAPLY — 5% of width is $1.00 on
+    // a $20 spread, enough to cross the spread and not enough to chase.
+    if (deps.coverGiveUp && pos.shortStrike != null && underlying > 0 && mark != null) {
+      const pts = deps.giveUpPoints != null ? deps.giveUpPoints : 10;
+      // a bull loses as price falls back BELOW its short strike; a bear as price rises above it
+      const through = pos.side === 'bull' ? (pos.shortStrike - underlying) : (underlying - pos.shortStrike);
+      if (through >= pts) {
+        const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
+        const openCost = pc.openCost != null ? pc.openCost : pos.limit;
+        const give = L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick);
+        if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
+          const from = pc.target;
+          pc.target = give;
+          pc.gaveUp = true;
+          if (deps.replaceOrder && pc.orderId) {
+            const srl = resolveLegs(pc.legs, deps.getLeg);
+            if (!srl.error) {
+              const payload = buildOrderPayload(srl.resolved, give, pos.quantity || cfg.quantity, 'DEBIT');
+              const r = await deps.replaceOrder(pc.orderId, payload, { kind: 'cover-giveup', of: pos.id, fromLimit: from, legs: pc.legs });
+              if (r && r.orderId) pc.orderId = r.orderId;
+            }
+          }
+          decisions.push({ action: 'cover-giveup', positionId: pos.id, from, to: give, mark,
+            through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 });
+        }
+        continue;   // give-up supersedes the ladder for this position; it is already at the market
+      }
+    }
+
+    if (!deps.coverLadder) continue;   // ladder is opt-in separately from give-up
     const next = LAD.limitNow({
       spreadWidth: W, openCost: pc.openCost != null ? pc.openCost : pos.limit, minLock: pc.minLock || 0,
       restingMs: pc.placedEpoch ? (Date.now() - pc.placedEpoch) : 0,

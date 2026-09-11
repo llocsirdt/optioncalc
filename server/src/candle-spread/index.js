@@ -257,10 +257,36 @@ const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 // suffered in the mid-Feb chop stretch, and it trades ~35/day against v6-20's 26 — more order flow
 // through the pipe, which is what a paper session should be stressing.
 const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
-// Variants carrying the cover ladder live. Env override so the experiment can be widened or shut off
-// with a config change instead of a deploy: CANDLE_SPREAD_LADDER='v9-20,v8-20' (or '' to disable all).
+// LIVE EXPERIMENTS, 2026-09-10. Two mechanisms, each on one of a correlated PAIR so the twin is a
+// matched control running the same signal without the feature.
+//
+// GIVE-UP (force a resting cover to the market once the position turns against us) — the stronger of the
+// two in backtest. Over 765 days WITH open fills modelled it is positive on 6 of 7 tested and improves
+// win rate, cover fill AND ret/DD on all 7: v7-20 +$490,108, v9-20 +$355,233, v6-20 +$299,331,
+// v8-20 +$227,781, v6-40 +$203,136, v3-20 +$59,789; v7-10 -$140,362 but ret/DD 114 -> 254.
+//   v3-20 (give-up) vs v0-20      v8-20 (give-up) vs v6-20      v9-20 (give-up) vs v7-20
+//
+// LADDER (walk a resting cover's price toward the market on a schedule) — kept live DESPITE the backtest
+// turning against it once opens were modelled, because that model is not trustworthy enough to kill it
+// on: opens are limited at the MID (debitLimit returns the mark, no tick) while covers pay mark+tick, and
+// the fill test hands the market a whole bar to move away from a price it may well have filled in
+// seconds. The ladder looked good before opens were modelled and bad after — exactly the case where a
+// live session should adjudicate rather than a simulation.
+//   v2-20 (ladder)      vs v0-20             — v2 is v0 with at-money cover geometry
+//   v5-20 (ladder)      vs v4-20             — different signals, so a weaker pair; read it on its own
+//   v8-20-cATM (ladder) vs v6-20-cATM        — same family pairing as the give-up set, on the OTHER
+//   v9-20-cATM (ladder) vs v7-20-cATM          geometry, so v8/v9 carry give-up at sATM and the ladder
+//                                              at cATM and the two can be read side by side.
+// NO `-unc` TWINS (user, 2026-09-10): uncapped variants swing far harder by construction, so their
+// deltas look disproportionate and they are not strategies anyone would actually trade. The cATM set
+// gives the same clean same-family control without that distortion.
+// Both sets are $20 only: the ladder degrades ret/DD at $40 in every family but v7/v9, and give-up was
+// measured at $20 except for a single $40 check.
 const LADDER_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v3-20,v8-20,v9-20')
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v2-20,v5-20,v8-20-cATM,v9-20-cATM')
+    .split(',').map(s => s.trim()).filter(Boolean));
+const GIVEUP_LIVE = new Set(
+  (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20')
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
@@ -324,20 +350,15 @@ function buildVariants() {
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
-      // COVER LADDER — LIVE A/B, 2026-09-10. Enabled on ONE of each correlated PAIR so its twin is a
-      // matched control running the same signal without the ladder:
-      //     v3-20  (ladder)  vs  v0-20   — v3 is v0 + risk-arming
-      //     v8-20  (ladder)  vs  v6-20   — v8 is v6 + softCap/exemptTrendStack/proactive
-      //     v9-20  (ladder)  vs  v7-20   — v9 is v7 + proactive 0.8, and live 2026-09-08/09 the two were
-      //                                    byte-identical (proactive never fires), so this is the
-      //                                    cleanest pair of the three.
-      // $20 only: measured over 765 days the ladder helps at $10/$20 and degrades ret/DD at $40 in every
-      // family but v7/v9. stepDollars 0.25 fixes the CONCESSION PER STEP rather than the step count, so
-      // one setting means the same thing at every width; lossCapFrac 0 never pays past break-even.
-      // Evidence at these settings: v9-20 -$2,236 for ret/DD 98.7->145.9 and fill 74->82%;
-      // v8-20 +$131,241 for ret/DD 21.9->29.9 and fill 56->73%; v3-20 -$145,756 for 95.4->101, fill 63->72%.
+      // Applied per variant; see LADDER_LIVE / GIVEUP_LIVE above for the pairing and the evidence.
       if (LADDER_LIVE.has(v.variant)) {
         v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+      }
+      // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30%
+      // is a rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is
+      // $1.00 on a $20 spread, enough to cross the spread and not enough to chase.
+      if (GIVEUP_LIVE.has(v.variant)) {
+        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
       }
       out.push(v);
     }
@@ -380,6 +401,15 @@ function buildUncapped() {
       if (f.bidirectional) v.bidirectional = true;
       if (f.exemptTrendStack) v.exemptTrendStack = true;
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
+      // The live experiments apply to `-unc` twins too — v7-20-unc carries the ladder precisely because
+      // its control (v9-20-unc) is behaviourally identical to it, which the capped set cannot offer once
+      // v9-20 is taken by give-up. Without this hook the flag was silently dropped for every -unc name.
+      if (LADDER_LIVE.has(v.variant)) {
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+      }
+      if (GIVEUP_LIVE.has(v.variant)) {
+        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
+      }
       out.push(v);
     }
   }
@@ -420,6 +450,14 @@ function buildAtmComparators() {
       if (f.softCap != null) v.softCap = f.softCap;
       v.lossMax = maxCapFor(w);                       // same governor as the short-ATM sweep
       v.continuousCoverMinLockFrac = minLockFor(f.key, w);
+      // cATM builder hook — the live experiments must reach the -cATM comparators too, or the flag is
+      // silently dropped for every cATM name exactly as it was for -unc.
+      if (LADDER_LIVE.has(v.variant)) {
+        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderStepDollars = 0.25; v.ladderLossCapFrac = 0;
+      }
+      if (GIVEUP_LIVE.has(v.variant)) {
+        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
+      }
       out.push(v);
     }
   }
@@ -683,6 +721,8 @@ function buildEngineDeps(run, live) {
       coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
       ladderSteps: run.ladderSteps, ladderLossCapFrac: run.ladderLossCapFrac,
       ladderStepDollars: run.ladderStepDollars,
+      // GIVE-UP: force a resting cover to the market once the position turns against us. Read off deps.
+      coverGiveUp: run.coverGiveUp, giveUpPoints: run.giveUpPoints, giveUpMaxLoss: run.giveUpMaxLoss,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
       // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
       wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
