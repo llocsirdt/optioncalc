@@ -311,6 +311,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
+  let gateCutoff = 0, gateFloor = 0;   // opens blocked by the stop-opening gates
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
@@ -813,7 +814,31 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
-    if (sig.openSide && dirOk) {                            // (d) open (subject to the caps)
+
+    // STOP-OPENING GATES. Two competing answers to the same measured leak: books build a good floor by
+    // mid-afternoon and then trade it away. Live 2026-09-10, 24 of 80 books reached a POSITIVE guaranteed
+    // floor and only 6 kept it, giving back $58,558 — and the v4-20-unc trajectory shows the floor
+    // climbing to +$100 at 14:05 with 11 positions, then decaying to -$6,600 by 15:45 as six more opens
+    // went on. Every late open made it worse.
+    //
+    //   openCutoffMin  — BLUNT but predictable: no signal-triggered opens after this ET minute. Peak
+    //                    floors cluster 13:00-14:10, which is where the user independently pointed.
+    //   openFloorGate  — ADAPTIVE: no opens once the book's own guaranteed floor is above the threshold.
+    //                    It stops when you have WON, whenever that happens, rather than by the clock.
+    //                    This is the MIRROR of the governor's existing loss gate (which blocks an open
+    //                    whose projected floor is too NEGATIVE); same machinery, opposite sign.
+    //
+    // Neither touches covers, offsets or wings — risk-reducing trades keep running all session, which is
+    // the whole point: stop adding exposure, keep repairing what is there.
+    let openGated = false, gateWhy = null;
+    if (opts.openCutoffMin != null && etMinute(bars[i].dt) >= opts.openCutoffMin) { openGated = true; gateWhy = 'cutoff'; }
+    if (!openGated && opts.openFloorGate != null && st.positions.length) {
+      const fl = floorOf(null);   // the book's guaranteed floor as it stands
+      if (fl >= opts.openFloorGate) { openGated = true; gateWhy = 'floor'; }
+    }
+    if (openGated) { if (gateWhy === 'cutoff') gateCutoff++; else gateFloor++; }
+
+    if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
       // ADAPTIVE geometry can DECLINE: every placement from deep-ITM through straddle priced above the
       // risk/reward ceiling. Skipping is the correct answer — the alternative (buying anyway, or booking a
@@ -1084,7 +1109,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, gateCutoff, gateFloor, coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
