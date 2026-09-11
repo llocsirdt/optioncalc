@@ -86,6 +86,16 @@
   .cell .cname .mk .v { color:#c0564f; }      /* setup: avoid */
   .cell .lift { font:9px ui-monospace,monospace; text-align:right; margin-top:-1px; }
   .cell .lift.f { color:#6f9b21; } .cell .lift.w { color:#7c8794; } .cell .lift.v { color:#c0564f; }
+  /* FEATURE STRIP — what this strategy had ON, and what actually FIRED this session. A dimmed glyph is a
+     feature that was enabled but never triggered; that distinction is the whole point of the strip, since
+     "enabled" and "did something" are very different facts when reading a day. */
+  .cell .feat { font:9px ui-monospace,monospace; display:flex; flex-wrap:wrap; gap:4px; margin:1px 0 0; line-height:1.35; }
+  .cell .feat i { font-style:normal; cursor:help; white-space:nowrap; opacity:.28; }
+  .cell .feat i.on { opacity:1; }
+  .cell .feat i.on b { font-weight:600; font-size:8.5px; margin-left:.5px; }
+  .cell .feat i.lad { color:#4a7fb5; } .cell .feat i.giv { color:#9a5bb8; }
+  .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
+  .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
   td.empty { border:1px dashed #eee; background:transparent; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
@@ -157,7 +167,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.71</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.72</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -448,6 +458,7 @@ function render() {
       html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
         + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
         + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
+        + featStrip(v)
         + (fTier ? `<div class="lift ${fTier}">${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d</div>` : '')
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
@@ -721,6 +732,69 @@ function underlyingAt(T) {
   let u = underlyingMap[0].under;
   for (const p of underlyingMap) { if (p.epoch <= T) u = p.under; else break; }
   return u;
+}
+
+// ── FEATURE STRIP ───────────────────────────────────────────────────────────────────────────────────
+// Two different facts live here and they must not be conflated: `cfg` is what the variant was CONFIGURED
+// with (known before the session), `k` is the decision action the engine actually EMITTED (known only
+// after). A feature can be on and never fire — that is the common case and the reason the strip dims
+// rather than hides. Counts matter more than booleans: "reprice x181" and "reprice on" say different things.
+const FEATURES = [
+  { k:'cover-reprice',       cfg:'coverLadder',  g:'⟳', c:'lad', label:'ladder reprice' },
+  { k:'cover-giveup',        cfg:'coverGiveUp',  g:'⤓', c:'giv', label:'cover give-up' },
+  { k:'floor-offset',        cfg:'floorOffset',  g:'⛨', c:'off', label:'floor offset' },
+  { k:'wing',                cfg:'wingConvert',  g:'✦', c:'wng', label:'wing convert' },
+  { k:'cover-to-stack',      cfg:'coverToStack', g:'⊞', c:'stk', label:'cover-to-stack' },
+  { k:'open-skip-governor',  cfg:null,           g:'⊘', c:'gov', label:'governor blocked an open' },
+  { k:'cover-defer-governor',cfg:null,           g:'⊗', c:'gov', label:'governor deferred a cover' },
+];
+// One line per firing, for the hover. Each action carries different fields, so the detail is per-action
+// rather than a generic dump — a give-up wants its price move, an offset wants its lift ratio.
+function featDetail(a, d, t) {
+  const m = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString());
+  // Limit prices come off the tick arithmetic as binary-float noise (9.450000000000001); these are option
+  // prices, so 2dp is the real precision and the raw value is never the right thing to show.
+  const px = (n) => (n == null ? '?' : (Math.round(n * 100) / 100).toFixed(2));
+  if (a === 'cover-reprice') return `${t}  ${px(d.from)}→${px(d.to)}  step ${d.step}${d.atMax ? '  AT MAX' : ''}${d.capped ? '  capped' : ''}`;
+  if (a === 'cover-giveup')  return `${t}  ${px(d.from)}→${px(d.to)}  through ${d.through != null ? d.through.toFixed(1) : '?'}pts`;
+  if (a === 'floor-offset')  return `${t}  ${(d.legs || []).map((l) => l.side[0] + l.type + l.strike).join('/')}  cost ${m(d.cost)} lift ${m(d.lift)} (${d.ratio}:1)`;
+  if (a === 'wing')          return `${t}  ${d.tag || ''}  cost ${m(d.cost)} (${d.ratio}:1)${d.naked ? '  naked' : ''}`;
+  if (a === 'open-skip-governor') return `${t}  projected floor ${m(d.projectedFloor)} vs cap ${m(d.lossMax)}`;
+  if (a === 'cover-defer-governor') return `${t}  floor would go ${m(d.floorNow)}→${m(d.floorIfBooked)} vs cap ${m(d.lossMax)}`;
+  return `${t}  ${d.positionId || d.id || ''}`;
+}
+function featSummary(rec) {
+  const cfg = (rec && rec.config) || {};
+  const hits = {};
+  for (const e of (rec && rec.events) || []) {
+    const t = (e.candle && e.candle.time) ? String(e.candle.time).slice(-5) : '';
+    for (const d of e.decisions || []) {
+      if (!d || !d.action) continue;
+      (hits[d.action] = hits[d.action] || []).push(featDetail(d.action, d, t));
+    }
+  }
+  const out = [];
+  for (const f of FEATURES) {
+    const fired = hits[f.k] || [];
+    const enabled = f.cfg ? cfg[f.cfg] === true : false;
+    if (!enabled && !fired.length) continue;          // neither configured nor fired — not this variant's story
+    out.push({ ...f, n: fired.length, enabled, lines: fired });
+  }
+  return out;
+}
+function featStrip(v) {
+  const fs = featSummary(records[v]);
+  if (!fs.length) return '';
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const cells = fs.map((f) => {
+    const head = f.n ? `${f.label} — fired ${f.n}×` : `${f.label} — enabled, never fired today`;
+    // Cap the tooltip: a ladder can reprice 180+ times and a 180-line title is unreadable.
+    const shown = f.lines.slice(0, 12);
+    const more = f.lines.length > shown.length ? `\n… ${f.lines.length - shown.length} more` : '';
+    const tip = esc(head + (shown.length ? '\n' + shown.join('\n') + more : ''));
+    return `<i class="${f.c}${f.n ? ' on' : ''}" title="${tip}">${f.g}${f.n ? `<b>${f.n}</b>` : ''}</i>`;
+  }).join('');
+  return `<div class="feat">${cells}</div>`;
 }
 
 // Build the epoch↔underlying series + day range. candle_close events carry a "MM/DD HH:MM" ET time and the
