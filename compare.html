@@ -99,6 +99,9 @@
   td.empty { border:1px dashed #eee; background:transparent; }
   /* A double-click opens the cell in the debug page; without this the two rapid clicks select the cell's
      text first and the chart flashes highlighted. */
+  /* .tgl sets display:inline-flex, which OVERRIDES the browser default [hidden]{display:none} — so
+     el.hidden = true had no visible effect on the toolbar controls. Make hidden win. */
+  [hidden] { display:none !important; }
   .cell { user-select:none; -webkit-user-select:none; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
@@ -170,7 +173,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.76</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.77</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -186,7 +189,16 @@
     </svg>
   </button>
   <span id="srcbar">
-    <label class="tgl" title="LIVE = the server's recorded shadow runs · BACKTEST = the same strategies replayed over a historical day">source
+      <label class="tgl" id="gridModeWrap" title="BY VARIANT = one day across every strategy · BY DATE = one strategy across the last 4 trading weeks">grid
+      <select id="gridMode" style="margin-left:4px">
+        <option value="variant">by variant</option>
+        <option value="date">by date</option>
+      </select>
+    </label>
+    <label class="tgl" id="dateModeVariantWrap" hidden>strategy
+      <select id="dateModeVariant" style="margin-left:4px"></select>
+    </label>
+  <label class="tgl" title="LIVE = the server's recorded shadow runs · BACKTEST = the same strategies replayed over a historical day">source
       <select id="srcSelect" style="margin-left:4px">
         <option value="live">Live runs</option>
         <option value="backtest">Backtest replay</option>
@@ -264,6 +276,67 @@ const COLUMNS = [
 // Uncapped hidden by DEFAULT — the button reveals rather than conceals.
 let showUnc = false;
 const visibleColumns = () => COLUMNS.filter((c) => showUnc || !c.unc);
+
+// ── GRID AXES ───────────────────────────────────────────────────────────────────────────────────────
+// The grid had exactly one shape: FAMILIES down, widths across, cell key `${family}-${width}`. That key is
+// also the VARIANT, which is why it threads through cells/records/completeness/baselines untouched.
+//
+// DATE MODE keeps the whole renderer and swaps only the axes: one strategy, the last 4 trading weeks, a
+// row per week and a column per weekday. The cell key becomes the ISO DATE. Everything downstream still
+// just looks up `cells[key]`, so nothing else had to learn about modes — the one thing that genuinely
+// differs is which VARIANT a cell belongs to, hence variantOf() below.
+let GRID_MODE = 'variant';       // 'variant' | 'date'
+let dateVariant = 'v7-10';       // the single strategy shown in date mode
+let dateCells = [];              // [{ key: ISO date, row, col }] for the current 4-week window
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const isoOf = (d) => d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+// The 4 trading weeks ENDING at `anchor` (inclusive). Weekends are skipped rather than rendered as empty
+// columns; a holiday simply leaves its weekday cell blank, which is information — you can see at a glance
+// that Monday was Labor Day.
+function fourWeekWindow(anchorIso) {
+  const a = new Date(`${anchorIso}T12:00:00Z`);
+  const dow = (a.getUTCDay() + 6) % 7;                    // 0 = Monday
+  const thisMon = new Date(a); thisMon.setUTCDate(a.getUTCDate() - Math.min(dow, 4));
+  const weeks = [];
+  for (let w = 3; w >= 0; w--) {
+    const mon = new Date(thisMon); mon.setUTCDate(thisMon.getUTCDate() - w * 7);
+    const days = [];
+    for (let i = 0; i < 5; i++) { const d = new Date(mon); d.setUTCDate(mon.getUTCDate() + i); days.push(isoOf(d)); }
+    weeks.push({ key: isoOf(mon), label: new Date(`${isoOf(mon)}T12:00:00Z`)
+      .toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }), days });
+  }
+  return weeks;
+}
+
+// rows/cols/cellKey for whichever mode is active. `label` is what the header cell shows.
+function gridSpec() {
+  if (GRID_MODE === 'date') {
+    const weeks = fourWeekWindow(commonDate || isoOf(new Date()));
+    return {
+      rows: weeks.map((w) => ({ key: w.key, label: w.label, days: w.days })),
+      cols: WEEKDAYS.map((h, i) => ({ key: String(i), h })),
+      cellKey: (row, col) => row.days[Number(col.key)],
+    };
+  }
+  return {
+    rows: FAMILIES.map((f) => ({ key: f, label: f })),
+    cols: visibleColumns().map((c) => ({ ...c, key: c.k })),
+    cellKey: (row, col) => `${row.key}-${col.key}`,
+  };
+}
+
+// Which VARIANT a cell key refers to. In variant mode the key IS the variant; in date mode every cell is
+// the same strategy. Baselines, gradability and the debug drill-down all need this rather than the key.
+const variantOf = (key) => (GRID_MODE === 'date' ? dateVariant : key);
+// Cell title in date mode: the day number is what you scan for, the weekday is already the column.
+const cellDateLabel = (iso) => {
+  const t = Date.parse(`${iso}T12:00:00Z`);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : iso;
+};
+// And the DATE a cell refers to — the mirror image.
+const dateOfCell = (key) => (GRID_MODE === 'date' ? key : commonDate);
 const CW = 174, CH = 74;   // mini-chart px
 
 const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
@@ -382,7 +455,10 @@ function render() {
   // stopped at 15:20 invites reading the gap as performance when most of it is just missing time. So an
   // incomplete run gets no reference line — the banner says why, rather than showing a silent comparison.
   const gradable = (v) => !completeness[v] || completeness[v].complete;
-  const btFor = (v) => (overlay && gradable(v)) ? baselines[v] : null;
+  // Baselines are keyed by VARIANT. In date mode every cell is the same strategy, so the lookup has to go
+  // through variantOf() rather than the cell key (which is a date there) or every cell loses its reference
+  // lines silently.
+  const btFor = (v) => (overlay && gradable(v)) ? baselines[variantOf(v)] : null;
   const cellLo = (v, d) => { let lo = d.lo; const b = btFor(v); if (b && Number.isFinite(b.worst)) lo = Math.min(lo, b.worst);
     const o = cellsB[v]; if (o && Number.isFinite(o.lo)) lo = Math.min(lo, o.lo); return lo; };
   const cellHi = (v, d) => { let hi = d.hi; const b = btFor(v); if (b && Number.isFinite(b.best)) hi = Math.max(hi, b.best);
@@ -392,26 +468,30 @@ function render() {
   // THIS, not to each cell's own axis — otherwise every cell would saturate at its own extreme and a $3k
   // book would look exactly as dangerous as a $30k one. Computed regardless of syncY, which only controls
   // the axis.
+  const SPEC = gridSpec();
+  const allKeys = [];
+  for (const r of SPEC.rows) for (const c of SPEC.cols) allKeys.push(SPEC.cellKey(r, c));
   gAbs = 0;
-  for (const f of FAMILIES) for (const c of visibleColumns()) {
-    const v = `${f}-${c.k}`, d = cells[v];
+  for (const v of allKeys) {
+    const d = cells[v];
     if (!d || !d.curve) continue;
     gAbs = Math.max(gAbs, Math.abs(cellLo(v, d)), Math.abs(cellHi(v, d)));
   }
   let gMin = null, gMax = null;
   if (syncY && finite.length) {
     gMin = Infinity; gMax = -Infinity;
-    for (const f of FAMILIES) for (const c of visibleColumns()) { const v = `${f}-${c.k}`, d = cells[v]; if (!d || !d.curve) continue; gMin = Math.min(gMin, cellLo(v, d)); gMax = Math.max(gMax, cellHi(v, d)); }
+    for (const v of allKeys) { const d = cells[v]; if (!d || !d.curve) continue; gMin = Math.min(gMin, cellLo(v, d)); gMax = Math.max(gMax, cellHi(v, d)); }
   }
 
-  let html = '<thead><tr><th class="rowh"></th>' + visibleColumns().map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
-  for (const f of FAMILIES) {
-    html += `<tr><th class="rowh">${f}</th>`;
-    for (const c of visibleColumns()) {
-      const v = `${f}-${c.k}`, d = cells[v];
+  let html = '<thead><tr><th class="rowh"></th>' + SPEC.cols.map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
+  for (const f of SPEC.rows) {
+    html += `<tr><th class="rowh">${f.label}</th>`;
+    for (const c of SPEC.cols) {
+      const v = SPEC.cellKey(f, c), d = cells[v];
       if (!d) { html += '<td class="empty"></td>'; continue; }
-      if (d.err) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="err">${d.err}</div></td>`; continue; }
-      if (d.empty) { html += `<td class="cell"><div class="cname"><b>${v}</b></div><div class="nodata">no positions</div></td>`; continue; }
+      const cellName = GRID_MODE === 'date' ? cellDateLabel(v) : v;
+      if (d.err) { html += `<td class="cell"><div class="cname"><b>${cellName}</b></div><div class="err">${d.err}</div></td>`; continue; }
+      if (d.empty) { html += `<td class="cell"><div class="cname"><b>${cellName}</b></div><div class="nodata">no positions</div></td>`; continue; }
       const bt = btFor(v);
       const yMin = syncY ? gMin : cellLo(v, d), yMax = syncY ? gMax : cellHi(v, d);
       const wStr = d.unboundedLoss ? '−∞' : usd(d.worst);
@@ -460,7 +540,7 @@ function render() {
       const signCls = d.underPnl == null ? '' : d.underPnl > 0 ? ' pos' : d.underPnl < 0 ? ' neg' : '';
       html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}  (double-click → open in debug)\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
         + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
-        + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
+        + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
         + featStrip(v)
         + (fTier ? `<div class="lift ${fTier}">${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d</div>` : '')
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
@@ -888,6 +968,37 @@ function setupSlider() {
   lbl.textContent = 'full day';
 }
 
+// DATE MODE loader: ONE strategy, the 4-week window. Structurally the mirror of the variant loader — it
+// fetches the same per-(date, variant) run endpoint, just varying the date instead of the variant — so the
+// cells it fills are indistinguishable downstream and render()/the slider/the overlays all work unchanged.
+// Missing days (holidays, or a day the server never ran) simply leave their cell empty, which is the
+// information you want: a blank Monday IS the fact that Monday was a holiday.
+async function loadDateGrid(status) {
+  const weeks = fourWeekWindow(commonDate || isoOf(new Date()));
+  const wanted = weeks.flatMap((w) => w.days);
+  // The run index tells us which (symbol, date) pairs exist, so we only fetch days that were recorded
+  // rather than firing 20 requests and collecting 404s.
+  const idx = await fetchJson(runsUrl());
+  const have = new Map();
+  for (const r of (idx.runs || [])) {
+    if (r.variant !== dateVariant) continue;
+    if (symbol && r.symbol !== symbol) continue;
+    have.set(r.tradeDate, r.expiration || r.tradeDate);
+  }
+  const targets = wanted.filter((d) => have.has(d));
+  if (!targets.length) { status.textContent = `No recorded runs for ${dateVariant} in this 4-week window.`; return; }
+  let done = 0;
+  await inBatches(targets, 8, async (d) => {
+    try {
+      const rec = await fetchJson(runUrl(symbol, have.get(d), d, dateVariant));
+      records[d] = rec.record || rec;
+      if (window.RunCompleteness) completeness[d] = window.RunCompleteness.assessRun(records[d]);
+    } catch (e) { cells[d] = { err: e.status === 404 ? 'no run' : (e.message || 'error') }; }
+    status.textContent = `Loading… ${++done}/${targets.length}`;
+  });
+  status.textContent = '';
+}
+
 async function load() {
   const status = document.getElementById('status');
   status.textContent = 'Loading runs…';
@@ -897,6 +1008,19 @@ async function load() {
   for (const k of Object.keys(aliasInfo)) delete aliasInfo[k];   // per-date; a stale badge is a wrong claim
   for (const k of Object.keys(completeness)) delete completeness[k];
   try {
+    if (GRID_MODE === 'date') {
+      // Date mode always reads LIVE runs: a 4-week backtest grid would mean 20 whole-day bundles, and the
+      // question this view answers ("how did my strategy actually behave lately") is a live-run question.
+      // commonDate is the ANCHOR the window rolls back from, not a day that must itself have a run.
+      commonDate = (document.getElementById('replayDate') || {}).value || isoOf(new Date());
+      symbol = 'NDX';
+      await loadDateGrid(status);
+      try { await ensureBaselines(); } catch (e) { /* curves still render without reference lines */ }
+      buildTimeIndex();
+      setupSlider();
+      applyTime(dayMax || null);
+      return;
+    }
     if (SRC === 'backtest') {
       let date = WANT_DATE || 'latest';
       // Show the picker and tell the user what range is replayable. `available` is every tradeable day in
@@ -971,6 +1095,44 @@ async function load() {
 }
 
 document.getElementById('refresh').addEventListener('click', load);
+
+// ── MODE CONTROLS ───────────────────────────────────────────────────────────────────────────────────
+// The strategy picker is only meaningful in date mode (variant mode shows them all), and the source
+// picker only in variant mode (see the note in load()), so each is hidden when it would be a lie.
+function syncModeChrome() {
+  const dv = document.getElementById('dateModeVariantWrap');
+  const sb = document.getElementById('srcbar');
+  if (dv) dv.hidden = GRID_MODE !== 'date';
+  const srcSel = sb && sb.querySelector('#srcSelect');
+  if (srcSel) srcSel.closest('.tgl').hidden = GRID_MODE === 'date';
+  const cmp = document.getElementById('cmpSrc');
+  if (cmp) cmp.closest('.tgl').hidden = GRID_MODE === 'date';
+  const unc = document.getElementById('uncBtn');
+  if (unc) unc.hidden = GRID_MODE === 'date';
+  const dLbl = document.querySelector('#srcbar label.tgl:last-of-type');
+  if (dLbl) dLbl.firstChild.textContent = GRID_MODE === 'date' ? 'week ending ' : 'date ';
+}
+// The strategy list comes from whatever the server actually has runs for, so it can never offer a
+// variant that would render an empty grid.
+async function fillVariantPicker() {
+  const sel = document.getElementById('dateModeVariant');
+  if (!sel || sel.options.length) return;
+  try {
+    const idx = await fetchJson(runsUrl());
+    const vs = [...new Set((idx.runs || []).map((r) => r.variant).filter(Boolean))].sort();
+    sel.innerHTML = vs.map((v) => `<option${v === dateVariant ? ' selected' : ''}>${v}</option>`).join('');
+    if (vs.length && !vs.includes(dateVariant)) { dateVariant = vs[0]; sel.value = dateVariant; }
+  } catch (e) { /* picker stays empty; the mode will report no runs */ }
+}
+document.getElementById('gridMode').addEventListener('change', async (e) => {
+  GRID_MODE = e.target.value === 'date' ? 'date' : 'variant';
+  syncModeChrome();
+  if (GRID_MODE === 'date') await fillVariantPicker();
+  await load();
+});
+document.getElementById('dateModeVariant').addEventListener('change', async (e) => {
+  dateVariant = e.target.value; await load();
+});
 document.getElementById('syncY').addEventListener('change', render);
 document.getElementById('timeSlider').addEventListener('input', (e) => {
   pendingT = +e.target.value;
@@ -999,10 +1161,11 @@ document.getElementById('grid').addEventListener('click', (e) => {
 // against a backtest-configured debug page would quietly show a different run.
 document.getElementById('grid').addEventListener('dblclick', (e) => {
   const svg = e.target.closest('svg[data-v]'); if (!svg) return;
-  const v = svg.dataset.v; if (!v) return;
-  // commonDate is whatever the loaded source labelled the day; debug wants YYYY-MM-DD.
+  const key = svg.dataset.v; if (!key) return;
+  const v = variantOf(key);
+  // In date mode the cell key IS the date; in variant mode the date is the one common to the grid.
   const iso = (() => {
-    const d = String(commonDate || '');
+    const d = String(dateOfCell(key) || '');
     if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
     const t = Date.parse(d);
     return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '';
