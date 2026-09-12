@@ -103,6 +103,12 @@ function optsFor(v) {
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
       'ladderStepDollars']) if (v[k] != null) o[k] = v[k];
   }
+  // DYNAMIC minLock RAMP — paired with the tight day-loss cap on the capital-preservation variant (see
+  // CAPPRES_LIVE in index.js). Only pays under that cap, so it is a per-variant pairing, not a default.
+  if (v.minLockRamp) {
+    o.minLockRamp = true;
+    for (const k of ['minLockRampStart', 'minLockRampEnd', 'minLockRampFrom', 'minLockRampTo']) if (v[k] != null) o[k] = v[k];
+  }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   // ALWAYS build the geo explicitly. This used to be conditional ((w && w !== 20) || sh || cf != null),

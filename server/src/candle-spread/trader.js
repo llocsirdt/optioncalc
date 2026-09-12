@@ -683,7 +683,31 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // signal cover skips anything already pending). Reversing the order here would silently trade a
   // different strategy from the one the baselines describe.
   if (ported && deps.continuousCover === true && cfg.coverFillModel === 'resting') {
-    const minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+    // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
+    // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
+    // compute the identical target for the identical bar.
+    //
+    // WHY: `W - openCost - minLock` is a FIXED price but the premium it competes against DECAYS all day.
+    // Early it sits far below a rich mark and cannot fill, so the position sits naked for hours; by
+    // afternoon the same target is reachable. Measured across 29 variants, ramping raised COVER FILL on
+    // 29/29 (mean +4.1 pts) and, on the variants where covers were being skipped outright, raised covers
+    // PLACED by up to 21% — the `W - open - minLock <= 0` gate below stops rejecting them.
+    //
+    // IT IS NOT A FREE WIN AND IS NOT A FLEET DEFAULT: uncapped it trades floor for those fills and loses
+    // on 18 of 29 variants (-$1.1M aggregate). It only pays where a tight day-loss cap already bounds the
+    // floor, which is why it ships ON for v7-10 (lossMax $1,000) and OFF everywhere else. See index.js.
+    let minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+    if (deps.minLockRamp) {
+      const a = deps.minLockRampStart != null ? deps.minLockRampStart : 9 * 60 + 30;
+      const b = deps.minLockRampEnd != null ? deps.minLockRampEnd : 12 * 60 + 30;
+      const from = deps.minLockRampFrom != null ? deps.minLockRampFrom : 0;
+      const to = deps.minLockRampTo != null ? deps.minLockRampTo : 1;
+      const now = etMinutesOf(candleTime);
+      // No clock (a malformed candle time) must not silently mean "ask for nothing" — fall back to the
+      // full constant lock, the safe end of the ramp.
+      const prog = now == null ? 1 : (b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1);
+      minLock = minLock * (from + (to - from) * prog);
+    }
     // ARMING (deps.continuousCoverArmFrac / continuousCoverOppRatio) — unset keeps the original
     // behaviour: rest a cover on EVERY position the instant it opens, which maximises locking but decides
     // each position's outcome at birth. When set, arm on either:

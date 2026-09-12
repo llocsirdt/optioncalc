@@ -300,6 +300,28 @@ const LADDER_LIVE = new Set(
 const GIVEUP_LIVE = new Set(
   (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20,v9-40,v9-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
+// CAPITAL-PRESERVATION PAIRING (2026-09-11). A TIGHT width-relative day-loss cap plus the dynamic
+// minLock ramp. Neither belongs on the fleet; together on one variant they are the configuration the user
+// can actually run on a $25k account.
+//
+// THE CAP: lossMax = 1 x W x 100 (so $1,000 at W=10), lossTarget = 0.7 x that. Because lossMax bounds the
+// BOOK FLOOR and every open is gated on it, -$1,000 is a TRUE per-day bound, not a sample statistic. Over
+// 765 days v7-10 shows worst day -$1,000, only 5 days <= -$1k, ZERO days <= -$2k, and a worst peak-to-
+// trough of -$3,620 = 14.5% of $25k recovered in 2 days — against 81% for the same variant ungated. It
+// costs about half the total (ret/DD 126.9 -> 327.1, so what remains is 2.6x more efficient per unit of
+// drawdown). The user is explicitly buying survivability with expected value while building $25k -> $50k.
+//
+// THE RAMP ONLY PAYS UNDER THE CAP, and the measurement is unusually clean because it is the same variant
+// and the same ramp either way:  uncapped -$269,485  ·  capped +$94,974.
+// Uncapped the ramp trades floor for fills (avgFloor -$774); capped the floor is already bounded by the
+// governor so the same trade costs -$28 and the fills are kept. Fleet-wide and uncapped it loses on 18 of
+// 29 variants (-$1.1M), which is why this is a PAIRING and not a default.
+//
+// Shape .25 -> 1 by 12:30 beat the more aggressive 0 -> 1 by 11:30 / 12:00 under the cap: those buy more
+// fill but give back more floor, and at the margin under a cap that is no longer free.
+const CAPPRES_LIVE = new Set(
+  (process.env.CANDLE_SPREAD_CAPPRES != null ? process.env.CANDLE_SPREAD_CAPPRES : 'v7-10')
+    .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
 const LOSS_TARGET = 5000;
@@ -362,6 +384,13 @@ function buildVariants() {
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
+      // CAPITAL PRESERVATION — must come AFTER lossMax/minLockFrac above, since it overrides the cap.
+      if (CAPPRES_LIVE.has(v.variant)) {
+        v.lossMax = w * 100;                 // 1 x width, the tightest cap that can still trade
+        v.lossTarget = Math.round(0.7 * v.lossMax);
+        v.minLockRamp = true; v.minLockRampStart = 9 * 60 + 30; v.minLockRampEnd = 12 * 60 + 30;
+        v.minLockRampFrom = 0.25; v.minLockRampTo = 1;
+      }
       // Applied per variant; see LADDER_LIVE / GIVEUP_LIVE above for the pairing and the evidence.
       if (LADDER_LIVE.has(v.variant)) {
         v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
@@ -738,6 +767,8 @@ function buildEngineDeps(run, live) {
       ladderStepDollars: run.ladderStepDollars,
       // GIVE-UP: force a resting cover to the market once the position turns against us. Read off deps.
       coverGiveUp: run.coverGiveUp, giveUpPoints: run.giveUpPoints, giveUpMaxLoss: run.giveUpMaxLoss,
+      minLockRamp: run.minLockRamp, minLockRampStart: run.minLockRampStart, minLockRampEnd: run.minLockRampEnd,
+      minLockRampFrom: run.minLockRampFrom, minLockRampTo: run.minLockRampTo,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
       // explicitly; `cfg` picks fields up automatically and that asymmetry is what hid two dead flags.
       wingConvert: run.wingConvert, wingMinRatio: run.wingMinRatio, wingAfterMin: run.wingAfterMin,
