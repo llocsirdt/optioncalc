@@ -45,13 +45,26 @@
      column narrower than that it spilled over the panel and covered the day-summary next to it. Constrain
      the box and let the svg scale inside its own viewBox instead. */
   .panel { overflow:hidden; min-width:0; }
-  #curveBox { position:relative; width:100%; }
+  /* RESERVE THE CHART BOX. The SVG is CW x CH with width:100%/height:auto, so its rendered height is
+     always width * CH/CW. Holding that same aspect-ratio on the container means the space is identical
+     whether or not a curve is in it — scrubbing the timeline back before the first trade no longer
+     collapses the panel and shoves the NQ chart and everything below it up the page. The ratio is set
+     from the CW/CH constants at boot so there is one source of truth; this is just the pre-JS fallback. */
+  #curveBox { position:relative; width:100%; aspect-ratio: 900 / 300; }
   #curveBox svg { display:block; width:100%; height:auto; max-width:100%; }
+  /* Empty state fills the reserved box rather than leaving it blank, so the panel reads as "nothing to
+     show yet" instead of looking broken. */
+  #curveBox .curveEmpty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font:12px ui-monospace,monospace; color:var(--muted); border:1px dashed var(--line); border-radius:4px; }
   /* HEADER. The title stays left; the numeric groups (actual / if-filled / backtest) stack right-aligned,
      one per row. They used to run on as a single "·"-joined sentence that wrapped mid-group at narrow
      widths, so a line could begin with a stray value belonging to the previous group. */
   .curveHead { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-  .curveHead .meta { text-align:right; font-weight:400; }
+  /* Reserve THREE rows. The meta stacks actual / if-filled / backtest, and when the book is empty it
+     drops to a single "no positions" line — which pulled the NQ chart and everything under it up ~35px
+     every time the timeline was scrubbed back before the first trade. Holding the height keeps the page
+     still; the rows are nowrap and line-height 1.5, so 3 x 1.5em is exactly what a full header occupies. */
+  .curveHead .meta { text-align:right; font-weight:400; min-height:4.5em; display:block; }
   .curveHead .meta .mrow { display:block; white-space:nowrap; line-height:1.5; }
   /* The "now" readout, positioned along the curve exactly as the compare cell does it. */
   .nowlbl { position:absolute; bottom:2px; transform:translateX(-50%); white-space:nowrap;
@@ -103,7 +116,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.75</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.76</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -735,7 +748,11 @@ function renderCurve(pos, se, T) {
     d.underlying = u;
     d.underPnl = u != null ? pnlAtPrice(d.curve, u) : null;
   }
-  if (!d) { host.outerHTML = '<div id="curve"></div>'; $('curveMeta').textContent = 'no positions'; return; }
+  if (!d) {
+    host.outerHTML = '<div id="curve"><div class="curveEmpty">no positions at this time</div></div>';
+    $('curveMeta').textContent = 'no positions';
+    return;
+  }
   dbgAbs = Math.max(Math.abs(d.lo), Math.abs(d.hi));
   const bt = (baselines && record && baselines[(record.config || {}).variant]) || null;
   const btRef = bt ? { worst: bt.avgWorstCase, best: bt.avgBestCase } : null;
@@ -790,6 +807,9 @@ function renderCurve(pos, se, T) {
 
 // ---- boot -------------------------------------------------------------------------------------
 (async function boot() {
+  // Keep the reserved chart box exactly the shape the SVG renders at, from the same constants.
+  const cb = document.getElementById('curveBox');
+  if (cb) cb.style.aspectRatio = `${CW} / ${CH}`;
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   $('date').value = _p.get('date') || today;
   if (_p.get('src')) $('src').value = _p.get('src');
