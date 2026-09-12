@@ -173,7 +173,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.77</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.78</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -356,6 +356,9 @@ const completeness = {};
 let commonDate = '', symbol = 'NDX';
 let baselines = null;   // variant -> { worst, avg, best, trades, peakCap, deployedCap } (backtest averages)
 let underlyingMap = [], dayMin = 0, dayMax = 0;   // {epoch,under}[] + the day's epoch range (for the slider)
+// Per-cell time index: { [cellKey]: { toEpoch(etMinute), settle, map:[{min,under}] } }. Needed because in
+// date mode every cell is a different session with its own close and its own intraday path.
+const dayIndex = {};
 let daySettle = null;   // the official index close for the day (eod_settlement.settle), or null if unsettled
 let pendingT = null, sliderRAF = null;             // rAF-coalesced slider recompute
 
@@ -808,8 +811,20 @@ async function inBatches(items, n, fn) {
 // --- TIME-OF-DAY SLIDER: rebuild every variant's book as of a chosen 5m-mark epoch ---
 const parseETMin = (t) => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
 const etLabel = (T) => new Date(T).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+// Date mode's slider carries an ET minute-of-day; format it as a clock time, not a timestamp.
+const minLabel = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')} ET`;
 
 // Underlying at time T = the latest candle whose epoch <= T (step function). Empty map → null.
+// The record's own underlying at an ET minute-of-day (date mode). Before its first candle there is no
+// reading — return null so the caller falls back to that day's settle rather than another day's price.
+function underAtMinute(di, min) {
+  if (!di || !di.map.length) return null;
+  if (min < di.map[0].min) return null;
+  let u = di.map[0].under;
+  for (const p of di.map) { if (p.min <= min) u = p.under; else break; }
+  return u;
+}
+
 function underlyingAt(T) {
   if (!underlyingMap.length) return null;
   let u = underlyingMap[0].under;
@@ -885,6 +900,7 @@ function featStrip(v) {
 // day, so it's a clean linear map, no timezone/DST guessing). Uses the record with the most candles.
 function buildTimeIndex() {
   underlyingMap = []; dayMin = 0; dayMax = 0; daySettle = null;
+  for (const k of Object.keys(dayIndex)) delete dayIndex[k];
   let bestN = -1; const eps = [];
   for (const v of Object.keys(records)) {
     const rec = records[v]; const st = rec.state || {};
@@ -892,6 +908,17 @@ function buildTimeIndex() {
     if (!anchor) continue;
     const anchorMin = parseETMin(anchor.openTime); if (anchorMin == null) continue;
     const toEpoch = (min) => anchor.openEpoch + (min - anchorMin) * 60000;
+    // PER-RECORD index. daySettle below is a single global, which is correct only while every cell is the
+    // SAME day — in date mode each cell is a different session, so one day's close was being drawn as the
+    // "now" line on all 20 cells. Keep each record's own settle and its own minute->epoch map.
+    const ownSe = (rec.events || []).filter((e) => e.type === 'eod_settlement' && e.settle != null).pop();
+    const ownCc = (rec.events || []).filter((e) => e.type === 'candle_close' && e.underlying != null && e.candle && e.candle.time);
+    dayIndex[v] = {
+      toEpoch,
+      settle: ownSe ? ownSe.settle : null,
+      map: ownCc.map((e) => ({ min: parseETMin(e.candle.time), under: e.underlying }))
+        .filter((x) => Number.isFinite(x.min)).sort((a, b) => a.min - b.min),
+    };
     (st.positions || []).forEach((p) => { if (p.openEpoch) eps.push(p.openEpoch); if (p.coverEpoch) eps.push(p.coverEpoch); });
     const cc = (rec.events || []).filter((e) => e.type === 'candle_close' && e.underlying != null && e.candle && e.candle.time);
     if (cc.length > bestN) {
@@ -918,16 +945,29 @@ function buildTimeIndex() {
 // Recompute every variant's cell for the book as of epoch T (T null → full end-of-day book).
 function applyTime(T) {
   const under = (T != null) ? underlyingAt(T) : null;
+  // In DATE MODE the slider carries an ET MINUTE-OF-DAY, not an epoch: a single epoch cannot address 20
+  // different sessions, and 4 weeks of epochs would make the slider meaningless. Each cell converts that
+  // minute through its OWN anchor, so scrubbing to 11:00 shows every day at 11:00.
+  const byMinute = GRID_MODE === 'date' && T != null;
   const build = (src, dest) => {
     for (const v of Object.keys(src)) {
       try {
-        const res = strategyRunToOptionArray(src[v], T != null ? { asOfEpoch: T } : {});
+        const di = dayIndex[v];
+        const asOf = byMinute ? (di ? di.toEpoch(T) : null) : T;
+        const res = strategyRunToOptionArray(src[v], asOf != null ? { asOfEpoch: asOf } : {});
         // THE FULL-DAY VIEW MUST USE THE SETTLE. Appending the settle to underlyingMap fixed the slider
         // path but NOT this one: with T null the code fell straight through to state.lastUnderlying, which
         // is the last 5m candle the engine acted on (15:55), not the official close. On 2026-09-09 that is
         // 29,414.77 vs a settle of 29,421.55. lastUnderlying stays the fallback for an UNSETTLED run
         // (mid-session, or a truncated record from a server that was down at the close).
-        const u = under != null ? under : (daySettle != null ? daySettle : (src[v].state && src[v].state.lastUnderlying));
+        // Settle is PER RECORD first; the global daySettle stays the fallback for a record with no
+        // settlement event of its own (and is identical for every cell in variant mode anyway).
+        const di2 = dayIndex[v];
+        const ownSettle = di2 && di2.settle != null ? di2.settle : daySettle;
+        const uNow = byMinute
+          ? (di2 ? underAtMinute(di2, T) : null)
+          : under;
+        const u = uNow != null ? uNow : (ownSettle != null ? ownSettle : (src[v].state && src[v].state.lastUnderlying));
         dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
       } catch (e) { dest[v] = { err: 'calc' }; }
     }
@@ -948,8 +988,16 @@ function applyTime(T) {
 // stamps (openEpoch/openTime) were added have exactly that shape, so full-day is the only view their data
 // supports; say so by returning null rather than inventing a time.
 function currentT() {
-  if (pendingT != null) return pendingT >= dayMax ? null : pendingT;
   const s = document.getElementById('timeSlider');
+  // Date mode scrubs MINUTES, so the "is this the end" test is the slider's own max rather than dayMax
+  // (an epoch, and meaningless against a minute).
+  if (GRID_MODE === 'date') {
+    if (s.disabled) return null;
+    const max = Number(s.max);
+    const t = pendingT != null ? pendingT : Number(s.value);
+    return Number.isFinite(t) && t < max ? t : null;
+  }
+  if (pendingT != null) return pendingT >= dayMax ? null : pendingT;
   if (s.disabled || !dayMax) return null;
   const t = Number(s.value);
   return Number.isFinite(t) && t < dayMax ? t : null;
@@ -962,6 +1010,17 @@ function setupSlider() {
   if (!dayMax || dayMax <= dayMin) {
     s.disabled = true;
     lbl.textContent = Object.keys(records).length ? 'full day (no intraday stamps)' : 'full day';
+    return;
+  }
+  if (GRID_MODE === 'date') {
+    // ET MINUTE-OF-DAY domain. One epoch cannot address 20 different sessions, and an epoch range spanning
+    // 4 weeks would scrub through calendar time rather than through a trading day. Minutes let the whole
+    // grid move together: 11:00 on every day at once, which is the comparison this view exists for.
+    const mins = [];
+    for (const k of Object.keys(dayIndex)) for (const p of dayIndex[k].map) mins.push(p.min);
+    if (!mins.length) { s.disabled = true; lbl.textContent = 'full day (no intraday stamps)'; return; }
+    s.min = Math.min(...mins); s.max = Math.max(...mins); s.step = 5; s.value = s.max; s.disabled = false;
+    lbl.textContent = 'full day';
     return;
   }
   s.min = dayMin; s.max = dayMax; s.step = 300000; s.value = dayMax; s.disabled = false;   // 5-min steps
@@ -1018,7 +1077,11 @@ async function load() {
       try { await ensureBaselines(); } catch (e) { /* curves still render without reference lines */ }
       buildTimeIndex();
       setupSlider();
-      applyTime(dayMax || null);
+      // NULL, not dayMax. dayMax is an EPOCH, and date mode's applyTime reads T as an ET minute-of-day —
+      // an epoch is larger than any minute, so underAtMinute saturated at each day's LAST CANDLE (15:55)
+      // instead of falling through to that day's official close. On 2026-09-08 that is 29,476.49 against a
+      // 29,507.70 settle. null means "full day", which is what the settle is for.
+      applyTime(null);
       return;
     }
     if (SRC === 'backtest') {
@@ -1136,9 +1199,14 @@ document.getElementById('dateModeVariant').addEventListener('change', async (e) 
 document.getElementById('syncY').addEventListener('change', render);
 document.getElementById('timeSlider').addEventListener('input', (e) => {
   pendingT = +e.target.value;
-  document.getElementById('timeLabel').textContent = (pendingT >= dayMax) ? 'full day' : etLabel(pendingT);
+  // The "end" sentinel differs by mode: an epoch against dayMax in variant mode, a minute against the
+  // slider's own max in date mode. Labelling likewise — a minute-of-day is not a timestamp.
+  const end = GRID_MODE === 'date' ? Number(e.target.max) : dayMax;
+  const atEnd = pendingT >= end;
+  document.getElementById('timeLabel').textContent = atEnd ? 'full day'
+    : (GRID_MODE === 'date' ? minLabel(pendingT) : etLabel(pendingT));
   if (sliderRAF) return;   // coalesce rapid drags to one recompute per frame (60 charts)
-  sliderRAF = requestAnimationFrame(() => { sliderRAF = null; applyTime(pendingT >= dayMax ? null : pendingT); });
+  sliderRAF = requestAnimationFrame(() => { sliderRAF = null; applyTime(atEnd ? null : pendingT); });
 });
 // Click/tap a chart → drop the purple cursor at that underlying price and read off the projected P&L.
 document.getElementById('grid').addEventListener('click', (e) => {
