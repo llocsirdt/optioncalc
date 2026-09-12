@@ -23,7 +23,7 @@
  * moment cannot move a bucket. Buckets with too few samples fall back to 1.0 (no correction) rather than
  * to a noisy estimate.
  *
- * Output: data/iv-skew-correction.json { buckets:[{z, mult}], meta:{...} }
+ * Output: shared/iv-skew-correction.json { buckets:[{z, mult}], meta:{...} }
  * Usage:  node scripts/candle-spread/calibrate-iv-skew.js [--minQuote 0.30] [--minSamples 20]
  */
 const fs = require('fs');
@@ -31,7 +31,7 @@ const path = require('path');
 const bs = require('../../server/src/candle-spread/bs-pricer');
 
 const ARCHIVE = path.join(__dirname, '..', '..', 'candle-spread-archive');
-const OUT = path.join(__dirname, '..', '..', 'data', 'iv-skew-correction.json');
+const OUT = path.join(__dirname, '..', '..', 'shared', 'iv-skew-correction.json');
 const argN = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? Number(process.argv[i + 1]) : d; };
 const MIN_QUOTE = argN('--minQuote', 0.30);     // sub-30c mids are noise at these tenors
 const MIN_SAMPLES = argN('--minSamples', 20);

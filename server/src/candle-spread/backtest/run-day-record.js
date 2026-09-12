@@ -111,6 +111,13 @@ function optsFor(v, day) {
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
+  // The give-up rule, the cover ladder and the dynamic minLock ramp are all per-variant experiments. If
+  // they are not forwarded HERE, the debug page's backtest overlay runs a DIFFERENT strategy from the one
+  // the variant declares — the overlay would quietly show v7-10 without its ramp, which is exactly the
+  // silent-no-op class the contract guard below exists to prevent (and did catch).
+  if (v.coverGiveUp) { o.coverGiveUp = true; for (const k of ['giveUpPoints', 'giveUpMaxLoss']) if (v[k] != null) o[k] = v[k]; }
+  if (v.coverLadder) { o.coverLadder = true; for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k]; }
+  if (v.minLockRamp) { o.minLockRamp = true; for (const k of ['minLockRampStart', 'minLockRampEnd', 'minLockRampFrom', 'minLockRampTo']) if (v[k] != null) o[k] = v[k]; }
   o.geo = v.adaptiveGeo
     ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
     : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });

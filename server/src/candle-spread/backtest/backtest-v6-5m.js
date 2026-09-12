@@ -63,7 +63,7 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 // moneyness consistently off one corrected IV. Default OFF -> byte-identical to the current baseline.
 // LIMITATION: single-IV (NO skew) correction calibrated on ATM vol; covers at other moneyness receive
 // the SAME time-of-day IV mult (best single-IV approximation; moneyness skew is a later refinement).
-// MONEYNESS (SKEW) CORRECTION (opts.ivSkew) — data/iv-skew-correction.json. Real index vol is a smile with
+// MONEYNESS (SKEW) CORRECTION (opts.ivSkew) — shared/iv-skew-correction.json. Real index vol is a smile with
 // a downside tilt, so pricing every leg of a vertical at one ATM vol is biased BY SIDE: measured against
 // 15,028 real chain quotes, flat vol under-prices bull call spreads by $69/contract and over-prices bear
 // put spreads by $50. The correction multiplies the base vol per leg by skewMult(z), z in expected-move
@@ -72,8 +72,20 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 let _skew = null;
 function loadSkew() {
   if (_skew) return _skew;
-  const p = path.join(__dirname, '..', '..', '..', '..', 'data', 'iv-skew-correction.json');
-  _skew = JSON.parse(fs.readFileSync(p, 'utf8')).buckets.filter(b => b.mult != null);
+  // MUST SHIP. It lives in shared/, which reaches the deployed server through the server/shared symlink
+  // that zip -r follows — the same route intraday-iv-correction.json already takes. It used to sit in the
+  // repo's data/ dir, which is NOT in the deployment package: after the engine moved under server/ the
+  // path resolved outside the app root and the first on-demand backtest on prod died with ENOENT.
+  // The fallback covers a stale checkout where the file has not been moved yet.
+  const cands = [
+    path.join(__dirname, '..', '..', '..', 'shared', 'iv-skew-correction.json'),
+    path.join(__dirname, '..', '..', '..', '..', 'data', 'iv-skew-correction.json'),
+  ];
+  const found = cands.find((c) => { try { return fs.existsSync(c); } catch (e) { return false; } });
+  // Do NOT silently degrade to "no correction": opts.ivSkew is ON for real variants, so a missing file
+  // would make prod quietly price differently from every baseline rather than fail visibly.
+  if (!found) throw new Error('iv-skew-correction.json not found (looked in shared/ and data/) — ivSkew cannot be applied');
+  _skew = JSON.parse(fs.readFileSync(found, 'utf8')).buckets.filter(b => b.mult != null);
   return _skew;
 }
 function skewMultAt(z) {
