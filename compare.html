@@ -97,6 +97,9 @@
   .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
   .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
   td.empty { border:1px dashed #eee; background:transparent; }
+  /* A double-click opens the cell in the debug page; without this the two rapid clicks select the cell's
+     text first and the chart flashes highlighted. */
+  .cell { user-select:none; -webkit-user-select:none; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
   .cell .cname .hmax { font:9px ui-monospace, monospace; white-space:nowrap; }
@@ -167,7 +170,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.72</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.76</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -455,7 +458,7 @@ function render() {
       // Sign of the CURRENT reading (the "now" P&L at the underlying) — after settlement that is the
       // settled close, so the border reflects how the day actually ended.
       const signCls = d.underPnl == null ? '' : d.underPnl > 0 ? ' pos' : d.underPnl < 0 ? ' neg' : '';
-      html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
+      html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}  (double-click → open in debug)\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
         + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
         + `<div class="cname"><b>${v}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
         + featStrip(v)
@@ -988,6 +991,29 @@ document.getElementById('grid').addEventListener('click', (e) => {
   const td = svg.closest('td'), sel = td && td.querySelector('.sel');
   if (sel) sel.innerHTML = `@ ${Math.round(price)} → <b style="color:${pnl >= 0 ? 'var(--profit)' : 'var(--loss)'}">${usd(pnl)}</b>`;
 });
+// DOUBLE-CLICK a chart -> open that exact (variant, date) in the debug page, in a new tab.
+// Double rather than single because a single click already means something here: it drops the projection
+// cursor. The two clicks that precede a dblclick still fire, so the cursor lands first and the tab opens
+// after — which is fine, the cursor is where you were pointing anyway.
+// The source and proxy are carried across so the debug page reads the SAME backend; opening a live cell
+// against a backtest-configured debug page would quietly show a different run.
+document.getElementById('grid').addEventListener('dblclick', (e) => {
+  const svg = e.target.closest('svg[data-v]'); if (!svg) return;
+  const v = svg.dataset.v; if (!v) return;
+  // commonDate is whatever the loaded source labelled the day; debug wants YYYY-MM-DD.
+  const iso = (() => {
+    const d = String(commonDate || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    const t = Date.parse(d);
+    return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '';
+  })();
+  const qs = new URLSearchParams({ variant: v });
+  if (iso) qs.set('date', iso);
+  if (SRC) qs.set('src', SRC === 'backtest' ? 'backtest' : 'live');
+  const proxy = _q.get('proxy'); if (proxy) qs.set('proxy', proxy);
+  window.open(`debug.html?${qs}`, '_blank', 'noopener');
+});
+
 // Load the OTHER source for the SAME date into recordsB. Failure is non-fatal and reported inline: the
 // most likely cause is simply that this date has no counterpart (a live day with no backtest data, or a
 // backtest date the server never ran), which is information rather than an error.
