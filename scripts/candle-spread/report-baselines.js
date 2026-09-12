@@ -25,7 +25,57 @@ const fs = require('fs');
 const path = require('path');
 
 const DEF = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread', 'backtest-baselines.json');
-const FILE = process.argv[2] ? path.resolve(process.argv[2]) : DEF;
+const FILE = process.argv[2] && !process.argv[2].startsWith('--') ? path.resolve(process.argv[2]) : DEF;
+
+// ── DIFF MODE ───────────────────────────────────────────────────────────────────────────────────────
+//   node report-baselines.js --diff <previous.json> [current.json]
+// A rebaseline changes what the strategies ARE, so the review question is "what moved, on every metric
+// that matters" — not just the running total. Totals alone are actively misleading once a day-loss cap is
+// in play: a capped variant is SUPPOSED to give up total, and `worst` stops being informative because it
+// is pinned to the ceiling by construction. What actually distinguishes configurations is the AVERAGE day
+// — the floor it holds (avgWorstCase: the minimum of the day's terminal curve; POSITIVE means the book
+// cannot lose) and the peak it carries (avgBestCase / avgTerminalPotential) — plus win rate, payoff and
+// drawdown. Print those side by side or the comparison is not a comparison.
+const di = process.argv.indexOf('--diff');
+if (di >= 0) {
+  const prevPath = process.argv[di + 1];
+  if (!prevPath) { console.error('usage: report-baselines.js --diff <previous.json> [current.json]'); process.exit(1); }
+  const A = JSON.parse(fs.readFileSync(path.resolve(prevPath), 'utf8'));
+  const B = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+  const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US'));
+  const d = (a, b, f) => { const x = (b == null ? 0 : b) - (a == null ? 0 : a); return (x >= 0 ? '+' : '') + (f ? f(x) : x); };
+  const rows = Object.keys(B.variants)
+    .filter((v) => A.variants[v] && JSON.stringify(A.variants[v]) !== JSON.stringify(B.variants[v]))
+    .map((v) => ({ v, a: A.variants[v], b: B.variants[v] }))
+    .sort((x, y) => (y.b.total - y.a.total) - (x.b.total - x.a.total));
+  console.log(`\nBASELINE DIFF — ${rows.length} variant(s) changed · ${A.days}d -> ${B.days}d`);
+  console.log('avgFloor = avgWorstCase, the mean day\'s WORST terminal outcome (>0 = the book cannot lose that day)');
+  console.log('avgPeak  = avgBestCase, the mean day\'s BEST terminal outcome · avgTerm = mean terminal potential\n');
+  const H = 'variant'.padEnd(11) + 'total'.padStart(13) + 'Δtotal'.padStart(13)
+    + 'avgFloor'.padStart(11) + 'Δ'.padStart(9) + 'avgPeak'.padStart(10) + 'Δ'.padStart(9)
+    + 'avgTerm'.padStart(10) + 'win%'.padStart(7) + 'payoff'.padStart(8)
+    + 'worst'.padStart(10) + 'maxDD30'.padStart(11) + 'eff'.padStart(8);
+  console.log(H); console.log('-'.repeat(H.length));
+  for (const r of rows) {
+    console.log(r.v.padEnd(11)
+      + usd(r.b.total).padStart(13) + d(r.a.total, r.b.total, usd).padStart(13)
+      + usd(r.b.avgWorstCase).padStart(11) + d(r.a.avgWorstCase, r.b.avgWorstCase, usd).padStart(9)
+      + usd(r.b.avgBestCase).padStart(10) + d(r.a.avgBestCase, r.b.avgBestCase, usd).padStart(9)
+      + usd(r.b.avgTerminalPotential).padStart(10)
+      + (Math.round(r.b.winRate * 100) + '%').padStart(7)
+      + String(r.b.payoff).padStart(8)
+      + usd(r.b.worst).padStart(10) + usd(r.b.maxDD30).padStart(11)
+      + String(r.b.efficiency).padStart(8));
+  }
+  // The bound check matters more than any P&L line once a cap is on: if the ceiling leaked, nothing else
+  // in the table means anything.
+  const leaked = rows.filter((r) => r.b.governor && r.b.governor.capExceeded > 0);
+  console.log('');
+  console.log(leaked.length
+    ? `⚠️  CAP LEAKED on ${leaked.length}: ` + leaked.map((r) => `${r.v} (${r.b.governor.capExceeded} days)`).join(', ')
+    : '✅ cap held on every changed variant (capExceeded 0)');
+  process.exit(0);
+}
 if (!fs.existsSync(FILE)) { console.error('no baselines file at ' + FILE); process.exit(1); }
 const B = JSON.parse(fs.readFileSync(FILE, 'utf8'));
 const V = B.variants;
