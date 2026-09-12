@@ -37,7 +37,12 @@ const fs = require('fs');
 const path = require('path');
 
 const SRC = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread');
-const BT = fs.readFileSync(path.join(__dirname, 'backtest-v6-5m.js'), 'utf8');
+// Reads the backtest's SOURCE TEXT to enumerate opts.* — so it must point at the real engine, not the
+// shim left behind at this path when the engine moved into server/src/candle-spread/backtest/ (which
+// deploys with the server). Reading the shim silently yields "backtest options: 0" and reports every live
+// field as an active divergence.
+const BT = fs.readFileSync(
+  path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread', 'backtest', 'backtest-v6-5m.js'), 'utf8');
 const TRADER = fs.readFileSync(path.join(SRC, 'trader.js'), 'utf8');
 const INDEX = fs.readFileSync(path.join(SRC, 'index.js'), 'utf8');
 

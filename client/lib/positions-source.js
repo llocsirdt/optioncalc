@@ -123,7 +123,7 @@
       const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : null;
       const isUncov = open && !hedge && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
       const label = hedge ? hedge
-        : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
+        : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
       const cr = e.net === 'CREDIT';
       const costStr = cr ? `+${usd(e.cost)}` : usd(e.cost);   // credit = cash received → leading +
       return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`

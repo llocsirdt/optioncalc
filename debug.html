@@ -103,7 +103,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.74</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.75</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -408,7 +408,9 @@ function syncNQ() {
 // THE ORDER TABLE. Built on the SAME data shape the index page's "Strategy Trades" panel uses
 // (strategyRunToOptionArray -> positions), so the columns, the row semantics and the glyphs match:
 // ▲/▼ opens coloured by side, ◇ covers, OPEN* for an open with no FILLED cover, a dimmed
-// "COVER (unfilled)" row for every resting order that was sent and never filled, and CR/DB net tags.
+// "COVER**" row for every resting order that was sent and never filled, and CR/DB net tags. The
+// double star mirrors OPEN*'s single star (uncovered): one star = this leg still lacks its pair,
+// two = the order to make the pair was placed and never filled. Shorter than "(unfilled)" too.
 // Reusing the producer rather than reimplementing it is the point — a lookalike would drift.
 //
 // The diagnostic columns are APPENDED, not substituted: the cover's mark when it was placed, the
@@ -498,7 +500,7 @@ function renderOrders() {
     const hedge = e.hedgeKind;
     const isUncov = open && !hedge && !e.isCovered;
     const label = hedge ? hedge
-      : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER (unfilled)' : 'COVER');
+      : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
     const cr = e.net === 'CREDIT';
     const r = e.raw, pc = r.pendingCover || {}, W = e.W, ML = e.ML;
     const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;

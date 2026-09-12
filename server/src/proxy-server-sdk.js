@@ -1167,7 +1167,7 @@ app.get('/api/v1/candle-spread/replay', (req, res) => {
 // This is a DEV-MACHINE endpoint by nature, exactly like /replay: the 5m datasets it reads are local-only
 // and gitignored, so the deployed instance answers 404 with the reason rather than pretending.
 const _btRunCache = new Map();   // `${variant}|${date}` -> record; the datasets are static, so a repeat UI call is free
-app.get('/api/v1/candle-spread/backtest', (req, res) => {
+app.get('/api/v1/candle-spread/backtest', async (req, res) => {
   const date = String(req.query.date || ''), variant = String(req.query.variant || '');
   const symbol = String(req.query.symbol || 'NDX');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
@@ -1176,12 +1176,22 @@ app.get('/api/v1/candle-spread/backtest', (req, res) => {
   if (_btRunCache.has(key)) return res.json(_btRunCache.get(key));
   let mod;
   try {
-    mod = require(require('path').join(__dirname, '..', '..', 'scripts', 'candle-spread', 'run-day-record.js'));
+    // The engine now lives under server/ so it DEPLOYS — the old scripts/ path was outside the zip, which
+    // is why this endpoint only ever worked on a dev box.
+    mod = require('./candle-spread/backtest/run-day-record');
   } catch (e) {
     return res.status(404).json({ error: 'Backtest engine not available on this host', message: e.message });
   }
   try {
-    const { record } = mod.runDayRecord({ date, variant, symbol });
+    // priceHistory lets the engine BUILD a day that no pre-built dataset covers (Schwab 1m, ~48 days back).
+    // Passing it is what makes this work on the deployed server, which ships no datasets at all. If the
+    // market client cannot be constructed we still serve pre-built and cached days.
+    let priceHistory = null;
+    try {
+      const mc = require('./persistence/market-client').marketClient;
+      if (mc && typeof mc.priceHistory === 'function') priceHistory = mc.priceHistory.bind(mc);
+    } catch (e) { /* no market creds → dataset/cache only */ }
+    const { record } = await mod.runDayRecord({ date, variant, symbol, priceHistory });
     _btRunCache.set(key, record);
     res.json(record);
   } catch (e) {
@@ -1190,7 +1200,7 @@ app.get('/api/v1/candle-spread/backtest', (req, res) => {
     if (e.code === 'NO_DATASET') {
       let available = [];
       try { available = mod.availableDates(); } catch (e2) { /* datasets unreadable — the 404 still stands */ }
-      return res.status(404).json({ error: 'No 5m dataset covers that date', date, checked: e.checked || [],
+      return res.status(404).json({ error: 'No 5m data for that date (not pre-built, and not buildable on demand)', date, checked: e.checked || [],
         first: available[0] || null, last: available[available.length - 1] || null, count: available.length });
     }
     if (e.code === 'NO_VARIANT') return res.status(404).json({ error: 'Unknown variant', variant });
