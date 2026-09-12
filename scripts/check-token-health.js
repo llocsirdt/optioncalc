@@ -52,8 +52,14 @@ async function check(name, base) {
     // printing "expired · 7d left" side by side reads like a contradiction — the days-left figure is just
     // the observed-first-seen clock, which restarts with the server and says nothing once auth is failing.
     const dead = tok.state === 'expired' || tok.state === 'missing';
-    const age = dead ? '' : (tok.daysLeft != null ? ` · ${tok.daysLeft}d left` : '')
-      + (tok.issuedAtObserved ? ' (age observed, not stamped)' : '');
+    // ageUnknown = the server had NO prior record of this fingerprint, so it started the clock at first
+    // sight. The "days left" figure is then an UPPER BOUND masquerading as an estimate — on 2026-09-12 that
+    // reported "7d left" on a token with ~2.4d remaining, because /tmp had been purged. Say so instead of
+    // printing a number that reads as authoritative.
+    const age = dead ? ''
+      : tok.ageUnknown ? ' · age UNKNOWN (no issue stamp and no prior record — renew to establish it)'
+      : (tok.daysLeft != null ? ` · ${tok.daysLeft}d left` : '')
+        + (tok.issuedAtObserved ? ' (age observed, not stamped)' : '');
     return { name, base, reachable: true, level, token: tok, dead,
       summary: `${tok.state}${age}${dead && tok.probe && tok.probe.auth ? ' — confirmed by auth probe' : ''}`,
       build: body.build && (body.build.commit || body.build.version) };

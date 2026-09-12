@@ -30,9 +30,14 @@ const WARN_DAYS = 1.0;
 const PROBE_TTL_MS = 5 * 60 * 1000;   // ground-truth probe at most every 5 minutes
 
 // Same durability ladder the run store uses: prefer the root-disk dir that survives a deploy, fall back to
-// /tmp. A lost state file only costs us the observed issue date, never correctness of the probe.
+// /tmp. A lost state file costs us the observed issue date — and that is NOT harmless: with no explicit
+// stamp the fallback restarts the clock, so a days-old token reports a fresh 7 days. That happened on
+// 2026-09-12 (macOS purged /tmp; the hourly check reported "7d left" on ~2.4d remaining). A per-user dir
+// now sits ahead of /tmp so a purge cannot silently reset the age on a dev machine.
 function stateDir() {
-  const cands = [process.env.SCHWAB_TOKEN_STATE_DIR, '/var/optioncalc-data', '/tmp'].filter(Boolean);
+  const home = process.env.HOME || process.env.USERPROFILE;
+  const cands = [process.env.SCHWAB_TOKEN_STATE_DIR, '/var/optioncalc-data',
+    home ? path.join(home, '.optioncalc') : null, '/tmp'].filter(Boolean);
   for (const d of cands) {
     try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); return d; } catch (e) { /* next */ }
   }
@@ -68,10 +73,16 @@ function resolveIssuedAt(fp) {
   }
   const st = readState();
   if (st.fingerprint === fp && st.firstSeenAt) return { issuedAt: st.firstSeenAt, observed: true };
-  // New (or first-ever) token: start the clock now.
+  // No record of this fingerprint. Two very different cases share this branch, and conflating them is what
+  // produced a confident-but-wrong "7d left":
+  //   ROTATED  — we have seen a DIFFERENT fingerprint before, so this really is a new token: clock starts now.
+  //   UNKNOWN  — no prior state at all (first run, or the state file was lost). The token may be minutes or
+  //              days old and we have NO evidence either way, so the age must be reported as UNKNOWN rather
+  //              than assumed fresh. Callers surface this instead of a reassuring number.
   const now = new Date().toISOString();
+  const rotated = Boolean(st.fingerprint && st.fingerprint !== fp);
   writeState({ fingerprint: fp, firstSeenAt: now, rotatedAt: now, previousFingerprint: st.fingerprint || null });
-  return { issuedAt: now, observed: true };
+  return { issuedAt: now, observed: true, ageUnknown: !rotated };
 }
 
 let probeCache = null;   // { at, ok, error }
@@ -113,7 +124,7 @@ function report(token) {
     return { present: false, state: 'missing', ok: false,
       message: 'SCHWAB_REFRESH_TOKEN is not set on this server.' };
   }
-  const { issuedAt, observed } = resolveIssuedAt(fp);
+  const { issuedAt, observed, ageUnknown } = resolveIssuedAt(fp);
   const ageMs = Date.now() - Date.parse(issuedAt);
   const ageDays = Math.round((ageMs / 86400000) * 100) / 100;
   const expiresAt = new Date(Date.parse(issuedAt) + LIFETIME_DAYS * 86400000).toISOString();
@@ -135,6 +146,9 @@ function report(token) {
     present: true, state, ok,
     fingerprint: fp,                       // sha256 prefix — identifies the token WITHOUT exposing it
     issuedAt, issuedAtObserved: observed,  // observed = "first seen by this server", not authoritative
+    // ageUnknown = we had NO prior record, so `issuedAt` is a floor on the age, not an estimate of it.
+    // Never present the remaining-days figure as trustworthy when this is set.
+    ageUnknown: Boolean(ageUnknown),
     ageDays, expiresAt, daysLeft, lifetimeDays: LIFETIME_DAYS,
     probe: p ? { ok: p.ok, auth: p.auth === true, checkedAt: new Date(p.at).toISOString(), error: p.error } : null,
     message: state === 'expired' ? 'Schwab refresh token is EXPIRED — renew it now (scripts/renew-schwab-token.js).'
