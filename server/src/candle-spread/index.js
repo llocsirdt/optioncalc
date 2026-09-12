@@ -294,9 +294,59 @@ const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
 // tested (v8-40-cATM -$23,125 vs -$143,511), because span = W x (lossCapFrac + minLockFrac) still scales
 // and a fixed dollar step is a smaller FRACTION of a wider span. Fixing the concession per step removed
 // most of the width dependence, not all of it.
+// v7-10 added 2026-09-12. The ladder was first judged on TOTAL P&L (-$70,043 across its six variants) and
+// called a loss; that was the wrong metric — it targets FILL RATE. Measured on what it aims at, over 765
+// days, it is the strongest lever we have: +13 points of cover fill on average, against the minLock ramp's
+// +5, and the two are additive rather than redundant. On v7-10 specifically it is not even a trade:
+//   control      74.5% fill   $1,183,947   ret/DD 327.1
+//   ladder       84.9% fill   $1,393,491   ret/DD 411.8     (+$209,544, worst day still -$1,000)
+// Fill rate is the number that decides whether the BACKTEST IS TRUSTWORTHY AT ALL: modelling ~50% fills
+// without being able to say WHICH half fail makes every total an approximation. Getting the armed variant
+// to ~85-88% is what turns the backtest into a measurement of the strategy rather than of our fill guess.
 const LADDER_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v2-20,v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v7-10,v2-20,v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
+// MIN-LOCK LEVEL A/B (2026-09-12). minLock is the price side of every resting cover — the target is
+// `W - openCost - minLock` — so it decides what RETURN we refuse to close below. Stated that way the
+// current settings are extreme: 0.20-0.35 of width is a 40-70% return DEMANDED on an intraday trade, and
+// the fleet's fill rates line up with it almost exactly (v6-20 at 0.35 fills 47.7%, v7-10 at 0.20 fills
+// 74.5%). The user's own rule is 5-10% of width — "locking even just $100 on a $20 tent is 10% profit on
+// that capital... a good return on any investment even when measured in months or years".
+//
+// Measured over 765 days it is the biggest fill lever found, and on v7-10 it is not even a trade-off:
+//   0.20 (current) + ladder   84.9% fill   $1,393,491
+//   0.10           + ladder   89.1% fill   $1,446,388   <- MORE total AND more fill
+//   0.05           + ladder   91.7% fill   $1,388,543   ret/DD 782
+// Worst day is -$1,000 at EVERY level: the governor bounds the floor, so lowering minLock costs no risk.
+//
+// WHY FILL RATE IS THE POINT, not P&L: a backtest that models ~50% fills without being able to say WHICH
+// half fail is an approximation with a plausible number on the end. Reaching ~90% makes the backtest a
+// measurement of the STRATEGY rather than of our fill guess, which is what makes every later experiment
+// trustworthy.
+//
+// SPREAD ACROSS BUCKETS AND WIDTHS, and kept attributable. The three signal blocks behave differently
+// enough that a result on one says little about the others (v0-v3 classic tent geometry; v4-v6 multi-TF
+// directional on the fixed-mark selector; v7-v9 bidirectional/capped). Ladder-only is ALREADY live on
+// v2-20/v5-20/v8-40, so these slots carry minLock alone or minLock+ladder — giving all four cells of the
+// 2x2 at once. Each test variant has a clean, highly-correlated control that keeps its current settings:
+//   v0-20 0.10        ctl v1-20 (r 0.943)     v0-10 0.10 +ladder  ctl v1-10 (r 0.914)
+//   v4-20 0.10        ctl v4-40 (r 0.841)     v6-40 0.05 +ladder  ctl v5-40 (r 0.862)
+//   v0-40 0.05        ctl v3-40 (r 0.985)     v9-10 0.05 +ladder  ctl v7-20 (r 0.699, the best the
+//                                                                  bidirectional block offers)
+const MIN_LOCK_AB = (() => {
+  const raw = process.env.CANDLE_SPREAD_MINLOCK != null ? process.env.CANDLE_SPREAD_MINLOCK
+    : 'v7-10:0.10+L,v0-20:0.10,v4-20:0.10,v0-40:0.05,v0-10:0.10+L,v6-40:0.05+L,v9-10:0.05+L';
+  const m = new Map();
+  for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const [name, spec] = part.split(':');
+    if (!name || !spec) continue;
+    const ladder = /\+L$/i.test(spec);
+    const frac = parseFloat(spec.replace(/\+L$/i, ''));
+    if (Number.isFinite(frac)) m.set(name.trim(), { frac, ladder });
+  }
+  return m;
+})();
+
 const GIVEUP_LIVE = new Set(
   (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20,v9-40,v9-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
@@ -319,8 +369,23 @@ const GIVEUP_LIVE = new Set(
 //
 // Shape .25 -> 1 by 12:30 beat the more aggressive 0 -> 1 by 11:30 / 12:00 under the cap: those buy more
 // fill but give back more floor, and at the margin under a cap that is no longer free.
+// SPREAD ACROSS BUCKETS AND WIDTHS (2026-09-12). The cap ran on v7-10 alone — one variant, one bucket,
+// one width — which is not enough to tell whether it generalises. It now runs on one variant from each
+// signal block at a different width, each against a clean, correlated control that keeps the $5k/$7k/$9k
+// production governor:
+//   v7-10  bidirectional  W=10  cap $1,000   (armed)
+//   v3-10  classic        W=10  cap $1,000   ctl v2-10 (r 0.789)
+//   v6-20  multiTF        W=20  cap $2,000   ctl v6-10 (r 0.802)
+//   v7-40  bidirectional  W=40  cap $4,000   ctl v7-20 (r 0.772)
+//
+// W=40 IS INCLUDED DELIBERATELY, AGAINST THE BACKTEST. The cap sweep says it fails badly there — v6-40 at
+// k=1.0 still draws down 142.7% of a $25k account and takes 21 days to recover, versus 14.5%/2 days at
+// W=10 — so this slot is spent expecting a negative. The reason to run it anyway is that the sweep is
+// backtest-only, and the backtest's cover-fill model is measurably wrong (75% modelled against 48% live).
+// A live W=40 read is the one way to find out whether the verdict survives contact with real fills; if it
+// does, the width question is settled with evidence rather than by a model we already distrust.
 const CAPPRES_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_CAPPRES != null ? process.env.CANDLE_SPREAD_CAPPRES : 'v7-10')
+  (process.env.CANDLE_SPREAD_CAPPRES != null ? process.env.CANDLE_SPREAD_CAPPRES : 'v7-10,v3-10,v6-20,v7-40')
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
@@ -384,12 +449,31 @@ function buildVariants() {
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
+      // MIN-LOCK A/B — after minLockFor above, since it overrides the family default. The paired `+L`
+      // variants also take the ladder here rather than being listed in LADDER_LIVE, so the pairing stays
+      // legible in ONE place: what this variant is testing is exactly what this entry says.
+      const ab = MIN_LOCK_AB.get(v.variant);
+      if (ab) {
+        v.continuousCoverMinLockFrac = ab.frac;
+        if (ab.ladder) {
+          v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
+          v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;
+        }
+      }
       // CAPITAL PRESERVATION — must come AFTER lossMax/minLockFrac above, since it overrides the cap.
       if (CAPPRES_LIVE.has(v.variant)) {
         v.lossMax = w * 100;                 // 1 x width, the tightest cap that can still trade
         v.lossTarget = Math.round(0.7 * v.lossMax);
-        v.minLockRamp = true; v.minLockRampStart = 9 * 60 + 30; v.minLockRampEnd = 12 * 60 + 30;
-        v.minLockRampFrom = 0.25; v.minLockRampTo = 1;
+        // THE RAMP IS GONE, and lowering minLock is why. Both attacked the SAME failure — a resting cover
+        // price the market never reaches — and minLock attacks it at the source. Measured on v7-10 with
+        // the cap and the ladder in place, at minLock 0.10 the ramp buys +109 fills (+0.8%) and costs
+        // $133/day of avgFloor and $51,662 of total. If those extra fills were new profit the floor would
+        // RISE; it falls, so the ramp is not winning covers that would otherwise be lost — it is taking
+        // covers that would have filled at the full lock and filling them EARLIER for less. That is a
+        // straight giveaway once minLock is already reachable.
+        //
+        // Keeping it would also have meant FOUR simultaneous changes on the only variant sending orders
+        // (cap + ramp + ladder + new minLock), with no way to attribute a bad Monday to any one of them.
       }
       // Applied per variant; see LADDER_LIVE / GIVEUP_LIVE above for the pairing and the evidence.
       if (LADDER_LIVE.has(v.variant)) {
