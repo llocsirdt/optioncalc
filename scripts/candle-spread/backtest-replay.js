@@ -40,7 +40,14 @@ const explicit = arg('--dataDir', null);
 const pools = explicit ? [{ name: path.basename(explicit), dir: explicit }] : DATASETS.filter(d => fs.existsSync(d.dir));
 const loaded = pools.map(p => ({ ...p, days: load5mDays(p.dir) }));
 // load5mDays labels days as M/D/YYYY (ET); accept either that or ISO on the command line.
-const iso = d => { const [m, dd, y] = d.split('/'); return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; };
+// Dataset days are labelled M/D/YYYY (ET); an ON-DEMAND day is already ISO. Passing an ISO string through
+// the M/D/YYYY split yielded "undefined-2026-09-11-undefined" as the output filename, so accept both.
+const iso = (d) => {
+  const str = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const [m, dd, y] = str.split('/');
+  return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+};
 
 if (process.argv.includes('--list')) {
   for (const p of loaded) {
@@ -57,7 +64,24 @@ for (const p of loaded) {
   const hit = p.days.find(d => iso(d.date) === want || d.date === want);
   if (hit) { day = hit; DIR = p.dir; poolName = p.name; break; }
 }
-if (!day) { console.error(`no such day: ${want}. Searched: ${loaded.map(p => p.name).join(', ') || '(no datasets present)'}. Use --list.`); process.exit(1); }
+// ON-DEMAND FALLBACK. The compare page's "overlay backtest" comes through /replay, which spawns this
+// script — so when a date had no pre-built dataset day the overlay failed with "not available" even
+// though the debug page could build the SAME day on request. The two backtest routes had diverged:
+// /candle-spread/backtest (one variant, in-process) gained on-demand building, /replay (whole-day bundle,
+// this script) did not. It does now, from the same builder, so both routes answer for the same dates.
+async function resolveOnDemand() {
+  const { buildDualDay } = require('../../server/src/candle-spread/backtest/day-builder');
+  const mc = require('../../server/src/persistence/market-client').marketClient;
+  if (!mc || typeof mc.priceHistory !== 'function') return null;
+  return buildDualDay(want, mc.priceHistory.bind(mc));
+}
+
+(async () => {
+if (!day) {
+  try { day = await resolveOnDemand(); } catch (e) { console.error(`on-demand build failed: ${e.message}`); }
+  if (day) { DIR = 'on-demand'; poolName = 'built on demand'; }
+}
+if (!day) { console.error(`no such day: ${want}. Searched: ${loaded.map(p => p.name).join(', ') || '(no datasets present)'}, then tried building it from Schwab 1m history (~48 days back). Use --list.`); process.exit(1); }
 
 // Same opts mapping the baseline builder uses, so a replay is the SAME run the baselines measured.
 function optsFor(v) {
@@ -75,6 +99,18 @@ function optsFor(v) {
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.openNeverOtm) o.openNeverOtm = true;
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
+  // These were never forwarded, so the compare page's backtest overlay has been drawing runs with NO cover
+  // geometry and NO wing conversion — a different strategy from the one the cell claims and from the one
+  // the baselines measure. It went unnoticed because /replay serves a cached bundle from disk when one
+  // exists, so only a NEW date ever reaches this code. Caught by the contract guard below the moment
+  // on-demand building let a new date through.
+  if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
+  if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
+  if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
+  if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
+  if (v.coverGiveUp) { o.coverGiveUp = true; for (const k of ['giveUpPoints', 'giveUpMaxLoss']) if (v[k] != null) o[k] = v[k]; }
+  if (v.coverLadder) { o.coverLadder = true; for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k]; }
+  if (v.minLockRamp) { o.minLockRamp = true; for (const k of ['minLockRampStart', 'minLockRampEnd', 'minLockRampFrom', 'minLockRampTo']) if (v[k] != null) o[k] = v[k]; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. When the dataset carries an NDX
@@ -137,3 +173,4 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 console.log(`replay ${date} — ${vs.length} variants · ${(vs[0].events.length - 1)} bars · ${(fs.statSync(file).size / 1024).toFixed(0)} KB`);
 console.log(`  settle ${vs[0].events[vs[0].events.length - 1].settle.toFixed(0)}  ·  terminal range ${usd(Math.min(...vs.map(v => v.summary.terminal)))} .. ${usd(Math.max(...vs.map(v => v.summary.terminal)))}`);
 console.log(`wrote ${path.relative(process.cwd(), file)}`);
+})().catch((e) => { console.error(e && e.message ? e.message : String(e)); process.exit(1); });
