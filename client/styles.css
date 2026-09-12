@@ -580,9 +580,23 @@ pre {
    but the only rules here were .status-success / .status-error / .status-pending — names nothing ever
    applies. The status has therefore always rendered plain black, in the old panel too. Now that it sits in
    the header where the colour is the at-a-glance signal, match the classes the code actually sets. */
-#schwab-status.connected { color: #2e7d32; font-weight: 700; }
+/* HEALTHY = a dot, not a sentence. Connected is the state you are in ~always, and the header should spend
+   its room on the symbol and the price instead. A BAD state stays verbose on purpose — that is when the
+   words matter, and it should be noisy.
+   The text is collapsed with font-size:0 rather than removed, because updateConnectionButtonVisibility()
+   in schwab-api.js keys off statusElement.textContent === 'Connected' to hide the Test/Connect button.
+   Changing the text would silently strand that button on screen forever. */
+#schwab-status::before { content: '\25CF'; font-size: 13px; line-height: 1; }
+#schwab-status.connected { font-size: 0; }                      /* hide the word, keep textContent */
+#schwab-status.connected::before { color: #2e7d32; }
 #schwab-status.error     { color: #c62828; font-weight: 700; }
+#schwab-status.error::before { color: #c62828; margin-right: 5px; }
 #schwab-status.testing   { color: #ef6c00; font-weight: 700; font-style: italic; }
+#schwab-status.testing::before { color: #ef6c00; margin-right: 5px; }
+/* No class yet (initial "Not Connected") — grey dot plus the words, since it is not a good state either. */
+#schwab-status:not(.connected):not(.error):not(.testing)::before { color: #9e9e9e; margin-right: 5px; }
+/* A ticker is never more than ~4-5 characters; the field was sized for prose. */
+#apibar input#symbol-input { width: 62px; text-transform: uppercase; }
 
 .schwab-status .status-success {
   color: #4CAF50;
