@@ -81,16 +81,34 @@ function resolveCover(coveredSide, shortStrike, width, ledger, opts) {
   opts = opts || {};
   const prefer = opts.preferStyle || 'debit';
   const incr = opts.incr || 10;
-  const maxWing = opts.maxWingShift != null ? opts.maxWingShift : 8;
+  // maxWingShift is kept as the option name for compatibility; it now bounds the ITM SLIDE, not a width change.
+  const maxShift = opts.maxCoverShift != null ? opts.maxCoverShift : (opts.maxWingShift != null ? opts.maxWingShift : 8);
   const styles = prefer === 'credit' ? ['credit', 'debit'] : ['debit', 'credit'];
   for (const style of styles) {   // ideal / twin: tent-width wing
     const legs = CL.coverLegsFor(coveredSide, shortStrike, width, style);
-    if (!ledger.conflicts(legs)) return { legs, style, wing: width, resolution: style === prefer ? 'ideal' : 'twin' };
+    if (!ledger.conflicts(legs)) return { legs, style, wing: width, shift: 0, anchor: shortStrike, resolution: style === prefer ? 'ideal' : 'twin' };
   }
-  for (let w = width + incr; w <= width + maxWing * incr; w += incr) {   // wing-shift out to a free strike
+  // SLIDE THE WHOLE SPREAD, WIDTH UNCHANGED. The old behaviour moved only the LONG leg out to a free
+  // strike, which changed the cover's WIDTH — and a different-width spread does not cover the original:
+  // it re-introduces risk on the opposite side that nothing in the book is tracking, and it broke the
+  // `W - open - cover` lock arithmetic that assumes value >= W everywhere. Measured on 2026-09-11 prod,
+  // 98 of 103 wing-shifted covers (95%) locked a GUARANTEED LOSS totalling -$136,080, against 4% on the
+  // unshifted path.
+  //
+  // Instead translate BOTH legs together, deeper in the money, keeping the width equal to the position's.
+  // A parallel shift preserves the tent: for a bull open the cover is a put spread whose payoff is
+  // clamp((anchor+W)-S, 0, W), and summed with the call spread's clamp(S-(K-W), 0, W) the minimum stays
+  // exactly W for any ITM offset — so the lock price is unchanged and `W - open - cover` stays true.
+  // (Shifting the other way, OTM, eventually breaks that: once the cover stops paying where the open pays
+  // nothing the floor collapses to 0, which is why only the ITM direction is searched.)
+  //
+  // Different-width covers are a real strategy, but they need continuous per-side risk tracking that does
+  // not exist yet — so they are deliberately NOT generated here.
+  for (let s = 1; s <= maxShift; s++) {
+    const anchor = coveredSide === 'bull' ? shortStrike + s * incr : shortStrike - s * incr;
     for (const style of styles) {
-      const legs = CL.coverLegsFor(coveredSide, shortStrike, w, style);
-      if (!ledger.conflicts(legs)) return { legs, style, wing: w, resolution: 'wingShift' };
+      const legs = CL.coverLegsFor(coveredSide, anchor, width, style);
+      if (!ledger.conflicts(legs)) return { legs, style, wing: width, shift: s * incr, anchor, resolution: 'shift' };
     }
   }
   return { resolution: 'skip' };

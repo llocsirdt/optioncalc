@@ -85,6 +85,24 @@ function optsFor(v) {
   // both ladders, so under leg-uniqueness it changes which opens shift/skip → must be modeled to match live.
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.openNeverOtm) o.openNeverOtm = true;
+  // COVER GIVE-UP: once the underlying has run `giveUpPoints` through the short strike, stop asking for the
+  // profit-lock price and take the exit at a capped loss (`giveUpMaxLoss` x width). Shipped live 2026-09-10,
+  // one day AFTER the committed baselines were last generated — so the CSV never carried it and the
+  // contract guard had nothing to catch, since the variants did not yet declare the field. Regenerating
+  // without these lines would have thrown; that is the guard working.
+  if (v.coverGiveUp) {
+    o.coverGiveUp = true;
+    if (v.giveUpPoints != null) o.giveUpPoints = v.giveUpPoints;
+    if (v.giveUpMaxLoss != null) o.giveUpMaxLoss = v.giveUpMaxLoss;
+  }
+  // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
+  // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
+  // the 2026-09-09 CSV — the contract guard caught it on the first regeneration after the fact.
+  if (v.coverLadder) {
+    o.coverLadder = true;
+    for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
+      'ladderStepDollars']) if (v[k] != null) o[k] = v[k];
+  }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
   const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
   // ALWAYS build the geo explicitly. This used to be conditional ((w && w !== 20) || sh || cf != null),

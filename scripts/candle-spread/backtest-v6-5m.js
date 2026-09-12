@@ -370,7 +370,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (enforceLegs) {
         rc = LL.resolveCover(p.side, p.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
         if (rc.resolution === 'skip') { legCoverSkip++; continue; }   // can't lock leg-uniquely → leave uncovered
-        if (rc.wing !== G.WIDTH) cl = CL.coverLegsFor(p.side, p.shortStrike, rc.wing, 'debit');   // anchor-cover P&L legs
+        if (rc.shift) cl = CL.coverLegsFor(p.side, rc.anchor, G.WIDTH, 'debit');   // slid cover, SAME width
       }
       // coverToStackSlip: the lock-cover is booked INSTANTLY at mark + 1 tick with no resting-fill check
       // (the agreed CROSS mode — the position is deep ITM so its offsetting cover is cheap/OTM and you
@@ -720,10 +720,13 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (enforceLegs) {
           rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
-          if (rc.wing !== G.WIDTH) {
-            // Anchor cover (wider wing): P&L uses the ACTUAL legs (debit-canonical at the shifted wing).
-            cLegs = CL.coverLegsFor(pos.side, pos.shortStrike, rc.wing, 'debit');
-            cLimit = roundTick(legsMark(cLegs, S, tau, iv) + TICK);
+          if (rc.shift) {
+            // SLID cover (same width, deeper ITM): P&L uses the ACTUAL legs, but the price rule is
+            // UNCHANGED from the unshifted case — min(workingTarget, mark + tick). The old branch priced a
+            // shifted cover at its own mark with no target cap, which is what let a resolver-shifted cover
+            // book above the lock price and bank a guaranteed loss.
+            cLegs = CL.coverLegsFor(pos.side, rc.anchor, G.WIDTH, 'debit');
+            cLimit = roundTick(Math.min(workingTarget, legsMark(cLegs, S, tau, iv) + TICK));
           }
         }
     if (governed) {

@@ -101,7 +101,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // (anchor cover: long wing out to a free strike) → skip (leave uncovered). The resting-fill BOOKING stays
   // debit-canonical (pendingCover.legs) so the floor + settlement P&L are right for the position's own
   // style; only the SENT order + the cash ledger differ. Wing-shift books/settles at the wider wing.
-  let style = 'debit', wing = W;
+  let style = 'debit', wing = W, shift = 0, anchor = pos.shortStrike;
   if (deps.capitalRecapture === true) {
     const m = coverMarkNow(pos.legs, deps.getLeg);
     if (m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W) style = 'credit';
@@ -109,11 +109,12 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   if (deps.enforceLegUniqueness && deps._ledger) {
     const rc = LL.resolveCover(pos.side, pos.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
     if (rc.resolution === 'skip') { decisions.push({ action: 'cover-skip-leg', positionId: pos.id }); return; }   // can't place — stays uncovered
-    style = rc.style; wing = rc.wing;
+    style = rc.style; wing = rc.wing; shift = rc.shift || 0; anchor = rc.anchor != null ? rc.anchor : pos.shortStrike;
     deps._ledger.record(rc.legs);
   }
-  // BOOK debit-canonical at the resolved wing (parity for the position's own economics).
-  const bookLegs = (wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, 'debit');
+  // BOOK debit-canonical at the resolved ANCHOR. The resolver now slides the whole spread at CONSTANT
+  // width rather than widening it, so `wing === W` always and the lock arithmetic below stays true.
+  const bookLegs = shift ? CL.coverLegsFor(pos.side, anchor, W, 'debit') : plan.legs;
   const brl = resolveLegs(bookLegs, deps.getLeg);
   const bookMark = brl.error ? null : round2(brl.longMid - brl.shortMid);
   // COVER PRICING (deps.coverPriceMode, default 'lock' = the historical behaviour).
@@ -127,9 +128,13 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const markMode = deps.coverPriceMode === 'mark';
   const slip = (deps.coverSlipTicks != null ? deps.coverSlipTicks : 1) * tick;
   const lockTarget = round2(W - pos.limit - ML);
+  // Lock mode always rests at the profit-lock price. It used to fall back to the cover's own mark whenever
+  // the legs had been shifted, which is how a resolver-shifted cover came to be BOUGHT AT MARK and lock a
+  // guaranteed loss; with a constant-width slide there is no wider instrument to price off, so the lock
+  // target is the only correct price and a cover that cannot reach it simply rests unfilled.
   const target = markMode
     ? (bookMark != null ? round2(Math.max(tick, bookMark)) : lockTarget)
-    : ((wing === W) ? lockTarget : (bookMark != null ? round2(Math.max(tick, bookMark)) : lockTarget));
+    : lockTarget;
   // placedEpoch / placedUnder are what the ladder walks on: how long this has rested and how far the
   // underlying has travelled since. Without them a resting order has no way to know it has gone stale.
   pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike,
@@ -137,7 +142,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     minLock: ML, openCost: pos.limit };
   pos.coverStatus = 'resting';
   // SEND the resolved cover (debit or credit) at the resolved wing.
-  const sendLegs = (style === 'debit' && wing === W) ? plan.legs : CL.coverLegsFor(pos.side, pos.shortStrike, wing, style);
+  const sendLegs = (style === 'debit' && !shift) ? plan.legs : CL.coverLegsFor(pos.side, anchor, W, style);
   const srl = resolveLegs(sendLegs, deps.getLeg);
   let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
   if (!srl.error) {
@@ -148,8 +153,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       const m = round2(srl.longMid - srl.shortMid);
       price = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
     }
-    else { price = (wing === W) ? L.roundToTick(round2(W - pos.limit - ML), tick)   // ideal debit: rest at the profit-lock target
-                                : L.roundToTick(Math.max(tick, round2(srl.longMid - srl.shortMid)), tick); }   // wing-shift: the wider cover's mark
+    else { price = L.roundToTick(round2(W - pos.limit - ML), tick); }   // debit: rest at the profit-lock target, shifted or not
     if (price > 0) {
       const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
       const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: sendLegs, limit: price, net: sentNet, mark: plan.mark });
@@ -159,7 +163,14 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
   pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
-  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs, mark: plan.mark, geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet, wing: wing !== W ? wing : undefined, minLock: ML || undefined, note });
+  // `mark` MUST be the mark of the legs actually booked. It used to log plan.mark — the mark of the
+  // UNSHIFTED plan that was never sent — sitting next to a target taken from a different instrument, which
+  // made a correctly-priced order read as a buy limit far above the market. planMark is kept, named, when
+  // the two differ.
+  decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs,
+    mark: bookMark != null ? bookMark : plan.mark, planMark: shift ? plan.mark : undefined,
+    geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet,
+    shift: shift || undefined, minLock: ML || undefined, note });
 }
 
 // v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
