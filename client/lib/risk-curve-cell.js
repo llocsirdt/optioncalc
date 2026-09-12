@@ -60,8 +60,9 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // and the two overprint — visible on the debug page as the backtest "best" value buried under
   // "if all covers filled". Knowing the legend's extent here lets the labels start below it instead.
   const overlays = (Array.isArray(dB) ? dB : [dB]).filter((o) => o && o.curve && o.curve.length);
-  const legendRows = overlays.filter((o) => o.label).length;
-  const legendBottom = legendRows ? (11 * FS) + legendRows * (10 * FS) : 0;
+  // Overlay labels now ride their own curves rather than stacking in this corner, so the reference labels
+  // no longer have to dodge a legend block. Kept at 0 so the clamp below stays a plain font-scaled bound.
+  const legendBottom = 0;
 
   // Backtest AVERAGE loss/profit: dashed reference lines (always shown) with the $ value inline at the LEFT.
   const btEl = (y, color, txt) => {
@@ -97,14 +98,28 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // covers filled") and is now either that object or an ARRAY of them, because the debug page draws two:
   // the if-all-filled counterfactual AND the same day as the backtest engine ran it. Each may carry its
   // own colour/dash; the defaults reproduce the original single blue dashed line byte-for-byte, so every
-  // existing caller renders exactly as before. Labels stack down the top-left in their own colour, which
-  // is also the key — no separate legend to keep in sync.
-  let ovRow = 0;
+  // existing caller renders exactly as before. The colour IS the key — no separate legend to keep in sync.
+  //
+  // The label used to be a bold 8*FS block stacked in the top-left corner, which at debug's FS=2.1 read as
+  // a heading and sat nowhere near the line it named (and collided with the reference values drawn in the
+  // same corner). It now rides ON its own curve — placed at the curve's left end, at that curve's own
+  // height — so which line it belongs to is positional rather than something to work out from the colour.
+  // Smaller and lighter to match: it is an annotation, not a title.
+  const ovPlaced = [];   // baselines already used, so two overlays running together do not overprint
   const ovEl = (o) => {
     const col = o.color || '#6ab0f3', txt = o.labelColor || o.color || '#3d86c6', dash = o.dash || '4 2';
-    const y = (11 * FS) + (ovRow++) * (10 * FS);
-    return `<polyline points="${o.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="${col}" stroke-width="${(1.2 * FS).toFixed(1)}" stroke-dasharray="${dash}" opacity="0.95"/>`
-      + (o.label ? `<text x="2" y="${y.toFixed(1)}" font-size="${(8 * FS).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="${txt}" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${o.label}</text>` : '');
+    const poly = `<polyline points="${o.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}" fill="none" stroke="${col}" stroke-width="${(1.2 * FS).toFixed(1)}" stroke-dasharray="${dash}" opacity="0.95"/>`;
+    if (!o.label) return poly;
+    const fs = 7 * FS;                       // was 8*FS bold; smaller + lighter reads as an annotation
+    // Anchor to the curve's LEFT end, sitting just above the line, then clamp inside the canvas.
+    const p0 = o.curve[0];
+    let ly = Math.max(fs, Math.min(CH - 0.3 * fs, Y(p0.y) - 0.55 * fs));
+    // If another overlay label already sits within a line-height, step below it rather than overprint.
+    for (let guard = 0; guard < 8 && ovPlaced.some((v) => Math.abs(v - ly) < fs * 1.15); guard++) ly += fs * 1.15;
+    ly = Math.max(fs, Math.min(CH - 0.3 * fs, ly));
+    ovPlaced.push(ly);
+    return poly
+      + `<text x="${(3 * FS).toFixed(1)}" y="${ly.toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="500" font-family="ui-monospace,monospace" fill="${txt}" stroke="#fff" stroke-width="${(2.2 * FS).toFixed(1)}" paint-order="stroke">${o.label}</text>`;
   };
   // FILL DEPTH = HOW BIG THE OUTCOME IS, in dollars. Each gradient runs from break-even (pale) to the
   // grid-wide extreme (full colour) in USER SPACE — so the full-saturation stop for a small book sits far

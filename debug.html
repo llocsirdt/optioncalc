@@ -47,6 +47,12 @@
   .panel { overflow:hidden; min-width:0; }
   #curveBox { position:relative; width:100%; }
   #curveBox svg { display:block; width:100%; height:auto; max-width:100%; }
+  /* HEADER. The title stays left; the numeric groups (actual / if-filled / backtest) stack right-aligned,
+     one per row. They used to run on as a single "·"-joined sentence that wrapped mid-group at narrow
+     widths, so a line could begin with a stray value belonging to the previous group. */
+  .curveHead { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .curveHead .meta { text-align:right; font-weight:400; }
+  .curveHead .meta .mrow { display:block; white-space:nowrap; line-height:1.5; }
   /* The "now" readout, positioned along the curve exactly as the compare cell does it. */
   .nowlbl { position:absolute; bottom:2px; transform:translateX(-50%); white-space:nowrap;
     font:11px ui-monospace,monospace; color:#555; background:rgba(255,255,255,.86); padding:0 3px; border-radius:3px; }
@@ -97,7 +103,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.73</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.74</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -117,7 +123,7 @@
   <div class="two">
     <div class="col-left">
       <div class="panel">
-        <h2>Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
+        <h2 class="curveHead">Risk curve at settle <span class="meta" id="curveMeta"></span></h2>
         <div id="curveBox"><div id="curve"></div></div>
         <div id="timebar"><span style="font-size:11px;color:var(--muted)">Time of day</span>
           <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
@@ -764,12 +770,20 @@ function renderCurve(pos, se, T) {
   host.outerHTML = `<div id="curve">${cellCurve((record.config || {}).variant, d, yLo, yHi, btRef, [dF, dB])}${nowlbl}</div>`;
   const gap = (dF && d.underPnl != null && dF.underPnl != null) ? dF.underPnl - d.underPnl : null;
   const bgap = (dB && d.underPnl != null && dB.underPnl != null) ? dB.underPnl - d.underPnl : null;
-  $('curveMeta').innerHTML = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
-    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '')
-    + (dF ? ` · <span style="color:#3d86c6">if filled ${fmtN(dF.lo)} / ${fmtN(dF.hi)}` + (gap != null ? ` (${gap >= 0 ? '+' : ''}${fmtN(gap)} at settle)` : '') + '</span>' : '')
-    + (dB ? ` · <span style="color:var(--bt)">backtest ${fmtN(dB.lo)} / ${fmtN(dB.hi)}` + (bgap != null ? ` (${bgap >= 0 ? '+' : ''}${fmtN(bgap)} at settle)` : '') + '</span>'
-      : btNote ? ` · <span class="m">backtest: ${btNote}</span>` : '')
-    + ` <span id="curvePick" style="margin-left:8px"></span>`;
+  // One ROW per source so the groups can never wrap into each other: actual, if-filled, backtest.
+  const rowActual = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
+    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '');
+  const rowFilled = dF
+    ? `<span style="color:#3d86c6">if filled ${fmtN(dF.lo)} / ${fmtN(dF.hi)}`
+      + (gap != null ? ` (${gap >= 0 ? '+' : ''}${fmtN(gap)} at settle)` : '') + '</span>'
+    : '';
+  const rowBt = dB
+    ? `<span style="color:var(--bt)">backtest ${fmtN(dB.lo)} / ${fmtN(dB.hi)}`
+      + (bgap != null ? ` (${bgap >= 0 ? '+' : ''}${fmtN(bgap)} at settle)` : '') + '</span>'
+    : btNote ? `<span class="m">backtest: ${btNote}</span>` : '';
+  $('curveMeta').innerHTML = [rowActual, rowFilled, rowBt].filter(Boolean)
+    .map((r) => `<span class="mrow">${r}</span>`).join('')
+    + `<span class="mrow"><span id="curvePick"></span></span>`;
 }
 
 // ---- boot -------------------------------------------------------------------------------------
