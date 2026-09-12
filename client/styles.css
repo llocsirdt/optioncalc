@@ -538,6 +538,20 @@ pre {
 }
 
 /* Schwab API Integration Styles */
+/* API INTEGRATION moved into the header (index.html #apibar). It is horizontal now rather than a stacked
+   panel, so the pieces sit on one line and wrap as units when the header runs out of room — the same
+   flex-wrap approach the rest of the header uses, with no guessed breakpoint. The .schwab-status colour
+   classes still apply, since the status span kept its class and id. */
+#apibar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px;
+  margin-top: 8px; font-size: 13px;
+}
+#apibar .apiItem { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+#apibar label { font-weight: 600; }
+#apibar input[type="text"] { padding: 3px 8px; border: 1px solid #ccc; border-radius: 4px; width: 90px; font-size: 13px; }
+#apibar button { padding: 3px 10px; font-size: 12px; }
+#apibar #underlying-price { font-weight: 700; font-family: ui-monospace, monospace; }
+/* The old panel is gone from the markup; the rule is kept harmless in case a saved page still has one. */
 #schwab-container {
   background: #f5f5f5;
   border: 1px solid #ddd;
@@ -561,6 +575,14 @@ pre {
 .schwab-status {
   font-size: 14px;
 }
+
+/* The script (schwab-api.js updateSchwabStatus) sets `connected` / `error` / `testing` on the status span,
+   but the only rules here were .status-success / .status-error / .status-pending — names nothing ever
+   applies. The status has therefore always rendered plain black, in the old panel too. Now that it sits in
+   the header where the colour is the at-a-glance signal, match the classes the code actually sets. */
+#schwab-status.connected { color: #2e7d32; font-weight: 700; }
+#schwab-status.error     { color: #c62828; font-weight: 700; }
+#schwab-status.testing   { color: #ef6c00; font-weight: 700; font-style: italic; }
 
 .schwab-status .status-success {
   color: #4CAF50;

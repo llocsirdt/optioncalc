@@ -45,7 +45,7 @@
 </style>
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.75</h1>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.77</h1>
     <span id="csEngineStatus" title="candle-spread engine status"></span>
     <!-- The activity rollup and the compare link are grouped so they WRAP AS A UNIT. On desktop the whole
          header sits on one line; when the row runs out of room this pair drops to the next line together
@@ -60,6 +60,19 @@
     </span>
   </div>
   
+  <!-- API INTEGRATION, hoisted out of column 3. The connection, the symbol and the live-data feed drive
+       EVERY column (chain, positions, risk, strategies) — parking them inside the options-chain column
+       implied they belonged to it. Each column has one purpose; this belongs above them all. IDs and
+       handlers are unchanged so nothing that reads them had to move. -->
+  <div id="apibar">
+    <span class="apiItem schwab-status">Status: <span id="schwab-status">Not Connected</span>
+      <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button></span>
+    <span class="apiItem"><label for="symbol-input">Symbol</label>
+      <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
+      <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button></span>
+    <span class="apiItem">Underlying <span id="underlying-price">--</span></span>
+  </div>
+
   <div id="buttonContainer">
     <button onclick="processInput()">Submit</button>
   </div>
@@ -211,30 +224,6 @@
 
   <div id="container-col3">
       
-    <!-- Schwab API Status -->
-    <div id="schwab-container">
-      <div class="schwab-header">
-        <h3>API Integration</h3>
-        <div class="schwab-status">
-          Status: <span id="schwab-status">Not Connected</span> <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button>
-        </div>
-      </div>
-      
-      <div class="schwab-controls">
-        <div class="control-group">
-          <label for="symbol-input">Symbol:</label>
-          <input type="text" id="symbol-input" placeholder="e.g., SPY" value="SPY">
-          <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button>
-        </div>      
-        <div class="live-data-display">
-          <div class="price-display">
-            <span>Underlying Price: </span>
-            <span id="underlying-price">--</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    
     <!-- Options Chain Display -->
     <div id="options-chain-container">
       <h4>Live Options Chain</h4>
