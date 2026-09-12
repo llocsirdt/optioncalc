@@ -24,18 +24,53 @@
     const gAbsOf = typeof deps.gAbs === 'function' ? deps.gAbs : () => (deps.gAbs || 0);
 function svgCurve(v, d, yMin, yMax, bt, dB) {
   const xMin = d.xMin, xMax = d.xMax;
-  const padY = (yMax - yMin) * 0.08 || 1;
-  const y0 = yMin - padY, y1 = yMax + padY;
+  // VERTICAL HEADROOM. The default is 8% of the plotted range, which is right for the compare grid's
+  // thumbnails but too little on a full-size chart: at CH=300 a tall book's peak and valley run into the
+  // edge, where they collide with the labels drawn at the extremes and with the page furniture above and
+  // below (the time slider in particular).
+  //
+  // `padPx` asks for an EXACT pixel gutter instead. Reserving padPx at top and bottom means the data must
+  // occupy CH - 2*padPx pixels, so the extra range each side is range * padPx / (CH - 2*padPx) — solved
+  // rather than approximated, so 20 really is 20px at any CH. Falls back to the percentage rule when the
+  // chart is too short to give up the space. Omitting padPx keeps the grid byte-identical.
+  // Accepts a number (same gutter both ends) or {top, bottom} — the bottom usually needs more, because the
+  // host may float a readout over the foot of the chart (debug's .nowlbl) and the time slider sits directly
+  // beneath it. Reserving tPx/bPx means the data occupies CH - tPx - bPx pixels, so the extra range at each
+  // end is range * px / (CH - tPx - bPx) — solved, not approximated, so the gutters are exact at any range.
+  //
+  // NOTE the default is NOT small: 8% of range works out to CH * 0.08/1.16 ≈ 6.9% of the canvas at ANY
+  // range, i.e. ~20.7px at CH=300. So asking for 20px would be a REDUCTION. Pass more than that to gain room.
+  const range = yMax - yMin;
+  const pp = deps.padPx;
+  const tPx = typeof pp === 'number' ? pp : (pp && pp.top) || 0;
+  const bPx = typeof pp === 'number' ? pp : (pp && pp.bottom) || 0;
+  const usable = CH - tPx - bPx;
+  const exact = (tPx > 0 || bPx > 0) && usable > 0 && range > 0;
+  const padTop = exact ? range * tPx / usable : ((yMax - yMin) * 0.08 || 1);
+  const padBot = exact ? range * bPx / usable : ((yMax - yMin) * 0.08 || 1);
+  const y0 = yMin - padBot, y1 = yMax + padTop;
   const X = (x) => ((x - xMin) / (xMax - xMin || 1)) * CW;
   const Y = (y) => CH - ((y - y0) / (y1 - y0 || 1)) * CH;
   const zeroY = Math.max(0, Math.min(CH, Y(0)));
   const pts = d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
   const areaUp = `M0,${zeroY} L ${d.curve.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' L ')} L ${CW},${zeroY} Z`;
   const id = 'c' + Math.random().toString(36).slice(2, 8);
+  // The overlay legend stacks down the TOP-LEFT (see ovEl below) and the reference labels below are drawn
+  // in the same corner, so a reference line sitting above the book's own range gets pinned into the legend
+  // and the two overprint — visible on the debug page as the backtest "best" value buried under
+  // "if all covers filled". Knowing the legend's extent here lets the labels start below it instead.
+  const overlays = (Array.isArray(dB) ? dB : [dB]).filter((o) => o && o.curve && o.curve.length);
+  const legendRows = overlays.filter((o) => o.label).length;
+  const legendBottom = legendRows ? (11 * FS) + legendRows * (10 * FS) : 0;
+
   // Backtest AVERAGE loss/profit: dashed reference lines (always shown) with the $ value inline at the LEFT.
   const btEl = (y, color, txt) => {
     if (y == null || !Number.isFinite(y)) return '';
-    const ly = Math.max(8, Math.min(CH - 1, Y(y) - 1.5));
+    // The clamp must scale WITH the font. These constants were written for the grid's 8px labels; at
+    // fontScale 2.1 the text is 16.8px, so a baseline pinned at y=8 puts the ascender near y=-5 — outside
+    // the viewBox, which is the top-edge clipping seen on the debug page. Multiplying by FS keeps FS=1
+    // byte-identical and makes the gutter proportional to the glyphs actually drawn.
+    const ly = Math.max(Math.max(8 * FS, legendBottom), Math.min(CH - 1 * FS, Y(y) - 1.5));
     return `<line x1="0" y1="${Y(y).toFixed(1)}" x2="${CW}" y2="${Y(y).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.85"/>`
       + `<text x="2" y="${ly.toFixed(1)}" text-anchor="start" font-size="${(8 * FS).toFixed(1)}" font-weight="${FS > 1 ? 700 : 400}" font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="${(2.4 * FS).toFixed(1)}" paint-order="stroke">${txt}</text>`;
   };
@@ -49,7 +84,7 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // glance instead of between the header and the plot.
   const exEl = (y, color, txt) => {
     if (y == null || !Number.isFinite(y)) return '';
-    const ly = Math.max(9, Math.min(CH - 2, Y(y) - 2));
+    const ly = Math.max(9 * FS, Math.min(CH - 2 * FS, Y(y) - 2));   // scaled for the same reason as btEl
     return `<text x="${CW - 2}" y="${ly.toFixed(1)}" text-anchor="end" font-size="${(9.5 * FS).toFixed(1)}" font-weight="700"`
       + ` font-family="ui-monospace,monospace" fill="${color}" stroke="#fff" stroke-width="${(2.6 * FS).toFixed(1)}" paint-order="stroke">${txt}</text>`;
   };
@@ -64,7 +99,6 @@ function svgCurve(v, d, yMin, yMax, bt, dB) {
   // own colour/dash; the defaults reproduce the original single blue dashed line byte-for-byte, so every
   // existing caller renders exactly as before. Labels stack down the top-left in their own colour, which
   // is also the key — no separate legend to keep in sync.
-  const overlays = (Array.isArray(dB) ? dB : [dB]).filter((o) => o && o.curve && o.curve.length);
   let ovRow = 0;
   const ovEl = (o) => {
     const col = o.color || '#6ab0f3', txt = o.labelColor || o.color || '#3d86c6', dash = o.dash || '4 2';

@@ -97,7 +97,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.71</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.73</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -566,7 +566,7 @@ let dbgAbs = 0;   // one chart, so the saturation reference is that chart's own 
 // fontScale 2.1: this page draws ONE chart at full width, where the compare grid's thumbnail-sized
 // 8-9.5px labels are unreadable. The peak, the floor and the dashed backtest averages are the numbers
 // this page exists to show, so they get to be legible.
-const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs, fontScale: 2.1 });
+const cellCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice, CW, CH, gAbs: () => dbgAbs, fontScale: 2.1, padPx: { top: 26, bottom: 38 } });
 
 // Build the same {curve, lo, hi, underlying, underPnl, ...} shape the compare grid feeds its cell.
 // `dom` PINS the x-domain to another cell's. Overlay curves must be sampled over the SAME price range as
