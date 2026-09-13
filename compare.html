@@ -102,6 +102,8 @@
   /* .tgl sets display:inline-flex, which OVERRIDES the browser default [hidden]{display:none} — so
      el.hidden = true had no visible effect on the toolbar controls. Make hidden win. */
   [hidden] { display:none !important; }
+  /* The action group sits at the far right of the control row and stays together when the row wraps. */
+  .hrow-ctl .actbar { display:inline-flex; align-items:center; gap:6px; margin-left:auto; }
   .cell { user-select:none; -webkit-user-select:none; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
@@ -173,21 +175,14 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.78</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.80</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
   <div class="hrow hrow-ctl">
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
   <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">overlay backtest</span></label>
-  <button id="btTableBtn">Backtest table ▾</button>
-  <button id="dbgBtn" title="Debug one variant on one day — every order with the mark at placement and the limit sent" onclick="window.open('debug.html?date='+encodeURIComponent(document.getElementById('date')?document.getElementById('date').value:'')+'&src='+encodeURIComponent(SRC),'_blank')">⚙ Debug</button>
   <button id="uncBtn" title="The -unc twins run the same strategy with the day-loss governor OFF. They measure what the cap costs; they are not tradable candidates.">Show uncapped</button>
-  <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
-    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
-    </svg>
-  </button>
   <span id="srcbar">
       <label class="tgl" id="gridModeWrap" title="BY VARIANT = one day across every strategy · BY DATE = one strategy across the last 4 trading weeks">grid
       <select id="gridMode" style="margin-left:4px">
@@ -205,6 +200,19 @@
       </select>
     </label>
     <label class="tgl">date <input type="date" id="replayDate" style="margin-left:4px"></label>
+  </span>
+  <!-- ACTIONS last. These three do not describe WHAT is shown (the toggles and the grid/source/date
+       selectors do that) — they act on it: reload, open elsewhere, expand a panel. Grouping them at the
+       end keeps the row reading left-to-right as "what am I looking at" then "what can I do with it",
+       instead of interleaving a Debug button between two checkboxes. -->
+  <span class="actbar">
+  <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
+    </svg>
+  </button>
+  <button id="dbgBtn" title="Debug one variant on one day — every order with the mark at placement and the limit sent" onclick="window.open('debug.html?date='+encodeURIComponent(document.getElementById('date')?document.getElementById('date').value:'')+'&src='+encodeURIComponent(SRC),'_blank')">⚙ Debug</button>
+  <button id="btTableBtn">Backtest table ▾</button>
   </span>
   </div>
 </header>
