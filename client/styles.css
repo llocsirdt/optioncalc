@@ -620,8 +620,8 @@ pre {
 @media (max-width: 560px) {
   #header { padding: 8px 12px; }
   #apibar { gap: 6px 10px; margin-top: 6px; }
-  /* The input's placeholder already says SPY and the field is obviously a ticker box. */
-  #apibar label[for="symbol-input"] { display: none; }
+  /* The Symbol label STAYS — it fits comfortably once the button is shortened, and dropping it left the
+     input unlabelled for no real gain. Only the button's width was actually the problem. */
   /* "Start Live Data" is 104px of a 350px row. The TEXT stays in the DOM (font-size:0, not display:none)
      so screen readers and the JS that rewrites textContent are both unaffected; only the rendering is
      short. State comes from the class the toggle already sets, so the label still flips with it. */

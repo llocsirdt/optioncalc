@@ -382,8 +382,14 @@
     const badgeHtml =
       (blocked ? `<span style="background:#b3261e;color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif;margin-right:4px">NOT TRADING</span>` : '')
       + `<span style="background:${badgeColor(s.mode)};color:#fff;padding:1px 6px;border-radius:3px;font:bold 11px sans-serif">${s.mode}</span>`;
-    const statsHtml = (inline ? `<span style="font:11px monospace;color:#999">${inline}</span>` : '')
-      + `<span style="font:11px monospace;color:#bbb">${inline ? ' · ' : ''}~${tickMin}m</span>`;
+    // ONE SPAN, nowrap. The order stats and the "~Nm" next-tick marker were two sibling spans, so on a
+    // narrow screen the marker broke onto its own line underneath them — a lone "~5m" reading as if it
+    // belonged to nothing. They are one fact ("this is what the engine has done, and when it next runs"),
+    // so they wrap as a unit or not at all.
+    const statsHtml = `<span style="font:11px monospace;white-space:nowrap">`
+      + (inline ? `<span style="color:#999">${inline}</span>` : '')
+      + `<span style="color:#bbb">${inline ? ' · ' : ''}~${tickMin}m</span>`
+      + `</span>`;
     const ie = inlineEl();
     c.innerHTML = badgeHtml + (ie ? '' : statsHtml);
     if (ie) { ie.innerHTML = statsHtml; ie.title = c.title; }
