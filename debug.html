@@ -23,6 +23,12 @@
   button { cursor:pointer; }
   .meta { color:var(--muted); font:11px ui-monospace,monospace; margin-left:2px; }
   .wrap { padding:10px 14px 40px; }
+  /* The stat strip is its OWN .wrap so it can span both columns, which meant it inherited the generic
+     40px bottom tail and then the next .wrap added its own 10px top — ~50px of dead space between the
+     numbers and the charts they describe. Tighten both sides here and let the columns start right under. */
+  .wrap-stats { padding-bottom:0; }
+  .wrap-stats + .wrap { padding-top:8px; }
+  .wrap-stats .side-by-side { margin-top:0; }
   .two { display:flex; gap:14px; align-items:flex-start; }
   .col-left { flex:1 1 0; min-width:0; }
   .col-right { flex:1 1 0; min-width:0; }
@@ -124,7 +130,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.81</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.82</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -136,7 +142,7 @@
   </div>
 </header>
 <div id="err"></div>
-<div class="wrap">
+<div class="wrap wrap-stats">
   <!-- THE NUMBERS THAT FRAME BOTH COLUMNS. These three are read against the chart AND the table, so they
        sit above both rather than inside the right column where they were competing with the orders list
        for its vertical space. Kept dense — they are a reference while reading, not the main event. -->
@@ -187,7 +193,7 @@
     </div>
 
     <div class="col-right">
-      <div class="panel" style="display:flex; flex-direction:column; margin-top:8px; max-height:calc(100vh - 300px)">
+      <div class="panel" style="display:flex; flex-direction:column; max-height:calc(100vh - 300px)">
         <h2>Orders <span class="meta" id="ordMeta"></span>
           <span id="ordSrcWrap" style="float:right; font-weight:400; display:none">
             <select id="ordSrc" style="font-size:10.5px; padding:1px 4px">
