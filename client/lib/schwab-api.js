@@ -295,6 +295,14 @@ function updateSchwabStatus(status, type, detail) {
       statusElement.classList.add('testing');
     }
 
+    // KEEP THE BUTTON IN STEP WITH THE STATUS IT DESCRIBES. updateConnectionButtonVisibility() ran in
+    // exactly one place — once, on window.load — while the status it reads is set here, asynchronously,
+    // whenever the connection resolves. That is a race: if the connection lands BEFORE load the button is
+    // correctly hidden, and if it lands AFTER, the status reads "Connected" while Test/Connect stays on
+    // screen forever. A fast desktop usually won the race; a phone reliably loses it.
+    // Calling it from here makes visibility a function of the status rather than of timing.
+    if (typeof updateConnectionButtonVisibility === 'function') updateConnectionButtonVisibility();
+
     // On an error, surface a direct link to the server's /health so it's one click to see whether
     // the backend is up (JSON build info) or down (a CloudFront 5xx) — distinct from a token issue.
     const isError = type === 'error' || status === 'Error';
