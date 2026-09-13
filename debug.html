@@ -34,7 +34,14 @@
   .col-right { flex:1 1 0; min-width:0; }
   .side-by-side { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
   /* The stat row spans both columns; its panels share the width and wrap rather than squeezing. */
-  #statRow > .panel { flex:1 1 240px; }
+  /* NOT equal thirds. The two kv panels are label/value pairs that right-align their numbers, so extra
+     width just stretches the gap between name and figure — they looked spread out while "Live vs backtest"
+     (a 4-column table: metric / backtest / live / delta) was squeezed. Size each to what it actually
+     holds: the kv panels take what they need, the comparison table gets the remainder. */
+  #statRow > .panel { flex:0 1 auto; min-width:0; }
+  #statRow > .panel:nth-child(1),
+  #statRow > .panel:nth-child(2) { flex:1 1 260px; max-width:340px; }
+  #statRow > #cmpPanel { flex:2 1 420px; max-width:none; }
   .side-by-side .panel { flex:1 1 0; min-width:0; }
   /* DENSE stat panels: they frame the trades table rather than compete with it, so they trade padding and
      leading for height. Long labels ellipsize instead of wrapping to a second line. */
@@ -127,10 +134,13 @@
   td.srcTag { font:700 9.5px system-ui,sans-serif; }
   .note { color:var(--muted); font-size:11px; margin:4px 0 0; max-width:900px; line-height:1.45; }
   #err { color:var(--loss); font:12px ui-monospace,monospace; padding:8px 14px; }
+  /* It is empty on every normal load, and an empty box still occupied its padding — a permanent 16px
+     gutter reserved for an error that is almost never there. */
+  #err:empty { display:none; }
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.82</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.83</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
