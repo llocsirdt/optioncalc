@@ -93,6 +93,12 @@
   .net { font:600 9px system-ui,sans-serif; padding:0 3px; border-radius:2px; }
   .net.cr { background:#e6f5f2; color:#1c7f72; } .net.dr { background:#f1f1f1; color:#666; }
   .p { color:var(--profit); } .l { color:var(--loss); } .m { color:var(--muted); }
+  /* Same encoding the risk curve uses: a floor above zero is LOCKED (violet), not merely a smaller loss. */
+  .lk { color:var(--locked); } .z { color:var(--zero); }
+  /* The values carry the colour; the labels around them stay muted so the numbers lead. */
+  .curveHead .meta .mrow { color:var(--muted); }
+  .curveHead .meta .mrow .p, .curveHead .meta .mrow .l,
+  .curveHead .meta .mrow .lk, .curveHead .meta .mrow .z { font-weight:600; }
   .tag { padding:0 5px; border-radius:3px; font:600 9.5px system-ui,sans-serif; }
   .tag.ok { background:#e6f5f2; color:#1c7f72; } .tag.no { background:#fdecea; color:#a5322c; }
   .tag.w  { background:#f3efff; color:#5b3fa8; }
@@ -116,7 +122,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.79</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.80</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -798,8 +804,19 @@ function renderCurve(pos, se, T) {
   const gap = (dF && d.underPnl != null && dF.underPnl != null) ? dF.underPnl - d.underPnl : null;
   const bgap = (dB && d.underPnl != null && dB.underPnl != null) ? dB.underPnl - d.underPnl : null;
   // One ROW per source so the groups can never wrap into each other: actual, if-filled, backtest.
-  const rowActual = `min ${fmtN(d.lo)} · max ${fmtN(d.hi)}`
-    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${fmtN(d.underPnl)}` : '');
+  // COLOUR THE MONEY, matching the chart directly above rather than inventing a second scheme: the curve
+  // paints a floor ABOVE zero violet (--locked: no settlement price loses money, a different STATE from a
+  // small loss) and below zero red, with the peak in green. The header said the same three numbers in
+  // uniform grey, so the one cell that most wants to be read at a glance was the least legible.
+  // The if-filled and backtest rows keep their SOURCE colours (blue / brown) — there the colour is
+  // identity, not sign, and overriding it would lose which curve a number belongs to.
+  const money = (n, positiveIsLocked) => {
+    if (n == null || !Number.isFinite(n)) return fmtN(n);
+    const cls = n > 0 ? (positiveIsLocked ? 'lk' : 'p') : n < 0 ? 'l' : 'z';
+    return `<span class="${cls}">${fmtN(n)}</span>`;
+  };
+  const rowActual = `min ${money(d.lo, true)} · max ${money(d.hi)}`
+    + (d.underlying != null ? ` · settle ${Math.round(d.underlying)} → ${money(d.underPnl)}` : '');
   const rowFilled = dF
     ? `<span style="color:#3d86c6">if filled ${fmtN(dF.lo)} / ${fmtN(dF.hi)}`
       + (gap != null ? ` (${gap >= 0 ? '+' : ''}${fmtN(gap)} at settle)` : '') + '</span>'
