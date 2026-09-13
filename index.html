@@ -45,8 +45,8 @@
 </style>
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0 10px 0 0">Option Calc v3.8.84</h1>
-    <span id="csEngineStatus" title="candle-spread engine status"></span>
+    <h1 style="margin:0 10px 0 0">Option Calc v3.8.85 <span id="csEngineStatus" title="candle-spread engine status"></span></h1>
+    
     <!-- The activity rollup and the compare link are grouped so they WRAP AS A UNIT. On desktop the whole
          header sits on one line; when the row runs out of room this pair drops to the next line together
          and stays there, instead of the rollup breaking mid-string the way it used to. No breakpoint is
@@ -66,11 +66,10 @@
        handlers are unchanged so nothing that reads them had to move. -->
   <div id="apibar">
     <span class="apiItem schwab-status">API <span id="schwab-status">Not Connected</span>
-      <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button></span>
-    <span class="apiItem"><label for="symbol-input">Symbol</label>
+      <button id="test-connection" onclick="testSchwabConnection()">Test/Connect</button><label for="symbol-input">Symbol</label>
       <input type="text" id="symbol-input" placeholder="SPY" maxlength="6" value="SPY">
+      <span id="underlying-price">--</span>
       <button id="live-data-toggle" onclick="toggleLiveData()">Start Live Data</button></span>
-    <span class="apiItem">Underlying <span id="underlying-price">--</span></span>
   </div>
 
   <div id="buttonContainer">
