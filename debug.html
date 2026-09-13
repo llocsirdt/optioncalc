@@ -26,7 +26,9 @@
   .two { display:flex; gap:14px; align-items:flex-start; }
   .col-left { flex:1 1 0; min-width:0; }
   .col-right { flex:1 1 0; min-width:0; }
-  .side-by-side { display:flex; gap:10px; margin-top:10px; }
+  .side-by-side { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
+  /* The stat row spans both columns; its panels share the width and wrap rather than squeezing. */
+  #statRow > .panel { flex:1 1 240px; }
   .side-by-side .panel { flex:1 1 0; min-width:0; }
   /* DENSE stat panels: they frame the trades table rather than compete with it, so they trade padding and
      leading for height. Long labels ellipsize instead of wrapping to a second line. */
@@ -122,7 +124,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.80</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.81</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -134,6 +136,27 @@
   </div>
 </header>
 <div id="err"></div>
+<div class="wrap">
+  <!-- THE NUMBERS THAT FRAME BOTH COLUMNS. These three are read against the chart AND the table, so they
+       sit above both rather than inside the right column where they were competing with the orders list
+       for its vertical space. Kept dense — they are a reference while reading, not the main event. -->
+  <div class="side-by-side dense" id="statRow">
+    <div class="panel">
+      <h2>Day summary</h2>
+      <div class="kv" id="summary"></div>
+    </div>
+    <div class="panel">
+      <h2>Backtest expectation <span class="meta">(765d)</span></h2>
+      <div class="kv" id="baseline"></div>
+    </div>
+    <!-- THE EXECUTION GAP. Same day, same candles, same signal — so every number that differs here is
+         execution or pricing, never market luck. Hidden until a backtest for this variant+date loads. -->
+    <div class="panel" id="cmpPanel" style="display:none">
+      <h2>Live vs backtest <span class="meta" id="cmpMeta"></span></h2>
+      <table class="cmp" id="cmp"></table>
+    </div>
+  </div>
+</div>
 <div class="wrap">
   <!-- TWO COLUMNS. Left: the risk curve with the NQ candles directly beneath it, so the price action and
        the curve share one eye-line — the point is to see WHICH candle pattern was forming when a trade went
@@ -164,28 +187,7 @@
     </div>
 
     <div class="col-right">
-      <!-- The numbers that frame the table sit directly above it: what this day actually did, against what
-           765 days of backtest say the variant does. Kept deliberately dense — they are a reference while
-           reading the orders, not the main event, so they must not push the table off the screen. -->
-      <div class="side-by-side dense">
-        <div class="panel">
-          <h2>Day summary</h2>
-          <div class="kv" id="summary"></div>
-        </div>
-        <div class="panel">
-          <h2>Backtest expectation <span class="meta">(765d)</span></h2>
-          <div class="kv" id="baseline"></div>
-        </div>
-      </div>
-      <!-- THE EXECUTION GAP, in one strip. Same day, same candles, same signal — so every number that
-           differs here is execution or pricing, never market luck. Hidden until a backtest for this
-           variant+date actually loads; most dates have no 5m capture and the live side must still read
-           normally on its own. -->
-      <div class="panel" id="cmpPanel" style="margin-top:8px; display:none">
-        <h2>Live vs backtest <span class="meta" id="cmpMeta"></span></h2>
-        <table class="cmp" id="cmp"></table>
-      </div>
-      <div class="panel" style="display:flex; flex-direction:column; margin-top:8px; max-height:calc(100vh - 210px)">
+      <div class="panel" style="display:flex; flex-direction:column; margin-top:8px; max-height:calc(100vh - 300px)">
         <h2>Orders <span class="meta" id="ordMeta"></span>
           <span id="ordSrcWrap" style="float:right; font-weight:400; display:none">
             <select id="ordSrc" style="font-size:10.5px; padding:1px 4px">
@@ -508,11 +510,11 @@ function renderOrders() {
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
-    ['cover mark', 'the cover’s MARK when the resting order was placed'],
+    ['mark', 'the cover’s MARK when the resting order was placed'],
     ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
-    ['settle P&L', 'this position’s P&L at settlement'],
+    ['P&L', 'this position’s P&L at settlement'],
   ]);
   const usdc = (c) => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
   const color = (sd) => (sd === 'bull' ? 'var(--profit)' : 'var(--loss)');
