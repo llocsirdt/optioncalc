@@ -1105,7 +1105,10 @@ app.get('/api/v1/candle-spread/baselines', (req, res) => {
 // so in practice this serves from a dev machine, not the deployed instance).
 //   GET /api/v1/candle-spread/replays          -> { dates: [...] }
 //   GET /api/v1/candle-spread/replay?date=...  -> the day's bundle
-const REPLAY_DIR = require('path').join(__dirname, '..', '..', 'data', 'backtest-replays');
+// SHARED with the generator — see replay-dir.js. These two resolving differently is what produced a
+// 500 with an empty detail on prod: the child wrote the bundle, exited 0, and this side looked in a
+// directory that does not exist on the deployed box.
+const REPLAY_DIR = require('./candle-spread/backtest/replay-dir').replayDir();
 app.get('/api/v1/candle-spread/replays', (req, res) => {
   try {
     const fs = require('fs');
@@ -1162,7 +1165,15 @@ app.get('/api/v1/candle-spread/replay', (req, res) => {
   child.on('error', (e) => res.status(500).json({ error: 'Failed to launch replay generator', message: e.message }));
   child.on('close', (code) => {
     if (code !== 0 || !fs.existsSync(file)) {
-      return res.status(code === 0 ? 500 : 404).json({ error: 'Could not generate that replay', date, exit: code, detail: err.trim().split('\n').pop() });
+      // SAY WHERE WE LOOKED. The first version reported exit 0 with an empty detail, which is the least
+      // useful 500 possible: the generator had succeeded and this side was simply reading a different
+      // directory. Naming the path turns that into a one-glance diagnosis.
+      const wrote = (() => { try { return fs.readdirSync(REPLAY_DIR).filter((f) => /\.json$/.test(f)).slice(-3); } catch (e) { return ['<unreadable>']; } })();
+      return res.status(code === 0 ? 500 : 404).json({
+        error: 'Could not generate that replay', date, exit: code,
+        detail: err.trim().split('\n').pop() || (code === 0 ? `generator exited 0 but no bundle at ${file}` : ''),
+        expectedAt: file, replayDir: REPLAY_DIR, dirContains: wrote,
+      });
     }
     try { serve(); } catch (e) { res.status(500).json({ error: 'Failed to read generated replay', message: e.message }); }
   });

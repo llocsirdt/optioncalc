@@ -27,16 +27,8 @@ const { buildRuns } = require('../index');
 const VC = require('../variant-contract');
 
 const arg = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : d; };
-// WHERE THE BUNDLES LIVE. This used to be a repo-relative data/ dir, which only exists on a dev box: the
-// deployment package IS server/, so `__dirname/../../data` resolves outside the app root on prod. Same
-// durability ladder the run store and the token state use — a writable disk dir first, /tmp last.
-const OUTDIR = (() => {
-  const cands = [process.env.CANDLE_REPLAY_DIR, '/var/optioncalc-data/backtest-replays',
-    path.join(__dirname, '..', '..', '..', '..', 'data', 'backtest-replays'),
-    path.join(require('os').tmpdir(), 'backtest-replays')].filter(Boolean);
-  for (const d of cands) { try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); return d; } catch (e) { /* next */ } }
-  return path.join(require('os').tmpdir(), 'backtest-replays');
-})();
+const { replayDir } = require('./replay-dir');
+const OUTDIR = replayDir();
 // KNOWN DATASETS, searched in order. NQ is the 2022-2025 Kaggle history (large, local-only); NDX is the
 // Schwab capture (2026, small enough to ship). Their date ranges do not overlap, so a requested date
 // selects its dataset unambiguously — no flag needed, and asking for a date only one host has simply
