@@ -613,6 +613,23 @@ pre {
 /* A ticker is never more than ~4-5 characters; the field was sized for prose. */
 #apibar input#symbol-input { width: 62px; text-transform: uppercase; }
 
+/* MOBILE. At ~390px the bar needs 446px (items 410 + 36 of gaps) against a ~350px content box, so it
+   wrapped to three lines and pushed everything below it down. Condensed WITHOUT reordering: the pieces
+   stay API -> Symbol -> Underlying, they just stop spending width on words the context already supplies.
+   Measured after: ~321px, one line. */
+@media (max-width: 560px) {
+  #header { padding: 8px 12px; }
+  #apibar { gap: 6px 10px; margin-top: 6px; }
+  /* The input's placeholder already says SPY and the field is obviously a ticker box. */
+  #apibar label[for="symbol-input"] { display: none; }
+  /* "Start Live Data" is 104px of a 350px row. The TEXT stays in the DOM (font-size:0, not display:none)
+     so screen readers and the JS that rewrites textContent are both unaffected; only the rendering is
+     short. State comes from the class the toggle already sets, so the label still flips with it. */
+  #apibar #live-data-toggle { font-size: 0; padding: 3px 9px; }
+  #apibar #live-data-toggle::after { font-size: 12px; content: 'Live'; }
+  #apibar #live-data-toggle.button-stop::after { content: 'Stop'; }
+}
+
 .schwab-status .status-success {
   color: #4CAF50;
   font-weight: bold;
