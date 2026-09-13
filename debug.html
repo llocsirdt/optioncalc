@@ -116,7 +116,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.76</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.79</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -205,15 +205,20 @@
 // every one of them was resting below a market that had already moved past the profit ceiling.
 //
 // Split routing matches compare.html: LIVE runs come from PROD (the local engine only records while this
-// machine is awake, so its days end at whatever ragged time the Mac slept), BACKTEST replay comes from
-// LOCAL (the deployed box has no 5m datasets).
+// machine is awake, so its days end at whatever ragged time the Mac slept). The BACKTEST used to be pinned
+// to LOCAL because "the deployed box has no 5m datasets" — true when written, obsolete since the engine
+// moved under server/ and gained on-demand day building from Schwab. Prod now answers for any recent date,
+// so pinning to LOCAL just meant "backtest overlay only works while your Mac is running the dev server",
+// which is what produced "local backtest server not running" when viewing the deployed page.
 const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
   || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
 const _p = new URLSearchParams(location.search);
 const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
 const forced = _p.get('proxy');
 const LIVE_BASE = forced === 'local' ? LOCAL_BASE : forced === 'remote' ? PROD_BASE : PROD_BASE;
-const BT_BASE   = forced === 'remote' ? PROD_BASE : LOCAL_BASE;
+// Same resolution compare.html uses: LOCAL only when actually served locally, PROD otherwise.
+const BT_BASE   = forced === 'local' ? LOCAL_BASE : forced === 'remote' ? PROD_BASE
+                : (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
 // nq-chart.js reads its API base off this global. Candles always come from LIVE_BASE: the chartseries
 // endpoint is a PROD service, independent of whether the run record itself is live or a local backtest.
 const PROXY_URL = LIVE_BASE;
@@ -267,8 +272,11 @@ async function loadBacktest(variant, date) {
   try {
     btRecord = await getJson(`${BT_BASE}/api/v1/candle-spread/backtest?symbol=NDX&date=${date}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`);
   } catch (e) {
-    btNote = /404/.test(e.message) ? 'no 5m dataset for this date'
-      : /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'local backtest server not running'
+    // Name the host that actually failed. "local backtest server not running" was simply wrong whenever
+    // BT_BASE pointed at prod, and it sent you looking at the wrong machine.
+    const where = BT_BASE === LOCAL_BASE ? 'local backtest server not running' : 'backtest host unreachable';
+    btNote = /404/.test(e.message) ? 'no data for this date (not pre-built, and not buildable on demand)'
+      : /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? where
       : e.message;
   }
 }
