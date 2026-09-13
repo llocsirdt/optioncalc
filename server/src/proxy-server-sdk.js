@@ -252,6 +252,12 @@ app.get('/health', (req, res) => {
     externalMB: MB(m.external),
     arrayBuffersMB: MB(m.arrayBuffers || 0),
     peakRssMB: MB(peakRss),
+    // THE INSTANCE SIZE, so these numbers are interpretable on their own. Without it "687MB RSS" needs
+    // outside knowledge to read — it is 69% of a 1GB box and 34% of a 2GB one, which are different
+    // conclusions. The box was resized from 1GB to 2GB and nothing here recorded that, so every memory
+    // review depended on remembering it.
+    totalMB: MB(require('os').totalmem()),
+    usedPctOfInstance: Math.round(MB(m.rss) / MB(require('os').totalmem()) * 100),
     uptimeMin: Math.round(process.uptime() / 60)
   };
   if (req.query.mem === 'full') {
