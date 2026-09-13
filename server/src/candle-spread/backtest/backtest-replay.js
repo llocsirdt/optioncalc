@@ -174,4 +174,37 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 console.log(`replay ${date} — ${vs.length} variants · ${(vs[0].events.length - 1)} bars · ${(fs.statSync(file).size / 1024).toFixed(0)} KB`);
 console.log(`  settle ${vs[0].events[vs[0].events.length - 1].settle.toFixed(0)}  ·  terminal range ${usd(Math.min(...vs.map(v => v.summary.terminal)))} .. ${usd(Math.max(...vs.map(v => v.summary.terminal)))}`);
 console.log(`wrote ${path.relative(process.cwd(), file)}`);
+
+// PRUNE. A bundle is ~1.6MB — 31x a cached bar day — and unlike the bar cache this had no cap at all, so
+// bundles for dates never revisited sat on disk forever. /var/optioncalc-data deliberately SURVIVES an EB
+// deploy, so deploying does not clean them either; at ~250 trading days a year that is ~400MB/year of
+// files that can never be served.
+//
+// Two passes, cheapest win first:
+//   1. STALE FINGERPRINT — a bundle whose configFp no longer matches can never be served, it will always
+//      be rebuilt. Deleting it is free. Every deploy invalidates the whole directory (the fingerprint
+//      includes the build commit), so this is where the bulk goes.
+//   2. COUNT CAP — keep the most recent N by DATE, not mtime: the useful set is "recent sessions", and
+//      mtime would preserve whichever was browsed last rather than whichever is current.
+(() => {
+  const MAX = Number(process.env.CANDLE_REPLAY_MAX || 40);
+  try {
+    const mine = out.configFp;
+    const files = fs.readdirSync(OUTDIR).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    let freed = 0, n = 0;
+    const keep = [];
+    for (const f of files) {
+      if (f === path.basename(file)) { keep.push(f); continue; }
+      let fp = null;
+      try { fp = JSON.parse(fs.readFileSync(path.join(OUTDIR, f), 'utf8')).configFp; } catch (e) { /* corrupt → drop */ }
+      if (fp !== mine) {
+        try { freed += fs.statSync(path.join(OUTDIR, f)).size; fs.unlinkSync(path.join(OUTDIR, f)); n++; } catch (e) { /* ignore */ }
+      } else keep.push(f);
+    }
+    for (const f of keep.sort().slice(0, Math.max(0, keep.length - MAX))) {
+      try { freed += fs.statSync(path.join(OUTDIR, f)).size; fs.unlinkSync(path.join(OUTDIR, f)); n++; } catch (e) { /* ignore */ }
+    }
+    if (n) console.log(`pruned ${n} bundle(s), freed ${(freed / 1048576).toFixed(1)} MB (kept ${keep.length > MAX ? MAX : keep.length}, cap ${MAX})`);
+  } catch (e) { /* pruning must never fail a build */ }
+})();
 })().catch((e) => { console.error(e && e.message ? e.message : String(e)); process.exit(1); });
