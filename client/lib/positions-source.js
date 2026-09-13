@@ -224,6 +224,18 @@
     if (!api || !api.openStrategyPicker) return;   // status module absent → the hidden select still works
     api.openStrategyPicker(btn, sel.value, (variant) => {
       if (!variant || variant === sel.value) return;
+      // THE SELECT MUST HAVE THE OPTION FIRST. Assigning a value with no matching <option> does not throw —
+      // the select silently becomes "", so the pick is lost, currentVariant() returns empty and the button
+      // falls back to its remembered label. That happens whenever the picker offers a variant the roster
+      // fetch did not populate (it failed, or the server's roster is thinner than the live grid): measured
+      // here the picker offered 50 variants while the select held 1.
+      // The PICKER is the better source anyway — it is built from the engine's own live status — so trust
+      // it and add what is missing rather than dropping the click.
+      if (!Array.prototype.some.call(sel.options, (o) => o.value === variant)) {
+        const opt = document.createElement('option');
+        opt.value = variant; opt.textContent = variant;
+        sel.appendChild(opt);
+      }
       // Reflect the pick into the select and fire its change handler, so picking a strategy behaves
       // exactly like choosing one from the old dropdown (auto-pull + remember).
       sel.value = variant;

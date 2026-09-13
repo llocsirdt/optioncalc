@@ -148,7 +148,7 @@
     const p = ensurePop();
     if (!lastStatus) { p.innerHTML = '<div class="cshdr">Engine status not loaded yet — try again in a moment.</div>'; }
     else p.innerHTML = gridHtml(lastStatus, 0, { pick: true, selected });
-    pickMode = { onPick };
+    pickMode = { onPick, selected };   // `selected` is kept so a mid-poll re-render can re-mark the cell
     p.classList.add('pick');
     p.style.display = 'block';   // (set after innerHTML so offsetWidth below is measured correctly)
     const r = anchor.getBoundingClientRect();
@@ -388,8 +388,17 @@
     c.innerHTML = badgeHtml + (ie ? '' : statsHtml);
     if (ie) { ie.innerHTML = statsHtml; ie.title = c.title; }
 
-    // Keep an open popover in sync with the fresh data.
-    if (pop && pop.style.display === 'block') pop.innerHTML = lastHtml;
+    // Keep an open popover in sync with the fresh data — but RE-RENDER IN THE MODE IT IS ACTUALLY IN.
+    // lastHtml is the READ-ONLY grid (gridHtml without {pick:true}), so blindly assigning it to an open
+    // PICKER replaced every selectable cell with a plain one: the variant ids vanished from the cells and
+    // the click handler's closest('td[data-variant]') then matched nothing. The picker therefore worked
+    // only until the first poll after opening — 12s — which is exactly "clicking sometimes updates the
+    // strategy but often doesn't". Re-render with the pick options so a refresh preserves selectability.
+    if (pop && pop.style.display === 'block') {
+      pop.innerHTML = pickMode
+        ? gridHtml(s, tickMin, { pick: true, selected: pickMode.selected })
+        : lastHtml;
+    }
   }
 
   async function poll() {

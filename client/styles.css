@@ -592,20 +592,24 @@ pre {
    the outer glow make it read as lit rather than printed. font-size:0 on the connected state cannot
    shrink it, because its size no longer comes from the font. */
 #schwab-status::before {
-  content: ''; display: inline-block; width: 20px; height: 20px; border-radius: 50%;
+  /* 14px, not 20 — at 20 it outweighed the 13px text beside it and read as a graphic rather than an
+     indicator. Shading is a single soft top highlight plus a hairline edge: the heavy inset bottom shadow
+     was making it look muddy at this size, where there is not enough area to carry a gradient. */
+  content: ''; display: inline-block; width: 14px; height: 14px; border-radius: 50%;
   vertical-align: middle; background: #9e9e9e;
-  box-shadow: inset 0 2px 3px rgba(255,255,255,.45), inset 0 -2px 4px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.14);
+  box-shadow: inset 0 1px 2px rgba(255,255,255,.5), 0 0 0 1px rgba(0,0,0,.12);
 }
 #schwab-status.connected { font-size: 0; }                      /* hide the word, keep textContent */
-#schwab-status.connected::before { background: #2e7d32; box-shadow: inset 0 2px 3px rgba(255,255,255,.45), inset 0 -2px 4px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.14), 0 0 7px rgba(46,125,50,.75); }
+/* Matches the Start Live Data button (#4CAF50) so the two greens on this bar are the same green. */
+#schwab-status.connected::before { background: #4CAF50; box-shadow: inset 0 1px 2px rgba(255,255,255,.55), 0 0 0 1px rgba(0,0,0,.12), 0 0 5px rgba(76,175,80,.55); }
 #schwab-status.error     { color: #c62828; font-weight: 700; }
-#schwab-status.error::before { background: #c62828; margin-right: 7px; box-shadow: inset 0 2px 3px rgba(255,255,255,.4), inset 0 -2px 4px rgba(0,0,0,.3), 0 0 0 1px rgba(0,0,0,.14), 0 0 8px rgba(198,40,40,.8); }
+#schwab-status.error::before { background: #e53935; margin-right: 6px; box-shadow: inset 0 1px 2px rgba(255,255,255,.45), 0 0 0 1px rgba(0,0,0,.12), 0 0 6px rgba(229,57,53,.7); }
 #schwab-status.testing   { color: #ef6c00; font-weight: 700; font-style: italic; }
-#schwab-status.testing::before { background: #ef6c00; margin-right: 7px; box-shadow: inset 0 2px 3px rgba(255,255,255,.4), inset 0 -2px 4px rgba(0,0,0,.3), 0 0 0 1px rgba(0,0,0,.14), 0 0 8px rgba(239,108,0,.7); }
+#schwab-status.testing::before { background: #fb8c00; margin-right: 6px; box-shadow: inset 0 1px 2px rgba(255,255,255,.45), 0 0 0 1px rgba(0,0,0,.12), 0 0 6px rgba(251,140,0,.6); }
 /* No class yet (initial "Not Connected") — grey lamp plus the words, since it is not a good state either. */
-#schwab-status:not(.connected):not(.error):not(.testing)::before { margin-right: 7px; }
+#schwab-status:not(.connected):not(.error):not(.testing)::before { margin-right: 6px; }
 /* The lamp is taller than the 13px row, so let the bar breathe rather than clipping it. */
-#apibar .apiItem.schwab-status { gap: 8px; line-height: 20px; }
+#apibar .apiItem.schwab-status { gap: 7px; line-height: 16px; }
 /* A ticker is never more than ~4-5 characters; the field was sized for prose. */
 #apibar input#symbol-input { width: 62px; text-transform: uppercase; }
 
