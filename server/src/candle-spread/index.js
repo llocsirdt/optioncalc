@@ -1288,7 +1288,7 @@ function status() {
   const mode = !gates.isProd ? 'DEV (never sends)'
     : !gates.liveArmed ? 'DISARMED (CANDLE_SPREAD_LIVE not set)'
     : liveV.length ? `LIVE-ARMED (real orders: ${liveV.join(',')})`
-    : testV.length ? `TEST-ARMED (unfillable paper orders: ${testV.join(',')})`
+    : testV.length ? `TEST-ARMED (unfillable orders: ${testV.join(',')})`
     : 'ARMED (all dry-run)';
   // TRADABILITY — surfaced at the top level because "the market is not open / not quoted" is the single
   // most important thing to see at a glance: it explains an empty session without the operator having to
