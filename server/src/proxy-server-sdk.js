@@ -1139,9 +1139,22 @@ app.get('/api/v1/candle-spread/replay', (req, res) => {
   const fs = require('fs'), pathMod = require('path');
   const file = pathMod.join(REPLAY_DIR, `${date}.json`);
   const serve = () => res.type('application/json').send(fs.readFileSync(file, 'utf8'));
-  if (fs.existsSync(file)) { try { return serve(); } catch (e) { return res.status(500).json({ error: 'Failed to read replay', message: e.message }); } }
+  // A bundle is the result of applying a STRATEGY to a day, so it goes stale the moment any variant's
+  // config changes — and it is cached on disk, so serving it blindly shows the OLD strategy under today's
+  // name with nothing to indicate it. That happened on 2026-09-12. Only serve a cache whose config stamp
+  // matches the running config; otherwise fall through and rebuild. `?fresh=1` forces a rebuild.
+  const wantFp = require('./candle-spread/config-fingerprint').fingerprint();
+  if (fs.existsSync(file) && req.query.fresh !== '1') {
+    try {
+      const cached = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (cached && cached.configFp === wantFp) return serve();
+      console.log(`[replay] ${date} cache stale (config ${cached && cached.configFp} != ${wantFp}) — rebuilding`);
+    } catch (e) { /* unreadable cache → rebuild */ }
+  }
   if (req.query.generate === '0') return res.status(404).json({ error: 'Replay not generated for that date', date });
-  const script = pathMod.join(__dirname, '..', '..', 'scripts', 'candle-spread', 'backtest-replay.js');
+  // The generator MOVED under server/ so it ships: scripts/ is not in the deployment package, which is why
+  // this route only ever worked on a dev box and the compare overlay was local-only on prod.
+  const script = pathMod.join(__dirname, 'candle-spread', 'backtest', 'backtest-replay.js');
   if (!fs.existsSync(script)) return res.status(404).json({ error: 'Replay generator not available on this host', date });
   const child = require('child_process').spawn(process.execPath, [script, '--date', date], { stdio: ['ignore', 'pipe', 'pipe'] });
   let err = '';
@@ -1172,7 +1185,9 @@ app.get('/api/v1/candle-spread/backtest', async (req, res) => {
   const symbol = String(req.query.symbol || 'NDX');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
   if (!variant) return res.status(400).json({ error: 'variant required' });
-  const key = `${symbol}|${variant}|${date}`;
+  // Key the in-memory cache by the CONFIG FINGERPRINT as well, so a strategy change cannot serve a run
+  // computed under the previous config (a redeploy clears this map, but a long-lived dev server does not).
+  const key = `${require('./candle-spread/config-fingerprint').fingerprint()}|${symbol}|${variant}|${date}`;
   if (_btRunCache.has(key)) return res.json(_btRunCache.get(key));
   let mod;
   try {
