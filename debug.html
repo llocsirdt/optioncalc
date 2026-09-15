@@ -100,6 +100,13 @@
   table.ord td { text-align:right; padding:2px 6px; border-bottom:1px solid #f2f2f2; white-space:nowrap; }
   tr.td-unfilled { background:#fff6f6; opacity:.85; }
   tr.td-unfilled td:first-child { border-left:2px solid var(--loss); }
+  /* A REFUSED order (open/offset/wing/fly whose mark never reached the limit sent). Dimmer than an
+     unfilled cover and struck through on the legs, because unlike a resting cover this order is gone --
+     it was cancelled at the next candle or never became a position at all. It is shown so the day can be
+     read honestly: these used to be assumed filled, and then briefly were not shown at all. */
+  tr.td-nofill { background:#fbfbfc; opacity:.72; }
+  tr.td-nofill td:first-child { border-left:2px solid #9aa3ad; }
+  tr.td-nofill .legs { text-decoration:line-through; text-decoration-color:#b3bac2; }
   tr.td-uncovered td:first-child { border-left:2px solid #e0a03c; }
   tr.td-cover td { color:#555; }
   tr.td-hedge td { color:#6b5ea8; background:#faf9ff; }
@@ -140,7 +147,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.83</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.88</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -456,6 +463,8 @@ function syncNQ() {
 // "COVER**" row for every resting order that was sent and never filled, and CR/DB net tags. The
 // double star mirrors OPEN*'s single star (uncovered): one star = this leg still lacks its pair,
 // two = the order to make the pair was placed and never filled. Shorter than "(unfilled)" too.
+// Since every order type is price-tested (trader.markFill), the ** marker now applies to OPEN, OFFSET,
+// WING and FLY as well, not just COVER — any of them can be refused when the mark never reaches the limit.
 // Reusing the producer rather than reimplementing it is the point — a lookalike would drift.
 //
 // The diagnostic columns are APPENDED, not substituted: the cover's mark when it was placed, the
@@ -504,6 +513,36 @@ function orderEvents(rec, src) {
     // i.e. an exposed position waiting on a cover it will never get.
     e.hedgeKind = (e.raw.wing || /^wing-/.test(e.id)) ? 'WING' : (e.raw.hedge || /^off-/.test(e.id)) ? 'OFFSET' : null;
   }
+
+  // ORDERS THAT WERE PLACED AND NEVER FILLED — opens, offsets, wings and flies.
+  //
+  // Every order type is price-tested now (trader.markFill), not just resting covers: an order books only
+  // if an observed mark reached the limit we sent. That made refusals possible and, until this block,
+  // INVISIBLE — which is worse than the old behaviour, not better. An unfilled OPEN is spliced out of
+  // state.positions by the next candle's cancel path, and a refused offset/wing/fly never becomes a
+  // position at all, so a table built from positions cannot see either. The only trace is the decision
+  // stream, so read it from there. Nothing is inferred: these rows exist only where the engine logged a
+  // refusal, with the mark it saw and the limit it sent.
+  const REFUSED = { 'floor-offset-nofill': 'OFFSET', 'wing-nofill': 'WING', 'fly-nofill': 'FLY' };
+  let noFillSeq = 0;
+  for (const ev of (rec.events || [])) {
+    const t = (ev.candle && ev.candle.time) || ev.time || null;
+    for (const d of (ev.decisions || [])) {
+      // An open whose fill test failed. It logs filled:false here and is cancelled at the next candle.
+      const isOpen = d.action === 'open' && d.filled === false;
+      const kind = REFUSED[d.action];
+      if (!isOpen && !kind) continue;
+      // Format with the SAME producer the position rows use (exported from strategy-positions.js), so a
+      // refused order's legs read identically to a filled one's instead of being a second spelling.
+      const legs = (window.fmtSpreadLegs && d.legs) ? window.fmtSpreadLegs(d.legs, 1) : '';
+      const px = d.limit != null ? d.limit : 0;
+      evs.push({ id: `nofill-${src}-${noFillSeq++}`, type: isOpen ? 'open' : 'cover', unfilled: true,
+        noFill: true, noFillKind: isOpen ? 'OPEN' : kind, side: d.side || null, time: t,
+        epoch: ev.candleEpoch || 0, legs, cost: Math.round(px * 100), net: d.sentNet || 'DEBIT',
+        mark: d.mark != null ? d.mark : null, src, W, ML, raw: {}, sp: null, seq: null, isCovered: false,
+        hedgeKind: isOpen ? null : kind });
+    }
+  }
   return evs;
 }
 
@@ -522,7 +561,10 @@ function renderOrders() {
   const COLS = (both ? [['src', 'which engine placed this order — LIVE (real broker) or BT (backtest engine, same candles)']] : []).concat([
     ['Time', 'ET time of the order'],
     ['Pos', 'position number, chronological by open; a cover carries its open’s number'],
-    ['Event', '▲/▼ open (coloured by side), ◇ cover. OPEN* = no FILLED cover, so still exposed'],
+    ['Event', '▲/▼ open (coloured by side), ◇ cover. OPEN* = no FILLED cover, so still exposed. '
+      + 'A ** suffix (OPEN**, COVER**, OFFSET**, WING**, FLY**) = the order was PLACED and never filled — '
+      + 'its mark never reached the limit sent. Those rows are greyed with the legs struck through; an '
+      + 'unfilled open or hedge is cancelled or dropped, so nothing was ever held'],
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
@@ -543,8 +585,11 @@ function renderOrders() {
     // Hedges (floorOffset `off-*`, wing conversion `wing-*`) reshape the risk curve; they are not strategy
     // opens and are never covered, so "OPEN*" misrepresented them as exposed positions awaiting a cover.
     const hedge = e.hedgeKind;
-    const isUncov = open && !hedge && !e.isCovered;
-    const label = hedge ? hedge
+    const isUncov = open && !hedge && !e.isCovered && !e.noFill;
+    // A refused order carries its own kind and always the ** marker: placed, never filled. Same
+    // convention COVER** already used, now applied to every order type that can be refused.
+    const label = e.noFill ? `${e.noFillKind}**`
+      : hedge ? hedge
       : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
     const cr = e.net === 'CREDIT';
     const r = e.raw, pc = r.pendingCover || {}, W = e.W, ML = e.ML;
@@ -566,7 +611,7 @@ function renderOrders() {
     // The backtest tint sits UNDER the live semantics: a backtest row still shows unfilled-red / hedge-purple
     // where those apply, so the two sides are read with the same vocabulary and only the ground colour and
     // the src tag say which engine placed the order.
-    return `<tr class="td-${e.type}${e.src === 'bt' ? ' td-bt' : ''}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.src}:${e.id}">`
+    return `<tr class="td-${e.type}${e.src === 'bt' ? ' td-bt' : ''}${isUncov ? ' td-uncovered' : ''}${e.unfilled && !e.noFill ? ' td-unfilled' : ''}${e.noFill ? ' td-nofill' : ''}${hedge && !e.noFill ? ' td-hedge' : ''}" title="${e.src}:${e.id}${e.noFill ? `  (placed at ${e.cost / 100}, mark ${e.mark != null ? e.mark : '—'} — never filled)` : ''}">`
       + (both ? `<td class="srcTag" style="color:${e.src === 'bt' ? 'var(--bt)' : '#555'}">${e.src === 'bt' ? 'BT' : 'LIVE'}</td>` : '')
       + `<td>${e.time || '—'}</td><td>#${e.seq || '?'}</td>`
       // Hedge rows take the row's purple here too (the inline colour otherwise beats tr.td-hedge).

@@ -158,7 +158,12 @@
     };
   }
 
-  const api = { strategyRunToOptionArray, spreadToLegs, fmtLeg };
+  const api = { strategyRunToOptionArray, spreadToLegs, fmtLeg, fmtSpread };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof root !== 'undefined') root.strategyRunToOptionArray = strategyRunToOptionArray;
+  // EXPORTED so the debug page can render leg arrays that never became positions — a refused open,
+  // offset, wing or fly exists only as a decision, so it has no position for this module to format, but
+  // its legs must still read identically to every other row. Reusing the producer is the point: a
+  // lookalike formatter in the page would drift from this one the first time either changed.
+  if (typeof root !== 'undefined') root.fmtSpreadLegs = fmtSpread;
 })(typeof window !== 'undefined' ? window : this);
