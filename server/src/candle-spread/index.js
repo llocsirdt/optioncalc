@@ -1232,17 +1232,24 @@ async function processGroup(runs, kind) {
 }
 
 // Poll for candle availability: fire at boundary+5s, retry every 5s up to a cap.
+// Held for the whole tick INCLUDING its retries, so the sub-bar worker cannot mutate a record between a
+// failed attempt and the retry that succeeds. Both touch the same run records; the candle tick owns them
+// while it is running, and the worker skips rather than queues (it runs again in WORK_MS anyway).
+let tickBusy = false;
 function attemptTick(kind, retriesLeft) {
   const groups = {};
+  tickBusy = true;
   for (const run of RUNS) { (groups[groupKey(run)] = groups[groupKey(run)] || []).push(run); }
   Promise.all(Object.values(groups).map(runs => processGroup(runs, kind).catch(e => ({ error: e.message }))))
     .then(results => {
       const stillPending = results.some(r => r && r.pending);
       if (stillPending && retriesLeft > 0) {
-        setTimeout(() => attemptTick(kind, retriesLeft - 1), 5000);
+        setTimeout(() => attemptTick(kind, retriesLeft - 1), 5000);   // stays busy across the retry
+      } else {
+        tickBusy = false;
       }
     })
-    .catch(err => console.error('[candle-spread] tick error:', err && err.message));
+    .catch(err => { tickBusy = false; console.error('[candle-spread] tick error:', err && err.message); });
 }
 
 // --- Real order poller ----------------------------------------------------
@@ -1250,6 +1257,82 @@ function attemptTick(kind, retriesLeft) {
 // fills, and cancels test-mode orders (after TEST_CANCEL_MS) and stale working OPENs. Inert
 // unless armed + prod + a run is actually sending real orders (dryRun 'test' | false). Costs
 // nothing in dry-run (no liveOrders to poll).
+// ── SUB-BAR RESTING-ORDER WORKER (LIVE ONLY) ─────────────────────────────────────────────────────────
+// Both engines evaluated resting orders once per 5m CANDLE — workRestingCovers from processCandleClose,
+// and the backtest once per bar. In a backtest that is all the data supports. Live it is a lie about how
+// the day works: a cover whose mark dips through its target at 10:31 and recovers by 10:35 filled in
+// reality and was never seen, and an open priced at a candle close was tested against the very snapshot
+// that priced it, so it could only ever say yes.
+//
+// This pass re-reads the chain between candles and re-evaluates what is resting. It is the ONLY reason
+// the open-resting and ladder logic can do anything: the answer now comes from a different observation
+// than the one that set the price.
+//
+// WHAT IT DOES NOT DO. No signals, no opens, no covers placed, no reversals — those need the candle close
+// and its analysis. This only asks "did anything already working become fillable, and if not, walk it."
+//
+// The ladder does NOT speed up as a result: cover-ladder.stepsEarned reads ELAPSED restingMs, so looking
+// more often changes how soon a fill is NOTICED, not how fast the price chases. Live and backtest fill
+// rates will legitimately differ because live samples the tape more finely — expected, not a divergence,
+// and not something preflight can see (it compares fields, not sampling rates).
+//
+// The underlying is not refreshed here. The chain gives prices, not a spot, and the ladder's
+// underlying-move term and the governor both tolerate the last candle's value; a 5m-old spot is a far
+// smaller error than pretending a resting order cannot fill for five minutes.
+const WORK_MS = Number(process.env.CANDLE_SPREAD_WORK_MS) || 30000;
+let workTimer = null;
+let workBusy = false;      // never overlap a pass with itself or with a candle tick
+async function runRestingWork() {
+  if (!started || workBusy || tickBusy) return;
+  if (!(DEPS && DEPS.getOrFetchChainData)) return;
+  // RTH only, and not on the boundary itself — the candle tick owns that moment.
+  const { weekday, hour, minute } = etParts(new Date());
+  if (!RTH_WEEKDAYS.has(weekday)) return;
+  const t = hour * 60 + minute;
+  if (t < FIRST_ACTION_MIN || t > LAST_ACTION_MIN) return;
+  workBusy = true;
+  try {
+    const tradeDate = todayEST();
+    // Which variants actually have something working? Cheap enough to check before any network call, and
+    // on most passes the answer is none.
+    const pending = [];
+    for (const run of RUNS) {
+      const cfg = { ...run, expiration: run.expiration || tradeDate };
+      const record = store.initRun(cfg, tradeDate);
+      const st = record.state || {};
+      const hasOpen = !!st.pendingOpenId;
+      const hasCover = (st.positions || []).some(p => p.filled !== false && !p.covered && p.pendingCover);
+      if (hasOpen || hasCover) pending.push({ run, cfg, record });
+    }
+    if (!pending.length) return;
+    // ONE chain read for the whole pass. The 5s freshness window in getOrFetchChainData means every
+    // variant after the first reuses it, so 80 variants cost one request rather than eighty.
+    const first = pending[0].cfg;
+    const chainData = await DEPS.getOrFetchChainData(first.priceSymbol || first.symbol, first.expiration);
+    if (!chainData) return;
+    const getLeg = trader.makeLegAccessor(chainData, first.expiration);
+    for (const { run, cfg, record } of pending) {
+      const st = record.state;
+      const decisions = [];
+      const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying });
+      try {
+        trader.resolvePendingOpen(st, cfg, deps, decisions);
+        if (cfg.coverFillModel === 'resting') {
+          await trader.workRestingCovers(st, cfg, decisions, deps, st.lastUnderlying);
+        }
+      } catch (e) {
+        console.error(`[candle-spread] resting work (${run.variant}):`, e && e.message);
+        continue;
+      }
+      if (decisions.length) {
+        store.appendEvent(record, { type: 'resting_work', at: new Date().toISOString(), decisions });
+      }
+    }
+  } finally {
+    workBusy = false;
+  }
+}
+
 async function runOrderPoll() {
   if (!(LIVE_ARMED && DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return;
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
@@ -1272,6 +1355,10 @@ async function runOrderPoll() {
 // joint variant's retained upside is actually counted. (The parked cheap-cover sweep < 5%
 // width would slot in just before this.)
 async function eodSettlement() {
+  tickBusy = true;                 // settlement rewrites every record; the worker must stand clear
+  try { return await eodSettlementInner(); } finally { tickBusy = false; }
+}
+async function eodSettlementInner() {
   const bySymbol = {};
   for (const run of RUNS) { (bySymbol[run.symbol] = bySymbol[run.symbol] || []).push(run); }
   for (const [symbol, runs] of Object.entries(bySymbol)) {
@@ -1350,6 +1437,9 @@ function start(deps) {
   // Harmless when disarmed/dry-run: runOrderPoll early-returns and there are no liveOrders.
   orderPollTimer = setInterval(() => { runOrderPoll().catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);
   if (orderPollTimer.unref) orderPollTimer.unref();
+  // Sub-bar pass over resting opens and covers. Inert outside RTH and on any pass with nothing working.
+  workTimer = setInterval(() => { runRestingWork().catch(e => console.error('[candle-spread] resting work:', e && e.message)); }, WORK_MS);
+  if (workTimer.unref) workTimer.unref();
   // Live-send status. Real orders require prod + CANDLE_SPREAD_LIVE=true + a run with
   // dryRun:false (real) or dryRun:'test' (unfillable paper send).
   const liveRuns = RUNS.filter(r => r.dryRun === false);

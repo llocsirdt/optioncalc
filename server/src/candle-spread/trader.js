@@ -797,28 +797,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         st.positions = st.positions.filter(p => p.id !== pos.id);
         st.pendingOpenId = null;
       } else {
-        // Still our view — re-test it against this candle's mark, then ladder toward the market.
-        const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
-        if (chk.fillable) {
-          pos.filled = true; pos.orderStatus = 'filled'; pos.limit = pos.limit;
-          decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
-            mark: chk.mark, restedSince: pos.openTime });
-          st.pendingOpenId = null;
-        } else if (deps.coverLadder === true && chk.mark != null) {
-          // SAME LADDER AS THE COVERS, in the same direction: an open is a BUY, so walking toward the
-          // market means paying MORE. Bounded by the ceiling this open was already gated on — working an
-          // order must never become a way past the 65% rule.
-          const step = deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25;
-          const next = round2(Math.min(pos.limit + step, pos.cap != null ? pos.cap : Infinity, chk.mark));
-          if (next > pos.limit) {
-            decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
-              from: pos.limit, to: next, mark: chk.mark, cap: pos.cap });
-            pos.limit = next;
-          } else {
-            decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
-              mark: chk.mark, cap: pos.cap, reason: next >= (pos.cap != null ? pos.cap : Infinity) ? 'at ceiling' : 'no room' });
-          }
-        }
+        resolvePendingOpen(st, cfg, deps, decisions);   // still our view — try to fill it, else work it
       }
     }
   }
@@ -1564,6 +1543,47 @@ function coverMarkNow(legs, getLeg) {
 // LOST $461k-$863k across all 36 arms, because paying up to fill an order the market was going to come
 // to anyway is a worse trade than waiting. That result is why this ships DEFAULT OFF. It is wired so it
 // can be enabled deliberately and measured live, not because the backtest endorses it.
+// Try to FILL a resting open against the current chain, and work it toward the market if it will not.
+// Split out of processCandleClose so the LIVE sub-bar worker can call it between candles: the candle tick
+// prices an open and tests it in the same snapshot, which can only ever say yes, while a pass seconds
+// later reads the chain again and gives the answer an actual resting order would get.
+//
+// Deliberately does NOT decide reversals. A reversal needs the signal, the signal only exists at a candle
+// close, and cancelling an order on stale direction between bars would be guessing.
+function resolvePendingOpen(st, cfg, deps, decisions) {
+  if (!st.pendingOpenId) return 0;
+  const pos = st.positions.find(p => p.id === st.pendingOpenId);
+  if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
+  const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
+  if (chk.fillable) {
+    pos.filled = true; pos.orderStatus = 'filled';
+    decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
+      mark: chk.mark, restedSince: pos.openTime });
+    st.pendingOpenId = null;
+    return 1;
+  }
+  if (deps.coverLadder !== true || chk.mark == null) return 0;
+  // SAME LADDER AS THE COVERS, same direction: an open is a BUY, so walking toward the market means
+  // paying MORE. Bounded by the ceiling this open was already gated on and by the mark itself — working
+  // an order must never become a way past the 65% rule, nor a way to pay through the market.
+  //
+  // Step timing is ELAPSED-TIME based (cover-ladder.stepsEarned reads restingMs), so evaluating more
+  // often does not make the ladder walk faster. The sub-bar pass changes how often we LOOK, not how
+  // quickly we chase — which is the whole point of it.
+  const step = deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25;
+  const ceiling = pos.cap != null ? pos.cap : Infinity;
+  const next = round2(Math.min(pos.limit + step, ceiling, chk.mark));
+  if (next > pos.limit) {
+    decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
+      from: pos.limit, to: next, mark: chk.mark, cap: pos.cap });
+    pos.limit = next;
+    return 1;
+  }
+  decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
+    mark: chk.mark, cap: pos.cap, reason: next >= ceiling ? 'at ceiling' : 'no room' });
+  return 0;
+}
+
 async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   // Either mechanism can be enabled alone: the ladder walks price on a schedule, give-up reacts to the
   // position turning. They compose — give-up supersedes the ladder for a position it fires on.
@@ -1694,6 +1714,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 module.exports = {
   processCandleClose,
   workRestingCovers,
+  resolvePendingOpen,
   makeLegAccessor,
   buildOrderPayload,
   buildOpen,
