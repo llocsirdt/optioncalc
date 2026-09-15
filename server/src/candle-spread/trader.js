@@ -20,6 +20,7 @@ const LAD = require('./cover-ladder');   // works a resting cover toward the mar
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
 const WC = require('./wing-convert');
+const FY = require('./fly-convert');   // valley repair: flies/condors — SHARED with the backtest engine
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest   // shared peak->floor wing planner (same module the backtest uses)
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
@@ -611,6 +612,101 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
   return bought;
 }
 
+// FLY / CONDOR VALLEY REPAIR (deps.flyConvert) — the live port of the backtest's opts.flyConvert
+// (backtest/backtest-v6-5m.js). Shares fly-convert.js with the backtest, so both engines plan the same
+// structures off the same objective; only the PRICES differ (real chain here, Black-Scholes there).
+//
+// The complement to wingConvert, not a replacement. Wings and offsets only BUY, so they need cheap OTM
+// premium and have little potential until late; a fly SELLS THE BODY to fund its wings, so its net cost
+// stays small when premium is rich. Measured on 231 real chain snapshots a 30-wide fly is $175 (17:1) at
+// 09:30 and $720 (4.2:1) by 15:00 — an early/mid-day tool by its own economics, the mirror image of when
+// wings work, which is why flyBeforeMin defaults to 15:00 rather than running to the bell.
+//
+// It targets the biggest measured leak. Blocking late opens (time cutoff OR positive-floor gate) lost
+// total AND ret/DD in all 42 arms tested, so the late opens that erode the floor are net-positive and
+// "stop trading" is the wrong answer. Repairing the curve while continuing to trade is what is left.
+async function convertFlies(st, cfg, deps, decisions, candleTime) {
+  if (!(deps.flyConvert === true)) return 0;
+  const spot = deps.underlying;
+  const A = deps.A;
+  if (!(spot > 0) || !A || !A['15m'] || st.positions.length < 2) return 0;
+  const nowMin = etMinutesOf(candleTime);
+  const afterMin = deps.flyAfterMin != null ? deps.flyAfterMin : 0;
+  const beforeMin = deps.flyBeforeMin != null ? deps.flyBeforeMin : 15 * 60;   // cost/ratio collapses late
+  if (nowMin != null && (nowMin < afterMin || nowMin >= beforeMin)) return 0;
+  st.flyCount = st.flyCount || 0; st.flySpent = st.flySpent || 0;
+  const maxPerDay = deps.flyMaxPerDay != null ? deps.flyMaxPerDay : 4;
+  if (st.flyCount >= maxPerDay) return 0;
+
+  // SAME band as wings: 15m Bollinger width -> implied vol -> spot*iv*sqrt(tau), with the intraday IV
+  // term structure applied. Live and backtest must anchor on the same expected move or they are planning
+  // against two different notions of "far".
+  const b = A['15m'];
+  const tau = bs.tauFromTime(deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()));
+  const ivMult = nowMin != null ? IIV.ivMultAt(nowMin) : 1;
+  const iv = bs.ivFromRelBandWidth((b.bbupper - b.bblower) / b.close) * ivMult;
+  const band = Math.round(spot * iv * Math.sqrt(tau) * (deps.flyBandSig != null ? deps.flyBandSig : 1.5));
+  if (!(band > 0) || !(tau > 0)) return 0;
+
+  // MARKETABLE pricing off the real chain — pay the ask on a long leg, receive the bid on a short. A fly
+  // is short the body, so getting this backwards would make it look free.
+  const price = (type, strike, legSide) => {
+    const q = deps.getLeg(type, strike);
+    if (!q) return null;
+    const px = legSide === 'long' ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid);
+    return px != null ? px : null;
+  };
+  const filled = st.positions.filter((p) => p.filled !== false);
+  const bookView = filled.map((p) => ({ filled: true, legs: p.legs, limit: p.limit, quantity: p.quantity || cfg.quantity,
+    covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
+  const incr = cfg.strikeIncrement;
+  const budget = Math.min(deps.flyBudget != null ? deps.flyBudget : 1500, Math.max(0, (deps.flyBudget != null ? deps.flyBudget : 1500) - st.flySpent));
+  if (!(budget > 0)) return 0;
+
+  const plan = FY.planFlies(bookView, {
+    spot, band, incr, price, qty: cfg.quantity, step: incr, budget,
+    maxFlies: Math.min(2, maxPerDay - st.flyCount),
+    minRatio: deps.flyMinRatio != null ? deps.flyMinRatio : 3,
+    widths: deps.flyWidths || [2 * incr, 3 * incr, 4 * incr],
+    condors: deps.flyCondors !== false,
+  });
+  if (!plan || !plan.flies.length) return 0;
+
+  let bought = 0;
+  for (const f of plan.flies) {
+    if (deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(f.legs)) continue;
+    const resolved = [];
+    for (const l of f.legs) {
+      const q = deps.getLeg(l.type, l.strike);
+      if (!q || !q.symbol) { resolved.length = 0; break; }
+      resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+    }
+    if (!resolved.length) continue;
+    // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a fly does not book on its planned cost either.
+    const limitPx = round2(f.cost + openSlip(cfg, deps));
+    const chk = markFill(f.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    if (!chk.fillable) {
+      decisions.push({ action: 'fly-nofill', tag: f.tag, legs: f.legs, mark: chk.mark, limit: limitPx });
+      continue;
+    }
+    const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
+    const placed = await deps.placeOrder(payload, { kind: 'fly', legs: f.legs, net: 'DEBIT', limit: limitPx, condor: !!f.condor });
+    if (!placed || placed.filled === false) continue;
+    const pos = { id: nextId('fly'), filled: true, side: 'fly', shortStrike: null, legs: f.legs, limit: chk.fill,
+      openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
+      quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, fly: true };
+    st.positions.push(pos);
+    if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(f.legs);
+    st.flyCount++; st.flySpent = round2(st.flySpent + chk.fill * 100 * cfg.quantity);
+    bought++;
+    decisions.push({ action: 'fly', id: pos.id, tag: f.tag, condor: !!f.condor, legs: f.legs,
+      cost: round2(chk.fill * 100 * cfg.quantity), ratio: f.ratio, band, mark: chk.mark, limit: limitPx,
+      spentToday: st.flySpent });
+  }
+  return bought;
+}
+
+
 // "MM/DD HH:MM" -> minutes from ET midnight, for the wing time gate.
 function etMinutesOf(candleTime) {
   const m = /(\d{1,2}):(\d{2})\s*$/.exec(String(candleTime || ''));
@@ -942,6 +1038,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // governor — a book can be worth converting while nowhere near the cap, which is the case floorOffset
   // structurally cannot reach.
   await convertWings(st, cfg, deps, decisions, candleTime);
+  // FLY/CONDOR VALLEY REPAIR runs alongside wings and is their complement, not their competitor: wings
+  // buy OTM premium to bank a peak (late-day economics), a fly sells the body to fund its wings and
+  // repairs a valley (early/mid-day economics). Both are ungated by the governor for the same reason.
+  await convertFlies(st, cfg, deps, decisions, candleTime);
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).

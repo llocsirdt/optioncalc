@@ -74,6 +74,13 @@ function optsFor(v) {
   // it on 20 variants produced BYTE-IDENTICAL baselines until these lines existed — the variant config
   // said wingConvert:true and nothing carried it into the engine.
   if (v.wingConvert) o.wingConvert = true;
+  // FLY / CONDOR VALLEY REPAIR — the backtest has always had opts.flyConvert; until 2026-09-14 no variant
+  // set it, so it was dormant. Now that variants declare it, it has to be carried in here or the contract
+  // guard (correctly) refuses the build rather than let the feature be a silent no-op.
+  if (v.flyConvert) o.flyConvert = true;
+  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors', 'flyAfterMin', 'flyBeforeMin']) {
+    if (v[k] != null) o[k] = v[k];
+  }
   for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingBudget', 'wingMaxPerDay',
     'wingBandSigmas', 'wingOutSteps', 'wingUpsideLambda', 'wingTailSigmas']) if (v[k] != null) o[k] = v[k];
   if (v.wingNaked) o.wingNaked = true;

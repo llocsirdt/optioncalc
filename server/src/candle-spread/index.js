@@ -406,6 +406,34 @@ const CAPPRES_LIVE = new Set(
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
+// FLY / CONDOR VALLEY REPAIR, LIVE (2026-09-14). Ported from the backtest, where it had existed as
+// opts.flyConvert and never run live at all — it is one of the fields preflight listed as DORMANT.
+//
+// WHY IT IS THE COMPLEMENT TO WINGS, not a rival: wings and offsets only BUY, so they need cheap OTM
+// premium and have little potential until late in the session; a fly SELLS THE BODY to fund its wings,
+// so its net cost stays small while premium is rich. On 231 real chain snapshots a 30-wide fly runs $175
+// (17:1) at 09:30 and $720 (4.2:1) by 15:00 — early/mid-day economics, the mirror image of when wings
+// work, which is why flyBeforeMin stops it at 15:00 instead of running to the bell.
+//
+// HALF THE CAPPED FLEET, split by family so every fly variant has an adjacent, correlated control that
+// keeps flies OFF: v0/v2/v4/v6/v8 carry it, v1/v3/v5/v7/v9 are the controls. That is 25 of the 50 capped
+// variants (offsets are capped-only, so the capped set IS the offset+wing population), spanning all three
+// widths and both geometries. The `-unc` twins are excluded: they have wings but no governor and no
+// offsets, so they are not part of the population this is being measured against.
+//
+// CAVEAT, stated plainly: several of these 25 already carry another experiment (v0-10 and v4-20 have
+// ladder+minLock, v6-20 has the tight cap, v8-20 has give-up). Testing five features across 50 variants
+// cannot keep every arm single-factor. Read a fly result against its adjacent-family control at the same
+// width and geometry, and treat any variant carrying two flags as suggestive rather than attributable.
+const FLY_LIVE = new Set(
+  (process.env.CANDLE_SPREAD_FLY != null ? process.env.CANDLE_SPREAD_FLY
+    : 'v0-10,v0-20,v0-40,v0-20-cATM,v0-40-cATM,'
+    + 'v2-10,v2-20,v2-40,v2-20-cATM,v2-40-cATM,'
+    + 'v4-10,v4-20,v4-40,v4-20-cATM,v4-40-cATM,'
+    + 'v6-10,v6-20,v6-40,v6-20-cATM,v6-40-cATM,'
+    + 'v8-10,v8-20,v8-40,v8-20-cATM,v8-40-cATM')
+    .split(',').map(s => s.trim()).filter(Boolean));
+
 // ORDER SLIP A/B (2026-09-14). Opens, offsets and wings were priced exactly AT the mark, which needs the
 // market to come to us before anything fills. Paying a tick or two over makes the limit marketable against
 // a realistic ask, at $5/tick/contract. The user's call: cheap next to a cover that never fills.
@@ -475,6 +503,12 @@ function applyExperiments(v, { capPreset = true } = {}) {
   }
   // ORDER SLIP — ticks over the mark on opens/offsets/wings; a credit twin concedes the same.
   if (ORDER_SLIP_AB.has(v.variant)) v.orderSlipTicks = ORDER_SLIP_AB.get(v.variant);
+  // FLY / CONDOR VALLEY REPAIR. Defaults match the backtest's (backtest-v6-5m.js) so the two engines
+  // plan the same structures; only the prices differ (real chain live, Black-Scholes there).
+  if (FLY_LIVE.has(v.variant)) {
+    v.flyConvert = true; v.flyMinRatio = 3; v.flyBandSig = 1.5;
+    v.flyBudget = 1500; v.flyMaxPerDay = 4; v.flyCondors = true; v.flyBeforeMin = 15 * 60;
+  }
   return v;
 }
 
@@ -670,6 +704,7 @@ function validateSelectors(list) {
   check('CANDLE_SPREAD_GIVEUP', GIVEUP_LIVE);
   check('CANDLE_SPREAD_CAPPRES', CAPPRES_LIVE);
   check('CANDLE_SPREAD_ORDERSLIP', ORDER_SLIP_AB.keys());
+  check('CANDLE_SPREAD_FLY', FLY_LIVE);
   // The one deliberate refusal — see applyExperiments.
   for (const n of CAPPRES_LIVE) {
     if (/-unc$/.test(n)) problems.push(`CANDLE_SPREAD_CAPPRES: "${n}" is an UNCAPPED twin — a cap preset cannot apply to it`);
@@ -934,6 +969,11 @@ function buildEngineDeps(run, live) {
       // ORDER SLIP — ticks paid OVER the mark on opens/offsets/wings (and conceded on a credit twin), so
       // the limit is likelier to be crossed. Read off `deps`, so it MUST be listed here.
       orderSlipTicks: run.orderSlipTicks,
+      // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
+      // here or the flag is silently dropped live while the backtest measures a gain.
+      flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,
+      flyBudget: run.flyBudget, flyMaxPerDay: run.flyMaxPerDay, flyWidths: run.flyWidths,
+      flyCondors: run.flyCondors, flyAfterMin: run.flyAfterMin, flyBeforeMin: run.flyBeforeMin,
       // COVER LADDER — work a resting cover toward the market instead of leaving it untouched all day.
       // Read off `deps`, so it must be listed here. Default OFF; see the note in BASE_RUNS.
       coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
