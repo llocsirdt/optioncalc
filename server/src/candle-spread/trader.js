@@ -333,7 +333,12 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
   if (error) return { error };
   const credit = round2(shortMid - longMid);
   if (!(credit > 0)) return { error: `non-positive credit (${credit}) — bad quotes` };
-  const limit = Math.max(cfg.tickIncrement, Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), credit));
+  // MIRROR THE SLIP. A debit twin pays a tick OVER the mark to be crossed; the credit twin has to concede
+  // the same economics by ACCEPTING a tick less credit. Slipping only the debit side would make the two
+  // twins economically different orders, which breaks the parity the recapture alternation depends on —
+  // it is exactly what the capital-recapture and leg-uniqueness tests caught.
+  const asked = round2(credit - openSlip(cfg));
+  const limit = Math.max(cfg.tickIncrement, Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), asked));
   return { legs, limit, credit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'CREDIT') };
 }
 
@@ -356,10 +361,22 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // recapture-only: fall back to debit
   }
   const placed = await deps.placeOrder(payload, { kind: 'open', side: openSide, legs: sentLegs, limit: sentLimit, net: sentNet, mark: res.mark });
+  // SAME FILL TEST AS EVERY OTHER ORDER (markFill). This was `filled: !!placed.filled`, and placeOrder
+  // returns filled:true in simulate — so an open booked whether or not any price supported it, and an
+  // unquotable leg still produced a position. Now the observed mark has to reach the limit we placed.
+  // With the slip that is normally satisfied at once (a marketable buy), which is the correct answer for
+  // an open — the point is that it is now TESTED, and a missing or stale quote no longer books a fill.
+  // An open that does not fill rests as st.pendingOpenId and is cancelled at the next candle, which is
+  // the "work the order, never assume" rule the engine already had a dead code path for.
+  const openChk = markFill(res.legs, res.limit, deps.getLeg, cfg.tickIncrement);
   const pos = {
     id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
+    // Book what we OFFERED, not markFill's cheap-side price. markFill caps its fill at one tick through
+    // the mark (the cover convention); an open placed at mark + N ticks that books at mark + 1 would
+    // concede less than its credit twin does, and the twins must stay economically identical. Paying the
+    // slip is the whole point of placing it — that is the $5/tick/contract being spent on crossing odds.
     shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
-    orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
+    orderStatus: placed.status, filled: !!placed.filled && openChk.fillable, covered: false, coverId: null,
     openedAt: new Date().toISOString(),
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
@@ -467,16 +484,27 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
       resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
     }
     if (!resolved.length) break;
-    const limitPx = round2(best.debit);
+    // SAME FILL TEST AS EVERY OTHER ORDER (markFill). An offset used to book filled:true on the strength
+    // of its own cost estimate; now the observed mark has to reach the limit we place, and the limit
+    // carries the standard slip so it is likelier to be crossed for real.
+    const limitPx = round2(best.debit + openSlip(cfg, deps));
+    const chk = markFill(best.hp.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    if (!chk.fillable) {
+      decisions.push({ action: 'floor-offset-nofill', legs: best.hp.legs, mark: chk.mark, limit: limitPx });
+      break;
+    }
+    best.hp.limit = chk.fill;                 // book what the test says we paid, not the estimate
     const payload = buildOrderPayload(resolved, limitPx, qty, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'floor-offset', legs: best.hp.legs, net: 'DEBIT', limit: limitPx });
     if (!placed || placed.filled === false) break;
     best.hp.id = nextId('off');
     st.positions.push(best.hp);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.hp.legs);
-    st.offSpent += best.cost; st.offCount++; bought++;
+    const paid = chk.fill * 100 * qty;              // tested fill price, not the pre-trade estimate
+    st.offSpent += paid; st.offCount++; bought++;
     decisions.push({ action: 'floor-offset', id: best.hp.id, legs: best.hp.legs, cost: round2(best.cost),
-      lift: round2(best.lift), ratio: round2(best.ratio), forced: !!force, limit, spentToday: round2(st.offSpent) });
+      lift: round2(best.lift), ratio: round2(best.ratio), forced: !!force, limit: limitPx, mark: chk.mark,
+      spentToday: round2(st.offSpent) });
   }
   return bought;
 }
@@ -559,19 +587,26 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
       resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
     }
     if (!resolved.length) continue;
-    const limitPx = round2(w.cost);
+    // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a wing no longer books on its own cost estimate.
+    const limitPx = round2(w.cost + openSlip(cfg, deps));
+    const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    if (!chk.fillable) {
+      decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: chk.mark, limit: limitPx });
+      continue;
+    }
     const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'wing', legs: w.legs, net: 'DEBIT', limit: limitPx, naked: !!w.naked });
     if (!placed || placed.filled === false) continue;
-    const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost,
+    const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: chk.fill,
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(w.legs);
-    st.wingCount++; st.wingSpent = round2(st.wingSpent + w.cost * 100 * cfg.quantity);
+    st.wingCount++; st.wingSpent = round2(st.wingSpent + chk.fill * 100 * cfg.quantity);
     bought++;
     decisions.push({ action: 'wing', id: pos.id, tag: w.tag, naked: !!w.naked, side: w.side,
-      cost: round2(w.cost * 100 * cfg.quantity), ratio: w.ratio, peakNow: round2(peakNow), spentToday: st.wingSpent });
+      cost: round2(chk.fill * 100 * cfg.quantity), ratio: w.ratio, peakNow: round2(peakNow), spentToday: st.wingSpent,
+      mark: chk.mark, limit: limitPx });
   }
   return bought;
 }
@@ -1021,12 +1056,16 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
-  const { mark, cap, exceedsCap, limit } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
+  const { mark, cap, exceedsCap, limit: atMark } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
+  // SLIP OVER THE MARK (see openSlip). The opens were priced exactly AT the mark, which needs the market
+  // to come to us to fill. The slipped limit is still bounded by the ceiling — paying up must never be a
+  // way around the gate that just let this open through.
+  const limit = Math.min(round2(atMark + openSlip(cfg)), cap);
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
-    mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
+    mark, cap, limit, markLimit: atMark, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
   };
 }
 
@@ -1313,6 +1352,39 @@ function computeTerminalPnl(state, cfg, settle, events) {
 function round2(n) { return Math.round(n * 100) / 100; }
 
 // Net-debit mark of a cover leg-set from the CURRENT chain (null if any leg is unquoted).
+// ── ONE FILL TEST FOR EVERY ORDER TYPE ───────────────────────────────────────────────────────────────
+// Opens, offsets/hedges and wings used to book `filled: true` unconditionally: the position appeared in
+// the book whether or not any price supported it, and a missing or unquotable leg still produced a fill.
+// Only resting covers were ever price-tested. Every order type now goes through this, so "filled" means
+// the same thing everywhere — an observed mark reached the limit we placed.
+//
+// DEBIT-CANONICAL, like the rest of the engine: `mark <= limit` fills a BUY. Fill price is
+// min(limit, mark + tick) so a mark already through the limit books at the cheap side rather than
+// pretending we paid the full limit.
+//
+// HONEST LIMIT: `mark` here is Schwab's mark, or the midpoint when it is absent (see makeLegAccessor).
+// A resting buy fills when someone trades at the price, and the mid touching our limit is necessary but
+// not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
+// market observation rather than a model, which is the improvement, but it is not broker confirmation.
+// ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
+function markFill(legs, limit, getLeg, tick) {
+  const mark = coverMarkNow(legs, getLeg);
+  if (mark == null || limit == null || !(limit > 0)) return { mark, fillable: false, fill: null };
+  if (mark > limit) return { mark, fillable: false, fill: null };
+  return { mark, fillable: true, fill: round2(Math.max(tick, Math.min(limit, mark + tick))) };
+}
+
+// Pay a tick or two OVER the mark so the order is likelier to actually be crossed. A limit sitting exactly
+// at the mark needs the market to come to us; a limit above it is already marketable against a reasonable
+// ask. At $0.05 a tick that is $5/contract per tick — cheap next to a cover that never fills, and it is
+// the same trade the cover fill price has always made (min(target, mark + tick)).
+const ORDER_SLIP_DEFAULT = 0;   // OFF by default — see the note above openSlip
+function openSlip(cfg, deps) {   // deps optional: buildOpen* paths only carry cfg
+  const n = (deps && deps.orderSlipTicks != null) ? deps.orderSlipTicks
+    : (cfg && cfg.orderSlipTicks != null) ? cfg.orderSlipTicks : ORDER_SLIP_DEFAULT;
+  return Math.max(0, n) * cfg.tickIncrement;
+}
+
 function coverMarkNow(legs, getLeg) {
   let v = 0;
   for (const l of legs) {

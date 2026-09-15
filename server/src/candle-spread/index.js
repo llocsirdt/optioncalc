@@ -406,6 +406,29 @@ const CAPPRES_LIVE = new Set(
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
 
+// ORDER SLIP A/B (2026-09-14). Opens, offsets and wings were priced exactly AT the mark, which needs the
+// market to come to us before anything fills. Paying a tick or two over makes the limit marketable against
+// a realistic ask, at $5/tick/contract. The user's call: cheap next to a cover that never fills.
+//
+// NOT a fleet default. It changes what every order COSTS, so switching it on everywhere at once would
+// move all 80 variants and leave no way to attribute the result — the same mistake the minLock ramp
+// avoided. Default 0 (today's behaviour, byte-identical), enabled per variant here so its cost in floor
+// and its gain in fills are both measurable against untouched controls.
+//
+// Spelling: `variant:ticks`, e.g. `v7-10:1`. A credit twin concedes the SAME number of ticks of credit —
+// slipping only the debit side makes the twins economically different orders (the capital-recapture and
+// leg-uniqueness parity suites catch that immediately).
+const ORDER_SLIP_AB = (() => {
+  const raw = process.env.CANDLE_SPREAD_ORDERSLIP != null ? process.env.CANDLE_SPREAD_ORDERSLIP : '';
+  const m = new Map();
+  for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const [name, spec] = part.split(':');
+    const n = parseInt(spec, 10);
+    if (name && Number.isFinite(n) && n >= 0) m.set(name.trim(), n);
+  }
+  return m;
+})();
+
 // ── THE LIVE-EXPERIMENT HOOK — ONE PLACE, EVERY BUILDER ──────────────────────────────────────────────
 // Every selector above (minLock A/B, cap preset, ladder, give-up) is applied HERE and only here, and all
 // three builders (base, `-unc`, `-cATM`) call it. That is the whole point of the function existing.
@@ -450,6 +473,8 @@ function applyExperiments(v, { capPreset = true } = {}) {
   if (GIVEUP_LIVE.has(v.variant)) {
     v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
   }
+  // ORDER SLIP — ticks over the mark on opens/offsets/wings; a credit twin concedes the same.
+  if (ORDER_SLIP_AB.has(v.variant)) v.orderSlipTicks = ORDER_SLIP_AB.get(v.variant);
   return v;
 }
 
@@ -644,6 +669,7 @@ function validateSelectors(list) {
   check('CANDLE_SPREAD_LADDER', LADDER_LIVE);
   check('CANDLE_SPREAD_GIVEUP', GIVEUP_LIVE);
   check('CANDLE_SPREAD_CAPPRES', CAPPRES_LIVE);
+  check('CANDLE_SPREAD_ORDERSLIP', ORDER_SLIP_AB.keys());
   // The one deliberate refusal — see applyExperiments.
   for (const n of CAPPRES_LIVE) {
     if (/-unc$/.test(n)) problems.push(`CANDLE_SPREAD_CAPPRES: "${n}" is an UNCAPPED twin — a cap preset cannot apply to it`);
@@ -905,6 +931,9 @@ function buildEngineDeps(run, live) {
       openNeverOtm: run.openNeverOtm,
       // COVER PRICING MODE — 'lock' (historical) vs 'mark'. Read off `deps`, so it must be listed here.
       coverPriceMode: run.coverPriceMode, coverSlipTicks: run.coverSlipTicks,
+      // ORDER SLIP — ticks paid OVER the mark on opens/offsets/wings (and conceded on a credit twin), so
+      // the limit is likelier to be crossed. Read off `deps`, so it MUST be listed here.
+      orderSlipTicks: run.orderSlipTicks,
       // COVER LADDER — work a resting cover toward the market instead of leaving it untouched all day.
       // Read off `deps`, so it must be listed here. Default OFF; see the note in BASE_RUNS.
       coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
