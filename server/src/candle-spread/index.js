@@ -304,7 +304,10 @@ const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
 // without being able to say WHICH half fail makes every total an approximation. Getting the armed variant
 // to ~85-88% is what turns the backtest into a measurement of the strategy rather than of our fill guess.
 const LADDER_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v7-10,v2-20,v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
+  // LADDER-ALONE only. v7-10 and v2-20 moved out of this list on 2026-09-14 — both now carry the ladder
+  // via their `+L` entry in MIN_LOCK_AB, which is the stated convention: one entry states the whole
+  // experiment. What remains here is the pure ladder arm, kept at every width so the 2x2 still reads.
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
     .split(',').map(s => s.trim()).filter(Boolean));
 // MIN-LOCK LEVEL A/B (2026-09-12). minLock is the price side of every resting cover — the target is
 // `W - openCost - minLock` — so it decides what RETURN we refuse to close below. Stated that way the
@@ -326,16 +329,30 @@ const LADDER_LIVE = new Set(
 //
 // SPREAD ACROSS BUCKETS AND WIDTHS, and kept attributable. The three signal blocks behave differently
 // enough that a result on one says little about the others (v0-v3 classic tent geometry; v4-v6 multi-TF
-// directional on the fixed-mark selector; v7-v9 bidirectional/capped). Ladder-only is ALREADY live on
-// v2-20/v5-20/v8-40, so these slots carry minLock alone or minLock+ladder — giving all four cells of the
-// 2x2 at once. Each test variant has a clean, highly-correlated control that keeps its current settings:
-//   v0-20 0.10        ctl v1-20 (r 0.943)     v0-10 0.10 +ladder  ctl v1-10 (r 0.914)
-//   v4-20 0.10        ctl v4-40 (r 0.841)     v6-40 0.05 +ladder  ctl v5-40 (r 0.862)
-//   v0-40 0.05        ctl v3-40 (r 0.985)     v9-10 0.05 +ladder  ctl v7-20 (r 0.699, the best the
-//                                                                  bidirectional block offers)
+// directional on the fixed-mark selector; v7-v9 bidirectional/capped).
+//
+// CORRELATIONS RE-COMPUTED 2026-09-14 on the CURRENT baselines (765 days, the post-wing-shift-fix set
+// prod serves). The figures this block used to carry were measured BEFORE that fix moved +$6.8M through
+// the fleet and were never refreshed; every one of them was too high — v0-20/v1-20 0.943 -> 0.752,
+// v0-40/v3-40 0.985 -> 0.760, and worst, v9-10/v7-20 0.699 -> 0.192, which is barely a control at all.
+// The ORDERING survived, so the original picks were sound in spirit; only the magnitudes were stale.
+//
+// LADDER+MINLOCK COMBINED, 3 WIDTHS x 3 (2026-09-14). The combined arm had been 3x W=10 and 1x W=40 with
+// nothing at W=20, because every base W=20 slot was already spoken for and the only free W=20 names were
+// `-cATM` — which this map could not reach until applyExperiments existed. Now balanced:
+//   W=10  v7-10 0.10+L (armed, +cap)   v0-10 0.10+L  ctl v1-10 (r 0.646)   v9-10 0.05+L  ctl v7-20 (0.192!)
+//   W=20  v4-20 0.10+L ctl v4-40 (0.737)  v2-20 0.10+L ctl v1-20 (0.795)   v6-20-cATM 0.10+L ctl v5-20-cATM (0.819)
+//   W=40  v6-40 0.05+L ctl v5-40 (0.730)  v1-40 0.05+L ctl v2-40 (0.966)   v3-40-cATM 0.05+L ctl v0-40-cATM (0.988)
+// v1-40/v2-40 (0.966) and v3-40-cATM/v0-40-cATM (0.988) are the tightest pairs on the whole roster: both
+// halves were free, so the test and its control differ in exactly one thing.
+//
+// The SINGLE-FACTOR cells are deliberately kept so the 2x2 still reads: minLock-alone stays on v0-20/v0-40,
+// ladder-alone on v5-20/v8-40/v8-20-cATM/v9-20-cATM/v8-40-cATM. v4-20 and v2-20 were UPGRADED into the
+// combined arm (each already had one of the two factors), which is why their single-factor twins matter.
 const MIN_LOCK_AB = (() => {
   const raw = process.env.CANDLE_SPREAD_MINLOCK != null ? process.env.CANDLE_SPREAD_MINLOCK
-    : 'v7-10:0.10+L,v0-20:0.10,v4-20:0.10,v0-40:0.05,v0-10:0.10+L,v6-40:0.05+L,v9-10:0.05+L';
+    : 'v7-10:0.10+L,v0-20:0.10,v4-20:0.10+L,v0-40:0.05,v0-10:0.10+L,v6-40:0.05+L,v9-10:0.05+L,'
+      + 'v2-20:0.10+L,v1-40:0.05+L,v6-20-cATM:0.10+L,v3-40-cATM:0.05+L';
   const m = new Map();
   for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
     const [name, spec] = part.split(':');
@@ -388,6 +405,53 @@ const CAPPRES_LIVE = new Set(
   (process.env.CANDLE_SPREAD_CAPPRES != null ? process.env.CANDLE_SPREAD_CAPPRES : 'v7-10,v3-10,v6-20,v7-40')
     .split(',').map(s => s.trim()).filter(Boolean));
 const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'test';   // false = real fillable orders
+
+// ── THE LIVE-EXPERIMENT HOOK — ONE PLACE, EVERY BUILDER ──────────────────────────────────────────────
+// Every selector above (minLock A/B, cap preset, ladder, give-up) is applied HERE and only here, and all
+// three builders (base, `-unc`, `-cATM`) call it. That is the whole point of the function existing.
+//
+// WHY (found 2026-09-14): the hooks used to be COPIED into each builder, and the copies drifted. The base
+// builder had all four; `-unc` and `-cATM` had only ladder + give-up. So naming a `-cATM` variant in
+// CANDLE_SPREAD_MINLOCK did NOTHING — the variant ran at its family default while the config said
+// otherwise. It could not show up as a live-vs-backtest divergence either, because the backtest imports
+// THIS ROSTER (build-backtest-baselines.js requires VARIANTS from this file), so both engines were
+// equally wrong and preflight stayed green. The experiment simply never ran anywhere.
+//
+// The rule now: a selector list is the ONLY statement of what a variant is testing, and it reaches every
+// variant shape. Anything a list names that cannot be honoured is REPORTED (see validateSelectors), never
+// silently dropped.
+function applyLadderCfg(v) {
+  v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
+  // Step scales with width: $0.25 works the cover meaningfully on a $10/$20 tent, and on a $40 it would
+  // walk the price too far per step, so $40 steps at $0.10.
+  v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;
+}
+// `capPreset:false` for the `-unc` twins ONLY. An uncapped twin exists to show the model with the
+// governor removed; putting a cap back on it would not be "the same experiment on another variant", it
+// would delete the variant's reason to exist. Naming a `-unc` variant in CANDLE_SPREAD_CAPPRES is
+// therefore refused OUT LOUD by validateSelectors rather than quietly ignored.
+function applyExperiments(v, { capPreset = true } = {}) {
+  // MIN-LOCK A/B first: it overrides the family default set by minLockFor. The paired `+L` spelling takes
+  // the ladder here rather than needing a second list, so one entry states the whole experiment.
+  const ab = MIN_LOCK_AB.get(v.variant);
+  if (ab) {
+    v.continuousCoverMinLockFrac = ab.frac;
+    if (ab.ladder) applyLadderCfg(v);
+  }
+  // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
+  if (capPreset && CAPPRES_LIVE.has(v.variant)) {
+    v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
+    v.lossTarget = Math.round(0.7 * v.lossMax);
+  }
+  if (LADDER_LIVE.has(v.variant)) applyLadderCfg(v);
+  // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30% is a
+  // rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is $1.00 on
+  // a $20 spread, enough to cross the spread and not enough to chase.
+  if (GIVEUP_LIVE.has(v.variant)) {
+    v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
+  }
+  return v;
+}
 
 const LOSS_TARGET = 5000;
 const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
@@ -449,43 +513,16 @@ function buildVariants() {
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
       if (v.variant === ARMED_VARIANT) v.dryRun = ARMED_MODE;
-      // MIN-LOCK A/B — after minLockFor above, since it overrides the family default. The paired `+L`
-      // variants also take the ladder here rather than being listed in LADDER_LIVE, so the pairing stays
-      // legible in ONE place: what this variant is testing is exactly what this entry says.
-      const ab = MIN_LOCK_AB.get(v.variant);
-      if (ab) {
-        v.continuousCoverMinLockFrac = ab.frac;
-        if (ab.ladder) {
-          v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
-          v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;
-        }
-      }
-      // CAPITAL PRESERVATION — must come AFTER lossMax/minLockFrac above, since it overrides the cap.
-      if (CAPPRES_LIVE.has(v.variant)) {
-        v.lossMax = w * 100;                 // 1 x width, the tightest cap that can still trade
-        v.lossTarget = Math.round(0.7 * v.lossMax);
-        // THE RAMP IS GONE, and lowering minLock is why. Both attacked the SAME failure — a resting cover
-        // price the market never reaches — and minLock attacks it at the source. Measured on v7-10 with
-        // the cap and the ladder in place, at minLock 0.10 the ramp buys +109 fills (+0.8%) and costs
-        // $133/day of avgFloor and $51,662 of total. If those extra fills were new profit the floor would
-        // RISE; it falls, so the ramp is not winning covers that would otherwise be lost — it is taking
-        // covers that would have filled at the full lock and filling them EARLIER for less. That is a
-        // straight giveaway once minLock is already reachable.
-        //
-        // Keeping it would also have meant FOUR simultaneous changes on the only variant sending orders
-        // (cap + ramp + ladder + new minLock), with no way to attribute a bad Monday to any one of them.
-      }
-      // Applied per variant; see LADDER_LIVE / GIVEUP_LIVE above for the pairing and the evidence.
-      if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
-        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
-      }
-      // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30%
-      // is a rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is
-      // $1.00 on a $20 spread, enough to cross the spread and not enough to chase.
-      if (GIVEUP_LIVE.has(v.variant)) {
-        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
-      }
+      // THE RAMP IS GONE from the cap-preset pairing, and lowering minLock is why. Both attacked the SAME
+      // failure — a resting cover price the market never reaches — and minLock attacks it at the source.
+      // Measured on v7-10 with the cap and the ladder in place, at minLock 0.10 the ramp buys +109 fills
+      // (+0.8%) and costs $133/day of avgFloor and $51,662 of total. If those extra fills were new profit
+      // the floor would RISE; it falls, so the ramp is not winning covers that would otherwise be lost —
+      // it is taking covers that would have filled at the full lock and filling them EARLIER for less.
+      // That is a straight giveaway once minLock is already reachable. Keeping it would also have meant
+      // FOUR simultaneous changes on the only variant sending orders (cap + ramp + ladder + new minLock),
+      // with no way to attribute a bad Monday to any one of them.
+      applyExperiments(v);
       out.push(v);
     }
   }
@@ -529,14 +566,9 @@ function buildUncapped() {
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       // The live experiments apply to `-unc` twins too — v7-20-unc carries the ladder precisely because
       // its control (v9-20-unc) is behaviourally identical to it, which the capped set cannot offer once
-      // v9-20 is taken by give-up. Without this hook the flag was silently dropped for every -unc name.
-      if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
-        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
-      }
-      if (GIVEUP_LIVE.has(v.variant)) {
-        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
-      }
+      // v9-20 is taken by give-up. `capPreset:false` is the ONE exclusion: a cap preset on an uncapped
+      // twin would delete the twin's reason to exist, so it is refused loudly instead (validateSelectors).
+      applyExperiments(v, { capPreset: false });
       out.push(v);
     }
   }
@@ -577,15 +609,9 @@ function buildAtmComparators() {
       if (f.softCap != null) v.softCap = f.softCap;
       v.lossMax = maxCapFor(w);                       // same governor as the short-ATM sweep
       v.continuousCoverMinLockFrac = minLockFor(f.key, w);
-      // cATM builder hook — the live experiments must reach the -cATM comparators too, or the flag is
-      // silently dropped for every cATM name exactly as it was for -unc.
-      if (LADDER_LIVE.has(v.variant)) {
-        v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
-        v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;   // see the width note above
-      }
-      if (GIVEUP_LIVE.has(v.variant)) {
-        v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
-      }
+      // cATM builder hook — the live experiments must reach the -cATM comparators too. This used to carry
+      // only ladder + give-up, which is exactly how the minLock A/B silently skipped every cATM name.
+      applyExperiments(v);
       out.push(v);
     }
   }
@@ -598,6 +624,41 @@ function buildAtmComparators() {
 
 // Validate the env selection against the roster the moment it is built, so a typo is loud, immediate and
 // impossible to mistake for "armed but quiet".
+// Every selector entry must LAND on a real variant. Before this existed only the armed name was checked,
+// so a typo — or a variant shape a builder did not hook — produced a run set that quietly disagreed with
+// the config describing it, in BOTH engines at once (the backtest imports this roster). You would then
+// read the untouched family-default numbers as though they were the test arm. Neither preflight audit can
+// see that: parity compares FIELDS between engines, distinctness compares variants to each other, and
+// neither asks whether a requested config name actually took effect.
+//
+// Reported, not thrown: this module boots the live proxy that also serves the UI and the API, and a stale
+// EB env var must not crash-loop the box. Instead it is loud on startup AND published on status() as
+// `configProblems`, so the badge, the health check and preflight can all fail on it.
+function validateSelectors(list) {
+  const names = new Set(list.map(v => v.variant));
+  const problems = [];
+  const check = (envName, entries) => {
+    for (const n of entries) if (!names.has(n)) problems.push(`${envName}: "${n}" matches no variant on the roster`);
+  };
+  check('CANDLE_SPREAD_MINLOCK', MIN_LOCK_AB.keys());
+  check('CANDLE_SPREAD_LADDER', LADDER_LIVE);
+  check('CANDLE_SPREAD_GIVEUP', GIVEUP_LIVE);
+  check('CANDLE_SPREAD_CAPPRES', CAPPRES_LIVE);
+  // The one deliberate refusal — see applyExperiments.
+  for (const n of CAPPRES_LIVE) {
+    if (/-unc$/.test(n)) problems.push(`CANDLE_SPREAD_CAPPRES: "${n}" is an UNCAPPED twin — a cap preset cannot apply to it`);
+  }
+  if (problems.length && !process.argv.includes('--_slice')) {
+    console.error('[candle-spread] ============ CONFIG PROBLEMS — THESE EXPERIMENTS ARE NOT RUNNING ============');
+    for (const p of problems) console.error(`[candle-spread]   ${p}`);
+    console.error('[candle-spread] The named variants run at their DEFAULTS. Do not read them as test arms.');
+    console.error('[candle-spread] =============================================================================');
+  }
+  CONFIG_PROBLEMS = problems;
+  return list;
+}
+let CONFIG_PROBLEMS = [];
+
 function reportArming(list) {
   // Quiet in forked backtest workers — this line is about the LIVE order pipe and has nothing to do with a
   // backtest slice, but it fires once per worker process and buries the run's real output.
@@ -608,11 +669,11 @@ function reportArming(list) {
   return list;
 }
 
-const VARIANTS = reportArming([
+const VARIANTS = reportArming(validateSelectors([
   ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
   ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
   ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
-]);
+]));
 
 // Expand base runs × variants into the concrete run list.
 function buildRuns() {
@@ -1360,6 +1421,9 @@ function status() {
   });
   return {
     mode, gates, tradability, watchlist: WATCHLIST, setups: setupBlock,
+    // Non-empty means a selector named something that never landed — those variants are running at their
+    // DEFAULTS, not as test arms. Surfaced here so the UI badge and preflight can both fail on it.
+    configProblems: CONFIG_PROBLEMS,
     armedVariants: { live: liveV, test: testV },
     testConfig: { unfillableFrac: TEST_FRAC, cancelAfterMs: TEST_CANCEL_MS, pollMs: ORDER_POLL_MS },
     tradeDate, started, msToNextTick: msToNextBoundary(), runs, serverTime: new Date().toISOString()
