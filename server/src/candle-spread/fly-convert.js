@@ -48,7 +48,15 @@ function findValleys(curve, opts) {
     let l = i, r = i;
     while (l > 0 && curve[l - 1][1] >= curve[l][1]) l--;
     while (r < curve.length - 1 && curve[r + 1][1] >= curve[r][1]) r++;
-    if (l === 0 && r === curve.length - 1) continue;          // monotone — not a valley
+    // NOT a monotone test — this used to `continue` here, and it threw away the single most repairable
+    // shape there is. A lone dip with rising shoulders (the classic tent book) walks BOTH ways to the
+    // curve edges, so the guard discarded it while keeping every shallow ripple whose shoulders happen to
+    // be interior. Measured on the real v7-40-cATM book of 2026-09-14 14:30: a -$21,750 valley with a
+    // $28,000 drop was rejected as "monotone" while 130 ripples were returned, so the planner spent its
+    // budget on noise and never saw the thing it exists to fix.
+    // A genuinely monotone or flat curve is already excluded: a monotone curve's minimum sits at an
+    // endpoint, which this loop never visits, and a flat one yields drop === 0 and is dropped by the
+    // minDrop check below. The edge case is therefore redundant as well as harmful.
     const shoulder = Math.min(curve[l][1], curve[r][1]);
     const drop = shoulder - y;
     if (drop <= minDrop) continue;
