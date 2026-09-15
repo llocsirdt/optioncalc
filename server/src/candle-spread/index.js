@@ -16,22 +16,38 @@ const tradability = require('./tradability');   // is there a market to trade at
 const setups = require('./setups');             // named start-of-day setups (informational; never trades)
 const chartSeries = require('./../chart-series');
 
-// THE WATCHLIST. The six variants under active observation against live sessions, chosen 2026-09-07 on
-// efficiency / return-on-capital / total AND on being genuinely DIFFERENT BETS (measured daily-P&L
-// correlation: v7-10 vs v6-20 0.41, v7-40 vs the $10 books 0.16-0.19). Purely a UI marker — the engine
-// does not read this, and every variant keeps running regardless.
+// THE WATCHLIST — THE UNTREATED CONTROLS. Purely a UI marker; the engine does not read it and every
+// variant keeps running regardless.
+//
+// It used to mean "the six best expected performers", picked 2026-09-07 on efficiency and on being
+// genuinely different bets. That meaning did not survive the fleet minLock split: v7-40 fell to ret/DD
+// 41.5 with 407 losing days of 765, and v1-10 and v6-10 BECAME controls, so half the list was asserting
+// two contradictory things at once. "Best" is also a prediction, and a prediction goes stale every time
+// the config moves — which is how the list rotted without anyone noticing.
+//
+// It now marks the three capped MINLOCK control cells: no ladder, family-default minLock. That is
+// definitional rather than predictive, so it cannot go stale, and it is the more useful glance — on any
+// given day these say whether a result came from the market or from what we changed.
+//
+// THEY ARE NOT CLEAN OF EVERYTHING, and the tooltip says so rather than overclaiming. FLY_LIVE covers
+// families v0/v2/v4/v6/v8, which catches v2-10 and v6-10, so only v1-10 carries no experiment at all.
+// The overlap was not noticed when the two sets were chosen for different reasons on the same day. Left
+// as is because the 2026-09-15 baselines are built on these control cells and moving them would orphan
+// that run; the clean fix, if wanted later, is control cells drawn from families the fly set does not
+// touch (v1/v3/v5/v7/v9) — v1-10 and v5-10 both qualify today.
+//
+// Overlaps the grey arm stripe deliberately. The stripe CLASSIFIES every cell; the watchlist lifts the
+// cell ground so the reference set reads as a group from across the room. Classification and priority
+// are different jobs and the controls happen to deserve both.
 // ENV-OVERRIDABLE (2026-09-15) so the list can change without a package rebuild and redeploy. It is a UI
 // marker with no engine behaviour behind it, so needing a deployment to re-aim it was pure friction —
 // same reasoning as CANDLE_SPREAD_ARMED. Set CANDLE_SPREAD_WATCHLIST to a comma-separated variant list.
 //
-// THE DEFAULT IS STALE AND KNOWN TO BE. On the 2026-09-15 baselines v7-40 is the weakest variant here by
-// a wide margin (ret/DD 41.5, 407 losing days of 765), and v1-10/v6-10 became CONTROLS under the fleet
-// minLock split, so they cannot be "expected top performers" and untreated references at the same time.
-// Left in place deliberately: what the mark should MEAN is an open question, and a six-slot boolean
-// cannot express a three-arm experiment across thirty cells. Re-aim it with the env var once decided.
+// The `-unc` twins of these cells are controls too, but the overlay hides `-unc`, so listing them would
+// mark nothing visible while inflating the legend. Capped cells only.
 const WATCHLIST = (process.env.CANDLE_SPREAD_WATCHLIST != null
   ? process.env.CANDLE_SPREAD_WATCHLIST
-  : 'v7-10,v7-20,v6-20,v7-40,v1-10,v6-10')
+  : 'v1-10,v2-10,v6-10')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 // Named setups change only once a day, so evaluating them per tick would re-fetch a daily series for

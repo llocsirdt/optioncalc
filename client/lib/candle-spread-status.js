@@ -59,8 +59,9 @@
       // standing choice (amber, quiet); the triangle is a condition true only today (lime, louder). Lime
       // is reserved for the setup so it never reads as "armed" — armed is the orange the mode badge uses.
       + '#csEngineStatusPop .wl{color:#e2a33c;margin-left:3px;font-size:9px;cursor:help}'
-      // A 9px diamond was doing all the work of marking six cells out of eighty. Lift the cell ground
-      // as well, so the watched set reads as a GROUP at a glance rather than needing to be hunted for.
+      // A 9px diamond was doing all the work of marking the reference cells out of fifty. Lift the cell
+      // ground as well, so the control set reads as a GROUP at a glance rather than needing to be hunted
+      // for — which is the whole point of marking them: you read them FIRST, then everything else.
       // TWO class selectors (td.c.wlc), not one: `td.c` sets its own background further down this same
       // stylesheet, and at equal specificity the later rule wins — so a single-class `td.wlc` silently
       // lost and the lift never rendered. Also given real contrast against #2a2a2a; the first attempt
@@ -262,7 +263,11 @@
         const ro = r.realOrders || {};
         const name = `${f}-${c.k}`;
         const sel = o.pick && o.selected === name;
-        // WATCHED = on the six-variant observation list. FAVOURED = a named start-of-day setup fired
+        // WATCHED = a CONTROL FOR THE MINLOCK SPLIT: no ladder, family-default minLock. The reference for
+        // reading a day — if these are down too, it was the market and not the fleet change.
+        // NOT untreated in every respect, and the mark does not claim to be: the fly set covers families
+        // v0/v2/v4/v6/v8, so v2-10 and v6-10 also carry flies. Only v1-10 is clean of everything. Worth
+        // knowing before treating all three as a pure baseline. FAVOURED = a named start-of-day setup fired
         // today and points at this variant. They are deliberately different marks: one is a standing
         // choice, the other is a condition that is true right now and will be false tomorrow.
         const watched = (s.watchlist || []).includes(name);
@@ -279,7 +284,7 @@
         const watchTier = !favoured && favWatch.has(name);
         const avoided = !favoured && !watchTier && avoidAll.has(name);
         const lift = favoured ? favTested.get(name) : watchTier ? favWatch.get(name) : avoidAll.get(name);
-        const marks = (watched ? '<span class="wl" title="on the watchlist — under active observation against live sessions">◆</span>' : '')
+        const marks = (watched ? '<span class="wl" title="CONTROL for the minLock split — no ladder, family-default minLock. The reference for reading the day: if these are down too, it was the market. Note v2-10 and v6-10 also carry flies; only v1-10 is clean of every experiment.">◆</span>' : '')
           + (favoured ? `<span class="fav" title="${esc(favourTitle(s, name))}">▲</span>` : '')
           + (watchTier ? `<span class="favw" title="${esc(favourTitle(s, name))}">△</span>` : '')
           + (avoided ? `<span class="avo" title="${esc(favourTitle(s, name))}">▽</span>` : '');
