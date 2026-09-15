@@ -92,15 +92,25 @@
      TOP-RIGHT, opposite the variant id, and sized with it: at 9px and .28 opacity the glyphs were too
      small to tell apart and the untriggered ones were barely on the screen at all. The off state is now a
      SOLID grey rather than a faded colour — readable, and still obviously not the live state. */
-  .cell .cname .feat { font:11px ui-monospace,monospace; display:flex; gap:6px; align-items:center;
-    margin-left:auto; padding-left:6px; white-space:nowrap; line-height:1; }
-  .cell .cname .feat i { font-style:normal; cursor:pointer; white-space:nowrap; }
+  .cell .cname .feat { font:13px ui-monospace,monospace; display:flex; gap:3px; align-items:center;
+    margin-left:auto; white-space:nowrap; line-height:1; }
+  /* Each glyph is its own TAP TARGET, so the padding is the point rather than decoration: at 6px apart
+     with no padding the hit areas touched and a thumb could not reliably pick one. The padding widens
+     the target without pushing the glyphs apart visually — the gap shrinks to 3px to pay for it, and the
+     strip ends up the same width while every target is roughly twice the area. */
+  .cell .cname .feat i { font-style:normal; cursor:pointer; white-space:nowrap; padding:5px 4px;
+    border-radius:3px; display:inline-flex; align-items:center; gap:1px; }
+  .cell .cname .feat i:active { background:rgba(127,127,127,.18); }
   .cell .cname .feat i.lad { color:#4a7fb5; } .cell .cname .feat i.giv { color:#9a5bb8; }
   .cell .cname .feat i.off { color:#2f8f6f; } .cell .cname .feat i.wng { color:#b5822a; }
   .cell .cname .feat i.stk { color:#6f9b21; } .cell .cname .feat i.gov { color:#c0564f; }
   /* AFTER the colour rules and at equal specificity, so the untriggered grey wins without !important. */
   .cell .cname .feat i:not(.on) { color:#7b858f; }
-  .cell .cname .feat i.on b { font-weight:700; font-size:10px; margin-left:1px; }
+  /* The count always renders, 0 included. A bare glyph made "enabled but quiet" and "fired" look like
+     two different KINDS of thing; with a number on both, the strip reads as one row of counters and the
+     difference is just the value — which is what it actually is. */
+  .cell .cname .feat i b { font-weight:700; font-size:11px; }
+  .cell .cname .feat i:not(.on) b { font-weight:400; }
   /* TAP DETAIL — `title` only works on hover, so on a phone the strip was unreadable: you could see THAT
      something fired and never what. Tapping a glyph opens this; tapping anywhere else closes it. */
   .feattip { position:absolute; z-index:40; max-width:290px; background:var(--bg,#fff); color:var(--fg,#111);
@@ -186,7 +196,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.88</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.89</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -909,7 +919,7 @@ function featStrip(v) {
     const more = f.lines.length > shown.length ? `\n… ${f.lines.length - shown.length} more` : '';
     const tip = esc(head + (shown.length ? '\n' + shown.join('\n') + more : ''));
     // title for desktop hover, data-tip for the tap handler — the same text, so the two never disagree.
-    return `<i class="${f.c}${f.n ? ' on' : ''}" title="${tip}" data-tip="${tip}" data-head="${esc(head)}">${f.g}${f.n ? `<b>${f.n}</b>` : ''}</i>`;
+    return `<i class="${f.c}${f.n ? ' on' : ''}" title="${tip}" data-tip="${tip}" data-head="${esc(head)}">${f.g}<b>${f.n}</b></i>`;
   }).join('');
   return `<div class="feat">${cells}</div>`;
 }
