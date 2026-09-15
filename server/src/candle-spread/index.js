@@ -304,10 +304,12 @@ const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
 // without being able to say WHICH half fail makes every total an approximation. Getting the armed variant
 // to ~85-88% is what turns the backtest into a measurement of the strategy rather than of our fill guess.
 const LADDER_LIVE = new Set(
-  // LADDER-ALONE only. v7-10 and v2-20 moved out of this list on 2026-09-14 — both now carry the ladder
-  // via their `+L` entry in MIN_LOCK_AB, which is the stated convention: one entry states the whole
-  // experiment. What remains here is the pure ladder arm, kept at every width so the 2x2 still reads.
-  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : 'v5-20,v8-20-cATM,v9-20-cATM,v8-40,v8-40-cATM')
+  // EMPTY since the ladder became the fleet default (every non-control cell gets it via MINLOCK_FLEET).
+  // NOTE WHAT THIS COSTS: there is no longer a ladder-alone or a minLock-alone arm, so the two can no
+  // longer be told apart from here on. That is the deliberate consequence of adopting them together —
+  // the question this fleet now asks is 0.10 vs 0.20, not which half of the pair is doing the work.
+  // Still the per-variant override if a ladder-only arm is ever wanted again.
+  (process.env.CANDLE_SPREAD_LADDER != null ? process.env.CANDLE_SPREAD_LADDER : '')
     .split(',').map(s => s.trim()).filter(Boolean));
 // MIN-LOCK LEVEL A/B (2026-09-12). minLock is the price side of every resting cover — the target is
 // `W - openCost - minLock` — so it decides what RETURN we refuse to close below. Stated that way the
@@ -351,8 +353,11 @@ const LADDER_LIVE = new Set(
 // combined arm (each already had one of the two factors), which is why their single-factor twins matter.
 const MIN_LOCK_AB = (() => {
   const raw = process.env.CANDLE_SPREAD_MINLOCK != null ? process.env.CANDLE_SPREAD_MINLOCK
-    : 'v7-10:0.10+L,v0-20:0.10,v4-20:0.10+L,v0-40:0.05,v0-10:0.10+L,v6-40:0.05+L,v9-10:0.05+L,'
-      + 'v2-20:0.10+L,v1-40:0.05+L,v6-20-cATM:0.10+L,v3-40-cATM:0.05+L';
+    // EMPTY since the fleet default landed. Every entry that used to live here is now covered by
+    // MINLOCK_FLEET, and the 0.05 cells are deliberately gone: they were the ones doing the damage in the
+    // 765-day rebuild (v1-40 floor -$870 -> -$2,309, v3-40-cATM -$966 -> -$2,156) while their controls
+    // held flat. This map remains the per-variant OVERRIDE for a one-off test above the fleet level.
+    : '';
   const m = new Map();
   for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
     const [name, spec] = part.split(':');
@@ -471,6 +476,51 @@ const ORDER_SLIP_AB = (() => {
   return m;
 })();
 
+// ── FLEET DEFAULT: LADDER + REDUCED MIN-LOCK (2026-09-15) ────────────────────────────────────────────
+// minLock stops being an opt-in experiment and becomes the fleet setting, with the ladder alongside it.
+// The old defaults demanded 0.25-0.35 of width — a 50-70% return on an intraday trade — and the cost of
+// that is not theoretical: on 2026-09-14 v8-20 opened at $10.60, the rule allowed a cover at
+// 20 - 10.60 - 7.00 = $2.40, and that order sat 77% below a $10.50 mark for 35 minutes, give-up fired
+// too late, and the position settled at max loss. That is the default behaving as designed.
+//
+// LEVEL IS AN OPEN QUESTION, so it is the A/B rather than a decision. The 765-day sweep says the optimum
+// is family-dependent and the two ends disagree: on v6-20, 0.20 BEATS 0.35 outright (+12.5 fill points and
+// +$158,885 total) while 0.05 costs $396k and three quarters of the floor; on v7-20 even 0.05 more than
+// doubles ret/DD (71.3 -> 157.6). So the fleet splits ~50/50 between 0.10 and 0.20 and live decides.
+//
+// ASSIGNED PER family x width CELL, not per variant, because a `-unc` twin isolates the CAPS and a
+// `-cATM` comparator isolates the GEOMETRY — anything that is not the thing under test has to match the
+// sibling, or the twin comparison measures two changes at once. So a cell's level propagates to its base,
+// `-unc` and `-cATM` variants together.
+//
+// The split is a CHECKERBOARD over (family, width) so the level is orthogonal to both: 5/5 at W=20 and
+// W=40, and no family sits entirely on one level. Deliberately not evidence-weighted — putting v7/v9 on
+// 0.10 because the sweep likes it there would confound level with signal block and answer nothing.
+const MINLOCK_FAMS = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9'];
+const MINLOCK_WIDTHS = [10, 20, 40];
+// THE CONTROLS — three whole cells (base + `-unc`; W=10 has no `-cATM`), so six variants keep the family
+// default and no ladder. One per signal block: v1-10 classic, v2-10 classic at-money, v6-10 multi-TF.
+// Whole cells rather than single variants, again so the twin comparison stays clean.
+const MINLOCK_CONTROL_CELLS = new Set(
+  (process.env.CANDLE_SPREAD_MINLOCK_CTL != null ? process.env.CANDLE_SPREAD_MINLOCK_CTL : 'v1-10,v2-10,v6-10')
+    .split(',').map(s => s.trim()).filter(Boolean));
+// `vX-W` for any variant shape — the cell a variant belongs to.
+const cellOf = (variant) => { const m = /^(v\d+)-(\d+)/.exec(variant); return m ? `${m[1]}-${m[2]}` : variant; };
+const MINLOCK_FLEET = (() => {
+  const m = new Map();
+  for (const f of MINLOCK_FAMS) {
+    for (const w of MINLOCK_WIDTHS) {
+      m.set(`${f}-${w}`, (MINLOCK_FAMS.indexOf(f) + MINLOCK_WIDTHS.indexOf(w)) % 2 === 0 ? 0.10 : 0.20);
+    }
+  }
+  // PINNED: v7-10 is the armed variant and the one configuration with real evidence behind it —
+  // 0.10 + ladder measured 89.1% cover fill, $1,446,388 total and ret/DD 591.6 over 765 days, its best
+  // result at any level. The checkerboard would have moved it to 0.20; live money does not get reshuffled
+  // to keep a grid tidy.
+  m.set('v7-10', 0.10);
+  return m;
+})();
+
 // ── THE LIVE-EXPERIMENT HOOK — ONE PLACE, EVERY BUILDER ──────────────────────────────────────────────
 // Every selector above (minLock A/B, cap preset, ladder, give-up) is applied HERE and only here, and all
 // three builders (base, `-unc`, `-cATM`) call it. That is the whole point of the function existing.
@@ -496,8 +546,14 @@ function applyLadderCfg(v) {
 // would delete the variant's reason to exist. Naming a `-unc` variant in CANDLE_SPREAD_CAPPRES is
 // therefore refused OUT LOUD by validateSelectors rather than quietly ignored.
 function applyExperiments(v, { capPreset = true } = {}) {
-  // MIN-LOCK A/B first: it overrides the family default set by minLockFor. The paired `+L` spelling takes
-  // the ladder here rather than needing a second list, so one entry states the whole experiment.
+  // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
+  const cell = cellOf(v.variant);
+  if (!MINLOCK_CONTROL_CELLS.has(cell) && MINLOCK_FLEET.has(cell)) {
+    v.continuousCoverMinLockFrac = MINLOCK_FLEET.get(cell);
+    applyLadderCfg(v);
+  }
+  // MIN-LOCK A/B second, so an explicit entry still overrides the fleet level for a one-off test. Empty by
+  // default now that the fleet carries ladder + reduced minLock; the map is the override, not the policy.
   const ab = MIN_LOCK_AB.get(v.variant);
   if (ab) {
     v.continuousCoverMinLockFrac = ab.frac;
