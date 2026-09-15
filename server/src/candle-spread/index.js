@@ -20,7 +20,19 @@ const chartSeries = require('./../chart-series');
 // efficiency / return-on-capital / total AND on being genuinely DIFFERENT BETS (measured daily-P&L
 // correlation: v7-10 vs v6-20 0.41, v7-40 vs the $10 books 0.16-0.19). Purely a UI marker — the engine
 // does not read this, and every variant keeps running regardless.
-const WATCHLIST = ['v7-10', 'v7-20', 'v6-20', 'v7-40', 'v1-10', 'v6-10'];
+// ENV-OVERRIDABLE (2026-09-15) so the list can change without a package rebuild and redeploy. It is a UI
+// marker with no engine behaviour behind it, so needing a deployment to re-aim it was pure friction —
+// same reasoning as CANDLE_SPREAD_ARMED. Set CANDLE_SPREAD_WATCHLIST to a comma-separated variant list.
+//
+// THE DEFAULT IS STALE AND KNOWN TO BE. On the 2026-09-15 baselines v7-40 is the weakest variant here by
+// a wide margin (ret/DD 41.5, 407 losing days of 765), and v1-10/v6-10 became CONTROLS under the fleet
+// minLock split, so they cannot be "expected top performers" and untreated references at the same time.
+// Left in place deliberately: what the mark should MEAN is an open question, and a six-slot boolean
+// cannot express a three-arm experiment across thirty cells. Re-aim it with the env var once decided.
+const WATCHLIST = (process.env.CANDLE_SPREAD_WATCHLIST != null
+  ? process.env.CANDLE_SPREAD_WATCHLIST
+  : 'v7-10,v7-20,v6-20,v7-40,v1-10,v6-10')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 // Named setups change only once a day, so evaluating them per tick would re-fetch a daily series for
 // nothing. Cached for 30 minutes; failure is non-fatal and reported rather than thrown, because a setup
@@ -775,6 +787,9 @@ function validateSelectors(list) {
   check('CANDLE_SPREAD_CAPPRES', CAPPRES_LIVE);
   check('CANDLE_SPREAD_ORDERSLIP', ORDER_SLIP_AB.keys());
   check('CANDLE_SPREAD_FLY', FLY_LIVE);
+  // The watchlist is only a UI marker, but a typo there silently un-marks a variant you meant to watch,
+  // which is the same class of quiet failure as the rest of this function.
+  check('CANDLE_SPREAD_WATCHLIST', WATCHLIST);
   // The one deliberate refusal — see applyExperiments.
   for (const n of CAPPRES_LIVE) {
     if (/-unc$/.test(n)) problems.push(`CANDLE_SPREAD_CAPPRES: "${n}" is an UNCAPPED twin — a cap preset cannot apply to it`);
