@@ -773,17 +773,54 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   const underlying = deps.underlying != null ? deps.underlying : candle.close;
   st.lastUnderlying = underlying;   // NDX (pricing instrument) — for mark-to-market terminal P&L in status/EOD
 
-  // (1) Cancel any unfilled prior OPEN order before doing anything else.
+  // (1) WORK THE UNFILLED OPEN — rest it, ladder it toward the market, and cancel it only on a REVERSAL.
+  //
+  // This used to cancel any unfilled open unconditionally at the next candle. The original rule was
+  // narrower than that and still holds: we do not want a stale open working once the signal has FLIPPED.
+  // Until it flips we want the order resting exactly like a cover, and worked the same way — an open that
+  // never fills is a cover we never get to place, and covers are where the money is.
+  //
+  // An unfilled position stays in st.positions and is excluded from every floor, cover and settlement
+  // path by the `filled !== false` guards already in place, so resting it changes no risk arithmetic.
   if (st.pendingOpenId) {
     const pos = st.positions.find(p => p.id === st.pendingOpenId);
-    if (pos && !pos.filled) {
-      deps.placeOrder && null; // (cancel path is internal; dry-run just logs)
-      pos.orderStatus = 'cancelled';
-      decisions.push({ action: 'cancel-open', positionId: pos.id, reason: 'unfilled at next candle' });
-      // Remove the never-filled position from the working list.
-      st.positions = st.positions.filter(p => p.id !== pos.id);
+    if (!pos || pos.filled) {
+      st.pendingOpenId = null;
+    } else {
+      // REVERSAL = the signal now wants the other side, or wants this side covered. Either way the order
+      // was placed on a view the engine no longer holds, so it goes rather than filling into a flip.
+      const reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side);
+      if (reversed) {
+        pos.orderStatus = 'cancelled';
+        decisions.push({ action: 'cancel-open', positionId: pos.id, side: pos.side, limit: pos.limit,
+          reason: openSide && openSide !== pos.side ? `reversal → ${openSide}` : `cover signal on ${pos.side}` });
+        st.positions = st.positions.filter(p => p.id !== pos.id);
+        st.pendingOpenId = null;
+      } else {
+        // Still our view — re-test it against this candle's mark, then ladder toward the market.
+        const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
+        if (chk.fillable) {
+          pos.filled = true; pos.orderStatus = 'filled'; pos.limit = pos.limit;
+          decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
+            mark: chk.mark, restedSince: pos.openTime });
+          st.pendingOpenId = null;
+        } else if (deps.coverLadder === true && chk.mark != null) {
+          // SAME LADDER AS THE COVERS, in the same direction: an open is a BUY, so walking toward the
+          // market means paying MORE. Bounded by the ceiling this open was already gated on — working an
+          // order must never become a way past the 65% rule.
+          const step = deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25;
+          const next = round2(Math.min(pos.limit + step, pos.cap != null ? pos.cap : Infinity, chk.mark));
+          if (next > pos.limit) {
+            decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
+              from: pos.limit, to: next, mark: chk.mark, cap: pos.cap });
+            pos.limit = next;
+          } else {
+            decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
+              mark: chk.mark, cap: pos.cap, reason: next >= (pos.cap != null ? pos.cap : Infinity) ? 'at ceiling' : 'no room' });
+          }
+        }
+      }
     }
-    st.pendingOpenId = null;
   }
 
   // Cover evaluation + context (logged so run analysis can show WHY we covered or held:
