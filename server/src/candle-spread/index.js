@@ -417,9 +417,22 @@ const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'te
 //
 // HALF THE CAPPED FLEET, split by family so every fly variant has an adjacent, correlated control that
 // keeps flies OFF: v0/v2/v4/v6/v8 carry it, v1/v3/v5/v7/v9 are the controls. That is 25 of the 50 capped
-// variants (offsets are capped-only, so the capped set IS the offset+wing population), spanning all three
-// widths and both geometries. The `-unc` twins are excluded: they have wings but no governor and no
-// offsets, so they are not part of the population this is being measured against.
+// variants, spanning all three widths and both geometries.
+//
+// PLUS FIVE `-unc` TWINS, and excluding them first was a measurement mistake. Flies repair the WORST
+// TERMINAL VALUE — the deepest point of the risk curve — and on a capped variant the governor has already
+// truncated that tail: measured over 120 days, worstCase never once fell below -$10k on v0-20 or v6-40,
+// so there is nothing left to repair and the premium simply lowers every outcome. The `-unc` twins are
+// the only population where the tail runs free. On v7-40-unc, where it reaches -$50k and 37 days of 120
+// close below -$20k, flies improve the whole body of that tail: p5 -$41,745 -> -$39,048, p10 -$35,012 ->
+// -$32,952, days below -$20k 37 -> 33, for 3.8% of terminal P&L.
+//
+// The `-unc` pairs are also the tightest controls on the entire roster — v7/v9 correlate 0.998-0.999 at
+// every width, against 0.75-0.97 for the best capped pairs — so these five A/Bs are the cleanest
+// measurement available anywhere:
+//   v7-10-unc ctl v9-10-unc (0.998)   v7-20-unc ctl v9-20-unc (0.999)   v7-40-unc ctl v9-40-unc (0.999)
+//   v6-40-unc ctl v8-40-unc (0.986)   v0-40-unc ctl v1-40-unc (0.980)
+// Weighted to W=40 and to the bidirectional books, which is where the tail is actually deep.
 //
 // CAVEAT, stated plainly: several of these 25 already carry another experiment (v0-10 and v4-20 have
 // ladder+minLock, v6-20 has the tight cap, v8-20 has give-up). Testing five features across 50 variants
@@ -431,7 +444,8 @@ const FLY_LIVE = new Set(
     + 'v2-10,v2-20,v2-40,v2-20-cATM,v2-40-cATM,'
     + 'v4-10,v4-20,v4-40,v4-20-cATM,v4-40-cATM,'
     + 'v6-10,v6-20,v6-40,v6-20-cATM,v6-40-cATM,'
-    + 'v8-10,v8-20,v8-40,v8-20-cATM,v8-40-cATM')
+    + 'v8-10,v8-20,v8-40,v8-20-cATM,v8-40-cATM,'
+    + 'v7-10-unc,v7-20-unc,v7-40-unc,v6-40-unc,v0-40-unc')
     .split(',').map(s => s.trim()).filter(Boolean));
 
 // ORDER SLIP A/B (2026-09-14). Opens, offsets and wings were priced exactly AT the mark, which needs the
