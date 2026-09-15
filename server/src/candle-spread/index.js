@@ -1634,6 +1634,12 @@ function status() {
       variant: run.variant, symbol: run.symbol, signalSymbol: run.signalSymbol || run.symbol,
       mode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
       width: run.spreadWidth || 20, shift: run.spreadShift || 0,
+      // WHICH ARM THIS VARIANT IS IN. The overlay tints cells by arm, and without these it could not tell
+      // a 0.10 cell from a 0.20 one from a control — nothing else in this payload carries the covering
+      // policy. Sent as the two FACTS rather than a computed label so the server never has to agree with
+      // the client about what an "arm" is; the tint is presentation and lives where the presenting happens.
+      minLock: run.continuousCoverMinLockFrac != null ? run.continuousCoverMinLockFrac : null,
+      ladder: run.coverLadder === true,
       positions: st ? st.positions.length : 0,
       covered: st ? st.positions.filter(p => p.covered).length : 0,
       terminalPnl,                                    // settled terminal when the day is done, else mark-to-market

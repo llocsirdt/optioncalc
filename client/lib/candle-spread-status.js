@@ -90,7 +90,24 @@
       + '#csEngineStatusPop table.csg{border-collapse:separate;border-spacing:3px;font:10px ui-monospace,Menlo,monospace}'
       + '#csEngineStatusPop .csg th{color:#999;font-weight:600;padding:1px 3px;text-align:center;white-space:nowrap}'
       + '#csEngineStatusPop .csg th.rowh{text-align:right;color:#ccc}'
-      + '#csEngineStatusPop .csg td.c{width:66px;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:4px;padding:2px 3px;text-align:center;vertical-align:top}'
+      + '#csEngineStatusPop .csg td.c{width:66px;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:4px;padding:2px 3px 2px 6px;text-align:center;vertical-align:top;position:relative}'
+      // ARM TINT — which side of the minLock split this variant is on, as a stripe down the cell's left
+      // edge. Every other channel here is already spoken for: background is the watchlist lift, border is
+      // armed/selected, and the inset shadow is the setup tier. A stripe is the one axis left, and it
+      // reads as a GROUP down a column without competing with any of them.
+      //
+      // Two shades of one hue rather than two hues, because that is what the measurement says: over 765
+      // days the ret/DD gained per dollar of P&L given up is 0.063 at 0.10 and 0.064 at 0.20 — the same
+      // trade-off at two settings, not two different behaviours. Colouring them as opposites would have
+      // implied a rivalry the data does not support. The control is grey: not a setting on the dial.
+      + '#csEngineStatusPop .csg td.c::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;'
+      + 'border-radius:4px 0 0 4px;background:transparent}'
+      + '#csEngineStatusPop .csg td.arm10::before{background:#a78bfa}'
+      + '#csEngineStatusPop .csg td.arm20::before{background:#5b3fa8}'
+      + '#csEngineStatusPop .csg td.armctl::before{background:#6b7280}'
+      + '#csEngineStatusPop .csarms{color:#888;font-size:9px;margin-top:5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}'
+      + '#csEngineStatusPop .csarms i{font-style:normal;display:inline-flex;align-items:center;gap:3px}'
+      + '#csEngineStatusPop .csarms b{display:inline-block;width:3px;height:9px;border-radius:1px}'
       + '#csEngineStatusPop .csg td.e{background:transparent;border:0}'
       + '#csEngineStatusPop .csg td.armed{border-color:#e67e22;box-shadow:0 0 0 1px #e67e22}'
       + '#csEngineStatusPop .csg .pnl{font-weight:700}'
@@ -249,6 +266,13 @@
         // today and points at this variant. They are deliberately different marks: one is a standing
         // choice, the other is a condition that is true right now and will be false tomorrow.
         const watched = (s.watchlist || []).includes(name);
+        // ARM from the two facts the server sends. Derived here rather than server-side so the engine
+        // never has to hold an opinion about presentation; if minLock is absent (an older server) no arm
+        // class is added and the stripe simply stays transparent.
+        const armCls = r.minLock == null ? ''
+          : !r.ladder ? ' armctl'
+          : Math.abs(r.minLock - 0.10) < 1e-9 ? ' arm10'
+          : Math.abs(r.minLock - 0.20) < 1e-9 ? ' arm20' : '';
         const favTested = setupLifts(s, 'tested', 'favors'), favWatch = setupLifts(s, 'watch', 'favors');
         const avoidAll = new Map([...setupLifts(s, 'tested', 'avoid'), ...setupLifts(s, 'watch', 'avoid')]);
         const favoured = favTested.has(name);
@@ -264,7 +288,7 @@
         // looking the same.
         const liftEl = (favoured || watchTier || avoided)
           ? `<div class="lift ${favoured ? 'f' : watchTier ? 'w' : 'a'}">${money0(lift)}/d</div>` : '';
-        body += `<td class="c${armed ? ' armed' : ''}${sel ? ' sel' : ''}${watched ? ' wlc' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}${avoided ? ' avo' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
+        body += `<td class="c${armCls}${armed ? ' armed' : ''}${sel ? ' sel' : ''}${watched ? ' wlc' : ''}${favoured ? ' fav' : ''}${watchTier ? ' favw' : ''}${avoided ? ' avo' : ''}"${o.pick ? ` data-variant="${name}"` : ''} title="${esc(cellTitle(r))}">`
           + (o.pick ? `<div class="vname">${name}${marks}</div>` : (marks ? `<div class="mk">${marks}</div>` : ''))
           + `<div class="pnl" style="color:${col}">${money(pnl)}</div>`
           + `<div class="sub">${r.opens}o/${r.covers}c/${r.coverFills}f</div>`
@@ -282,7 +306,24 @@
         + (uncCount ? ` — includes ${uncCount} uncapped (-unc) twin(s), hidden here; see the compare page` : '')
         + `</div>`
       : '';
-    return hdr + setupBanner(s) + body + foot;
+    // ARM LEGEND — a stripe with no key is decoration. Rendered only when the server actually sent the
+    // arm facts, so an older server shows the grid exactly as before rather than a legend for stripes
+    // that are not there.
+    // COUNTS THE SHOWN CELLS ONLY. This grid hides the `-unc` twins (see the footer note), so counting
+    // every run gave "control, no ladder (6)" above a grid containing three of them — a legend that
+    // disagrees with what is on screen is worse than no legend.
+    const shownRuns = (s.runs || []).filter(r => r.minLock != null && !/-unc$/.test(r.variant));
+    const armed10 = shownRuns.filter(r => r.ladder && Math.abs(r.minLock - 0.10) < 1e-9).length;
+    const armed20 = shownRuns.filter(r => r.ladder && Math.abs(r.minLock - 0.20) < 1e-9).length;
+    const armedCtl = shownRuns.filter(r => !r.ladder).length;
+    const arms = (armed10 || armed20 || armedCtl)
+      ? `<div class="csarms" title="the minLock split — every variant runs the cover ladder except the controls">`
+        + `<i><b style="background:#a78bfa"></b>ladder + 0.10 (${armed10})</i>`
+        + `<i><b style="background:#5b3fa8"></b>ladder + 0.20 (${armed20})</i>`
+        + `<i><b style="background:#6b7280"></b>control, no ladder (${armedCtl})</i>`
+        + `</div>`
+      : '';
+    return hdr + setupBanner(s) + body + arms + foot;
   }
 
 
