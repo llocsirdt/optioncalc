@@ -101,9 +101,11 @@
   tr.td-unfilled { background:#fff6f6; opacity:.85; }
   tr.td-unfilled td:first-child { border-left:2px solid var(--loss); }
   /* A REFUSED order (open/offset/wing/fly whose mark never reached the limit sent). Dimmer than an
-     unfilled cover and struck through on the legs, because unlike a resting cover this order is gone --
-     it was cancelled at the next candle or never became a position at all. It is shown so the day can be
-     read honestly: these used to be assumed filled, and then briefly were not shown at all. */
+     unfilled cover and struck through on the legs, because unlike a resting cover this order never became
+     a position -- there is nothing still working to fill. Shown so a day reads honestly: these used to be
+     assumed filled, and then briefly were not shown at all.
+     An OPEN** specifically means the spread could not be quoted, not that the price was missed: the open
+     limit ceils to a tick at or above the mark, so it cannot fail its own test on rounding. */
   tr.td-nofill { background:#fbfbfc; opacity:.72; }
   tr.td-nofill td:first-child { border-left:2px solid #9aa3ad; }
   tr.td-nofill .legs { text-decoration:line-through; text-decoration-color:#b3bac2; }
@@ -563,8 +565,9 @@ function renderOrders() {
     ['Pos', 'position number, chronological by open; a cover carries its open’s number'],
     ['Event', '▲/▼ open (coloured by side), ◇ cover. OPEN* = no FILLED cover, so still exposed. '
       + 'A ** suffix (OPEN**, COVER**, OFFSET**, WING**, FLY**) = the order was PLACED and never filled — '
-      + 'its mark never reached the limit sent. Those rows are greyed with the legs struck through; an '
-      + 'unfilled open or hedge is cancelled or dropped, so nothing was ever held'],
+      + 'its mark never reached the limit sent. Those rows are greyed with the legs struck through. '
+      + 'COVER** was working all day; the others never became a position. OPEN** means the spread could '
+      + 'not be quoted at all, since an open limit ceils to a tick at or above its own mark'],
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],

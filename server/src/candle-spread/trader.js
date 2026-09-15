@@ -367,8 +367,13 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // unquotable leg still produced a position. Now the observed mark has to reach the limit we placed.
   // With the slip that is normally satisfied at once (a marketable buy), which is the correct answer for
   // an open — the point is that it is now TESTED, and a missing or stale quote no longer books a fill.
-  // An open that does not fill rests as st.pendingOpenId and is cancelled at the next candle, which is
-  // the "work the order, never assume" rule the engine already had a dead code path for.
+  // WHEN CAN THIS NOW FAIL? Only when the legs have no usable quote at all (markFill returns mark null),
+  // because the limit ceils to a tick at or above the mark. That distinction matters: an open we chose not
+  // to price is not an open the market refused, and there is nothing to work on a spread we cannot quote.
+  // We do not make money on opens — we make it on covers, and a cover needs an open that filled — so an
+  // open must never fail its own fill test for a rounding reason. If real chasing is ever wanted (bump the
+  // limit toward the market over successive candles rather than leaving it), that is a feature to build
+  // deliberately, not a side effect of how a price was rounded.
   const openChk = markFill(res.legs, res.limit, deps.getLeg, cfg.tickIncrement);
   const pos = {
     id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
@@ -1159,10 +1164,19 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   const { mark, cap, exceedsCap, limit: atMark } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
-  // SLIP OVER THE MARK (see openSlip). The opens were priced exactly AT the mark, which needs the market
-  // to come to us to fill. The slipped limit is still bounded by the ceiling — paying up must never be a
-  // way around the gate that just let this open through.
-  const limit = Math.min(round2(atMark + openSlip(cfg)), cap);
+  // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
+  // limit BELOW the mark for 40 of every 100 one-cent marks (8.22 -> 8.20). That was harmless while opens
+  // booked on assumption; the moment they were price-tested it meant 40% of opens failed their own fill
+  // test and were cancelled. A BUY limit under the mark is not a cheap fill, it is a non-marketable order
+  // — the same sub-market booking ab922ee removed from the ceiling path.
+  //
+  // We do not make money on opens; we make it on covers, and a cover needs an open that filled. So an
+  // open pays the tick UP rather than risk not existing.
+  const tick = cfg.tickIncrement;
+  const atOrAbove = round2(Math.ceil((mark / tick) - 1e-9) * tick);
+  // SLIP OVER THE MARK (see openSlip), still bounded by the ceiling — paying up must never be a way
+  // around the gate that just let this open through.
+  const limit = Math.min(round2(atOrAbove + openSlip(cfg)), cap);
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
     mark, cap, limit, markLimit: atMark, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
