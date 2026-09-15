@@ -86,16 +86,27 @@
   .cell .cname .mk .v { color:#c0564f; }      /* setup: avoid */
   .cell .lift { font:9px ui-monospace,monospace; text-align:right; margin-top:-1px; }
   .cell .lift.f { color:#6f9b21; } .cell .lift.w { color:#7c8794; } .cell .lift.v { color:#c0564f; }
-  /* FEATURE STRIP — what this strategy had ON, and what actually FIRED this session. A dimmed glyph is a
+  /* FEATURE STRIP — what this strategy had ON, and what actually FIRED this session. A grey glyph is a
      feature that was enabled but never triggered; that distinction is the whole point of the strip, since
-     "enabled" and "did something" are very different facts when reading a day. */
-  .cell .feat { font:9px ui-monospace,monospace; display:flex; flex-wrap:wrap; gap:4px; margin:1px 0 0; line-height:1.35; }
-  .cell .feat i { font-style:normal; cursor:help; white-space:nowrap; opacity:.28; }
-  .cell .feat i.on { opacity:1; }
-  .cell .feat i.on b { font-weight:600; font-size:8.5px; margin-left:.5px; }
-  .cell .feat i.lad { color:#4a7fb5; } .cell .feat i.giv { color:#9a5bb8; }
-  .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
-  .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
+     "enabled" and "did something" are very different facts when reading a day.
+     TOP-RIGHT, opposite the variant id, and sized with it: at 9px and .28 opacity the glyphs were too
+     small to tell apart and the untriggered ones were barely on the screen at all. The off state is now a
+     SOLID grey rather than a faded colour — readable, and still obviously not the live state. */
+  .cell .cname .feat { font:11px ui-monospace,monospace; display:flex; gap:6px; align-items:center;
+    margin-left:auto; padding-left:6px; white-space:nowrap; line-height:1; }
+  .cell .cname .feat i { font-style:normal; cursor:pointer; white-space:nowrap; }
+  .cell .cname .feat i.lad { color:#4a7fb5; } .cell .cname .feat i.giv { color:#9a5bb8; }
+  .cell .cname .feat i.off { color:#2f8f6f; } .cell .cname .feat i.wng { color:#b5822a; }
+  .cell .cname .feat i.stk { color:#6f9b21; } .cell .cname .feat i.gov { color:#c0564f; }
+  /* AFTER the colour rules and at equal specificity, so the untriggered grey wins without !important. */
+  .cell .cname .feat i:not(.on) { color:#7b858f; }
+  .cell .cname .feat i.on b { font-weight:700; font-size:10px; margin-left:1px; }
+  /* TAP DETAIL — `title` only works on hover, so on a phone the strip was unreadable: you could see THAT
+     something fired and never what. Tapping a glyph opens this; tapping anywhere else closes it. */
+  .feattip { position:absolute; z-index:40; max-width:290px; background:var(--bg,#fff); color:var(--fg,#111);
+    border:1px solid #bbb; border-radius:4px; box-shadow:0 4px 14px rgba(0,0,0,.18); padding:6px 8px;
+    font:11px/1.45 ui-monospace,monospace; white-space:pre-wrap; }
+  .feattip b { display:block; margin-bottom:3px; font-weight:700; }
   td.empty { border:1px dashed #eee; background:transparent; }
   /* A double-click opens the cell in the debug page; without this the two rapid clicks select the cell's
      text first and the chart flashes highlighted. */
@@ -175,7 +186,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.80</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.88</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -551,8 +562,7 @@ function render() {
       const signCls = d.underPnl == null ? '' : d.underPnl > 0 ? ' pos' : d.underPnl < 0 ? ' neg' : '';
       html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}  (double-click → open in debug)\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
         + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
-        + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}</div>`
-        + featStrip(v)
+        + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}${featStrip(v)}</div>`
         + (fTier ? `<div class="lift ${fTier}">${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d</div>` : '')
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
@@ -898,7 +908,8 @@ function featStrip(v) {
     const shown = f.lines.slice(0, 12);
     const more = f.lines.length > shown.length ? `\n… ${f.lines.length - shown.length} more` : '';
     const tip = esc(head + (shown.length ? '\n' + shown.join('\n') + more : ''));
-    return `<i class="${f.c}${f.n ? ' on' : ''}" title="${tip}">${f.g}${f.n ? `<b>${f.n}</b>` : ''}</i>`;
+    // title for desktop hover, data-tip for the tap handler — the same text, so the two never disagree.
+    return `<i class="${f.c}${f.n ? ' on' : ''}" title="${tip}" data-tip="${tip}" data-head="${esc(head)}">${f.g}${f.n ? `<b>${f.n}</b>` : ''}</i>`;
   }).join('');
   return `<div class="feat">${cells}</div>`;
 }
@@ -1217,6 +1228,33 @@ document.getElementById('timeSlider').addEventListener('input', (e) => {
   sliderRAF = requestAnimationFrame(() => { sliderRAF = null; applyTime(atEnd ? null : pendingT); });
 });
 // Click/tap a chart → drop the purple cursor at that underlying price and read off the projected P&L.
+// FEATURE-STRIP TAP DETAIL. `title` is hover-only, so on a touch device the strip could show that a
+// feature fired but never what it did. A tap opens the same text in a positioned box; the next tap
+// anywhere closes it. Registered BEFORE the chart handler and it stops propagation, so tapping a glyph
+// never also drops the projection cursor. Single-click is safe here: the cell's dblclick-to-debug is
+// bound to svg[data-v], which a glyph is not inside.
+function closeFeatTip() { const t = document.querySelector('.feattip'); if (t) t.remove(); }
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('.cname .feat i');
+  closeFeatTip();
+  if (!g) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const box = document.createElement('div');
+  box.className = 'feattip';
+  const body = (g.dataset.tip || '').split('\n').slice(1).join('\n');
+  box.innerHTML = `<b>${(g.dataset.head || '').replace(/</g, '&lt;')}</b>${body.replace(/</g, '&lt;')}`;
+  document.body.appendChild(box);
+  // Place under the glyph, then pull back inside the viewport — on a phone a right-hand glyph would
+  // otherwise open a box that runs off the screen edge, which is exactly where this strip now lives.
+  const r = g.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight;
+  let left = r.left + window.scrollX, top = r.bottom + window.scrollY + 4;
+  left = Math.max(6 + window.scrollX, Math.min(left, window.scrollX + document.documentElement.clientWidth - bw - 6));
+  if (r.bottom + bh + 10 > window.innerHeight) top = r.top + window.scrollY - bh - 4;
+  box.style.left = `${left}px`; box.style.top = `${Math.max(window.scrollY + 4, top)}px`;
+}, true);
+window.addEventListener('scroll', closeFeatTip, { passive: true });
+
 document.getElementById('grid').addEventListener('click', (e) => {
   const svg = e.target.closest('svg[data-v]'); if (!svg) return;
   const d = cells[svg.dataset.v]; if (!d || !d.curve) return;
