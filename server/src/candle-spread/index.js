@@ -1534,6 +1534,14 @@ function listVariants() {
       variant: v.variant, label: v.variantLabel, spreadWidth: v.spreadWidth,
       dryRun: v.dryRun, live: v.dryRun === 'test' || v.dryRun === false,
       lossTarget: v.lossTarget != null ? v.lossTarget : null, lossMax: v.lossMax != null ? v.lossMax : null,
+      // WHAT THIS VARIANT IS TESTING. The roster is the canonical answer to "which strategies have
+      // give-up?" and until now it could not answer it — the compare page could show 80 rows of results
+      // with no way to see which experiment produced them. Sent as raw facts, so a UI can label, colour
+      // or sort them however it likes without the engine holding an opinion about presentation.
+      minLock: v.continuousCoverMinLockFrac != null ? v.continuousCoverMinLockFrac : null,
+      ladder: v.coverLadder === true,
+      giveUp: v.coverGiveUp === true,
+      fly: v.flyConvert === true,
     }))
     .sort((a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) { if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; } return 0; });
 }

@@ -196,7 +196,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.89</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.92</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -728,6 +728,18 @@ async function ensureBaselines() {
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's',
     d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement).' },
+  // WHAT IT IS TESTING — put directly after the name so the table doubles as the index of which variant
+  // carries which experiment. Sortable like everything else, which is the point: sort by giveUp and the
+  // five give-up variants group together with their results already beside them, instead of being
+  // cross-referenced against a legend.
+  { k: 'minLock', h: 'minLock', t: 'n',
+    d: 'The profit this variant REFUSES to close below, as a fraction of spread width: the resting cover sits at width - openCost - (minLock x width). 0.10 and 0.20 are the two arms of the live split; 0.25-0.35 are family defaults and mark a CONTROL (no ladder either). Lower demands less and fills more often, which is the whole trade — measured over 765 days the ret/DD gained per dollar of P&L given up is 0.063 at 0.10 and 0.064 at 0.20, i.e. the same trade-off at two settings rather than two different behaviours.' },
+  { k: 'ladder', h: 'ladder', t: 'n',
+    d: 'Works a resting cover toward the market over the day instead of leaving it at its original price ($0.25 per 5m step, $0.10 at width 40). ON for every variant except the controls. Worth +5 to +16 points of cover fill wherever it has been measured.' },
+  { k: 'giveUp', h: 'giveUp', t: 'n',
+    d: 'Forces a resting cover to the market once the position has gone 10 points against, capped at 5% of width so it crosses the spread without chasing. Abandons the profit lock to stop a loss growing. On 5 variants.' },
+  { k: 'fly', h: 'fly', t: 'n',
+    d: 'Fly / condor valley repair: sells the body to fund its wings and lifts the deepest dip in the risk curve. Measured to pay only where the tail is genuinely deep — on the uncapped twins it improved the worst case (v7-40-unc +$1,432) while on capped variants the governor has already truncated the tail, so the premium is close to pure cost. On 30 variants.' },
   { k: 'cap', h: 'riskMax', t: 'n',
     d: 'The most capital this strategy is allowed to put at risk in a day: the governor\'s hard bound on the BOOK FLOOR, i.e. the worst the day is permitted to finish. Width-scaled on purpose — $6k / $7k / $9k at $10 / $20 / $40 spreads — because a wider spread carries more risk per position. The working level the engine actively manages back toward is lossTarget, a flat $5k everywhere (shown in each cell\'s own tooltip). Reads "none" on -unc twins, which run the identical strategy with the governor off, so the capped/uncapped pair shows exactly what the cap costs. NOT the same as the legacy riskCap/softCap/hardCap settings, which ceiling uncovered OPEN DEBIT at the moment of opening — bounding the realised floor instead of at-risk debit is the whole reason the governor replaced them. Not rescaled by the $20-normalize toggle: it is a risk budget, not a P&L figure, and is already width-aware.' },
   { k: 'avgDaily', h: 'avgDaily', t: 'n',
@@ -782,7 +794,7 @@ function renderBtTable() {
   const hideUnc = !showUnc;   // ONE control for both views — the grid and the table must not disagree
   const rows = Object.entries(baselines)
     .filter(([variant]) => !(hideUnc && variant.endsWith('-unc')))
-    .map(([variant, e]) => ({ variant, ...e }));
+    .map(([variant, e]) => ({ variant, ...e, ...((variantCfg && variantCfg[variant]) || {}) }));
   const k = btSort.k;
   rows.sort((a, b) => k === 'variant'
     ? a.variant.localeCompare(b.variant) * btSort.dir
@@ -814,6 +826,15 @@ function renderBtTable() {
       if (c.k === 'cap') return r.cap == null
         ? `<td class="num" style="color:var(--muted)" title="no governor — this twin is uncapped">none</td>`
         : `<td class="num" style="color:var(--loss)" title="working target ${r.lossTarget == null ? '—' : '-$' + Math.abs(r.lossTarget) / 1000 + 'k'}">-$${Math.abs(r.cap) / 1000}k</td>`;
+      // CONFIG CELLS. A tick and a dash rather than true/false: the eye picks out which rows carry a
+      // feature far faster from a sparse column of ticks than from a dense one of words.
+      if (c.k === 'minLock') return r.minLock == null
+        ? `<td class="num" style="color:var(--muted)">—</td>`
+        : `<td class="num"${r.ladder ? '' : ' style="color:var(--muted)"'} title="${r.ladder ? 'live arm' : 'family default — this is a CONTROL'}">${r.minLock.toFixed(2)}</td>`;
+      if (c.k === 'ladder' || c.k === 'giveUp' || c.k === 'fly') {
+        const on = r[c.k] === true, known = variantCfg && variantCfg[r.variant];
+        return `<td class="num" style="color:${on ? 'var(--profit)' : 'var(--muted)'}">${!known ? '' : on ? '✓' : '—'}</td>`;
+      }
       if (c.k === 'trades') return `<td class="num">${r.trades == null ? '—' : r.trades}</td>`;
       if (c.k === 'winRate') return `<td class="num">${r.winRate == null ? '—' : Math.round(r.winRate * 100) + '%'}</td>`;
       if (c.k === 'efficiency') return `<td class="num" style="color:${r.efficiency >= 0 ? 'var(--profit)' : ''}">${r.efficiency == null ? '—' : r.efficiency}</td>`;
@@ -1371,6 +1392,22 @@ document.getElementById('cmpSrc').addEventListener('change', async (e) => {
 })();
 
 // Backtest table: toggle the section, loading baselines on first open, then render (sortable by header).
+// WHAT EACH VARIANT IS TESTING, from the live roster rather than the baselines. The baselines describe
+// the config a rebuild HAPPENED to run with; this table is used as an index of what is running now, and
+// after a config change those two disagree until the next two-hour rebuild. Only the four experiment
+// fields are taken — the roster also carries lossMax/lossTarget, and merging those wholesale would
+// clobber the baselines' own `cap`, which is negated for display.
+let variantCfg = null;
+async function ensureVariantCfg() {
+  if (variantCfg) return variantCfg;
+  const idx = await fetchJson(runsUrl());
+  variantCfg = {};
+  for (const v of (idx.variants || [])) {
+    variantCfg[v.variant] = { minLock: v.minLock != null ? v.minLock : null,
+      ladder: !!v.ladder, giveUp: !!v.giveUp, fly: !!v.fly };
+  }
+  return variantCfg;
+}
 document.getElementById('btTableBtn').addEventListener('click', async () => {
   const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');
   if (wrap.style.display !== 'none') { wrap.style.display = 'none'; btn.textContent = 'Backtest table ▾'; return; }
@@ -1380,6 +1417,9 @@ document.getElementById('btTableBtn').addEventListener('click', async () => {
     try { await ensureBaselines(); status.textContent = ''; }
     catch (err) { status.textContent = 'No backtest baselines available (' + (err.status === 404 ? 'not deployed yet' : (err.message || err)) + ')'; return; }
   }
+  // Config is a nicety, not the table: an older server without the fields just leaves those columns
+  // blank rather than blocking the results everyone actually came for.
+  try { await ensureVariantCfg(); } catch (e) { /* older server — columns render as — */ }
   renderBtTable();
   wrap.style.display = ''; btn.textContent = 'Backtest table ▴';
   wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
