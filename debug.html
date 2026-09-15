@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.88</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.93</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -571,7 +571,8 @@ function renderOrders() {
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
-    ['mark', 'the cover’s MARK when the resting order was placed'],
+    ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
+    ['markLow', 'the BEST price this order ever saw while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it.'],
     ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
@@ -597,7 +598,12 @@ function renderOrders() {
     const cr = e.net === 'CREDIT';
     const r = e.raw, pc = r.pendingCover || {}, W = e.W, ML = e.ML;
     const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;
-    const mark = pc.markAtPlace != null ? pc.markAtPlace : null;
+    // MARK for any order type, not just covers: a cover carries it on its pendingCover, every other order
+    // records markAtPlace when it is tested (opens keep theirs as `mark`).
+    const mark = pc.markAtPlace != null ? pc.markAtPlace
+      : (r.markAtPlace != null ? r.markAtPlace : (open && r.mark != null ? r.mark : (e.mark != null ? e.mark : null)));
+    const markLow = pc.markLow != null ? pc.markLow
+      : (r.coverMarkLow != null && !open ? r.coverMarkLow : (r.markLow != null ? r.markLow : null));
     const sent = pc.target != null ? pc.target : null;
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
@@ -608,7 +614,10 @@ function renderOrders() {
       ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
         + '<td class="m">—</td><td class="m">—</td><td class="m">—</td><td class="m">—</td>'
       : '<td class="m">—</td>'
-        + `<td>${num(mark)}</td><td class="m">${num(ceiling)}</td>`
+        + `<td>${num(mark)}</td>`
+        + `<td${markLow != null && sent != null && markLow < sent ? ' style="color:var(--profit)"' : ''}`
+        + ` title="${markLow == null ? 'no observation recorded' : sent == null ? '' : markLow <= sent ? 'went ' + (Math.round((sent - markLow) * 100) / 100) + ' THROUGH the price sent' : 'never reached the price sent'}">${num(markLow)}</td>`
+        + `<td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;
     // The backtest tint sits UNDER the live semantics: a backtest row still shows unfilled-red / hedge-purple

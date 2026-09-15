@@ -382,6 +382,10 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     // concede less than its credit twin does, and the twins must stay economically identical. Paying the
     // slip is the whole point of placing it — that is the $5/tick/contract being spent on crossing odds.
     shortStrike: res.shortStrike, mark: res.mark, cap: res.cap, limit: res.limit,
+    // LOW-WATER MARK while this order was working. Seeded at the placement mark and pushed down by each
+    // sub-bar pass, so the record answers "how far through our price did the market actually trade?"
+    // rather than only "was it through at the two instants we happened to look".
+    markLow: res.mark,
     orderStatus: placed.status, filled: !!placed.filled && openChk.fillable, covered: false, coverId: null,
     openedAt: new Date().toISOString(),
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
@@ -475,6 +479,10 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
       // that orders by time sorted them to the very top with a blank timestamp — they appeared to be the
       // first two trades of the day when they were bought mid-session.
       const hp = { filled: true, side: 'hedge', shortStrike: null, legs: cand.legs, limit: debit,
+        // markAtPlace: the mark this order was TESTED against. Recorded on every order type now, not just
+        // covers, because "filled" is only as trustworthy as the price behind it and a row with no mark
+        // cannot be audited at all. See the note on markFill about how weak that test currently is here.
+        markAtPlace: null,
         openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
         quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true };
       const lift = RC.bookFloor(filled.concat([hp]), null, 10) - f;
@@ -500,6 +508,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
       break;
     }
     best.hp.limit = chk.fill;                 // book what the test says we paid, not the estimate
+    best.hp.markAtPlace = chk.mark;
     const payload = buildOrderPayload(resolved, limitPx, qty, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'floor-offset', legs: best.hp.legs, net: 'DEBIT', limit: limitPx });
     if (!placed || placed.filled === false) break;
@@ -604,6 +613,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     const placed = await deps.placeOrder(payload, { kind: 'wing', legs: w.legs, net: 'DEBIT', limit: limitPx, naked: !!w.naked });
     if (!placed || placed.filled === false) continue;
     const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: chk.fill,
+      markAtPlace: chk.mark, limitSent: limitPx,
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
     st.positions.push(pos);
@@ -698,6 +708,7 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
     const placed = await deps.placeOrder(payload, { kind: 'fly', legs: f.legs, net: 'DEBIT', limit: limitPx, condor: !!f.condor });
     if (!placed || placed.filled === false) continue;
     const pos = { id: nextId('fly'), filled: true, side: 'fly', shortStrike: null, legs: f.legs, limit: chk.fill,
+      markAtPlace: chk.mark, limitSent: limitPx,
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, fly: true };
     st.positions.push(pos);
@@ -1555,6 +1566,7 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
   const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
+  if (chk.mark != null) pos.markLow = pos.markLow == null ? chk.mark : Math.min(pos.markLow, chk.mark);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
@@ -1674,6 +1686,12 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     if (!pos.filled || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
     const mark = coverMarkNow(pc.legs, getLeg);
+    // LOW-WATER MARK — the best price this resting order ever saw, pushed down on EVERY observation
+    // including the ones that do not fill. With the sub-bar worker that is ~10 looks per candle instead
+    // of one, so `markLow` vs `target` finally answers "did the market actually come to our price, and by
+    // how much?" — which a single mark at placement cannot. Recorded before the fill test so a cover that
+    // never fills still carries the evidence of how close it came.
+    if (mark != null) pc.markLow = pc.markLow == null ? mark : Math.min(pc.markLow, mark);
     if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
     const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
     // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
@@ -1695,6 +1713,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     pos.coverLimit = fill;
     pos.coverGeometry = pc.geometry;
     pos.coverStatus = 'filled';
+    pos.coverMarkLow = pc.markLow != null ? pc.markLow : mark;   // how far through target it actually got
     pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     pos.coverEpoch = st.lastCandleEpoch || null;
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
@@ -1714,6 +1733,9 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 module.exports = {
   processCandleClose,
   workRestingCovers,
+  // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
+  // a caller that takes only the first will reprice forever and never book anything.
+  resolveRestingCovers,
   resolvePendingOpen,
   makeLegAccessor,
   buildOrderPayload,

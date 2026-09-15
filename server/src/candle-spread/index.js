@@ -1349,7 +1349,13 @@ async function runRestingWork() {
       try {
         trader.resolvePendingOpen(st, cfg, deps, decisions);
         if (cfg.coverFillModel === 'resting') {
+          // BOTH, and in this order, exactly as processCandleClose does it (trader.js). workRestingCovers
+          // only WALKS the ladder; resolveRestingCovers is what tests whether the mark reached the target
+          // and books the fill. Calling the first alone — which is what this did on 2026-09-15 — meant the
+          // worker repriced 126 times and filled nothing, so every fill still waited for a candle close
+          // and the whole reason for a sub-bar pass was missing.
           await trader.workRestingCovers(st, cfg, decisions, deps, st.lastUnderlying);
+          trader.resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
         }
       } catch (e) {
         console.error(`[candle-spread] resting work (${run.variant}):`, e && e.message);
