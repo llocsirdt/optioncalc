@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.94</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.95</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -598,27 +598,37 @@ function renderOrders() {
     const cr = e.net === 'CREDIT';
     const r = e.raw, pc = r.pendingCover || {}, W = e.W, ML = e.ML;
     const ceiling = (W != null && r.limit != null) ? +(W - r.limit - ML).toFixed(2) : null;
-    // MARK for any order type, not just covers: a cover carries it on its pendingCover, every other order
-    // records markAtPlace when it is tested (opens keep theirs as `mark`).
-    const mark = pc.markAtPlace != null ? pc.markAtPlace
-      : (r.markAtPlace != null ? r.markAtPlace : (open && r.mark != null ? r.mark : (e.mark != null ? e.mark : null)));
-    const markLow = pc.markLow != null ? pc.markLow
-      : (r.coverMarkLow != null && !open ? r.coverMarkLow : (r.markLow != null ? r.markLow : null));
+    // BRANCH ON THE ROW, not on which field happens to be populated. Reading pendingCover first meant an
+    // OPEN row on a position with a working cover showed the COVER's mark — 16.05 where the open's own was
+    // 23. A cover that has FILLED has had pendingCover cleared, so it falls back to what the fill left on
+    // the position (coverMarkAtPlace / coverMarkLow); an unfilled one still has its pendingCover.
+    const mark = open
+      ? (r.markAtPlace != null ? r.markAtPlace : (r.mark != null ? r.mark : null))
+      : (pc.markAtPlace != null ? pc.markAtPlace
+        : (r.coverMarkAtPlace != null ? r.coverMarkAtPlace : (e.mark != null ? e.mark : null)));
+    const markLow = open
+      ? (r.markLow != null ? r.markLow : null)
+      : (pc.markLow != null ? pc.markLow : (r.coverMarkLow != null ? r.coverMarkLow : null));
     // The quote that produced that low, so a suspiciously good one can be checked against the spread.
-    const lowBid = pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null && !open ? r.coverMarkLowBid : (r.markLowBid != null ? r.markLowBid : null));
-    const lowAsk = pc.markLowAsk != null ? pc.markLowAsk : (r.coverMarkLowAsk != null && !open ? r.coverMarkLowAsk : (r.markLowAsk != null ? r.markLowAsk : null));
+    const lowBid = open ? (r.markLowBid != null ? r.markLowBid : null)
+      : (pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null ? r.coverMarkLowBid : null));
+    const lowAsk = open ? (r.markLowAsk != null ? r.markLowAsk : null)
+      : (pc.markLowAsk != null ? pc.markLowAsk : (r.coverMarkLowAsk != null ? r.coverMarkLowAsk : null));
     const sent = pc.target != null ? pc.target : null;
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
     if (!open && e.src === 'live') { if (gap != null && gap < 0) restingBelow++; if (coverable) everCoverable++; }
     const sp = e.sp;
-    // Diagnostics belong to the COVER order, so they only render on cover rows.
-    const diag = open
-      ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
-        + '<td class="m">—</td><td class="m">—</td><td class="m">—</td><td class="m">—</td>'
-      : '<td class="m">—</td>'
-        + `<td>${num(mark)}</td>`
-        + (() => {
+    // MARK AND markLow RENDER ON EVERY ROW. They used to be part of a cover-only block, so an open showed
+    // a dash even when its own mark was sitting right there on the position — which defeated the point of
+    // recording a mark for every order type. `ceiling`, `gap` and `cover?` stay cover-only: they are all
+    // defined against W - openCost - minLock, which an open has no analogue for.
+    //
+    // The two branches MUST emit the same number of cells. Adding the markLow column without adding a
+    // matching cell here left every open row one short, so its P&L rendered under `cover?` — 11 cells
+    // against 12 headers, silently, because nothing checks column counts.
+    const markCell = `<td>${num(mark)}</td>`;
+    const markLowCell = (() => {
           // A LOW IS ONLY AS GOOD AS THE QUOTE UNDER IT. If the bid/ask at that instant was wider than the
           // distance the mark fell below our limit, the "through" could be entirely an artifact of a
           // collapsed bid dragging the midpoint — nothing a buyer could have hit. Flag those rather than
@@ -631,8 +641,17 @@ function renderOrders() {
               + (spr != null ? `\nbid/ask at that moment: ${lowBid} / ${lowAsk}  (spread ${spr})` : '\nno bid/ask recorded')
               + (suspect ? '\n\n⚠ the spread was WIDER than the distance through — this low may be a collapsed bid dragging the mid, not a tradeable price.' : '');
           const col = suspect ? 'var(--loss)' : (through != null && through > 0 ? 'var(--profit)' : '');
-          return `<td${col ? ` style="color:${col}"` : ''} title="${esc(tip)}">${num(markLow)}${suspect ? ' ⚠' : ''}</td>`;
-        })()
+          // Inline escape: this file has no `esc` helper (that is compare.html's), and calling one threw a
+          // ReferenceError out of renderOrders — taking the orders table AND the risk curve down with it.
+          const attr = String(tip).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+          return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${suspect ? ' ⚠' : ''}</td>`;
+        })();
+    const diag = open
+      ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
+        + markCell + markLowCell
+        + '<td class="m">—</td><td class="m">—</td><td class="m">—</td>'
+      : '<td class="m">—</td>'
+        + markCell + markLowCell
         + `<td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;

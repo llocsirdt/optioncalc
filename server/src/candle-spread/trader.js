@@ -1841,6 +1841,9 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     pos.coverStatus = 'filled';
     pos.coverMarkLow = pc.markLow != null ? pc.markLow : mark;   // how far through target it actually got
     pos.coverMarkLowBid = pc.markLowBid; pos.coverMarkLowAsk = pc.markLowAsk;
+    // The mark this cover was PLACED at, kept on the position because pendingCover is cleared below —
+    // without it a filled cover loses the price it was working against and the row reads "—".
+    pos.coverMarkAtPlace = pc.markAtPlace != null ? pc.markAtPlace : null;
     pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     pos.coverEpoch = st.lastCandleEpoch || null;
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
