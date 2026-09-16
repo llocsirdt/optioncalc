@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.95</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.96</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -733,7 +733,7 @@ function coverOrdersByPosition(rec) {
   return m;
 }
 
-function buildCell(pos, se, dom, rec) {
+function buildCell(pos, se, dom, rec, underAt) {
   const orders = coverOrdersByPosition(rec || record);
   const legs = [];
   let cost = 0;
@@ -756,9 +756,35 @@ function buildCell(pos, se, dom, rec) {
     }
   }
   if (!legs.length) return null;
-  const under = se && se.settle != null ? se.settle : null;
-  const centre = under || 29500;
-  const lo = dom ? dom.xMin : centre * 0.985, hi = dom ? dom.xMax : centre * 1.015;
+  // X-DOMAIN FROM THE BOOK, not from a guess at where the market is.
+  //
+  // It used to be `centre * 0.985 .. centre * 1.015` around the SETTLE, falling back to a hardcoded
+  // 29500 whenever `se` was absent — which is exactly what the time slider does, since scrubbing passes
+  // se = null. On 2026-09-16 that produced a 29,058-29,942 window for strikes at 29,070-29,110: the
+  // whole structure crushed into the leftmost few percent, with the settle (28,928) off the chart
+  // entirely. That is the "curve hugs the left, empty space to the right" and why it worsened on scrub.
+  //
+  // Even when centred it was wrong-SIZED: a fixed +/-1.5% is ~870 points, so a $40 spread drew its
+  // entire shape across 5% of the width and the rest was flat line.
+  //
+  // Now: span the strikes actually in the book, include the underlying so the "now" marker is always on
+  // screen, and pad proportionally. The floor keeps a single tight spread from filling the panel edge to
+  // edge; the proportional term keeps a wide book from being cramped.
+  const under = se && se.settle != null ? se.settle : (underAt != null ? underAt : null);
+  let lo, hi;
+  if (dom) { lo = dom.xMin; hi = dom.xMax; }        // pinned to another curve's domain (overlay twins)
+  else {
+    const ks = legs.map((l) => l.strike).filter((k) => Number.isFinite(k));
+    if (ks.length) {
+      lo = Math.min(...ks); hi = Math.max(...ks);
+      if (under != null) { lo = Math.min(lo, under); hi = Math.max(hi, under); }
+      const pad = Math.max((hi - lo) * 0.4, 60);
+      lo -= pad; hi += pad;
+    } else {
+      const centre = under || 29500;
+      lo = centre * 0.985; hi = centre * 1.015;
+    }
+  }
   const curve = [];
   for (let i = 0; i <= 240; i++) {
     const x = lo + (hi - lo) * (i / 240);
@@ -866,11 +892,13 @@ function renderCurve(pos, se, T) {
   const host = document.getElementById('curve');
   // Rebuild the book as of T; at full day this is the whole book, so the default path is unchanged.
   const bookPos = T != null ? bookAsOf(record, T) : pos;
-  const d = buildCell(bookPos, T != null ? null : se);
+  // The underlying AT T has to reach buildCell, not just be patched on afterwards: it is part of what the
+  // x-domain must contain, and computing the domain without it was how the marker ended up off-chart.
+  const uAt = T != null ? underlyingAt(T) : null;
+  const d = buildCell(bookPos, T != null ? null : se, null, null, uAt);
   if (d && T != null) {
-    const u = underlyingAt(T);
-    d.underlying = u;
-    d.underPnl = u != null ? pnlAtPrice(d.curve, u) : null;
+    d.underlying = uAt;
+    d.underPnl = uAt != null ? pnlAtPrice(d.curve, uAt) : null;
   }
   if (!d) {
     host.outerHTML = '<div id="curve"><div class="curveEmpty">no positions at this time</div></div>';
