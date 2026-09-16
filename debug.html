@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.97</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.98</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -613,7 +613,7 @@ function renderOrders() {
     // DWELL: observations of this working order, and how many had the mark at or through the price sent.
     const looks = open ? (r.looks != null ? r.looks : null)
       : (pc.looks != null ? pc.looks : (r.coverLooks != null ? r.coverLooks : null));
-    const through = open ? (r.atOrThrough != null ? r.atOrThrough : null)
+    const through2 = open ? (r.atOrThrough != null ? r.atOrThrough : null)
       : (pc.atOrThrough != null ? pc.atOrThrough : (r.coverAtOrThrough != null ? r.coverAtOrThrough : null));
     const lowBid = open ? (r.markLowBid != null ? r.markLowBid : null)
       : (pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null ? r.coverMarkLowBid : null));
@@ -639,26 +639,37 @@ function renderOrders() {
     // against 12 headers, silently, because nothing checks column counts.
     const markCell = `<td>${num(mark)}</td>`;
     const markLowCell = (() => {
-          // A LOW IS ONLY AS GOOD AS THE QUOTE UNDER IT. If the bid/ask at that instant was wider than the
-          // distance the mark fell below our limit, the "through" could be entirely an artifact of a
-          // collapsed bid dragging the midpoint — nothing a buyer could have hit. Flag those rather than
-          // let them read as comfortable fills.
+          // WHAT MAKES A FILL DOUBTFUL HERE IS DWELL, NOT SPREAD WIDTH. NDX 0DTE quotes very wide — 12.1 /
+          // 26.4 on a 40-point spread is ordinary — and these spreads still trade near the MID, so a wide
+          // quote is not evidence a fill was unreachable. An earlier version warned on
+          // spread > distance-through and flagged 7 of 12 covers on v9-40-cATM, i.e. most normal fills,
+          // which trains the eye to ignore the flag.
+          //
+          // The real question is how long the price was actually there. A mark that touched our limit on
+          // ONE observation out of many is a graze a resting order may well have missed; one that sat at
+          // or through it repeatedly would have been hit. Bid/ask stays in the tooltip as context — it is
+          // worth seeing — but it no longer raises a warning.
           const through = (markLow != null && sent != null) ? Math.round((sent - markLow) * 100) / 100 : null;
           const spr = (lowBid != null && lowAsk != null) ? Math.round((lowAsk - lowBid) * 100) / 100 : null;
-          const suspect = through != null && through >= 0 && spr != null && spr > through;
-          const dwell = looks ? `\nseen at or through the price sent on ${through || 0} of ${looks} observation(s)`
-            + ((through || 0) === 0 ? ' — the market never actually reached it'
-              : (through || 0) === 1 ? ' — a single touch, which a real order may well have missed' : '') : '';
+          // A single touch across five or more looks. Below five observations there is not enough to call
+          // it either way, so it stays unflagged rather than crying wolf on a short-lived order.
+          const suspect = looks != null && looks >= 5 && (through2 || 0) <= 1;
+          const dwell = looks ? `\nseen at or through the price sent on ${through2 || 0} of ${looks} observation(s)`
+            + ((through2 || 0) === 0 ? ' — the market never actually reached it'
+              : (through2 || 0) === 1 ? ' — a single touch, which a real order may well have missed' : '') : '';
+          const ticks = (through != null && through >= 0) ? Math.round(through / 0.05) : null;
           const tip = markLow == null ? 'no observation recorded'
-            : (through == null ? '' : (through >= 0 ? `went ${through} THROUGH the price sent` : 'never reached the price sent'))
+            : (through == null ? '' : (through >= 0
+                ? `went ${through} THROUGH the price sent (${ticks} tick${ticks === 1 ? '' : 's'} — the buffer this fill needed)`
+                : 'never reached the price sent'))
               + (spr != null ? `\nbid/ask at that moment: ${lowBid} / ${lowAsk}  (spread ${spr})` : '\nno bid/ask recorded')
               + dwell
-              + (suspect ? '\n\n⚠ the spread was WIDER than the distance through — this low may be a collapsed bid dragging the mid, not a tradeable price.' : '');
+              + (suspect ? '\n\n⚠ the mark reached this price on only one look out of ' + looks + ' — a graze, not a price the market sat at. A resting order may well have missed it.' : '');
           const col = suspect ? 'var(--loss)' : (through != null && through > 0 ? 'var(--profit)' : '');
           // Inline escape: this file has no `esc` helper (that is compare.html's), and calling one threw a
           // ReferenceError out of renderOrders — taking the orders table AND the risk curve down with it.
           const attr = String(tip).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-          const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through || 0}/${looks}</span>` : '';
+          const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through2 || 0}/${looks}</span>` : '';
           return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${frac}${suspect ? ' ⚠' : ''}</td>`;
         })();
     const diag = open
