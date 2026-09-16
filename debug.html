@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.93</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.94</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -572,7 +572,7 @@ function renderOrders() {
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
     ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
-    ['markLow', 'the BEST price this order ever saw while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it.'],
+    ['markLow', 'the BEST price this order ever saw while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ had a bid/ask wider than the distance the mark travelled below our limit, which is exactly that case.'],
     ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
@@ -604,6 +604,9 @@ function renderOrders() {
       : (r.markAtPlace != null ? r.markAtPlace : (open && r.mark != null ? r.mark : (e.mark != null ? e.mark : null)));
     const markLow = pc.markLow != null ? pc.markLow
       : (r.coverMarkLow != null && !open ? r.coverMarkLow : (r.markLow != null ? r.markLow : null));
+    // The quote that produced that low, so a suspiciously good one can be checked against the spread.
+    const lowBid = pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null && !open ? r.coverMarkLowBid : (r.markLowBid != null ? r.markLowBid : null));
+    const lowAsk = pc.markLowAsk != null ? pc.markLowAsk : (r.coverMarkLowAsk != null && !open ? r.coverMarkLowAsk : (r.markLowAsk != null ? r.markLowAsk : null));
     const sent = pc.target != null ? pc.target : null;
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
@@ -615,8 +618,21 @@ function renderOrders() {
         + '<td class="m">—</td><td class="m">—</td><td class="m">—</td><td class="m">—</td>'
       : '<td class="m">—</td>'
         + `<td>${num(mark)}</td>`
-        + `<td${markLow != null && sent != null && markLow < sent ? ' style="color:var(--profit)"' : ''}`
-        + ` title="${markLow == null ? 'no observation recorded' : sent == null ? '' : markLow <= sent ? 'went ' + (Math.round((sent - markLow) * 100) / 100) + ' THROUGH the price sent' : 'never reached the price sent'}">${num(markLow)}</td>`
+        + (() => {
+          // A LOW IS ONLY AS GOOD AS THE QUOTE UNDER IT. If the bid/ask at that instant was wider than the
+          // distance the mark fell below our limit, the "through" could be entirely an artifact of a
+          // collapsed bid dragging the midpoint — nothing a buyer could have hit. Flag those rather than
+          // let them read as comfortable fills.
+          const through = (markLow != null && sent != null) ? Math.round((sent - markLow) * 100) / 100 : null;
+          const spr = (lowBid != null && lowAsk != null) ? Math.round((lowAsk - lowBid) * 100) / 100 : null;
+          const suspect = through != null && through >= 0 && spr != null && spr > through;
+          const tip = markLow == null ? 'no observation recorded'
+            : (through == null ? '' : (through >= 0 ? `went ${through} THROUGH the price sent` : 'never reached the price sent'))
+              + (spr != null ? `\nbid/ask at that moment: ${lowBid} / ${lowAsk}  (spread ${spr})` : '\nno bid/ask recorded')
+              + (suspect ? '\n\n⚠ the spread was WIDER than the distance through — this low may be a collapsed bid dragging the mid, not a tradeable price.' : '');
+          const col = suspect ? 'var(--loss)' : (through != null && through > 0 ? 'var(--profit)' : '');
+          return `<td${col ? ` style="color:${col}"` : ''} title="${esc(tip)}">${num(markLow)}${suspect ? ' ⚠' : ''}</td>`;
+        })()
         + `<td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
         + `<td>${coverable == null ? '—' : coverable ? '<span class="tag ok">yes</span>' : '<span class="tag no">no</span>'}</td>`;

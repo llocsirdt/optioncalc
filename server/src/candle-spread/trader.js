@@ -1540,10 +1540,12 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
 function markFill(legs, limit, getLeg, tick) {
-  const mark = coverMarkNow(legs, getLeg);
-  if (mark == null || limit == null || !(limit > 0)) return { mark, fillable: false, fill: null };
-  if (mark > limit) return { mark, fillable: false, fill: null };
-  return { mark, fillable: true, fill: round2(Math.max(tick, Math.min(limit, mark + tick))) };
+  const q = spreadQuote(legs, getLeg);
+  const mark = q.mark;
+  const base = { mark, bid: q.bid, ask: q.ask };
+  if (mark == null || limit == null || !(limit > 0)) return { ...base, fillable: false, fill: null };
+  if (mark > limit) return { ...base, fillable: false, fill: null };
+  return { ...base, fillable: true, fill: round2(Math.max(tick, Math.min(limit, mark + tick))) };
 }
 
 // Pay a tick or two OVER the mark so the order is likelier to actually be crossed. A limit sitting exactly
@@ -1555,6 +1557,28 @@ function openSlip(cfg, deps) {   // deps optional: buildOpen* paths only carry c
   const n = (deps && deps.orderSlipTicks != null) ? deps.orderSlipTicks
     : (cfg && cfg.orderSlipTicks != null) ? cfg.orderSlipTicks : ORDER_SLIP_DEFAULT;
   return Math.max(0, n) * cfg.tickIncrement;
+}
+
+// The spread's EXECUTABLE extremes alongside its mark. `ask` is what it would cost to buy right now
+// (pay the ask on each long, receive the bid on each short); `bid` is what selling it would fetch. Both
+// are worst-case leg-by-leg, so the true package price sits between them.
+//
+// Recorded with the low-water mark because a mid can fall for two very different reasons: the market
+// genuinely traded down, or the BID collapsed while the ask never moved. The second drags the midpoint
+// down to a price no buyer could ever have hit, and on the mark alone the two are indistinguishable —
+// a suspiciously good markLow next to a bid/ask a dollar apart is the tell.
+function spreadQuote(legs, getLeg) {
+  let mark = 0, bid = 0, ask = 0, ok = true;
+  for (const l of legs) {
+    const q = getLeg(l.type, l.strike);
+    if (!q || q.mid == null) { ok = false; break; }
+    const sgn = l.side === 'long' ? 1 : -1;
+    mark += sgn * q.mid;
+    // Buying the package: pay ask on longs, receive bid on shorts. Selling it is the mirror.
+    ask += sgn * (sgn > 0 ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid));
+    bid += sgn * (sgn > 0 ? (q.bid != null ? q.bid : q.mid) : (q.ask != null ? q.ask : q.mid));
+  }
+  return ok ? { mark: round2(mark), bid: round2(bid), ask: round2(ask) } : { mark: null, bid: null, ask: null };
 }
 
 function coverMarkNow(legs, getLeg) {
@@ -1602,6 +1626,17 @@ function coverMarkNow(legs, getLeg) {
 // THEY EXPIRE, unlike a cover. A cover is worth having whenever it finally fills; a hedge was chosen for
 // the shape of the risk curve at one moment, and that reason goes stale. Working one for the rest of the
 // day would book a structure bought for a peak that is long gone. Default 10 minutes — two candles.
+// Push the low-water mark down and, when it improves, snapshot the QUOTE that produced it. One helper
+// for all three resting order types so the three cannot drift apart on what "the low" means.
+function noteMarkLow(o, chk) {
+  if (chk.mark == null) return;
+  if (o.markLow != null && chk.mark >= o.markLow) return;
+  o.markLow = chk.mark;
+  o.markLowBid = chk.bid;
+  o.markLowAsk = chk.ask;
+  o.markLowSpread = (chk.bid != null && chk.ask != null) ? round2(chk.ask - chk.bid) : null;
+}
+
 function resolvePendingHedges(st, cfg, deps, decisions) {
   const now = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
   const ttl = (deps.hedgeWorkMinutes != null ? deps.hedgeWorkMinutes : 10) * 60 * 1000;
@@ -1610,7 +1645,7 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     if (pos.filled !== false || !pos.pendingHedge) continue;
     const ph = pos.pendingHedge;
     const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement);
-    if (chk.mark != null) pos.markLow = pos.markLow == null ? chk.mark : Math.min(pos.markLow, chk.mark);
+    noteMarkLow(pos, chk);
     if (chk.fillable) {
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
@@ -1619,14 +1654,16 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
       decisions.push({ action: `${ph.kind}-fill`, id: pos.id, legs: pos.legs, limit: ph.limit,
-        fillPrice: chk.fill, mark: chk.mark, markLow: pos.markLow, cost: Math.round(spent),
+        fillPrice: chk.fill, mark: chk.mark, bid: chk.bid, ask: chk.ask,
+        markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk, cost: Math.round(spent),
         restedMs: ph.placedEpoch != null ? now - ph.placedEpoch : null });
       filled++;
       // `!= null`, not a truthiness test: epoch 0 is a legitimate value and `ph.placedEpoch &&` skipped
       // the expiry entirely for it, so a stale hedge would have worked forever.
     } else if (ph.placedEpoch != null && (now - ph.placedEpoch) > ttl) {
       decisions.push({ action: `${ph.kind}-expire`, id: pos.id, legs: pos.legs, limit: ph.limit,
-        mark: chk.mark, markLow: pos.markLow, restedMs: now - ph.placedEpoch });
+        mark: chk.mark, markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
+        restedMs: now - ph.placedEpoch });
       pos.pendingHedge = null; pos.orderStatus = 'expired';
       pos.expired = true;                    // filtered out below rather than spliced, so the row survives
     }
@@ -1642,11 +1679,13 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
   const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
-  if (chk.mark != null) pos.markLow = pos.markLow == null ? chk.mark : Math.min(pos.markLow, chk.mark);
+  noteMarkLow(pos, chk);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
-      mark: chk.mark, restedSince: pos.openTime });
+      mark: chk.mark, bid: chk.bid, ask: chk.ask,
+      markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
+      restedSince: pos.openTime });
     st.pendingOpenId = null;
     return 1;
   }
@@ -1761,13 +1800,14 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
   for (const pos of st.positions) {
     if (!pos.filled || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
-    const mark = coverMarkNow(pc.legs, getLeg);
+    const quote = spreadQuote(pc.legs, getLeg);
+    const mark = quote.mark;
     // LOW-WATER MARK — the best price this resting order ever saw, pushed down on EVERY observation
     // including the ones that do not fill. With the sub-bar worker that is ~10 looks per candle instead
     // of one, so `markLow` vs `target` finally answers "did the market actually come to our price, and by
     // how much?" — which a single mark at placement cannot. Recorded before the fill test so a cover that
     // never fills still carries the evidence of how close it came.
-    if (mark != null) pc.markLow = pc.markLow == null ? mark : Math.min(pc.markLow, mark);
+    noteMarkLow(pc, quote);
     if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
     const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
     // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
@@ -1790,6 +1830,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     pos.coverGeometry = pc.geometry;
     pos.coverStatus = 'filled';
     pos.coverMarkLow = pc.markLow != null ? pc.markLow : mark;   // how far through target it actually got
+    pos.coverMarkLowBid = pc.markLowBid; pos.coverMarkLowAsk = pc.markLowAsk;
     pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     pos.coverEpoch = st.lastCandleEpoch || null;
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
@@ -1802,7 +1843,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
     pos.coverSentNet = pc.sentNet;
     pos.pendingCover = null;
-    decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
+    decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark,
+      bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
   }
 }
 

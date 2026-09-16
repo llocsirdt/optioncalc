@@ -121,6 +121,37 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
   ok(!st.positions.some(p => p.hedge), 'no phantom hedge left in the book');
 }
 
+
+// ---- THE QUOTE UNDER THE LOW ---------------------------------------------------------------------
+// A mid can fall because the market traded down, or because the BID collapsed while the ask never moved.
+// Both drag markLow to the same number; only the first was ever tradeable. Recording bid/ask at the
+// instant of the low is what tells them apart.
+{
+  const qLegs = [{ side: 'long', type: 'C', strike: 100 }, { side: 'short', type: 'C', strike: 110 }];
+  const qCfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1 };
+  const book = (lMid, lBid, lAsk) => (ty, k) => k === 100
+    ? { mid: lMid, bid: lBid, ask: lAsk, symbol: 'L' } : { mid: 2, bid: 1.95, ask: 2.05, symbol: 'S' };
+  const pend = (limit) => ({ positions: [{ id: 'h1', side: 'wing', legs: qLegs, quantity: 1, limit,
+    filled: false, hedge: true, covered: false, pendingCover: null,
+    pendingHedge: { limit, kind: 'wing', placedEpoch: 1000 } }] });
+
+  const tight = pend(4.00);
+  trader.resolvePendingHedges(tight, qCfg, { getLeg: book(6, 5.95, 6.05), nowMs: 1000 }, []);
+  const t1 = tight.positions[0];
+  ok(t1.markLow === 4 && t1.markLowSpread === 0.2, `tight book records a 0.20 spread (got ${t1.markLowSpread})`);
+  ok(t1.markLowAsk === 4.1, 'and the ask it would really have paid');
+
+  const collapsed = pend(4.00);
+  trader.resolvePendingHedges(collapsed, qCfg, { getLeg: book(5, 3.00, 6.05), nowMs: 1000 }, []);
+  const c1 = collapsed.positions[0];
+  ok(c1.markLow === 3, 'a collapsed bid drags the mid DOWN, so markLow alone looks better');
+  ok(c1.markLowSpread === 3.15, `but the recorded spread exposes it (got ${c1.markLowSpread})`);
+  ok(c1.markLowAsk === 4.1 && c1.markLowAsk > 4.00,
+    'and the ask shows buying it still cost MORE than the limit — the low was never tradeable');
+  ok(c1.markLowSpread > (4.00 - c1.markLow),
+    'spread wider than the distance through: the condition the debug table flags');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 process.exit(fail ? 1 : 0);
