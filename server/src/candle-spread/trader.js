@@ -1628,8 +1628,14 @@ function coverMarkNow(legs, getLeg) {
 // day would book a structure bought for a peak that is long gone. Default 10 minutes — two candles.
 // Push the low-water mark down and, when it improves, snapshot the QUOTE that produced it. One helper
 // for all three resting order types so the three cannot drift apart on what "the low" means.
-function noteMarkLow(o, chk) {
+function noteMarkLow(o, chk, limit) {
   if (chk.mark == null) return;
+  // DWELL, not just the extreme. `looks` counts every observation of this working order and `atOrThrough`
+  // how many of them had the mark at or below the price we sent. A single tick grazing our limit and the
+  // market sitting there for ten minutes produce an IDENTICAL markLow, and they are very different claims
+  // about whether a real order would have been hit — 1-of-47 is a graze, 22-of-47 is a fill.
+  o.looks = (o.looks || 0) + 1;
+  if (limit != null && chk.mark <= limit) o.atOrThrough = (o.atOrThrough || 0) + 1;
   if (o.markLow != null && chk.mark >= o.markLow) return;
   o.markLow = chk.mark;
   o.markLowBid = chk.bid;
@@ -1645,7 +1651,7 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     if (pos.filled !== false || !pos.pendingHedge) continue;
     const ph = pos.pendingHedge;
     const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement);
-    noteMarkLow(pos, chk);
+    noteMarkLow(pos, chk, ph.limit);
     if (chk.fillable) {
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
@@ -1679,13 +1685,13 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
   const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
-  noteMarkLow(pos, chk);
+  noteMarkLow(pos, chk, pos.limit);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
       mark: chk.mark, bid: chk.bid, ask: chk.ask,
       markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
-      restedSince: pos.openTime });
+      looks: pos.looks, atOrThrough: pos.atOrThrough, restedSince: pos.openTime });
     st.pendingOpenId = null;
     return 1;
   }
@@ -1817,7 +1823,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // of one, so `markLow` vs `target` finally answers "did the market actually come to our price, and by
     // how much?" — which a single mark at placement cannot. Recorded before the fill test so a cover that
     // never fills still carries the evidence of how close it came.
-    noteMarkLow(pc, quote);
+    noteMarkLow(pc, quote, pc.target);
     if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
     const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
     // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
@@ -1844,6 +1850,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // The mark this cover was PLACED at, kept on the position because pendingCover is cleared below —
     // without it a filled cover loses the price it was working against and the row reads "—".
     pos.coverMarkAtPlace = pc.markAtPlace != null ? pc.markAtPlace : null;
+    pos.coverLooks = pc.looks || null; pos.coverAtOrThrough = pc.atOrThrough || null;
     pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     pos.coverEpoch = st.lastCandleEpoch || null;
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
@@ -1857,7 +1864,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     pos.coverSentNet = pc.sentNet;
     pos.pendingCover = null;
     decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark,
-      bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
+      bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk,
+      looks: pc.looks, atOrThrough: pc.atOrThrough, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
   }
 }
 

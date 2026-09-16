@@ -13,8 +13,15 @@
   function fmtLeg(leg) { return `${leg.qty}${leg.type}${leg.strike}@${leg.cost}`; }
 
   // Human-readable spread string for the trade-details panel, e.g. "+1c29050 -1c29070" (signed by side).
+  // LOWER STRIKE FIRST, always. The legs arrive in construction order, which differs by side and by
+  // geometry — a bull spread builds long-then-short, a bear the other way — so the same structure read
+  // "+1c29150 -1c29190" in one row and "-1p29190 +1p29230" in the next, and the eye had to re-derive
+  // which leg was which every time. Sorting is display-only: this returns a string, and every consumer
+  // that cares about leg ORDER uses the arrays directly.
   function fmtSpread(spreadLegs, qty) {
-    return (spreadLegs || []).map(l => `${l.side === 'long' ? '+' : '-'}${qty}${String(l.type).toLowerCase()}${l.strike}`).join(' ');
+    return (spreadLegs || []).slice()
+      .sort((a, b) => (a.strike || 0) - (b.strike || 0))
+      .map(l => `${l.side === 'long' ? '+' : '-'}${qty}${String(l.type).toLowerCase()}${l.strike}`).join(' ');
   }
 
 
@@ -122,6 +129,13 @@
         const ord = coverByPos.get(pos.id);   // the EXACT cover order (legs + price + net) from the log
         if (ord && ord.legs) { cCredit = ord.net === 'CREDIT'; cLegs = ord.legs; cAmt = ord.limit || 0; }
         else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
+        // PRICE COMES FROM THE FILL, not from the order log. The log holds the order AS FIRST SENT, which
+        // was the whole truth when a cover rested at one price and filled there. The ladder and give-up
+        // both REPRICE, so sent and filled diverge: on 2026-09-16 a cover sent at 10.00 was walked to
+        // 19.30 by give-up and booked there, and this table showed "$1,000 DB" — the original target — for
+        // a fill that cost $1,930. Legs and net still come from the log (a credit twin's legs are only
+        // there); pos.coverLimit is the authoritative price.
+        if (pos.coverLimit != null) cAmt = pos.coverLimit;
         // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
         // cover ORDER's own time from the log, and only then to the open (never earlier than the open).
         cEpoch = pos.coverEpoch || (ord && epochFrom5m(ord.time)) || oEpoch;

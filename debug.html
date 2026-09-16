@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.96</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.8.97</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -572,7 +572,7 @@ function renderOrders() {
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
     ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
-    ['markLow', 'the BEST price this order ever saw while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ had a bid/ask wider than the distance the mark travelled below our limit, which is exactly that case.'],
+    ['markLow', 'the BEST price this order ever saw, followed by a DWELL fraction: how many observations had the mark at or through the price sent, out of how many times we looked (every 30s while it worked). 1/47 is a graze a real order may well have missed; 22/47 is a price the market genuinely sat at.  while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ had a bid/ask wider than the distance the mark travelled below our limit, which is exactly that case.'],
     ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
@@ -610,11 +610,21 @@ function renderOrders() {
       ? (r.markLow != null ? r.markLow : null)
       : (pc.markLow != null ? pc.markLow : (r.coverMarkLow != null ? r.coverMarkLow : null));
     // The quote that produced that low, so a suspiciously good one can be checked against the spread.
+    // DWELL: observations of this working order, and how many had the mark at or through the price sent.
+    const looks = open ? (r.looks != null ? r.looks : null)
+      : (pc.looks != null ? pc.looks : (r.coverLooks != null ? r.coverLooks : null));
+    const through = open ? (r.atOrThrough != null ? r.atOrThrough : null)
+      : (pc.atOrThrough != null ? pc.atOrThrough : (r.coverAtOrThrough != null ? r.coverAtOrThrough : null));
     const lowBid = open ? (r.markLowBid != null ? r.markLowBid : null)
       : (pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null ? r.coverMarkLowBid : null));
     const lowAsk = open ? (r.markLowAsk != null ? r.markLowAsk : null)
       : (pc.markLowAsk != null ? pc.markLowAsk : (r.coverMarkLowAsk != null ? r.coverMarkLowAsk : null));
-    const sent = pc.target != null ? pc.target : null;
+    // The price this order was WORKING at. pendingCover holds it while the cover is still live, but that
+    // is cleared the moment it books — so a FILLED cover had no `sent`, which silently disabled both the
+    // gap column and the ⚠ wide-spread flag on exactly the rows most worth checking. coverLimit is what
+    // it actually paid, which is the right comparison for a filled order.
+    const sent = pc.target != null ? pc.target
+      : (!open && r.coverLimit != null ? r.coverLimit : null);
     const gap = (sent != null && mark != null) ? +(sent - mark).toFixed(2) : null;
     const coverable = (mark != null && ceiling != null) ? mark <= ceiling : null;
     if (!open && e.src === 'live') { if (gap != null && gap < 0) restingBelow++; if (coverable) everCoverable++; }
@@ -636,15 +646,20 @@ function renderOrders() {
           const through = (markLow != null && sent != null) ? Math.round((sent - markLow) * 100) / 100 : null;
           const spr = (lowBid != null && lowAsk != null) ? Math.round((lowAsk - lowBid) * 100) / 100 : null;
           const suspect = through != null && through >= 0 && spr != null && spr > through;
+          const dwell = looks ? `\nseen at or through the price sent on ${through || 0} of ${looks} observation(s)`
+            + ((through || 0) === 0 ? ' — the market never actually reached it'
+              : (through || 0) === 1 ? ' — a single touch, which a real order may well have missed' : '') : '';
           const tip = markLow == null ? 'no observation recorded'
             : (through == null ? '' : (through >= 0 ? `went ${through} THROUGH the price sent` : 'never reached the price sent'))
               + (spr != null ? `\nbid/ask at that moment: ${lowBid} / ${lowAsk}  (spread ${spr})` : '\nno bid/ask recorded')
+              + dwell
               + (suspect ? '\n\n⚠ the spread was WIDER than the distance through — this low may be a collapsed bid dragging the mid, not a tradeable price.' : '');
           const col = suspect ? 'var(--loss)' : (through != null && through > 0 ? 'var(--profit)' : '');
           // Inline escape: this file has no `esc` helper (that is compare.html's), and calling one threw a
           // ReferenceError out of renderOrders — taking the orders table AND the risk curve down with it.
           const attr = String(tip).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-          return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${suspect ? ' ⚠' : ''}</td>`;
+          const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through || 0}/${looks}</span>` : '';
+          return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${frac}${suspect ? ' ⚠' : ''}</td>`;
         })();
     const diag = open
       ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`

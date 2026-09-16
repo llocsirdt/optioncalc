@@ -173,6 +173,32 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     'and a smaller one concedes less per step than the cover default');
 }
 
+
+// ---- DWELL: how OFTEN the price was there, not just how low it went ------------------------------
+// markLow alone cannot separate a graze from a sit. These count every observation and how many of them
+// had the mark at or through the price sent.
+{
+  const st = pendingHedge('wing', 1.20, 1000);
+  const deps = (m) => ({ getLeg: hLegAt(m), nowMs: 1000 });
+  trader.resolvePendingHedges(st, cfg, deps(2.00), []);   // away
+  trader.resolvePendingHedges(st, cfg, deps(1.80), []);   // away
+  trader.resolvePendingHedges(st, cfg, deps(1.50), []);   // away, new low
+  const p = st.positions[0];
+  ok(p.looks === 3, `counts every observation (got ${p.looks})`);
+  ok(!p.atOrThrough, 'none of them reached the limit, so nothing counts as through');
+  ok(p.markLow === 1.5, 'and the low still tracks the best seen');
+  trader.resolvePendingHedges(st, cfg, deps(1.00), []);   // reaches it -> fills
+  ok(p.filled === true && p.atOrThrough === 1, 'the observation that fills is counted as through');
+}
+{ // a graze and a sit produce the same markLow — only the counters tell them apart
+  const graze = pendingHedge('fly', 1.20, 1000), sit = pendingHedge('fly', 1.20, 1000);
+  for (const m of [2.0, 2.0, 2.0, 2.0]) trader.resolvePendingHedges(graze, cfg, { getLeg: hLegAt(m), nowMs: 1000 }, []);
+  for (const m of [1.1, 1.1, 1.1, 1.1]) trader.resolvePendingHedges(sit, cfg, { getLeg: hLegAt(m), nowMs: 1000 }, []);
+  const g = graze.positions[0], si = sit.positions[0];
+  ok(g.looks === 4 && !g.atOrThrough, `never reached: 0 of ${g.looks}`);
+  ok(si.atOrThrough >= 1, 'sat at the price: counted through on the first look, then filled');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 process.exit(fail ? 1 : 0);
