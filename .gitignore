@@ -208,3 +208,8 @@ signal-lab-data/*
 # file sitting next to the real one is a thing to be misread later, and it goes stale the moment any
 # strategy changes. Regenerate it on demand instead.
 server/src/candle-spread/backtest-baselines-nowings.*
+
+# Snapshots of the PROD run store, pulled by hand when the EB box is about to lose them (the run
+# directory has now been wiped twice by instance replacement — S3 storage is the real fix and is on the
+# backlog). Megabytes of raw run records; keep them on disk, out of the repo.
+data/prod-run-snapshots/
