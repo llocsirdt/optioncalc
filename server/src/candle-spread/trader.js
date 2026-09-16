@@ -1689,7 +1689,14 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
     st.pendingOpenId = null;
     return 1;
   }
-  if (deps.coverLadder !== true || chk.mark == null) return 0;
+  // OPEN LADDER, its own flag. It defaults to coverLadder so nothing changes today, but the two are
+  // different jobs and were never measured together: the ladder's case (+5 to +16 fill points over 765
+  // days) is entirely a COVER result, established before opens could rest at all. A cover waits for
+  // premium to decay toward a fixed target; an open chases a price that runs AWAY as the underlying moves
+  // against the entry. Sharing one flag meant open-laddering could never be isolated — it went live on 74
+  // variants at once, bundled into a flag whose evidence came from something else.
+  const openLadderOn = deps.openLadder != null ? deps.openLadder === true : deps.coverLadder === true;
+  if (!openLadderOn || chk.mark == null) return 0;
   // SAME LADDER AS THE COVERS, same direction: an open is a BUY, so walking toward the market means
   // paying MORE. Bounded by the ceiling this open was already gated on and by the mark itself — working
   // an order must never become a way past the 65% rule, nor a way to pay through the market.
@@ -1697,7 +1704,10 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   // Step timing is ELAPSED-TIME based (cover-ladder.stepsEarned reads restingMs), so evaluating more
   // often does not make the ladder walk faster. The sub-bar pass changes how often we LOOK, not how
   // quickly we chase — which is the whole point of it.
-  const step = deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25;
+  // Same reasoning for the step: $0.25 (and $0.10 at W=40) was fitted to covers over 765 days, and there
+  // is no result behind it for opens. Separately settable, same default.
+  const step = deps.openLadderStepDollars != null ? deps.openLadderStepDollars
+    : (deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25);
   const ceiling = pos.cap != null ? pos.cap : Infinity;
   const next = round2(Math.min(pos.limit + step, ceiling, chk.mark));
   if (next > pos.limit) {

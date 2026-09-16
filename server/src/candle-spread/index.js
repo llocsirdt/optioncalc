@@ -1070,6 +1070,9 @@ function buildEngineDeps(run, live) {
       // ORDER SLIP — ticks paid OVER the mark on opens/offsets/wings (and conceded on a credit twin), so
       // the limit is likelier to be crossed. Read off `deps`, so it MUST be listed here.
       orderSlipTicks: run.orderSlipTicks,
+      // OPEN LADDER — separate from coverLadder so working an OPEN toward the market can be switched on
+      // and measured on its own. Unset means "follow coverLadder", which is today's behaviour.
+      openLadder: run.openLadder, openLadderStepDollars: run.openLadderStepDollars,
       // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
       // here or the flag is silently dropped live while the backtest measures a gain.
       flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,

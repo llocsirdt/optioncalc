@@ -67,6 +67,13 @@ const NA = {
   ivSkew: 'BS pricing-model choice; live reads real chain quotes',
   intradayIV: 'BS pricing-model choice; live reads real chain quotes',
   lockCoverMode: 'backtest lock-pricing model; documented as having no live counterpart',
+  // --- ROSTER PROJECTIONS: the same setting under a shorter name, emitted by listVariants for the UI so
+  // the compare table and the overlay can show which experiment a variant runs. The audit finds them
+  // because they match the `name: run.X` forwarding pattern it scans for, which is the regex doing its
+  // job — but nothing sets them, because buildRuns() carries the REAL names below. Allowlisted with the
+  // real field named, so a genuine divergence in either of those is still caught. ---
+  ladder: 'roster projection of coverLadder for the UI; not an engine option',
+  minLock: 'roster projection of continuousCoverMinLockFrac for the UI; not an engine option',
   coverFillModel: 'names the model; live fills are real broker fills',
   coverFillAtClose: 'fill-model bound (pessimistic); meaningless live',
   coverFillHaircut: 'fill-model robustness knob; meaningless live',

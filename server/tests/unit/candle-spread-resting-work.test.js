@@ -152,6 +152,27 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     'spread wider than the distance through: the condition the debug table flags');
 }
 
+
+// ---- OPEN LADDER IS ITS OWN FLAG -----------------------------------------------------------------
+// It was gated on coverLadder, so working an OPEN toward the market went live on 74 variants bundled
+// into a flag whose evidence (+5 to +16 fill points over 765 days) came entirely from COVERS. Separate
+// flag, same default, so it can be isolated and measured without changing anything today.
+{
+  const base = { getLeg: legAt(10.60), ladderStepDollars: 0.25 };
+  const stepTo = (deps) => { const st = restingOpen(10.20), d = [];
+    trader.resolvePendingOpen(st, cfg, deps, d); return st.positions[0].limit; };
+  ok(stepTo({ ...base, coverLadder: true }) === 10.45, 'unset openLadder follows coverLadder (today unchanged)');
+  ok(stepTo({ ...base, coverLadder: true, openLadder: false }) === 10.20, 'openLadder:false opts an open OUT while covers keep laddering');
+  ok(stepTo({ ...base, coverLadder: false, openLadder: true }) === 10.45, 'openLadder:true works with the cover ladder OFF');
+  // A bigger step is still bounded by the MARK: min(limit + step, ceiling, mark). 10.20 + 0.50 would be
+  // 10.70, but the market is at 10.60 and the ladder never pays through it — so this asserts the
+  // override is live AND that the bound survives it, which is the pair that matters.
+  ok(stepTo({ ...base, coverLadder: true, openLadderStepDollars: 0.50 }) === 10.6,
+    'a bigger open step walks further but still stops AT the mark, never through it');
+  ok(stepTo({ ...base, coverLadder: true, openLadderStepDollars: 0.10 }) === 10.3,
+    'and a smaller one concedes less per step than the cover default');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 process.exit(fail ? 1 : 0);
