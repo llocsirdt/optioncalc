@@ -1333,7 +1333,8 @@ async function runRestingWork() {
       const st = record.state || {};
       const hasOpen = !!st.pendingOpenId;
       const hasCover = (st.positions || []).some(p => p.filled !== false && !p.covered && p.pendingCover);
-      if (hasOpen || hasCover) pending.push({ run, cfg, record });
+      const hasHedge = (st.positions || []).some(p => p.filled === false && p.pendingHedge);
+      if (hasOpen || hasCover || hasHedge) pending.push({ run, cfg, record });
     }
     if (!pending.length) return;
     // ONE chain read for the whole pass. The 5s freshness window in getOrFetchChainData means every
@@ -1348,6 +1349,7 @@ async function runRestingWork() {
       const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying });
       try {
         trader.resolvePendingOpen(st, cfg, deps, decisions);
+        trader.resolvePendingHedges(st, cfg, deps, decisions);
         if (cfg.coverFillModel === 'resting') {
           // BOTH, and in this order, exactly as processCandleClose does it (trader.js). workRestingCovers
           // only WALKS the ladder; resolveRestingCovers is what tests whether the mark reached the target

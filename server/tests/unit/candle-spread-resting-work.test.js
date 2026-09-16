@@ -78,6 +78,49 @@ function restingOpen(limit) {
   ok(st.positions[0].filled === false, 'an unquotable spread does not fill');
   ok(st.positions[0].limit === 10.20, 'and its limit is not walked on a price we cannot see');
 }
+
+// ---- PENDING HEDGES: offsets, wings and flies work like covers now -------------------------------
+// Each was previously booked the instant it was priced, against the very marks that priced it — an
+// offset from those mids, a wing or fly from the ASK while the test read the MID. None could be refused.
+const hLegs = [{ side: 'long', type: 'C', strike: 29100 }, { side: 'short', type: 'C', strike: 29140 }];
+const hLegAt = (m) => (type, strike) => {
+  const mid = strike === 29100 ? Math.round((2 + m) * 100) / 100 : 2;
+  return { mid, symbol: `NDX_${type}${strike}`, bid: mid - 0.2, ask: mid + 0.2 };
+};
+const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
+  id: kind + '-1', side: kind === 'offset' ? 'hedge' : kind, legs: hLegs, quantity: 1, limit,
+  filled: false, hedge: true, covered: false, pendingCover: null,
+  pendingHedge: { limit, kind, markAtPlace: limit, placedEpoch } }] });
+
+{ // the market comes to it -> books, and the SPEND is counted here rather than at placement
+  const st = pendingHedge('wing', 1.20, 1000), d = [];
+  trader.resolvePendingHedges(st, cfg, { getLeg: hLegAt(1.00), nowMs: 1000 }, d);
+  const p = st.positions[0];
+  ok(p.filled === true, 'a hedge fills when a later mark reaches its limit');
+  ok(p.pendingHedge === null, 'pendingHedge cleared on fill');
+  ok(st.wingSpent > 0 && st.wingCount === 1, `spend counted at the FILL (got ${st.wingSpent})`);
+  ok(d.some(x => x.action === 'wing-fill' && x.markLow != null), 'logs wing-fill with the low-water mark');
+}
+{ // the market stays away -> keeps working, nothing booked, no budget consumed
+  const st = pendingHedge('fly', 1.20, 1000), d = [];
+  trader.resolvePendingHedges(st, cfg, { getLeg: hLegAt(2.00), nowMs: 1000 }, d);
+  ok(st.positions[0].filled === false, 'a hedge does NOT book while the mark is above its limit');
+  ok(st.positions[0].pendingHedge != null, 'it keeps working');
+  ok(!st.flySpent, 'no budget consumed by an unfilled hedge');
+  ok(st.positions[0].markLow === 2, `low-water mark recorded even without a fill (got ${st.positions[0].markLow})`);
+}
+{ // stale: a hedge chosen for a curve shape that is long gone must not fill an hour later
+  const st = pendingHedge('offset', 1.20, 0), d = [];
+  trader.resolvePendingHedges(st, cfg, { getLeg: hLegAt(2.00), nowMs: 11 * 60 * 1000 }, d);
+  ok(st.positions.length === 0, 'an unfilled hedge is dropped once it goes stale');
+  ok(d.some(x => x.action === 'offset-expire'), 'and the expiry is logged, not silent');
+}
+{ // an expired hedge must not be counted as held
+  const st = pendingHedge('offset', 1.20, 0), d = [];
+  trader.resolvePendingHedges(st, cfg, { getLeg: hLegAt(2.00), nowMs: 11 * 60 * 1000 }, d);
+  ok(!st.positions.some(p => p.hedge), 'no phantom hedge left in the book');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 process.exit(fail ? 1 : 0);

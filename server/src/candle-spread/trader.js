@@ -350,6 +350,19 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
 // is provably unchanged (see capital-legs parity test); only the actual sent order + the signed cash
 // ledger differ. sentNet/sentLegs record what really went to the broker for fill reconciliation.
 async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
+  // ONE WORKING OPEN AT A TIME. Now that an open can rest, a second signal on the same side would
+  // overwrite st.pendingOpenId and orphan the first — it would sit in st.positions unfilled forever,
+  // never resolved and never cancelled. A repeat signal means "still want this", and the existing order
+  // is already working (and laddering) toward it; a REVERSED signal cancels it earlier in the tick.
+  if (st.pendingOpenId) {
+    const prior = st.positions.find(p => p.id === st.pendingOpenId);
+    if (prior && !prior.filled) {
+      decisions.push({ action: 'open-skip-pending', side: openSide, workingId: prior.id,
+        workingSince: prior.openTime, limit: prior.limit });
+      return;
+    }
+    st.pendingOpenId = null;
+  }
   const altEvery = deps.openAlternateEvery || 3;
   // Send style: the leg-uniqueness resolver's choice when enforcing (it took the recapture preference but
   // may have flipped to the twin); otherwise the recapture alternation; otherwise debit.
@@ -374,6 +387,11 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // open must never fail its own fill test for a rounding reason. If real chasing is ever wanted (bump the
   // limit toward the market over successive candles rather than leaving it), that is a feature to build
   // deliberately, not a side effect of how a price was rounded.
+  // REST, do not fill here. Testing an open against the very snapshot that priced it can only ever say
+  // yes (limit = ceil(mark) + slip, so mark <= limit by construction), which is why not one open was
+  // refused on 2026-09-15. The order now works and is resolved by a LATER observation — the 30s sub-bar
+  // pass, or the next candle — exactly the way a resting cover is. That is the only way "filled" carries
+  // information. A spread we cannot even quote is not placed at all (resolveLegs already refused above).
   const openChk = markFill(res.legs, res.limit, deps.getLeg, cfg.tickIncrement);
   const pos = {
     id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
@@ -386,7 +404,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     // sub-bar pass, so the record answers "how far through our price did the market actually trade?"
     // rather than only "was it through at the two instants we happened to look".
     markLow: res.mark,
-    orderStatus: placed.status, filled: !!placed.filled && openChk.fillable, covered: false, coverId: null,
+    orderStatus: placed.status, filled: false, covered: false, coverId: null,
     openedAt: new Date().toISOString(),
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
@@ -394,7 +412,11 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   };
   st.positions.push(pos);
   if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(sentLegs);   // record the actual played legs
-  st.pendingOpenId = pos.filled ? null : pos.id;
+  st.pendingOpenId = pos.id;
+  // Resolve immediately against THIS observation too, so an order that is already marketable does not
+  // wait 30s for no reason. The point is not to delay fills, it is to stop asserting them: this call reads
+  // the same chain, so it will usually fill at once — and when the market has moved away it will not.
+  resolvePendingOpen(st, cfg, deps, decisions);
   st.direction = openSide;
   st.openN = (st.openN || 0) + 1;
   // Signed cash ledger (+paid debit, -received credit). Does NOT touch P&L — pure capital view.
@@ -503,20 +525,24 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     // carries the standard slip so it is likelier to be crossed for real.
     const limitPx = round2(best.debit + openSlip(cfg, deps));
     const chk = markFill(best.hp.legs, limitPx, deps.getLeg, cfg.tickIncrement);
-    if (!chk.fillable) {
-      decisions.push({ action: 'floor-offset-nofill', legs: best.hp.legs, mark: chk.mark, limit: limitPx });
+    if (chk.mark == null) {                  // unquotable — nothing to work
+      decisions.push({ action: 'floor-offset-nofill', legs: best.hp.legs, mark: null, limit: limitPx });
       break;
     }
-    best.hp.limit = chk.fill;                 // book what the test says we paid, not the estimate
     best.hp.markAtPlace = chk.mark;
     const payload = buildOrderPayload(resolved, limitPx, qty, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'floor-offset', legs: best.hp.legs, net: 'DEBIT', limit: limitPx });
     if (!placed || placed.filled === false) break;
     best.hp.id = nextId('off');
+    // WORKS rather than books. filled:false keeps it out of every floor/cover path (the `filled !== false`
+    // guards) until a later observation says the market reached our price, which is the whole point: an
+    // offset we do not own must not reshape a risk curve we are about to act on.
+    best.hp.filled = false;
+    best.hp.pendingHedge = { limit: limitPx, kind: 'offset', markAtPlace: chk.mark,
+      placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) };
     st.positions.push(best.hp);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.hp.legs);
-    const paid = chk.fill * 100 * qty;              // tested fill price, not the pre-trade estimate
-    st.offSpent += paid; st.offCount++; bought++;
+    bought++;
     decisions.push({ action: 'floor-offset', id: best.hp.id, legs: best.hp.legs, cost: round2(best.cost),
       lift: round2(best.lift), ratio: round2(best.ratio), forced: !!force, limit: limitPx, mark: chk.mark,
       spentToday: round2(st.offSpent) });
@@ -605,21 +631,22 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a wing no longer books on its own cost estimate.
     const limitPx = round2(w.cost + openSlip(cfg, deps));
     const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement);
-    if (!chk.fillable) {
-      decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: chk.mark, limit: limitPx });
+    if (chk.mark == null) {                  // unquotable — nothing to work
+      decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: null, limit: limitPx });
       continue;
     }
     const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'wing', legs: w.legs, net: 'DEBIT', limit: limitPx, naked: !!w.naked });
     if (!placed || placed.filled === false) continue;
-    const pos = { id: nextId('wing'), filled: true, side: 'wing', shortStrike: null, legs: w.legs, limit: chk.fill,
+    const pos = { id: nextId('wing'), filled: false, side: 'wing', shortStrike: null, legs: w.legs, limit: limitPx,
       markAtPlace: chk.mark, limitSent: limitPx,
+      pendingHedge: { limit: limitPx, kind: 'wing', markAtPlace: chk.mark, tag: w.tag,
+        placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(w.legs);
-    st.wingCount++; st.wingSpent = round2(st.wingSpent + chk.fill * 100 * cfg.quantity);
-    bought++;
+    bought++;   // count + spend move to the FILL (resolvePendingHedges); budget belongs to wings we own
     decisions.push({ action: 'wing', id: pos.id, tag: w.tag, naked: !!w.naked, side: w.side,
       cost: round2(chk.fill * 100 * cfg.quantity), ratio: w.ratio, peakNow: round2(peakNow), spentToday: st.wingSpent,
       mark: chk.mark, limit: limitPx });
@@ -700,21 +727,22 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a fly does not book on its planned cost either.
     const limitPx = round2(f.cost + openSlip(cfg, deps));
     const chk = markFill(f.legs, limitPx, deps.getLeg, cfg.tickIncrement);
-    if (!chk.fillable) {
-      decisions.push({ action: 'fly-nofill', tag: f.tag, legs: f.legs, mark: chk.mark, limit: limitPx });
+    if (chk.mark == null) {                  // unquotable — nothing to work
+      decisions.push({ action: 'fly-nofill', tag: f.tag, legs: f.legs, mark: null, limit: limitPx });
       continue;
     }
     const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
     const placed = await deps.placeOrder(payload, { kind: 'fly', legs: f.legs, net: 'DEBIT', limit: limitPx, condor: !!f.condor });
     if (!placed || placed.filled === false) continue;
-    const pos = { id: nextId('fly'), filled: true, side: 'fly', shortStrike: null, legs: f.legs, limit: chk.fill,
+    const pos = { id: nextId('fly'), filled: false, side: 'fly', shortStrike: null, legs: f.legs, limit: limitPx,
       markAtPlace: chk.mark, limitSent: limitPx,
+      pendingHedge: { limit: limitPx, kind: 'fly', markAtPlace: chk.mark, tag: f.tag,
+        placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, fly: true };
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(f.legs);
-    st.flyCount++; st.flySpent = round2(st.flySpent + chk.fill * 100 * cfg.quantity);
-    bought++;
+    bought++;   // count + spend move to the FILL (resolvePendingHedges)
     decisions.push({ action: 'fly', id: pos.id, tag: f.tag, condor: !!f.condor, legs: f.legs,
       cost: round2(chk.fill * 100 * cfg.quantity), ratio: f.ratio, band, mark: chk.mark, limit: limitPx,
       spentToday: st.flySpent });
@@ -1049,6 +1077,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // candle, not the next one.
   if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
+  // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
+  // the 30s sub-bar pass and by every later candle until it fills or expires.
+  resolvePendingHedges(st, cfg, deps, decisions);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
   // covers resolve so a cover that just filled already counts toward the floor. Locking winners is the
@@ -1561,6 +1592,51 @@ function coverMarkNow(legs, getLeg) {
 //
 // Deliberately does NOT decide reversals. A reversal needs the signal, the signal only exists at a candle
 // close, and cancelling an order on stale direction between bars would be guessing.
+// Resolve HEDGES that are working — offsets, wings and flies. Same rule as a resting cover: the order
+// books only when a LATER observation shows the mark at or through the limit we sent.
+//
+// Why these need it as much as opens did: an offset is priced from the same mids it was then tested
+// against, and a wing or fly is priced at the ASK while the test reads the MID — so each was priced at or
+// above its own mark and asked whether the mark was at or below its price. None could ever be refused.
+//
+// THEY EXPIRE, unlike a cover. A cover is worth having whenever it finally fills; a hedge was chosen for
+// the shape of the risk curve at one moment, and that reason goes stale. Working one for the rest of the
+// day would book a structure bought for a peak that is long gone. Default 10 minutes — two candles.
+function resolvePendingHedges(st, cfg, deps, decisions) {
+  const now = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
+  const ttl = (deps.hedgeWorkMinutes != null ? deps.hedgeWorkMinutes : 10) * 60 * 1000;
+  let filled = 0;
+  for (const pos of st.positions) {
+    if (pos.filled !== false || !pos.pendingHedge) continue;
+    const ph = pos.pendingHedge;
+    const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement);
+    if (chk.mark != null) pos.markLow = pos.markLow == null ? chk.mark : Math.min(pos.markLow, chk.mark);
+    if (chk.fillable) {
+      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
+      // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
+      const spent = chk.fill * 100 * (pos.quantity || cfg.quantity);
+      if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
+      else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
+      else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
+      decisions.push({ action: `${ph.kind}-fill`, id: pos.id, legs: pos.legs, limit: ph.limit,
+        fillPrice: chk.fill, mark: chk.mark, markLow: pos.markLow, cost: Math.round(spent),
+        restedMs: ph.placedEpoch != null ? now - ph.placedEpoch : null });
+      filled++;
+      // `!= null`, not a truthiness test: epoch 0 is a legitimate value and `ph.placedEpoch &&` skipped
+      // the expiry entirely for it, so a stale hedge would have worked forever.
+    } else if (ph.placedEpoch != null && (now - ph.placedEpoch) > ttl) {
+      decisions.push({ action: `${ph.kind}-expire`, id: pos.id, legs: pos.legs, limit: ph.limit,
+        mark: chk.mark, markLow: pos.markLow, restedMs: now - ph.placedEpoch });
+      pos.pendingHedge = null; pos.orderStatus = 'expired';
+      pos.expired = true;                    // filtered out below rather than spliced, so the row survives
+    }
+  }
+  // Drop expired orders from the working list once logged: they were never held, so leaving them would
+  // let a structure we do not own keep appearing in position counts.
+  st.positions = st.positions.filter(p => !p.expired);
+  return filled;
+}
+
 function resolvePendingOpen(st, cfg, deps, decisions) {
   if (!st.pendingOpenId) return 0;
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
@@ -1737,6 +1813,7 @@ module.exports = {
   // a caller that takes only the first will reprice forever and never book anything.
   resolveRestingCovers,
   resolvePendingOpen,
+  resolvePendingHedges,
   makeLegAccessor,
   buildOrderPayload,
   buildOpen,
