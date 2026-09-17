@@ -28,6 +28,7 @@ const VC = require('../variant-contract');
 
 const arg = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : d; };
 const { replayDir } = require('./replay-dir');
+const { optsFor: buildOpts } = require('./opts-for');
 const OUTDIR = replayDir();
 // KNOWN DATASETS, searched in order. NQ is the 2022-2025 Kaggle history (large, local-only); NDX is the
 // Schwab capture (2026, small enough to ship). Their date ranges do not overlap, so a requested date
@@ -85,56 +86,16 @@ if (!day) {
 if (!day) { console.error(`no such day: ${want}. Searched: ${loaded.map(p => p.name).join(', ') || '(no datasets present)'}, then tried building it from Schwab 1m history (~48 days back). Use --list.`); process.exit(1); }
 
 // Same opts mapping the baseline builder uses, so a replay is the SAME run the baselines measured.
+// Shared mapping — see opts-for.js for why every hand-copied version of this drifted.
+// Shared mapping — see opts-for.js for why every hand-copied version of this drifted. `day` is the
+// module-level day being replayed; when its bars carry a separate price series the engine MUST price off
+// it (FOUNDATIONAL: /NQ signals, NDX pricing), so hasPx is read from the data rather than assumed.
 function optsFor(v) {
-  const o = { rthActionOnly: true, trackCapital: true, intradayIV: true, recordReplay: true };
-  if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
-  if (v.floorOffset) o.floorOffset = true;
-  // FLOOR RATCHET: caps the RETREAT from the day's peak floor, which the governor cannot see. Opens only.
-  if (v.floorRatchet) o.floorRatchet = true;
-  for (const k of ['floorGiveBackFrac', 'floorRatchetMinPeak']) if (v[k] != null) o[k] = v[k];
-  if (v.ivSkew) o.ivSkew = true;
-  if (v.continuousCover) o.continuousCover = true;
-  if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
-  if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
-  if (v.exemptTrendStack) o.exemptTrendStack = true;
-  if (v.coverSelector) o.coverSelector = v.coverSelector;
-  if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
-  if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
-  if (v.openNeverOtm) o.openNeverOtm = true;
-  if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
-  // These were never forwarded, so the compare page's backtest overlay has been drawing runs with NO cover
-  // geometry and NO wing conversion — a different strategy from the one the cell claims and from the one
-  // the baselines measure. It went unnoticed because /replay serves a cached bundle from disk when one
-  // exists, so only a NEW date ever reaches this code. Caught by the contract guard below the moment
-  // on-demand building let a new date through.
-  if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
-  if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
-  if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
-  // FLY / CONDOR VALLEY REPAIR. Never forwarded here, so every fly-enabled variant (25 capped + 5 unc
-  // since 2026-09-14) failed this endpoint with a 500 from the contract guard — correctly, since dropping
-  // them would have made the on-demand backtest silently run a DIFFERENT strategy from the baselines.
-  // Mirrors build-backtest-baselines optsFor exactly; the two must agree or the overlay compares a run
-  // against a differently-configured twin with nothing on screen saying so.
-  if (v.flyConvert) o.flyConvert = true;
-  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors',
-    'flyAfterMin', 'flyBeforeMin']) if (v[k] != null) o[k] = v[k];
-  if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
-  if (v.coverGiveUp) { o.coverGiveUp = true; for (const k of ['giveUpPoints', 'giveUpMaxLoss']) if (v[k] != null) o[k] = v[k]; }
-  if (v.coverLadder) { o.coverLadder = true; for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k]; }
-  if (v.minLockRamp) { o.minLockRamp = true; for (const k of ['minLockRampStart', 'minLockRampEnd', 'minLockRampFrom', 'minLockRampTo']) if (v[k] != null) o[k] = v[k]; }
-  const w = v.spreadWidth, sh = v.spreadShift || 0, cf = v.capFrac;
-  if ((w && w !== 20) || sh || cf != null) o.geo = makeGeo({ width: w || 20, shift: sh, capFrac: cf });
-  // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. When the dataset carries an NDX
-  // price series (`px`), options MUST be priced off it — without this the engine silently prices off the
-  // SIGNAL series, which is the quiet way to violate the rule.
-  if (day.bars.some(b => b.px)) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
-  // Guard: fail loudly if this variant carries a capability optsFor does not forward. extraOk
-  // lists what this script deliberately controls itself (its swept dimension) or handles under
-  // another name — everything else missing here would be a silent no-op, not a null result.
-  VC.assertForwarded(v, Object.keys(o), 'backtest-replay optsFor',
-    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
-  return o;
+  return buildOpts(v, {
+    intradayIV: true,
+    hasPx: !!(day && day.bars && day.bars.some((b) => b && b.px)),
+    where: 'backtest-replay optsFor',
+  });
 }
 
 const RUNS = buildRuns();

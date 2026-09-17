@@ -26,6 +26,7 @@ const { runDay5m, load5mDays } = require('./backtest-v6-5m');
 const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../../server/src/candle-spread/index');
 const VC = require('../../server/src/candle-spread/variant-contract');
+const { optsFor: buildOpts } = require('../../server/src/candle-spread/backtest/opts-for');
 
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
 const DATE = arg('--date', null);
@@ -40,44 +41,13 @@ const DIRS = [
 ];
 if (!DATE) { console.error('need --date YYYY-MM-DD'); process.exit(2); }
 
+// Shared mapping — see opts-for.js for why every hand-copied version of this drifted.
 function optsFor(v, days) {
-  const o = { rthActionOnly: true, intradayIV: true };
-  if (v.ivSkew) o.ivSkew = true;
-  if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
-  if (v.exemptTrendStack) o.exemptTrendStack = true;
-  if (v.floorOffset) o.floorOffset = true;
-  // FLOOR RATCHET: caps the RETREAT from the day's peak floor, which the governor cannot see. Opens only.
-  if (v.floorRatchet) o.floorRatchet = true;
-  for (const k of ['floorGiveBackFrac', 'floorRatchetMinPeak']) if (v[k] != null) o[k] = v[k];
-  if (v.continuousCover) o.continuousCover = true;
-  if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
-  if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
-  if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
-  if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
-  if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
-  if (v.coverSelector) o.coverSelector = v.coverSelector;
-  if (v.openNeverOtm) o.openNeverOtm = true;
-  if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
-  // NOTE the ALIAS: live calls this capitalRecapture, the backtest recaptureAlternate. Same feature.
-  if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
-  if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
-  // FLY / CONDOR VALLEY REPAIR. Never forwarded here, so every fly-enabled variant (25 capped + 5 unc
-  // since 2026-09-14) failed this endpoint with a 500 from the contract guard — correctly, since dropping
-  // them would have made the on-demand backtest silently run a DIFFERENT strategy from the baselines.
-  // Mirrors build-backtest-baselines optsFor exactly; the two must agree or the overlay compares a run
-  // against a differently-configured twin with nothing on screen saying so.
-  if (v.flyConvert) o.flyConvert = true;
-  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors',
-    'flyAfterMin', 'flyBeforeMin']) if (v[k] != null) o[k] = v[k];
-  if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
-  o.geo = v.adaptiveGeo
-    ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
-    : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
-  const hasPx = !!(days[0] && days[0].bars && days[0].bars[0] && days[0].bars[0].px);
-  if (hasPx) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
-  VC.assertForwarded(v, Object.keys(o), 'reconcile-day optsFor',
-    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
+  const o = buildOpts(v, {
+    intradayIV: true,
+    hasPx: !!(days[0] && days[0].bars && days[0].bars[0] && days[0].bars[0].px),
+    where: 'reconcile-day optsFor',
+  });
   return o;
 }
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });

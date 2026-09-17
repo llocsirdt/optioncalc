@@ -47,10 +47,15 @@ const PANEL = arg('--variants', 'v1-10,v7-10,v5-20,v6-20,v9-20,v0-40,v6-40,v9-40
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const days = load5mDays(DIR);
+const DAYS = days.filter((d) => d && d.bars && d.bars.length);
 const HAS_PX = !!(days[0] && days[0].bars && days[0].bars[0] && days[0].bars[0].px);
 const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US'));
 const runs = buildRuns();
 const ET = (h, m) => h * 60 + (m || 0);
+// Same signal wrapper the baselines builder uses — the variant's signalFn with its own cfg bound in.
+const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
+// The baselines grade RTH-complete days only; matching that keeps this panel comparable to them.
+const hasRth = (d) => d && d.bars && d.bars.some((b) => b && b.analysis && b.analysis['5m']);
 
 // The arms. `label` is what prints; `apply` mutates the opts for one variant.
 const CONFIGS = [{ label: 'control', arm: '-', apply: () => {} }];
@@ -84,9 +89,10 @@ if (ARM === 'B' || ARM === 'BOTH') {
 function runOne(v, cfg) {
   const o = optsFor(v, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-floor-protection optsFor' });
   cfg.apply(o, v);
+  const fn = wrap(v);
   let total = 0, worst = Infinity, neg = 0, n = 0, blocked = 0, gated = 0;
-  for (const d of days) {
-    const r = runDay5m(d, o);
+  for (const d of DAYS) {
+    const r = runDay5m(d.bars, fn, o);
     if (!r) continue;
     const t = r.terminal != null ? r.terminal : (r.total != null ? r.total : 0);
     total += t; n++;
@@ -99,7 +105,7 @@ function runOne(v, cfg) {
 }
 
 (function main() {
-  console.log(`FLOOR-PROTECTION SWEEP — ${days.length} days, ${PANEL.length} variants, ${CONFIGS.length} configs\n`);
+  console.log(`FLOOR-PROTECTION SWEEP — ${DAYS.length} days, ${PANEL.length} variants, ${CONFIGS.length} configs\n`);
   const base = {};
   const rows = [];
   for (const cfg of CONFIGS) {

@@ -28,6 +28,7 @@ const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
 const { buildRuns } = require('../index');
 const VC = require('../variant-contract');
 const { buildDualDay } = require('./day-builder');
+const { optsFor: buildOpts } = require('./opts-for');
 
 // Same preference order as reconcile-day: the DUAL set (signals /NQ, pricing cash NDX) IS the live model.
 // The NQ-priced history is a fallback that answers a different question, so the model string says so and
@@ -91,56 +92,19 @@ function iso(v) {
   return m ? `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}` : v;
 }
 
+// The variant -> engine-opts mapping is SHARED (see opts-for.js). This file used to carry its own copy,
+// which is how the seven fly flags went missing here for two days while the baselines had them: every
+// fly-enabled variant answered HTTP 500 on the on-demand endpoint, and before the contract guard existed
+// the same omission would have silently run a DIFFERENT strategy than the baselines under the same name.
+// recordReplay is genuinely local — it asks the engine to keep positions so a run RECORD can be built,
+// and changes no decision the run makes.
 function optsFor(v, day) {
-  const o = { rthActionOnly: true, intradayIV: true };
-  if (v.ivSkew) o.ivSkew = true;
-  if (v.bidirectional) o.bidirectional = true;
-  for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
-  if (v.exemptTrendStack) o.exemptTrendStack = true;
-  if (v.floorOffset) o.floorOffset = true;
-  // FLOOR RATCHET: caps the RETREAT from the day's peak floor, which the governor cannot see. Opens only.
-  if (v.floorRatchet) o.floorRatchet = true;
-  for (const k of ['floorGiveBackFrac', 'floorRatchetMinPeak']) if (v[k] != null) o[k] = v[k];
-  if (v.continuousCover) o.continuousCover = true;
-  if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
-  if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
-  if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
-  if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
-  if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
-  if (v.coverSelector) o.coverSelector = v.coverSelector;
-  if (v.openNeverOtm) o.openNeverOtm = true;
-  if (v.coverToStack) { o.coverToStack = true; o.coverToStackVsRisk = true; if (v.coverToStackMinFrac != null) o.coverToStackMinFrac = v.coverToStackMinFrac; }
-  // NOTE the ALIAS: live calls this capitalRecapture, the backtest recaptureAlternate. Same feature.
-  if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
-  if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
-  // FLY / CONDOR VALLEY REPAIR. Never forwarded here, so every fly-enabled variant (25 capped + 5 unc
-  // since 2026-09-14) failed this endpoint with a 500 from the contract guard — correctly, since dropping
-  // them would have made the on-demand backtest silently run a DIFFERENT strategy from the baselines.
-  // Mirrors build-backtest-baselines optsFor exactly; the two must agree or the overlay compares a run
-  // against a differently-configured twin with nothing on screen saying so.
-  if (v.flyConvert) o.flyConvert = true;
-  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors',
-    'flyAfterMin', 'flyBeforeMin']) if (v[k] != null) o[k] = v[k];
-  if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
-  // The give-up rule, the cover ladder and the dynamic minLock ramp are all per-variant experiments. If
-  // they are not forwarded HERE, the debug page's backtest overlay runs a DIFFERENT strategy from the one
-  // the variant declares — the overlay would quietly show v7-10 without its ramp, which is exactly the
-  // silent-no-op class the contract guard below exists to prevent (and did catch).
-  if (v.coverGiveUp) { o.coverGiveUp = true; for (const k of ['giveUpPoints', 'giveUpMaxLoss']) if (v[k] != null) o[k] = v[k]; }
-  if (v.coverLadder) { o.coverLadder = true; for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k]; }
-  if (v.minLockRamp) { o.minLockRamp = true; for (const k of ['minLockRampStart', 'minLockRampEnd', 'minLockRampFrom', 'minLockRampTo']) if (v[k] != null) o[k] = v[k]; }
-  o.geo = v.adaptiveGeo
-    ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
-    : makeGeo({ width: v.spreadWidth || 20, shift: v.spreadShift || 0, capFrac: v.capFrac != null ? v.capFrac : undefined });
-  // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. Without priceOf the engine
-  // silently prices off the SIGNAL series — the quiet way to violate the rule.
-  const hasPx = !!(day.bars && day.bars[0] && day.bars[0].px);
-  if (hasPx) o.priceOf = (b) => b.px || { close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
-  // recordReplay is what makes the engine hand back its positions and the RTH bar series — i.e. the two
-  // things a run RECORD is made of. It does not change any decision the run makes.
+  const o = buildOpts(v, {
+    intradayIV: true,
+    hasPx: !!(day && day.bars && day.bars[0] && day.bars[0].px),
+    where: 'run-day-record optsFor',
+  });
   o.recordReplay = true;
-  VC.assertForwarded(v, Object.keys(o), 'run-day-record optsFor',
-    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']);
   return o;
 }
 
