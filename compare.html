@@ -196,7 +196,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.8.92</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.8.99</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -406,6 +406,42 @@ const SRC = _q.get('src') || (REPLAY ? 'backtest' : 'live');
 const WANT_DATE = _q.get('date') || (REPLAY && REPLAY !== 'latest' ? REPLAY : null);
 const replaysUrl = () => `${BT_BASE}/api/v1/candle-spread/replays?cb=${Date.now()}`;
 const replayUrl = (d) => `${BT_BASE}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
+// ON-DEMAND backtest for ONE variant on ONE day. This is the route that WORKS ON PROD: the engine moved
+// under server/ so it ships, and the handler passes Schwab priceHistory so it can BUILD a day no
+// pre-built dataset covers (~48 days back). /replay, by contrast, spawns a bundle generator that reads
+// tests/backtest/ — which is gitignored and not in the deploy package, so it 404s on the deployed box
+// forever. debug.html was migrated to this endpoint; compare.html was not, which is the only reason the
+// backtest overlay reported "not available" on the hosted page for a date the server could happily build.
+const btRunUrl = (sym, d, v) => `${BT_BASE}/api/v1/candle-spread/backtest?symbol=${encodeURIComponent(sym)}&date=${encodeURIComponent(d)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
+
+// Load a whole day of BACKTEST run records, keyed by variant.
+//
+// Prefers the pre-built bundle — one request instead of N, and on a dev box it is already on disk. Falls
+// back to fanning out the on-demand endpoint per variant, which is what makes this work on prod. The
+// day's bars are cached server-side (in-process AND on disk) after the first variant, so the fan-out
+// builds the day once and every later variant is cheap.
+//
+// `variants` is the list to ask for — normally the variants the LIVE side is showing, so the overlay
+// lines up one-to-one with what is on screen. A variant the backtest cannot produce is skipped rather
+// than failing the whole load: a partial overlay beats none.
+async function loadBacktestRuns(date, sym, variants, onProgress) {
+  try {
+    const bundle = await fetchJson(replayUrl(date));
+    const out = {};
+    for (const [v, rec] of Object.entries(bundle.runs || {})) out[v] = rec;
+    if (Object.keys(out).length) return { runs: out, via: 'bundle', symbol: bundle.symbol || sym, date: bundle.date || date };
+  } catch (e) { /* no bundle on this host — fan out below */ }
+  const list = (variants && variants.length) ? variants : Object.keys(baselines || {});
+  if (!list.length) { const e = new Error('no variants to request'); e.status = 404; throw e; }
+  const out = {};
+  let done = 0;
+  await inBatches(list, 6, async (v) => {
+    try { out[v] = await fetchJson(btRunUrl(sym, date, v)); } catch (e) { /* this variant has no backtest for this day */ }
+    if (onProgress) onProgress(++done, list.length);
+  });
+  if (!Object.keys(out).length) { const e = new Error('no backtest runs for that date'); e.status = 404; throw e; }
+  return { runs: out, via: 'on-demand', symbol: sym, date };
+}
 const runUrl = (sym, exp, date, v) => `${LIVE_BASE}/api/v1/candle-spread/runs/${encodeURIComponent(sym)}/${encodeURIComponent(exp)}?date=${encodeURIComponent(date)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
 
 // Turn a run record's legs into {curve, worst, best, avg, lo, hi}. Reuses PortfolioRisk (shared math) so
@@ -1154,11 +1190,14 @@ async function load() {
       }
       const dEl = document.getElementById('replayDate');
       if (dEl) dEl.value = date;
-      status.textContent = `Loading backtest replay ${date}… (building it takes ~15s the first time)`;
-      const bundle = await fetchJson(replayUrl(date));
-      symbol = bundle.symbol || 'NDX';
-      commonDate = bundle.date;
-      for (const [v, rec] of Object.entries(bundle.runs || {})) records[v] = rec;
+      status.textContent = `Loading backtest ${date}… (building it takes ~15s the first time)`;
+      // No live grid to mirror here, so ask for the whole roster the baselines know about.
+      try { await ensureBaselines(); } catch (e) { /* fan-out falls back to the bundle's own variant list */ }
+      const got = await loadBacktestRuns(date, symbol || 'NDX', Object.keys(baselines || {}),
+        (n, total) => { status.textContent = `Building backtest for ${date}… ${n}/${total}`; });
+      symbol = got.symbol || 'NDX';
+      commonDate = got.date;
+      for (const [v, rec] of Object.entries(got.runs)) records[v] = rec;
       status.textContent = '';
       try { await ensureBaselines(); } catch (e) { /* curves still render without reference lines */ }
       buildTimeIndex();
@@ -1344,8 +1383,11 @@ async function loadComparisonSource(status) {
         if (r.aliasOf) aliasInfo[r.variant] = { aliasOf: r.aliasOf, aliasNote: r.aliasNote };
       });
     } else {
-      const bundle = await fetchJson(replayUrl(date));
-      for (const [v, rec] of Object.entries(bundle.runs || {})) recordsB[v] = rec;
+      // Ask for exactly the variants the live side is showing, so the overlay lines up with the grid.
+      const want = Object.keys(records);
+      const got = await loadBacktestRuns(date, symbol, want,
+        (n, total) => { status.textContent = `Building backtest for ${date}… ${n}/${total}`; });
+      for (const [v, rec] of Object.entries(got.runs)) recordsB[v] = rec;
     }
     status.textContent = prev;
     applyTime(currentT());

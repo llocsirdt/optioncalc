@@ -111,6 +111,14 @@ function optsFor(v) {
   if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
   if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;
   if (v.continuousCoverOppRatio != null) o.continuousCoverOppRatio = v.continuousCoverOppRatio;
+  // FLY / CONDOR VALLEY REPAIR. Never forwarded here, so every fly-enabled variant (25 capped + 5 unc
+  // since 2026-09-14) failed this endpoint with a 500 from the contract guard — correctly, since dropping
+  // them would have made the on-demand backtest silently run a DIFFERENT strategy from the baselines.
+  // Mirrors build-backtest-baselines optsFor exactly; the two must agree or the overlay compares a run
+  // against a differently-configured twin with nothing on screen saying so.
+  if (v.flyConvert) o.flyConvert = true;
+  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors',
+    'flyAfterMin', 'flyBeforeMin']) if (v[k] != null) o[k] = v[k];
   if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
   if (v.coverGiveUp) { o.coverGiveUp = true; for (const k of ['giveUpPoints', 'giveUpMaxLoss']) if (v[k] != null) o[k] = v[k]; }
   if (v.coverLadder) { o.coverLadder = true; for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k]; }

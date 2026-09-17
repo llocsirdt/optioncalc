@@ -62,6 +62,14 @@ function optsFor(v, days) {
   // NOTE the ALIAS: live calls this capitalRecapture, the backtest recaptureAlternate. Same feature.
   if (v.capitalRecapture) { o.recaptureAlternate = true; if (v.openAlternateEvery != null) o.openAlternateEvery = v.openAlternateEvery; if (v.creditCoverFrac != null) o.creditCoverFrac = v.creditCoverFrac; }
   if (v.enforceLegUniqueness) { o.enforceLegUniqueness = true; if (v.legMaxShift != null) o.legMaxShift = v.legMaxShift; if (v.legMaxWing != null) o.legMaxWing = v.legMaxWing; }
+  // FLY / CONDOR VALLEY REPAIR. Never forwarded here, so every fly-enabled variant (25 capped + 5 unc
+  // since 2026-09-14) failed this endpoint with a 500 from the contract guard — correctly, since dropping
+  // them would have made the on-demand backtest silently run a DIFFERENT strategy from the baselines.
+  // Mirrors build-backtest-baselines optsFor exactly; the two must agree or the overlay compares a run
+  // against a differently-configured twin with nothing on screen saying so.
+  if (v.flyConvert) o.flyConvert = true;
+  for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyWidths', 'flyCondors',
+    'flyAfterMin', 'flyBeforeMin']) if (v[k] != null) o[k] = v[k];
   if (v.wingConvert) { o.wingConvert = true; for (const k of ['wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingNaked', 'wingUpsideLambda', 'wingOutSteps', 'wingMaxWings', 'wingQty', 'wingStep', 'wingBandSig']) if (v[k] != null) o[k] = v[k]; }
   o.geo = v.adaptiveGeo
     ? makeAdaptiveGeo({ width: v.spreadWidth || 20, incr: 10, maxDebitFrac: v.capFrac != null ? v.capFrac : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
