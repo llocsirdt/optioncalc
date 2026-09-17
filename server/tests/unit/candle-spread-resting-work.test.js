@@ -199,6 +199,29 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
   ok(si.atOrThrough >= 1, 'sat at the price: counted through on the first look, then filled');
 }
 
+
+// ---- THE LOOP MUST TERMINATE ---------------------------------------------------------------------
+// 2026-09-16: making hedges REST killed every exit of the floor-offset loop at once. offCount/offSpent
+// stopped advancing (they now move on the FILL), and a pending hedge is filled:false so it is filtered
+// out of the book the floor is computed from -- meaning the floor the loop tries to repair never moves
+// either. It pushed a position per iteration for hours, logging the same offset once a second, until the
+// instance stopped answering. These assert the guards count WORKING orders, not just filled ones.
+{
+  const legs = [{ side: 'long', type: 'P', strike: 28950 }, { side: 'short', type: 'P', strike: 28930 }];
+  const mk = (n) => {
+    const st = { positions: [], offCount: 0, offSpent: 0, wingCount: 0, wingSpent: 0, flyCount: 0, flySpent: 0 };
+    for (let i = 0; i < n; i++) st.positions.push({ id: 'off-' + i, side: 'hedge', legs, quantity: 1,
+      limit: 1.65, filled: false, hedge: true, pendingHedge: { limit: 1.65, kind: 'offset', placedEpoch: 1 } });
+    return st;
+  };
+  // the accounting the guards depend on
+  const p3 = trader.pendingHedges(mk(3), 'offset', 1);
+  ok(p3.n === 3, `counts working offsets (got ${p3.n})`);
+  ok(Math.round(p3.spent) === 495, `and their committed spend, 3 x $165 (got ${p3.spent})`);
+  ok(trader.pendingHedges(mk(3), 'wing', 1).n === 0, 'counts only the kind asked for');
+  ok(trader.pendingHedges(mk(0), 'offset', 1).n === 0, 'and zero when nothing is working');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 process.exit(fail ? 1 : 0);

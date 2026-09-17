@@ -478,10 +478,35 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
   const mark = (type, strike) => { const q = deps.getLeg(type, strike); return q && q.mid != null ? q.mid : null; };
   let bought = 0;
   st.offCount = st.offCount || 0; st.offSpent = st.offSpent || 0;
-  while (st.offCount < maxCount && st.offSpent < budget) {
+  // PENDING COUNTS TOWARD THE LIMITS. offCount/offSpent only move when a hedge FILLS (budget should be
+  // consumed by hedges we own), so on their own they are no longer this loop's brake: an order that is
+  // working leaves both untouched. Neither does the floor check below, because a pending hedge is
+  // `filled:false` and is filtered out of the book the floor is computed from — so the floor it is trying
+  // to repair never moves either.
+  //
+  // With all three exits dead this loop pushed a position per iteration forever. On 2026-09-16 it logged
+  // the SAME offset (v5-40-cATM C 28930/28950 @1.65) once a second for hours, growing st.positions and
+  // rewriting the whole run record each time, until the instance stopped answering. Counting what is
+  // already working restores every guard.
+  const pendingOff = () => {
+    let n = 0, spent = 0;
+    for (const p of st.positions) {
+      if (p.filled === false && p.pendingHedge && p.pendingHedge.kind === 'offset') {
+        n++; spent += (p.pendingHedge.limit || 0) * 100 * qty;
+      }
+    }
+    return { n, spent };
+  };
+  for (;;) {
+    const pend = pendingOff();
+    if (st.offCount + pend.n >= maxCount) break;
+    if (st.offSpent + pend.spent >= budget) break;
     const filled = st.positions.filter((p) => p.filled !== false);
     const f = RC.bookFloor(filled, null, 10);
     if (-f <= limit) break;                       // floor is back inside the limit — nothing to repair
+    // A WORKING OFFSET ALREADY ADDRESSES THIS FLOOR. Without this the loop would queue a second, third,
+    // Nth copy of the same repair while the first is still unfilled — which is exactly what it did.
+    if (pend.n > 0) break;
     // Which tail carries the loss? The terminal payoff is piecewise-linear with kinks only at strikes, so
     // the worst point is at one of them — the same scan the backtest does, via the shared bookPnl.
     let worstX = spot, worstV = Infinity;
@@ -496,7 +521,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
       const debit = RH.legsDebit(cand.legs, mark, slip);
       if (debit == null || debit <= 0) continue;
       const cost = debit * 100 * qty;
-      if (st.offSpent + cost > budget) continue;
+      if (st.offSpent + pendingOff().spent + cost > budget) continue;
       // STAMP THE TIME. Hedges were the only positions created without openTime/openEpoch, so every UI
       // that orders by time sorted them to the very top with a blank timestamp — they appeared to be the
       // first two trades of the day when they were bought mid-session.
@@ -573,7 +598,8 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
   if (deps.wingAfterMin && nowMin != null && nowMin < deps.wingAfterMin) return 0;
   st.wingCount = st.wingCount || 0; st.wingSpent = st.wingSpent || 0;
   const maxPerDay = deps.wingMaxPerDay != null ? deps.wingMaxPerDay : 6;
-  if (st.wingCount >= maxPerDay) return 0;
+  const pendW = pendingHedges(st, 'wing', cfg.quantity);
+  if (st.wingCount + pendW.n >= maxPerDay) return 0;   // working wings count against the day's cap
 
   const b = A['15m'];
   // Time-to-expiry from the CANDLE being processed, not the wall clock. Live they coincide, but a replay
@@ -606,12 +632,12 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
   // There has to be a peak worth converting before any premium is spent — a small tent can never justify
   // it, which is what makes this distinct from floorOffset's must-fix mode.
   const budget = Math.min(deps.wingBudget != null ? deps.wingBudget : Infinity,
-    (deps.wingBudgetFrac != null ? deps.wingBudgetFrac : 0.10) * peakNow);
+    (deps.wingBudgetFrac != null ? deps.wingBudgetFrac : 0.10) * peakNow) - pendW.spent;
   if (!(peakNow > 0) || !(budget > 0)) return 0;
 
   const plan = WC.planWings(bookView, {
     spot, band, incr: cfg.strikeIncrement, price, qty: cfg.quantity, step: cfg.strikeIncrement, budget,
-    maxWings: Math.min(3, maxPerDay - st.wingCount),
+    maxWings: Math.min(3, maxPerDay - st.wingCount - pendW.n),
     minRatio: deps.wingMinRatio != null ? deps.wingMinRatio : 3,
     outSteps: deps.wingOutSteps, naked: deps.wingNaked,
     upsideLambda: deps.wingUpsideLambda, tailSigmas: deps.wingTailSigmas,
@@ -678,7 +704,8 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
   if (nowMin != null && (nowMin < afterMin || nowMin >= beforeMin)) return 0;
   st.flyCount = st.flyCount || 0; st.flySpent = st.flySpent || 0;
   const maxPerDay = deps.flyMaxPerDay != null ? deps.flyMaxPerDay : 4;
-  if (st.flyCount >= maxPerDay) return 0;
+  const pendF = pendingHedges(st, 'fly', cfg.quantity);
+  if (st.flyCount + pendF.n >= maxPerDay) return 0;    // working flies count against the day's cap
 
   // SAME band as wings: 15m Bollinger width -> implied vol -> spot*iv*sqrt(tau), with the intraday IV
   // term structure applied. Live and backtest must anchor on the same expected move or they are planning
@@ -702,12 +729,12 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
   const bookView = filled.map((p) => ({ filled: true, legs: p.legs, limit: p.limit, quantity: p.quantity || cfg.quantity,
     covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
   const incr = cfg.strikeIncrement;
-  const budget = Math.min(deps.flyBudget != null ? deps.flyBudget : 1500, Math.max(0, (deps.flyBudget != null ? deps.flyBudget : 1500) - st.flySpent));
+  const budget = Math.max(0, (deps.flyBudget != null ? deps.flyBudget : 1500) - st.flySpent - pendF.spent);
   if (!(budget > 0)) return 0;
 
   const plan = FY.planFlies(bookView, {
     spot, band, incr, price, qty: cfg.quantity, step: incr, budget,
-    maxFlies: Math.min(2, maxPerDay - st.flyCount),
+    maxFlies: Math.min(2, maxPerDay - st.flyCount - pendF.n),
     minRatio: deps.flyMinRatio != null ? deps.flyMinRatio : 3,
     widths: deps.flyWidths || [2 * incr, 3 * incr, 4 * incr],
     condors: deps.flyCondors !== false,
@@ -1643,6 +1670,19 @@ function noteMarkLow(o, chk, limit) {
   o.markLowSpread = (chk.bid != null && chk.ask != null) ? round2(chk.ask - chk.bid) : null;
 }
 
+// What is already WORKING of a given hedge kind. The counters (wingCount/flyCount/offCount) and their
+// spend only advance on a FILL, so any per-day cap or budget that reads them alone is blind to orders
+// still in flight and will re-place the same structure every pass. Every cap must add this in.
+function pendingHedges(st, kind, qty) {
+  let n = 0, spent = 0;
+  for (const p of st.positions || []) {
+    if (p.filled === false && p.pendingHedge && p.pendingHedge.kind === kind) {
+      n++; spent += (p.pendingHedge.limit || 0) * 100 * (p.quantity || qty || 1);
+    }
+  }
+  return { n, spent };
+}
+
 function resolvePendingHedges(st, cfg, deps, decisions) {
   const now = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
   const ttl = (deps.hedgeWorkMinutes != null ? deps.hedgeWorkMinutes : 10) * 60 * 1000;
@@ -1877,6 +1917,7 @@ module.exports = {
   resolveRestingCovers,
   resolvePendingOpen,
   resolvePendingHedges,
+  pendingHedges,      // exported so the loop-termination guards are directly testable
   makeLegAccessor,
   buildOrderPayload,
   buildOpen,
