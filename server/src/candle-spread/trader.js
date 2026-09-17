@@ -1624,13 +1624,47 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
-function markFill(legs, limit, getLeg, tick) {
+function markFill(legs, limit, getLeg, tick, deps) {
   const q = spreadQuote(legs, getLeg);
   const mark = q.mark;
   const base = { mark, bid: q.bid, ask: q.ask };
   if (mark == null || limit == null || !(limit > 0)) return { ...base, fillable: false, fill: null };
-  if (mark > limit) return { ...base, fillable: false, fill: null };
-  return { ...base, fillable: true, fill: round2(Math.max(tick, Math.min(limit, mark + tick))) };
+  // STRUCTURAL GATE, BEFORE the price comparison. `mark > limit` is the only test this used to make, and
+  // an IMPOSSIBLE mark passes it trivially: a debit spread marked -32.20 is not above any positive limit,
+  // so it read as fillable, and the fill price then clamped to one tick. That is how 154 covers across 55
+  // variants booked at $5 on 40-wide spreads on 2026-09-16, inflating the recorded floor by roughly
+  // $188,425 of locked value that was never captured. A quote that cannot exist is a BAD QUOTE, not a
+  // cheap fill — refuse it and let the order keep working.
+  const sane = SQ.verticalSanity(legs, mark);
+  if (!sane.ok) return { ...base, fillable: false, fill: null, badQuote: sane.reason };
+  const usable = SQ.quoteUsable(legs, q);
+  if (!usable.ok) return { ...base, fillable: false, fill: null, badQuote: usable.reason };
+  // PARITY, for two-leg verticals: the opposing structure at the SAME strikes must price to the width.
+  // This is the check that catches legs which are broken but net to something legal-looking — the four
+  // covers on 2026-09-16 marked $0.05 with a ±148 book, which structural bounds cannot see.
+  //
+  // RECORDED ALWAYS, BLOCKING ONLY ON REQUEST (deps.parityGateTolFrac). The residual cannot be measured
+  // from history — run records store the NET quote, not the per-leg quotes — and switching on an unmeasured
+  // gate is how the quoted-width test nearly cost 354 good fills. So this collects the distribution on
+  // live orders now and can be armed once there is evidence for a tolerance. Recording it is the point:
+  // a check that is built but never wired is the failure mode this module already has a history of.
+  let parity = null;
+  if (legs.length === 2 && legs[0].type === legs[1].type) {
+    const ks = legs.map((l) => l.strike);
+    const tolFrac = deps && deps.parityGateTolFrac != null ? deps.parityGateTolFrac : null;
+    const pd = SQ.parityDeviation(Math.min(...ks), Math.max(...ks), getLeg, { tolFrac: tolFrac != null ? tolFrac : 0.25 });
+    if (pd) {
+      parity = { residual: pd.residual, width: pd.width, callMid: pd.callMid, putMid: pd.putMid };
+      if (tolFrac != null && !pd.ok) {
+        return { ...base, parity, fillable: false, fill: null,
+          badQuote: `parity off by ${pd.residual} on a ${pd.width} spread (calls ${pd.callMid} + puts ${pd.putMid})` };
+      }
+    }
+  }
+  if (mark > limit) return { ...base, parity, fillable: false, fill: null };
+  // The floor is the MARK, not one tick. Flooring at `tick` is what turned a nonsense mark into a $5
+  // fill; a real fill never prices below what the thing is actually marked at.
+  return { ...base, parity, fillable: true, fill: round2(Math.max(mark, Math.min(limit, mark + tick))) };
 }
 
 // Pay a tick or two OVER the mark so the order is likelier to actually be crossed. A limit sitting exactly

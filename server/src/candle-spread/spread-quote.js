@@ -138,4 +138,107 @@ function validateOpen(side, lo, hi, getLeg, opts) {
   };
 }
 
-module.exports = { netQuote, parityCheck, neighbourCheck, validateOpen, bullCallLegs, bearPutLegs };
+
+/**
+ * STRUCTURAL SANITY — is this quote even POSSIBLE for this structure?
+ *
+ * Parity and neighbour checks ask whether a mark is FAIR. This asks the cruder question first: whether
+ * it can exist at all. It needs no second quote, so it works when the opposing side is also garbage —
+ * which is exactly the case that got through on 2026-09-16.
+ *
+ * WHAT HAPPENED. Around 14:00, volatility knocked holes in the chain snapshot and legs came back with
+ * inverted, absurdly wide quotes: a 40-wide put spread quoted bid -373.3 / ask 140.0, a 513-point range
+ * on a structure that cannot be worth more than 40. Netting those legs produced marks like -116.65 and
+ * -32.20. A debit vertical can never be worth less than zero, and no vertical of any kind can be worth
+ * more than its width, so both are impossible rather than merely unfair.
+ *
+ * Nothing rejected them. markFill only asked `mark > limit`, which a negative mark trivially passes, and
+ * the limit itself had been derived from the same bad mark and clamped to one tick by Math.max(tick, …).
+ * So 154 covers across 55 variants "filled" at $5 on 40-wide spreads, booking roughly $188,425 of locked
+ * value that was never actually captured — and INFLATING the recorded floor, since a cover that costs
+ * nothing looks like a free lock.
+ *
+ * The bounds, for a vertical (two legs, same type):
+ *   |mark| <= W            no vertical is worth more than the distance between its strikes
+ *   debit  => mark >= 0    long the more valuable strike: you pay, you never receive
+ *   credit => mark <= 0    the mirror
+ * For anything with more legs (flies, condors) only the width bound applies, since the sign depends on
+ * the structure. Returns { ok, reason, width, isDebit } — `reason` names the violated bound, so a refusal
+ * can be logged as a BAD QUOTE rather than as a decision the strategy made.
+ */
+function verticalSanity(legs, mark, opts) {
+  const o = opts || {};
+  if (mark == null || !Number.isFinite(mark)) return { ok: false, reason: 'no mark', width: null, isDebit: null };
+  const ks = (legs || []).map((l) => l.strike).filter((k) => k != null);
+  if (ks.length < 2) return { ok: true, reason: null, width: null, isDebit: null };
+  const width = Math.max(...ks) - Math.min(...ks);
+  if (!(width > 0)) return { ok: true, reason: null, width, isDebit: null };
+  // The width bound applies to every structure built on one underlying.
+  if (Math.abs(mark) > width + (o.tol || 0)) {
+    return { ok: false, reason: `|mark| ${r2(mark)} exceeds width ${width}`, width, isDebit: null };
+  }
+  if (legs.length !== 2 || legs[0].type !== legs[1].type) return { ok: true, reason: null, width, isDebit: null };
+  const long = legs.find((l) => l.side === 'long'), short = legs.find((l) => l.side !== 'long');
+  if (!long || !short) return { ok: true, reason: null, width, isDebit: null };
+  // Which strike is worth more? Calls gain value as the strike FALLS, puts as it RISES. Holding the more
+  // valuable strike is a debit; holding the cheaper one is a credit.
+  const isDebit = long.type === 'C' ? long.strike < short.strike : long.strike > short.strike;
+  if (isDebit && mark < -(o.tol || 0)) return { ok: false, reason: `debit spread marked ${r2(mark)} (below zero)`, width, isDebit };
+  if (!isDebit && mark > (o.tol || 0)) return { ok: false, reason: `credit spread marked ${r2(mark)} (above zero)`, width, isDebit };
+  return { ok: true, reason: null, width, isDebit };
+}
+
+/**
+ * QUOTE USABILITY — only what is EXACTLY wrong, never what merely looks wide.
+ *
+ * An inverted book (ask below bid) is impossible and is refused. A WIDE book is not: NDX 0DTE spreads
+ * quote very wide and still trade near the mid, so width says nothing about whether a fill is real.
+ *
+ * MEASURED on the 1,339 covers of 2026-09-16, which settles it. Healthy covers reach 12.75x their width
+ * in quoted span (p50 0.72x, p90 2.75x, p99 8.29x); the KNOWN-BAD ones start at 3.51x. The two
+ * distributions overlap almost completely, so every threshold is a bad trade — at 1x it refuses 354
+ * healthy covers to catch 154, at 4x it still refuses 90 healthy ones and now misses 24 bad ones.
+ * Structural sanity catches 150 of the 154 with ZERO false positives out of 1,185, so the width test adds
+ * nothing but damage. It is deliberately absent; do not reintroduce it.
+ * See feedback_ndx_spreads_fill_near_mid.
+ */
+function quoteUsable(legs, q) {
+  if (!q || q.mark == null || q.bid == null || q.ask == null) return { ok: false, reason: 'incomplete quote' };
+  if (q.ask < q.bid) return { ok: false, reason: `inverted book (bid ${r2(q.bid)} > ask ${r2(q.ask)})` };
+  return { ok: true, reason: null };
+}
+
+/**
+ * PARITY DEVIATION — the two-sided version, for gating an order rather than repricing one.
+ *
+ * parityCheck() above only flags a sum ABOVE the width, because its job is to find an INFLATED side and
+ * it leans on "the cheaper side is never under-priced". That assumption holds when both sides are really
+ * quoted. It breaks when a leg comes back as garbage: on 2026-09-16 four covers showed a call spread
+ * marked $0.05 with a legged book of -147.9 / 148.0 — a symmetric ±148 around zero, two broken legs that
+ * happened to net to something plausible. Structural bounds cannot see that ($0.05 is a legal price for a
+ * 20-wide debit spread) and neither can a one-sided parity test (the sum comes out BELOW the width).
+ *
+ * Put-call parity is exact physics, not a heuristic: C(lo) - C(hi) + P(hi) - P(lo) = W at zero rates. So
+ * |sum - W| is a real distance from an identity, and a large one means at least one leg is not a price.
+ *
+ * TOLERANCE IS DELIBERATELY LOOSE (25% of width by default, against the ~5% friction the reprice path
+ * allows). It is here to catch a book that has fallen apart, NOT to judge whether a fill is realistic —
+ * NDX 0DTE quotes wide and still trades near the mid, and a tight gate here would repeat the mistake the
+ * width test already made. UNMEASURED on live data: run records store the NET quote, not the per-leg
+ * quotes, so the residual distribution cannot be recovered after the fact. Record parityResidual on
+ * orders, measure it over a few sessions, then tighten. Until then it should only ever catch the obvious.
+ */
+function parityDeviation(lo, hi, getLeg, opts) {
+  const o = opts || {};
+  const W = hi - lo;
+  if (!(W > 0)) return null;
+  const call = netQuote(bullCallLegs(lo, hi), getLeg);
+  const put = netQuote(bearPutLegs(lo, hi), getLeg);
+  if (!call || !put) return null;          // one side unquoted -> this check abstains, it does not refuse
+  const sum = r2(call.mid + put.mid);
+  const residual = r2(sum - W);
+  const tol = r2((o.tolFrac != null ? o.tolFrac : 0.25) * W);
+  return { width: W, callMid: call.mid, putMid: put.mid, sum, residual, tol, ok: Math.abs(residual) <= tol };
+}
+
+module.exports = { netQuote, parityCheck, parityDeviation, neighbourCheck, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };
