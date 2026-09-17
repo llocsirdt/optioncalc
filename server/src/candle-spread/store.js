@@ -20,8 +20,21 @@ const path = require('path');
 // replacement instance rehydrates the day's open positions. See /health candleRunsProbe for diagnosis.
 const RUNS_DIR = process.env.CANDLE_SPREAD_RUNS_DIR || path.join(__dirname, '..', 'persistence', 'candle-spread-runs');
 
+// SUMMARY SIDECARS. listRunsSummary() used to JSON.parse EVERY run record in full to read six small
+// fields out of each, so /api/v1/candle-spread/runs — hit by every compare and debug page load — cost a
+// full parse of the whole store. Harmless while records were small; on 2026-09-16 a runaway floor-offset
+// loop grew ONE record to 32,411 positions and the index endpoint became a ~140 MB transient allocation
+// per request, on a 1.9 GB instance with a history of OOM from exactly this shape of transient spike.
+//
+// Each write now also drops a small sidecar holding just the summary. The index reads those instead, so
+// its cost is proportional to the SUMMARY size rather than the record size and a pathological record can
+// no longer make listing expensive. They live in a subdirectory so listRunFiles() (which filters on a
+// `.json` suffix in RUNS_DIR) cannot mistake one for a run.
+const SUM_DIR = path.join(RUNS_DIR, '_summaries');
+
 function ensureDir() {
   try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch (_) { /* exists */ }
+  try { fs.mkdirSync(SUM_DIR, { recursive: true }); } catch (_) { /* exists */ }
 }
 
 // e.g. NDX_2026-08-11_2026-08-11 (symbol_expiration_tradeDate), or
@@ -44,10 +57,43 @@ function readRun(runId) {
   }
 }
 
+function sumFilePath(runId) {
+  return path.join(SUM_DIR, `${runId}.json`);
+}
+
+// The projection listRunsSummary() serves. Kept in ONE place so the sidecar and the fallback full-parse
+// path cannot drift into producing different shapes for the same record.
+function summarize(runId, r) {
+  return {
+    runId,
+    symbol: r.config?.symbol,
+    expiration: r.config?.expiration,
+    tradeDate: r.tradeDate,
+    variant: r.config?.variant || null,
+    variantLabel: r.config?.variantLabel || null,
+    // The width is what lets a legacy name (`v6`, `v6-20-10k`) be resolved onto the current roster —
+    // it comes from the run's own config, so the mapping is read from the record, never assumed.
+    spreadWidth: r.config?.spreadWidth ?? null,
+    coverSelector: r.config?.coverSelector || null,
+    direction: r.state?.direction,
+    positionCount: r.state?.positions?.length || 0,
+    realizedPnl: r.state?.realizedPnl || 0,
+    eventCount: r.events?.length || 0,
+    updatedAt: r.updatedAt
+  };
+}
+
+// Best-effort: a sidecar that cannot be written must never fail the run write that produced it. The
+// reader falls back to a full parse, so the worst case of a failure here is the old cost, not wrong data.
+function writeSummary(runId, record) {
+  try { fs.writeFileSync(sumFilePath(runId), JSON.stringify(summarize(runId, record)), 'utf8'); } catch (_) { /* non-fatal */ }
+}
+
 function writeRun(record) {
   ensureDir();
   record.updatedAt = new Date().toISOString();
   fs.writeFileSync(runFilePath(record.runId), JSON.stringify(record, null, 2), 'utf8');
+  writeSummary(record.runId, record);
   return record;
 }
 
@@ -91,30 +137,26 @@ function listRunFiles() {
 
 function listRunsSummary() {
   return listRunFiles().map(runId => {
+    // A sidecar is authoritative only while it is at least as new as the record it describes. Comparing
+    // mtimes rather than trusting its existence is what makes this safe against a record written by an
+    // older build, a half-finished write, or a file edited out of band: any of those just costs one full
+    // parse and heals the sidecar.
+    try {
+      const rp = runFilePath(runId), sp = sumFilePath(runId);
+      if (fs.statSync(sp).mtimeMs >= fs.statSync(rp).mtimeMs) return JSON.parse(fs.readFileSync(sp, 'utf8'));
+    } catch (_) { /* missing / unreadable / stale -> fall through and rebuild it */ }
     const r = readRun(runId);
     if (!r) return { runId };
-    return {
-      runId,
-      symbol: r.config?.symbol,
-      expiration: r.config?.expiration,
-      tradeDate: r.tradeDate,
-      variant: r.config?.variant || null,
-      variantLabel: r.config?.variantLabel || null,
-      // The width is what lets a legacy name (`v6`, `v6-20-10k`) be resolved onto the current roster —
-      // it comes from the run's own config, so the mapping is read from the record, never assumed.
-      spreadWidth: r.config?.spreadWidth ?? null,
-      coverSelector: r.config?.coverSelector || null,
-      direction: r.state?.direction,
-      positionCount: r.state?.positions?.length || 0,
-      realizedPnl: r.state?.realizedPnl || 0,
-      eventCount: r.events?.length || 0,
-      updatedAt: r.updatedAt
-    };
+    const sum = summarize(runId, r);
+    ensureDir();
+    writeSummary(runId, r);   // BACKFILL, so each legacy record is parsed in full at most once
+    return sum;
   });
 }
 
 module.exports = {
   RUNS_DIR,
+  summarize,
   makeRunId,
   runFilePath,
   readRun,
