@@ -1576,6 +1576,22 @@ function start(deps) {
   // place anything, because the failure this catches is invisible at runtime: an unforwarded flag makes the
   // feature a no-op that still reports success. Three shipped that way before this existed.
   assertDeps(RUNS);
+  // REPAIR THE STORE BEFORE TRADING. A runaway loop once grew a single record to 32,411 positions (~62 MB),
+  // and every read of the store then paid for it. The deploy hook cannot fix that: it runs as a user that
+  // may create files in the 1777 store directory but cannot overwrite a record THIS PROCESS owns, which
+  // is exactly how it failed EACCES on 2026-09-17. The app has the right identity by construction, so the
+  // repair belongs here. Costs one stat per file when the store is healthy, which is the normal case.
+  try {
+    const { sweepStore } = require('./tools/prune-runaway-hedges');
+    const r = sweepStore({ apply: true, log: (m) => console.log(`[candle-spread] ${m}`) });
+    if (r.rewritten || r.reclaimed) {
+      console.log(`[candle-spread] store repaired: ${r.rewritten} record(s) rewritten, `
+        + `${Math.round((r.freed + r.reclaimed) / 1e5) / 10} MB reclaimed`);
+    }
+  } catch (e) {
+    // Never block trading on housekeeping.
+    console.error('[candle-spread] store sweep failed (continuing):', e && e.message);
+  }
   started = true;
   scheduleNext();
   // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).

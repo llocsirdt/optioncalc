@@ -130,8 +130,12 @@ function appendEvent(record, event) {
 // For the read endpoints.
 function listRunFiles() {
   ensureDir();
+  // `_`-prefixed names are INTERNAL (the prune's status file, and anything added later). Without this
+  // the prune's own _prune-last.json listed as a run on 2026-09-17 — a phantom entry with null variant
+  // and zero positions, served to the compare page as if it were a session. Same convention as the
+  // _summaries/ directory, which is excluded already by virtue of not being a file.
   return fs.readdirSync(RUNS_DIR)
-    .filter(f => f.endsWith('.json'))
+    .filter(f => f.endsWith('.json') && !f.startsWith('_'))
     .map(f => f.replace(/\.json$/, ''));
 }
 
