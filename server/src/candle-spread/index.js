@@ -646,7 +646,32 @@ function applyExperiments(v, { capPreset = true } = {}) {
 //
 // The minLock control cells stay control here too. They are the clean baseline for the ladder/minLock
 // result and stacking a second live experiment on them would cost us that.
-const RATCHET_LEVELS = [null, 0.25, 0.50];
+//
+// ═══ MEASURED AND REJECTED, 765 days, 2026-09-16 ═══════════════════════════════════════════════════
+// The grid is OFF by default. It cost money and bought nothing:
+//   0.25 arm (15 variants): total $24,744,752 -> $22,987,882   (-$1,756,870, -$117,125/variant)
+//   0.50 arm (16 variants): total $32,140,046 -> $30,413,140   (-$1,726,906, -$107,932/variant)
+//   control (19 variants):  byte-identical, as were all 30 `-unc` twins — a clean experiment
+// **31 of 31 ratcheted variants got WORSE. Not one improved.**
+//
+// And it failed on the metric it targets, not just on P&L. The worst floor HELD did not move by one
+// dollar (-$7,394 -> -$7,394 at 0.25; -$7,796 -> -$7,796 at 0.50), nor did the worst single day. Max
+// drawdown improved 1.4%, which is noise. The mechanism worked exactly as designed — opens/day 21.2 ->
+// 19.9, win rate 63.5% -> 64.3% — it just bought the wrong thing.
+//
+// WHY, and it is the useful part: the ratchet only engages once a peak clears minPeak, so it is active
+// precisely on the days that were ALREADY GOING WELL and dormant on the days that go badly — which are
+// the days that set the worst floor. It is a profit-taker wearing a risk control's clothes, and the
+// profit it banks is worth less than the continuation it forgoes. The 2026-09-16 live observation (82%
+// of peak floor surrendered) was real but measured the FLOOR, which is a worst case, not the P&L: giving
+// back floor buys variance, and over 765 days that variance pays for itself.
+//
+// STILL UNTESTED and closer to what the live day actually showed: the give-back was concentrated after
+// 14:00, while this engages at any hour. A TIME-CONDITIONED ratchet (protect the floor only in the last
+// hour) would leave the profitable mid-day continuation alone. Also untested: the backtest's dormant
+// `openCutoffMin` / `openFloorGate`. Keep the flags — the machinery is sound and parity-checked, the
+// POLICY is what failed. Arm a variant with CANDLE_SPREAD_RATCHET=v6-40:0.25 to re-test.
+const RATCHET_LEVELS = [null, null, null];
 const FLOOR_RATCHET_FLEET = (() => {
   const m = new Map();
   for (const f of MINLOCK_FAMS) {

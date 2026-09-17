@@ -100,32 +100,30 @@ const coveredPair = (lo, hi, debit, coverDebit, qty) => ({
   ok(-proj(cheap / 100 * 2) < 6000, 'the refused open is still far inside a $6,000 lossMax');
 }
 
-// ── THE A/B GRID ────────────────────────────────────────────────────────────────────────────────────
+// ── THE GRID, MEASURED AND REJECTED ─────────────────────────────────────────────────────────────────
+// 765 days, 2026-09-16: 31 of 31 ratcheted variants got WORSE (-$1.76M at 0.25, -$1.73M at 0.50) and the
+// worst floor HELD did not move a dollar — it engages only once a peak exists, so it is active on the
+// good days and dormant on the days that set the worst floor. The grid is therefore OFF by default and
+// the flags stay for targeted re-tests. These pin BOTH halves: nothing armed by accident, and the env
+// override still works, because a rejected feature that quietly re-arms itself is the worse failure.
 {
-  const runs = require('../../src/candle-spread/index').buildRuns();
-  const on = runs.filter(r => r.floorRatchet === true);
-  const capped = runs.filter(r => !/-unc$/.test(r.variant));
-  ok(on.length > 0, 'the grid actually arms some variants');
-  ok(on.every(r => r.floorGiveBackFrac === 0.25 || r.floorGiveBackFrac === 0.5), 'only the two designed levels are used');
-  ok(on.every(r => r.floorRatchetMinPeak === Math.max(1000, r.spreadWidth * 100)), 'minPeak scales with spread width');
-  // The two exclusions, both for attribution rather than mechanics.
-  ok(on.filter(r => /-unc$/.test(r.variant)).length === 0, 'no `-unc` twin carries the ratchet');
-  const armed = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
-  ok(!runs.find(r => r.variant === armed).floorRatchet, `the armed variant (${armed}) stays single-factor`);
-  // A `-cATM` comparator must carry the SAME arm as its base or the geometry comparison measures the
-  // ratchet too. cellOf() strips the suffix, so this is really a test that the grid keys on the cell.
-  for (const r of runs.filter(v => /-cATM$/.test(v.variant))) {
-    const base = runs.find(v => v.variant === r.variant.replace(/-cATM$/, ''));
-    if (!base) continue;
-    ok((base.floorGiveBackFrac || null) === (r.floorGiveBackFrac || null),
-      `${r.variant} carries the same arm as ${base.variant}`);
-  }
-  // Every arm needs a control at its own width, or the width effect and the ratchet effect are confounded.
-  for (const w of [10, 20, 40]) {
-    const atW = capped.filter(r => r.spreadWidth === w);
-    ok(atW.some(r => r.floorRatchet), `width ${w} has ratcheted variants`);
-    ok(atW.some(r => !r.floorRatchet), `width ${w} keeps controls`);
-  }
+  const idx = require('../../src/candle-spread/index');
+  const runs = idx.buildRuns();
+  ok(runs.filter(r => r.floorRatchet === true).length === 0, 'the fleet grid arms NOTHING by default');
+  ok(runs.every(r => r.floorGiveBackFrac == null), 'and leaves no give-back fraction set');
+}
+// The override is the whole point of keeping the feature, so prove it still reaches a variant — in a
+// child process, since the roster is built at module load and the env must be set before that.
+{
+  const { execFileSync } = require('child_process');
+  const out = execFileSync(process.execPath, ['-e',
+    "const r=require('./server/src/candle-spread/index.js').buildRuns().find(x=>x.variant==='v6-40');"
+    + "console.log(JSON.stringify({on:r.floorRatchet,frac:r.floorGiveBackFrac,min:r.floorRatchetMinPeak}));"],
+    { cwd: require('path').join(__dirname, '..', '..', '..'),
+      env: { ...process.env, CANDLE_SPREAD_RATCHET: 'v6-40:0.25' }, encoding: 'utf8' });
+  const got = JSON.parse(out.trim().split('\n').pop());
+  ok(got.on === true && got.frac === 0.25, 'CANDLE_SPREAD_RATCHET still arms a named variant');
+  ok(got.min === 4000, 'and minPeak still scales with width ($40 -> $4,000)');
 }
 
 console.log(`${pass} passed, ${fail} failed`);
