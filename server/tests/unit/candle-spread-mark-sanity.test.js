@@ -89,5 +89,40 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     'an unquoted opposing side abstains instead of refusing');
 }
 
+// ── THE CREDIT TWIN, and the $995 order ─────────────────────────────────────────────────────────────
+// At 14:00 on 2026-09-16, v0-10 sent NET_CREDIT $995 on a $10-wide spread while its OWN recorded mark for
+// the same strikes was 3. The put legs were broken, `credit` computed to ~10, and
+// Math.min(W - tick, asked) pinned it to exactly the ceiling -- the mirror image of the $5 covers, a price
+// that cannot be right forced into range instead of refused.
+//
+// Neither other gate reaches it: markFill gates FILLS not placements, and 9.95 on a 10-wide credit spread
+// is structurally legal. Only the twin identity convicts it -- the credit twin is the SAME position as the
+// debit vertical, so parity fixes its price at W - debitMark exactly.
+{
+  const trader = require('../../src/candle-spread/trader');
+  const cfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1, strikeIncrement: 10 };
+  // A bull credit twin sells the put spread: short P(upper), long P(lower).
+  const q = (mid, type, k) => ({ mid, bid: Math.max(0, mid - 1), ask: mid + 1, symbol: `NDX_${type}${k}` });
+  const chain = (hi, lo) => (type, k) => (type === 'P' ? q(k === 29130 ? hi : lo, type, k) : q(5, type, k));
+
+  // BROKEN, exactly as it happened: the put legs net to ~10 of credit on a 10-wide spread.
+  const bad = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(80, 70), 3);
+  ok(bad.error, `the $995 order is now refused (${bad.error || 'NOT REFUSED'})`);
+  ok(!bad.payload, 'and no payload is built for it');
+
+  // HEALTHY: debit mark 3 on a 10-wide implies the twin receives 7. A chain that agrees must go through.
+  const good = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(10, 3), 3);
+  ok(!good.error, `a twin that agrees with parity is sent (${good.error || 'ok'})`);
+  ok(good.limit === 7, `and is priced at W - debitMark = 7 (got ${good.limit})`);
+
+  // The check must ABSTAIN when there is no debit mark to compare against, rather than block every twin.
+  const noMark = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(10, 3), null);
+  ok(!noMark.error, 'with no debit mark the parity check abstains');
+
+  // And the ceiling is a REFUSAL now, not a clamp -- that is what hid the bug.
+  const overWidth = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(200, 180), null);
+  ok(overWidth.error && /outside/.test(overWidth.error), `a credit above the width is refused, not clamped (${overWidth.error})`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

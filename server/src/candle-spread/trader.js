@@ -328,7 +328,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
 // Build the P&L-equivalent CREDIT open order (parity twin of the debit vertical at the same strikes):
 // bull → sell the bull put spread, bear → sell the bear call spread. NET_CREDIT priced at the mid credit
 // (short leg richer than long). Used only for capital recapture; returns { legs, limit, credit, payload }.
-function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
+function buildCreditOpenOrder(side, lower, upper, cfg, getLeg, debitMark) {
   const legs = CL.openLegsFor(side, lower, upper, 'credit');
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
@@ -339,7 +339,31 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg) {
   // twins economically different orders, which breaks the parity the recapture alternation depends on —
   // it is exactly what the capital-recapture and leg-uniqueness tests caught.
   const asked = round2(credit - openSlip(cfg));
-  const limit = Math.max(cfg.tickIncrement, Math.min(round2(cfg.spreadWidth - cfg.tickIncrement), asked));
+  // PARITY CHECK ON THE TWIN, and the reason this exists. The credit twin is supposed to be the SAME
+  // position as the debit vertical at these strikes, so by put-call parity it must receive exactly
+  // W - debitMark. On 2026-09-16 at 14:00 the put legs came back broken and `credit` computed to 9.95 on
+  // a 10-wide spread while the engine's own debit mark for the same strikes was 3 — it should have asked
+  // 7. The clamp below then hid it: Math.min(W - tick, asked) pinned the nonsense to exactly the ceiling
+  // and sent NET_CREDIT $995. Same failure as the $5 covers, in the opposite direction — a price that
+  // cannot be right, forced into range instead of refused.
+  //
+  // Nothing else could have caught this. markFill gates FILLS, not placements, and structurally a 9.95
+  // credit on a 10-wide spread is legal (|mark| <= W, credit <= 0), so mark sanity passes it too. Only the
+  // twin identity is exact enough to convict it.
+  const W = cfg.spreadWidth;
+  if (debitMark != null && Number.isFinite(debitMark)) {
+    const fair = round2(W - debitMark);
+    const tol = Math.max(4 * cfg.tickIncrement, 0.1 * W);   // friction + a tick or two, not a judgement call
+    if (Math.abs(credit - fair) > tol) {
+      return { error: `credit twin ${credit} disagrees with parity (debit mark ${debitMark} on a ${W} spread implies ${fair})` };
+    }
+  }
+  // NO CEILING CLAMP. A credit above W - tick is not a rich price, it is a broken quote: the twin can
+  // never receive more than the width. Refuse it rather than pinning it to the ceiling.
+  if (!(asked > 0) || asked > round2(W - cfg.tickIncrement)) {
+    return { error: `credit ${asked} outside [0, ${round2(W - cfg.tickIncrement)}] on a ${W} spread — bad quotes` };
+  }
+  const limit = L.roundToTick(asked, cfg.tickIncrement);
   return { legs, limit, credit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'CREDIT') };
 }
 
@@ -369,7 +393,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   const style = legStyle || ((deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
   let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
   if (style === 'credit') {
-    const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg);
+    const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark);
     if (!c.error) { payload = c.payload; sentNet = 'CREDIT'; sentLegs = c.legs; sentLimit = c.limit; }
     else if (legStyle) { decisions.push({ action: 'open-skip-leg', side: openSide, error: 'twin credit unquotable' }); return; }  // forced twin: can't fall back to a conflicting debit
     else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // recapture-only: fall back to debit
@@ -2004,6 +2028,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 module.exports = {
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
+  buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
   // a caller that takes only the first will reprice forever and never book anything.
