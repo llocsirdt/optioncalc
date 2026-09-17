@@ -1,0 +1,46 @@
+FLOOR-PROTECTION SWEEP — 922 days, 10 variants, 14 configs
+
+  control                      $23,331,377                  worstSum    -$64,444   negDays  2791
+  A ratchet>14:00 give0.25     $22,420,216      -$911,161   worstSum    -$64,444   negDays  2728
+  A ratchet>14:00 give0.5      $22,738,916      -$592,461   worstSum    -$64,444   negDays  2733
+  A ratchet>14:30 give0.25     $22,798,522      -$532,855   worstSum    -$64,444   negDays  2745
+  A ratchet>14:30 give0.5      $23,028,825      -$302,552   worstSum    -$64,444   negDays  2747
+  A ratchet>15:00 give0.25     $23,113,951      -$217,426   worstSum    -$64,444   negDays  2770
+  A ratchet>15:00 give0.5      $23,197,438      -$133,939   worstSum    -$64,444   negDays  2769
+  A ratchet>15:30 give0.25     $23,287,752       -$43,625   worstSum    -$64,444   negDays  2778
+  A ratchet>15:30 give0.5      $23,315,210       -$16,167   worstSum    -$64,444   negDays  2779
+  B lock&stop 0.5x width       $18,150,937    -$5,180,440   worstSum    -$64,444   negDays  2471
+  B lock&stop 1x width         $20,116,210    -$3,215,167   worstSum    -$64,444   negDays  2676
+  B lock&stop 1.5x width       $21,385,975    -$1,945,403   worstSum    -$64,444   negDays  2744
+  B lock&stop 2x width         $22,327,559    -$1,003,818   worstSum    -$64,444   negDays  2770
+  B lock&stop 3x width         $23,050,823      -$280,554   worstSum    -$64,444   negDays  2787
+
+RANKED (best first):
+  A ratchet>15:30 give0.5         -$16,167
+  A ratchet>15:30 give0.25        -$43,625
+  A ratchet>15:00 give0.5        -$133,939
+  A ratchet>15:00 give0.25       -$217,426
+  B lock&stop 3x width           -$280,554
+  A ratchet>14:30 give0.5        -$302,552
+  A ratchet>14:30 give0.25       -$532,855
+  A ratchet>14:00 give0.5        -$592,461
+  A ratchet>14:00 give0.25       -$911,161
+  B lock&stop 2x width         -$1,003,818
+  B lock&stop 1.5x width       -$1,945,403
+  B lock&stop 1x width         -$3,215,167
+  B lock&stop 0.5x width       -$5,180,440
+
+BEST: A ratchet>15:30 give0.5  -$16,167
+NO ARM BEATS THE CONTROL — both ideas fail on this panel.
+
+PER-VARIANT for the best arm:
+  v1-10            $1,075,490 ->   $1,068,911       -$6,578
+  v7-10            $1,744,116 ->   $1,726,318      -$17,798
+  v5-20            $2,040,854 ->   $2,052,037       $11,183
+  v6-20            $1,523,336 ->   $1,517,079       -$6,257
+  v9-20            $3,861,747 ->   $3,812,257      -$49,489
+  v0-40            $1,586,217 ->   $1,579,486       -$6,731
+  v6-40            $2,577,748 ->   $2,568,081       -$9,667
+  v9-40            $3,183,632 ->   $3,219,353       $35,721
+  v6-20-cATM       $2,035,519 ->   $2,020,628      -$14,891
+  v9-40-cATM       $3,702,718 ->   $3,751,059       $48,341
