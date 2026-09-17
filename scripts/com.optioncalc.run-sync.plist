@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.optioncalc.run-sync</string>
+
+    <!-- Mirror prod's candle-spread runs into candle-spread-archive/.
+
+         The run store lives on the EB instance's own disk, OUTSIDE /var/app so it survives deploys — but
+         NOT instance replacement, which hands the box a fresh volume. That happened at 00:12Z on
+         2026-09-16 and took 09-09 through 09-14 with it, because the sync script existed and had never
+         been scheduled: it last ran around 09-08. Until run state moves to S3, this local archive is the
+         only durable copy. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/tdriscoll/Documents/surf/optioncalc/scripts/candle-spread-sync.sh</string>
+    </array>
+
+    <!-- Weekdays at 18:00 local (ET) — after EOD settlement has written the closing books, and half an
+         hour after the 1m capture so the two are not competing. launchd runs a missed job on next wake. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/com.optioncalc.run-sync.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.optioncalc.run-sync.err</string>
+</dict>
+</plist>
