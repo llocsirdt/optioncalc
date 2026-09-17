@@ -607,8 +607,80 @@ function applyExperiments(v, { capPreset = true } = {}) {
     v.flyConvert = true; v.flyMinRatio = 3; v.flyBandSig = 1.5;
     v.flyBudget = 1500; v.flyMaxPerDay = 4; v.flyCondors = true; v.flyBeforeMin = 15 * 60;
   }
+  // FLOOR RATCHET last — it reads spreadWidth, which every builder has set by the time we get here.
+  // `-unc` twins never take it (see the note on FLOOR_RATCHET_FLEET); the explicit A/B map overrides
+  // the grid so a single arm can be re-pointed from the environment without a package + deploy.
+  if (!/-unc$/.test(v.variant)) {
+    const frac = FLOOR_RATCHET_AB.has(v.variant) ? FLOOR_RATCHET_AB.get(v.variant)
+      : FLOOR_RATCHET_FLEET.get(cell);
+    if (frac != null) {
+      v.floorRatchet = true;
+      v.floorGiveBackFrac = frac;
+      v.floorRatchetMinPeak = ratchetMinPeakFor(v.spreadWidth);
+    }
+  }
   return v;
 }
+
+
+// ── FLOOR RATCHET A/B (2026-09-16) ──────────────────────────────────────────────────────────────────
+// THE FINDING that motivated it: on 2026-09-16 every one of 79 variants gave back book floor between its
+// intraday peak and 15:00. Fleet peak $278,125 -> $48,995 at 15:00 — 82% of a GUARANTEED profit handed
+// back, with 75 of 79 peaking at or after 14:00. This is not the day-loss governor's problem: lossMax
+// bounds how bad the book can get in absolute terms and says nothing about surrendering a won floor, so
+// a book can sit far inside the governor and still give everything back.
+//
+// THE ARMS. Three-way by CELL so every family and width carries a control:
+//   off   — no ratchet (control)
+//   0.25  — may give back a quarter of the peak floor
+//   0.50  — may give back half
+// `(family + width) % 3` spreads the arms evenly instead of clumping them by width, which matters because
+// the give-back scaled hard with width (the $40s dominated the worst-12 list).
+//
+// CELL, not variant, so a `-cATM` comparator always carries the same arm as its base (cellOf strips the
+// suffix) — otherwise the geometry comparison would be measuring the ratchet too.
+//
+// The `-unc` twins are EXCLUDED by name. They exist to show what the caps cost, and a retreat-from-peak
+// budget is a cap; putting one on them would break the only variants that answer "what would no caps do".
+// (Moot on today's data anyway — the worst `-unc` runs peaked at $0, so the ratchet never engages.)
+//
+// The minLock control cells stay control here too. They are the clean baseline for the ladder/minLock
+// result and stacking a second live experiment on them would cost us that.
+const RATCHET_LEVELS = [null, 0.25, 0.50];
+const FLOOR_RATCHET_FLEET = (() => {
+  const m = new Map();
+  for (const f of MINLOCK_FAMS) {
+    for (const w of MINLOCK_WIDTHS) {
+      const cell = `${f}-${w}`;
+      if (MINLOCK_CONTROL_CELLS.has(cell)) continue;               // keep the minLock controls clean
+      // THE ARMED CELL STAYS SINGLE-FACTOR. v7-10 is the one variant sending orders and the one with real
+      // evidence behind its config (0.10 + ladder, 89.1% cover fill over 765 days). The same reasoning that
+      // kept it pinned through the minLock reshuffle applies here: the arm carrying order flow does not also
+      // carry the newest experiment. An explicit CANDLE_SPREAD_RATCHET entry can still override this.
+      if (cell === cellOf(ARMED_VARIANT)) continue;
+      const lvl = RATCHET_LEVELS[(MINLOCK_FAMS.indexOf(f) + MINLOCK_WIDTHS.indexOf(w)) % 3];
+      if (lvl != null) m.set(cell, lvl);
+    }
+  }
+  return m;
+})();
+// Env override, same spelling as the other selectors: `variant:frac`, e.g. `v6-40:0.25`. Named per VARIANT
+// (not cell) so a one-off arm can be pinned without moving its twin; an entry here wins over the grid.
+const FLOOR_RATCHET_AB = (() => {
+  const raw = process.env.CANDLE_SPREAD_RATCHET != null ? process.env.CANDLE_SPREAD_RATCHET : '';
+  const m = new Map();
+  for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const [name, spec] = part.split(':');
+    const frac = spec == null || spec === '' ? 0.25 : Number(spec);
+    if (Number.isFinite(frac) && frac > 0 && frac < 1) m.set(name.trim(), frac);
+  }
+  return m;
+})();
+// Below this much locked floor the ratchet stays out of the way: there is nothing worth protecting, and a
+// fraction-of-peak budget is zero at peak zero, which would block the first open of the day and every one
+// after it. One spread-width of floor ($10 -> $1,000, $40 -> $4,000) is the natural scale — a $2,500 peak
+// on a $40-wide book is noise, the same number on a $10-wide book is a real day's work.
+const ratchetMinPeakFor = w => Math.max(1000, w * 100);
 
 const LOSS_TARGET = 5000;
 const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
@@ -803,6 +875,7 @@ function validateSelectors(list) {
   check('CANDLE_SPREAD_CAPPRES', CAPPRES_LIVE);
   check('CANDLE_SPREAD_ORDERSLIP', ORDER_SLIP_AB.keys());
   check('CANDLE_SPREAD_FLY', FLY_LIVE);
+  check('CANDLE_SPREAD_RATCHET', FLOOR_RATCHET_AB.keys());
   // The watchlist is only a UI marker, but a typo there silently un-marks a variant you meant to watch,
   // which is the same class of quiet failure as the rest of this function.
   check('CANDLE_SPREAD_WATCHLIST', WATCHLIST);
@@ -1050,6 +1123,11 @@ function buildEngineDeps(run, live) {
       continuousCover: run.continuousCover, continuousCoverMinLockFrac: run.continuousCoverMinLockFrac,
       // DAY-LOSS GOVERNOR — bounds the BOOK FLOOR (the day's true max loss), not at-risk debit.
       lossTarget: run.lossTarget, lossMax: run.lossMax,
+      // FLOOR RATCHET — bounds the RETREAT FROM THE PEAK floor, which the governor structurally cannot
+      // see (a book can be nowhere near lossMax and still hand back everything it won). Read off `deps`,
+      // so like every other engine opt it MUST be listed here or the flag is a silent live no-op.
+      floorRatchet: run.floorRatchet, floorRatchetMinPeak: run.floorRatchetMinPeak,
+      floorGiveBackFrac: run.floorGiveBackFrac,
       // LOW-COST RISK OFFSET — the governor's only REPAIR tool (everything else it does is preventive:
       // block an open, defer a cover). Buys the far-side spread with the best floor-lift per dollar once
       // the floor is through the target. Tuning knobs fall back to the trader's defaults when unset.

@@ -62,6 +62,10 @@ function optsFor(v) {
   // enables the low-cost risk-offsetting buys. The `-unc` twins null these out → ungoverned.
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
   if (v.floorOffset) o.floorOffset = true;
+  // FLOOR RATCHET: caps the RETREAT from the day's peak floor, which the governor above cannot see
+  // (lossMax bounds the absolute floor, not the give-back). Gates OPENS only.
+  if (v.floorRatchet) o.floorRatchet = true;
+  for (const k of ['floorGiveBackFrac', 'floorRatchetMinPeak']) if (v[k] != null) o[k] = v[k];
   // CONTINUOUS COVERING: a standing resting cover on every position at its profit-locking price. Not a
   // risk cap — it applies to the `-unc` twins too, so those isolate the CAPS rather than the policy.
   if (v.continuousCover) o.continuousCover = true;

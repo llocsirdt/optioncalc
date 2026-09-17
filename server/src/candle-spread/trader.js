@@ -449,6 +449,44 @@ function bookFloorNow(st, extra) {
   return RC.bookFloor(st.positions.filter(p => p.filled !== false), extra || null, 10);
 }
 
+// FLOOR RATCHET (deps.floorRatchet) — protect a floor once we actually have one.
+//
+// Measured on 2026-09-16: EVERY ONE of 79 variants gave back floor between its intraday peak and 15:00 —
+// $278,125 of fleet peak floor down to $48,995, 82% surrendered, with 75 of 79 peaking at or after 14:00.
+// A floor is a GUARANTEE (the worst terminal P&L across every settlement price), so handing one back is
+// not variance. It is returning money already won.
+//
+// The rule cannot be "never lower the floor". EVERY debit open lowers it by its debit, because the worst
+// terminal case for a new spread is losing what we paid for it — so a literal no-lowering rule is "stop
+// trading" with extra steps, and it would also forbid the late opens that GET COVERED and lift the floor
+// (the 14:30-15:00 window was floor-accretive on 2026-09-16, which is why a blunt time stop measured
+// WORSE than a later one).
+//
+// So this is a GIVE-BACK BUDGET against a high-water mark: the floor may retreat from its peak by
+// floorGiveBackFrac of that peak and no further. Only OPENS are gated. Covers, offsets, wings and flies
+// are never gated — they raise the floor or carry their own budgets, and gating them would be backwards.
+//
+// Engages only once the peak clears floorRatchetMinPeak. Without that guard a fraction-of-peak budget is
+// zero while the peak is zero, which would block the morning's first trade and every trade after it.
+// Returns the floor level an open must not push the book below, or null when the ratchet is not engaged.
+function ratchetLimit(st, deps) {
+  if (!deps || deps.floorRatchet !== true) return null;
+  const peak = st.peakFloor;
+  if (!(peak > 0)) return null;
+  const minPeak = deps.floorRatchetMinPeak != null ? deps.floorRatchetMinPeak : 1000;
+  if (peak < minPeak) return null;
+  const frac = deps.floorGiveBackFrac != null ? deps.floorGiveBackFrac : 0.25;
+  return peak * (1 - frac);
+}
+
+// Update the high-water mark. Called at the END of a bar, after covers, offsets, wings and flies have all
+// moved the floor, so the peak reflects a floor we have actually observed rather than one mid-bar state.
+function noteFloorPeak(st, deps) {
+  if (!deps || deps.floorRatchet !== true) return;
+  const f = bookFloorNow(st, null);
+  if (Number.isFinite(f) && (st.peakFloor == null || f > st.peakFloor)) st.peakFloor = f;
+}
+
 // LOW-COST RISK OFFSET (deps.floorOffset) — the live port of the backtest's buyFloorOffsets, and the
 // governor's only tool that REPAIRS a bad floor rather than preventing a worse one. Everything else it
 // does is preventive: block an open, defer a cover. This one acts on a book that has ALREADY run through
@@ -1071,6 +1109,17 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // Evaluated on the FINAL res, after any leg-uniqueness shift, so we gate what we would actually send.
       const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
+    } else if (ratchetLimit(st, deps) != null
+        && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps)) {
+      // FLOOR RATCHET OPEN GATE — this open would surrender more of the day's locked floor than the
+      // give-back budget allows. Same evaluation point as the governor gate (the FINAL res, post-shift),
+      // for the same reason: gate what we would actually send. The two are independent — the governor
+      // bounds the ABSOLUTE loss, this one bounds the RETREAT FROM THE PEAK, and a book can be nowhere
+      // near lossMax while still giving back a won floor.
+      const lim = ratchetLimit(st, deps);
+      const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
+      decisions.push({ action: 'open-skip-ratchet', side: openSide, projectedFloor: projected,
+        peakFloor: round2(st.peakFloor), ratchetFloor: round2(lim), limit: res.limit });
     } else if (ported && !capState(st, res, openSide, cfg, deps).ok) {
       // A cap blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM winner
       // and open anyway; else skip (existing v8 behavior). capAllowsOpen logs the FINAL 'open-skip-cap'.
@@ -1132,6 +1181,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // buy OTM premium to bank a peak (late-day economics), a fly sells the body to fund its wings and
   // repairs a valley (early/mid-day economics). Both are ungated by the governor for the same reason.
   await convertFlies(st, cfg, deps, decisions, candleTime);
+
+  // FLOOR RATCHET — record the bar's high-water floor LAST, once every floor-moving action above has run.
+  // Placed here rather than at the open gate on purpose: the open on the next bar is then measured against
+  // a floor this bar actually closed at, not a mid-bar value that a later cover would have changed anyway.
+  noteFloorPeak(st, deps);
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
@@ -1911,6 +1965,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   processCandleClose,
+  ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
   // a caller that takes only the first will reprice forever and never book anything.

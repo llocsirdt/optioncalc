@@ -281,6 +281,22 @@ function runDay5m(bars, signalFn, opts = {}) {
   // PER DOLLAR (ratio-gated, so it only ever trades an outsized risk reduction for a small slice of the
   // peak). Distinct from the v11 riskHarvest overlay: that one targets the REACHABLE floor over a ±σ
   // band on a direction gate (a P&L bet); this one targets the ABSOLUTE floor to satisfy a hard cap.
+  // FLOOR RATCHET (opts.floorRatchet) — mirror of the live engine's ratchetLimit/noteFloorPeak. Bounds the
+  // RETREAT FROM THE PEAK floor, which the governor structurally cannot see: lossMax caps how bad the book
+  // gets in absolute terms and says nothing about surrendering a floor already won. Measured 2026-09-16,
+  // all 79 live variants gave back floor from their intraday peak to 15:00 (82% of $278,125 fleet peak).
+  // Only OPENS are gated; covers, offsets, wings and flies raise the floor or carry their own budgets.
+  const floorRatchet = opts.floorRatchet === true;
+  const ratchetMinPeak = opts.floorRatchetMinPeak != null ? opts.floorRatchetMinPeak : 1000;
+  const ratchetGiveBack = opts.floorGiveBackFrac != null ? opts.floorGiveBackFrac : 0.25;
+  let peakFloor = 0;          // high-water mark of the book floor, updated at the END of each bar
+  let ratchetBlocked = 0;     // opens refused by the ratchet — reported so a null result is distinguishable
+  // The level an open must not push the book below, or null when the ratchet is not engaged. Identical
+  // shape to the live ratchetLimit() so the two engines refuse the same orders.
+  const ratchetFloorLimit = () => {
+    if (!floorRatchet || !(peakFloor > 0) || peakFloor < ratchetMinPeak) return null;
+    return peakFloor * (1 - ratchetGiveBack);
+  };
   const floorOffset = opts.floorOffset === true;
   const offMinRatio = opts.floorOffsetMinRatio != null ? opts.floorOffsetMinRatio : 3;
   const offWidths = opts.floorOffsetWidths || [20, 40, 60];
@@ -1021,7 +1037,14 @@ function runDay5m(bars, signalFn, opts = {}) {
       // bookPayoff(settle) >= floor, and every open is gated here, the day's loss is bounded by lossMax.
       const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
       if (!govOk) govBlocked++;
-      if (strategyOk && ceilingOk && govOk && !geoDecline) {
+      // FLOOR RATCHET GATE — independent of the governor and evaluated on the same FINAL `o`. A book can
+      // sit far inside lossMax and still be handing back everything it won, which is exactly the case the
+      // governor cannot reach.
+      const _ratLim = ratchetFloorLimit();
+      const ratchetOk = _ratLim == null || geoDecline
+        || floorOf({ legs: o.legs, limit: o.limit, covered: false }) >= _ratLim;
+      if (!ratchetOk) ratchetBlocked++;
+      if (strategyOk && ceilingOk && govOk && ratchetOk && !geoDecline) {
         // OPEN FILL MODEL (opts.openFillModel, default 'immediate' = the historical assumption).
         // Until now an open was assumed FILLED AT THE LIMIT, always — the engine simply pushed the
         // position. That is the one order in the system whose execution was never modelled, and it is
@@ -1119,6 +1142,10 @@ function runDay5m(bars, signalFn, opts = {}) {
     // are `continue`d above under rthOnly, so only true action steps are counted.
     if (trackCap) { sumReal += depR; nSteps++; }
     _bar = i; noteLock();   // END of the bar: opens, covers and the reduction ladder have all settled
+    // FLOOR RATCHET high-water mark, taken at the same point for the same reason: every floor-moving
+    // action of this bar has settled, so the next bar's open is gated against a floor the book actually
+    // closed at. Mirrors noteFloorPeak() in the live engine.
+    if (floorRatchet) { const _f = floorNow(); if (_f > peakFloor) peakFloor = _f; }
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
@@ -1235,7 +1262,12 @@ function runDay5m(bars, signalFn, opts = {}) {
     wings: { count: wingCount, spent: Math.round(wingSpent) },
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
-    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null
+    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
+    // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
+    // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
+    // is a different finding from "the ratchet did nothing because it was off".
+    ratchet: floorRatchet ? { giveBackFrac: ratchetGiveBack, minPeak: ratchetMinPeak,
+      peakFloor: Math.round(peakFloor), blocked: ratchetBlocked } : null
   };
 }
 

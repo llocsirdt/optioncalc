@@ -98,6 +98,9 @@ function optsFor(v, day) {
   for (const k of ['riskCap', 'softCap', 'hardCap', 'capitalCeiling', 'proactiveCoverFrac', 'lossTarget', 'lossMax']) if (v[k] != null) o[k] = v[k];
   if (v.exemptTrendStack) o.exemptTrendStack = true;
   if (v.floorOffset) o.floorOffset = true;
+  // FLOOR RATCHET: caps the RETREAT from the day's peak floor, which the governor cannot see. Opens only.
+  if (v.floorRatchet) o.floorRatchet = true;
+  for (const k of ['floorGiveBackFrac', 'floorRatchetMinPeak']) if (v[k] != null) o[k] = v[k];
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
   if (v.lockCoverMode) o.lockCoverMode = v.lockCoverMode;
