@@ -54,10 +54,13 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   const legs = callDebit(29000, 29040);
   ok(!SQ.quoteUsable(legs, { mark: 10, bid: 20, ask: 5 }).ok, 'an inverted book is refused');
   ok(!SQ.quoteUsable(legs, { mark: 10, bid: null, ask: 5 }).ok, 'an incomplete quote is refused');
-  // THE ONE THAT MUST NOT REGRESS. NDX 0DTE quotes very wide and still trades near the mid. Measured on
-  // that session, healthy covers reached 12.75x their width in quoted span while the known-bad ones
-  // started at 3.51x — the distributions overlap, so no width threshold is safe. See
-  // feedback_ndx_spreads_fill_near_mid before ever adding one.
+  // THE ONE THAT MUST NOT REGRESS. NDX 0DTE quotes very wide and still trades near the mid, and quoted
+  // span tracks MONEYNESS and market-wide widening rather than whether a quote is broken. Measured on
+  // that session's healthy covers: far-OTM covers (mark < 0.10 of width) median 5.17x span, mid-moneyness
+  // ones 0.70x — so covering a deep-ITM position, where the cover sits far OTM, legitimately quotes
+  // widest. And the 463 healthy covers in the SAME 14:xx hour as all 154 failures share their span
+  // profile exactly (median 0.91x, p90 5.17x, max 12.75x). Span separates nothing here.
+  // See feedback_ndx_spreads_fill_near_mid before ever adding a width threshold.
   ok(SQ.quoteUsable(legs, { mark: 12, bid: -140, ask: 160 }).ok, 'a WIDE but ordered book is accepted');
   ok(SQ.quoteUsable(legs, { mark: 12, bid: 2, ask: 25 }).ok, 'and so is an ordinary one');
 }

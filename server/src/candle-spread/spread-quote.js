@@ -194,12 +194,27 @@ function verticalSanity(legs, mark, opts) {
  * An inverted book (ask below bid) is impossible and is refused. A WIDE book is not: NDX 0DTE spreads
  * quote very wide and still trade near the mid, so width says nothing about whether a fill is real.
  *
- * MEASURED on the 1,339 covers of 2026-09-16, which settles it. Healthy covers reach 12.75x their width
- * in quoted span (p50 0.72x, p90 2.75x, p99 8.29x); the KNOWN-BAD ones start at 3.51x. The two
- * distributions overlap almost completely, so every threshold is a bad trade — at 1x it refuses 354
- * healthy covers to catch 154, at 4x it still refuses 90 healthy ones and now misses 24 bad ones.
- * Structural sanity catches 150 of the 154 with ZERO false positives out of 1,185, so the width test adds
- * nothing but damage. It is deliberately absent; do not reintroduce it.
+ * WHY NO WIDTH TEST, measured on the 1,339 covers of 2026-09-16. Quoted span is not a property of
+ * whether a quote is broken -- it is driven by MONEYNESS and by market-wide widening, so it cannot
+ * separate the two:
+ *
+ *   By moneyness (healthy covers only, span as a multiple of the spread's width):
+ *     mark/W < 0.10   n=48    median 5.17x      far-OTM covers quote widest, and legitimately so
+ *     mark/W 0.25-0.50 n=939  median 0.70x
+ *     mark/W 0.50-0.75 n=34   median 0.39x
+ *   Covering a deep-ITM position puts the cover far OTM, where a wide relative quote is normal.
+ *
+ *   By hour (healthy covers only):
+ *     11:xx  median 0.37x  max 1.37x
+ *     14:xx  median 0.91x  p90 5.17x  max 12.75x     <- the whole book widened
+ *     15:xx  median 0.71x  max 1.78x
+ *
+ * And the one that settles it: the 463 HEALTHY covers in the 14:xx hour have the same span profile as
+ * every one of the 154 broken ones (median 0.91x, p90 5.17x, max 12.75x). Inside the window where the
+ * failures happened, span distinguishes nothing at all.
+ *
+ * Structural sanity catches 150 of the 154 with ZERO false positives out of 1,185, needs no threshold,
+ * and is immune to both confounds. A width test would refuse hundreds of real fills to add nothing.
  * See feedback_ndx_spreads_fill_near_mid.
  */
 function quoteUsable(legs, q) {
