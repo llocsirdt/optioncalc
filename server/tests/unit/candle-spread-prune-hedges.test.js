@@ -63,5 +63,51 @@ const spread = (id, lo, hi) => ({ id, side: 'bull', filled: true, limit: 9,
   ok(!isHedge({ side: 'bull' }) && !isHedge(null), 'a real position is not a hedge, and null is safe');
 }
 
+// ── THE FAILED-DEPLOY SHAPE (2026-09-17) ────────────────────────────────────────────────────────────
+// The hook copied a 65 MB backup, failed to rewrite the record, and `|| true` swallowed the error. The
+// only symptom was the store getting BIGGER. Two behaviours pin that: a backup left beside an UNCHANGED
+// record is reclaimed, and the sweep runs BEFORE the prune so a backup this run creates is not judged
+// against a record this run already shrank.
+{
+  const os = require('os'), path = require('path'), fs = require('fs');
+  const { execFileSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-prune-'));
+  const tool = path.join(__dirname, '..', '..', 'src', 'candle-spread', 'tools', 'prune-runaway-hedges.js');
+  const env = { ...process.env, CANDLE_SPREAD_RUNS_DIR: dir };
+  // A runaway record plus the orphaned backup a half-finished prune leaves behind.
+  execFileSync(process.execPath, ['-e', `
+    const store = require(${JSON.stringify(path.join(__dirname, '..', '..', 'src', 'candle-spread', 'store.js'))});
+    const fs = require('fs');
+    const rec = store.initRun({ symbol:'NDX', expiration:'2026-09-16', variant:'vX', spreadWidth:40 }, '2026-09-16');
+    const dup = { side:'hedge', hedge:true, filled:true, limit:1.65,
+      legs:[{side:'long',type:'C',strike:28930},{side:'short',type:'C',strike:28950}] };
+    rec.state.positions = [{ id:'r1', side:'bull', filled:true, limit:9,
+      legs:[{side:'long',type:'C',strike:29000},{side:'short',type:'C',strike:29040}] },
+      ...Array.from({length:40000},()=>JSON.parse(JSON.stringify(dup)))];
+    store.writeRun(rec);
+    fs.copyFileSync(store.runFilePath(rec.runId), store.runFilePath(rec.runId)+'.2026-09-17T03-33-00-000Z.bak');
+  `], { env, encoding: 'utf8' });
+
+  const bytes = () => fs.readdirSync(dir).filter(f => fs.statSync(path.join(dir, f)).isFile())
+    .reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0);
+  const before = bytes();
+  const out = execFileSync(process.execPath, [tool, '--all', '--apply'], { env, encoding: 'utf8' });
+  const after = bytes();
+
+  ok(/never rewritten/.test(out), 'the orphaned backup is identified and removed');
+  ok(after < before, `the store SHRINKS (${(before / 1e6).toFixed(1)}MB -> ${(after / 1e6).toFixed(1)}MB)`);
+  ok(!fs.readdirSync(dir).some(f => /2026-09-17T03-33-00/.test(f)), 'the orphan is gone');
+  // The status file is the whole point: `|| true` means stdout goes nowhere on a real deploy.
+  const st = JSON.parse(fs.readFileSync(path.join(dir, '_prune-last.json'), 'utf8'));
+  ok(st.rewritten === 1, `status records the rewrite (${st.rewritten})`);
+  ok(st.reclaimedMB > 0, `status records the reclaim (${st.reclaimedMB}MB)`);
+  ok(Array.isArray(st.problems) && st.problems.length === 0, 'and reports no problems on a clean run');
+  // Idempotent: a second pass must not touch the fresh backup or the pruned record.
+  const out2 = execFileSync(process.execPath, [tool, '--all', '--apply'], { env, encoding: 'utf8' });
+  ok(/store is healthy/.test(out2), 'a second run finds nothing to do');
+  ok(bytes() === after, 'and changes nothing');
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

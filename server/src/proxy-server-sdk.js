@@ -225,6 +225,14 @@ function diskUsage() {
     bootedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     root: fsUsage('/'), tmp: fsUsage('/tmp'),
     candleRuns: dirStats(CANDLE_RUNS_DIR),         // the ACTIVE store dir (what the server reads/writes)
+    // LAST PRUNE RESULT. The deploy hook runs with `|| true` so a cleanup can never fail a deploy — which
+    // also means its stdout goes nowhere. On 2026-09-17 the prune copied a 65 MB backup, failed to rewrite
+    // the record, and the only symptom was the store getting BIGGER. Reading its own status file here
+    // makes "did it run, and did it work" answerable from the health endpoint.
+    candlePruneLast: (() => {
+      try { return JSON.parse(fs.readFileSync(CANDLE_RUNS_DIR + '/_prune-last.json', 'utf8')); }
+      catch (e) { return null; }                    // never run on this host, or not yet since the file was added
+    })(),
     candleRunsProbe: RUN_DIR_CANDIDATES.map(dirStats)   // all candidate locations — catch a location mismatch
   };
   diskCacheAt = now;

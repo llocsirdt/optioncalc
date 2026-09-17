@@ -76,6 +76,9 @@ const MIN_SIZE = numArg('--min-size', 5e6);
 // Refuse to PARSE anything above this. JSON.parse of a huge record allocates several times the file size,
 // and the deploy hook shares a 1.9 GB box with the running app.
 const MAX_SIZE = numArg('--max-size', 400e6);
+// How long a backup from a SUCCESSFUL prune is kept. It holds thousands of duplicate copies of one hedge,
+// so it is worth space only as a short rollback window; the local archive is the real durable copy.
+const BAK_DAYS = numArg('--bak-days', 7);
 const runId = args.find((a) => !a.startsWith('--') && !/^\d+(\.\d+)?(e\d+)?$/i.test(a));
 const mb = (n) => `${(n / 1e6).toFixed(1)} MB`;
 
@@ -88,27 +91,78 @@ if (ALL) {
     return { id, size };
   }).filter((r) => r.size >= MIN_SIZE).sort((a, b) => b.size - a.size);
   if (!rows.length) { console.log(`prune: nothing over ${mb(MIN_SIZE)} — store is healthy`); process.exit(0); }
-  let touched = 0, freed = 0;
+  let touched = 0, freed = 0, reclaimed = 0;
+  const problems = [];
+  // ORPHANED BACKUPS from a previous failed run. A .bak is only worth keeping while it differs from the
+  // record beside it; one left by a prune that never completed its rewrite is a byte-for-byte duplicate,
+  // so it is pure waste. Only removed when the live record is still LARGER than the sane threshold —
+  // i.e. the prune it belonged to demonstrably did not take effect.
+  try {
+    for (const f of fs.readdirSync(store.RUNS_DIR)) {
+      const m = /^(.*\.json)\.[0-9TZ-]+\.bak$/.exec(f);
+      if (!m) continue;
+      const live = path.join(store.RUNS_DIR, m[1]);
+      const bakPath = path.join(store.RUNS_DIR, f);
+      let liveSize = 0;
+      try { liveSize = fs.statSync(live).size; } catch (_) { continue; }   // no record beside it — leave it alone
+      // Two reasons to remove one: the record beside it was never rewritten (so the backup is a
+      // byte-for-byte duplicate of it — the 2026-09-17 failure), or it has simply aged out. Run BEFORE
+      // the prune below, or a backup this run is about to create would be judged against a record this
+      // run already shrank.
+      const ageDays = (Date.now() - fs.statSync(bakPath).mtimeMs) / 864e5;
+      const orphaned = liveSize >= MIN_SIZE;          // record still runaway => that prune never took
+      if (!orphaned && ageDays < BAK_DAYS) continue;  // a real backup, still inside its retention
+      const bs = fs.statSync(bakPath).size;
+      fs.unlinkSync(bakPath);
+      reclaimed += bs;
+      console.log(`prune: removed backup ${f} (${mb(bs)}) — ${orphaned ? 'its record was never rewritten' : `older than ${BAK_DAYS} days`}`);
+    }
+  } catch (e) { console.log(`prune: backup sweep failed — ${e.message}`); }
+
   for (const r of rows) {
-    if (r.size > MAX_SIZE) { console.log(`prune: SKIP ${r.id} — ${mb(r.size)} exceeds the ${mb(MAX_SIZE)} parse cap`); continue; }
+    if (r.size > MAX_SIZE) { console.log(`prune: SKIP ${r.id} — ${mb(r.size)} exceeds the ${mb(MAX_SIZE)} parse cap`); problems.push(`${r.id}: over parse cap`); continue; }
+    // WRITABILITY FIRST. The 2026-09-17 deploy copied a 65 MB backup and only THEN failed to rewrite the
+    // record, leaving an orphan that made the store bigger — the opposite of the job. The store dir is
+    // 1777 (sticky, world-writable), so CREATING a .bak always succeeds even when truncating a record
+    // owned by another user does not. Check the thing that can actually fail before doing the thing that
+    // leaves a mess.
+    try { fs.accessSync(store.runFilePath(r.id), fs.constants.W_OK); }
+    catch (e) { console.log(`prune: SKIP ${r.id} — not writable by ${process.getuid ? 'uid ' + process.getuid() : 'this user'} (${e.code})`); problems.push(`${r.id}: not writable (${e.code})`); continue; }
     try {
       const rec = store.readRun(r.id);
-      if (!rec || !rec.state || !Array.isArray(rec.state.positions)) { console.log(`prune: SKIP ${r.id} — unreadable`); continue; }
+      if (!rec || !rec.state || !Array.isArray(rec.state.positions)) { console.log(`prune: SKIP ${r.id} — unreadable`); problems.push(`${r.id}: unreadable`); continue; }
       const kept = collapse(rec.state.positions);
       const dropped = rec.state.positions.length - kept.length;
       if (!dropped) { console.log(`prune: ${r.id} — ${mb(r.size)}, no duplicate runs, left alone`); continue; }
       if (!APPLY) { console.log(`prune: ${r.id} — WOULD remove ${dropped.toLocaleString()} duplicate hedges (dry run)`); continue; }
-      fs.copyFileSync(store.runFilePath(r.id), `${store.runFilePath(r.id)}.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`);
+      const bak = `${store.runFilePath(r.id)}.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+      fs.copyFileSync(store.runFilePath(r.id), bak);
       rec.state.positions = kept;
-      store.writeRun(rec);
+      try { store.writeRun(rec); }
+      catch (e) {
+        // The rewrite is the only step that can half-succeed. If it fails, take the backup back out
+        // rather than leaving a duplicate of an unchanged record on the disk we are trying to free.
+        try { fs.unlinkSync(bak); } catch (_) { /* nothing better to do */ }
+        throw e;
+      }
       const after = fs.statSync(store.runFilePath(r.id)).size;
       touched++; freed += r.size - after;
       console.log(`prune: ${r.id} — removed ${dropped.toLocaleString()} duplicate hedges, ${mb(r.size)} -> ${mb(after)}`);
     } catch (e) {
-      // NEVER fail the deploy over a cleanup.
       console.log(`prune: SKIP ${r.id} — ${e.message}`);
+      problems.push(`${r.id}: ${e.message}`);
     }
   }
+  // A STATUS FILE, because `|| true` in the deploy hook means nobody ever sees stdout. On 2026-09-17 the
+  // prune half-ran and the only evidence was the store getting 65 MB BIGGER. /health surfaces this.
+  try {
+    fs.writeFileSync(path.join(store.RUNS_DIR, '_prune-last.json'), JSON.stringify({
+      when: new Date().toISOString(), apply: APPLY, scanned: rows.length,
+      rewritten: touched, freedMB: Math.round(freed / 1e5) / 10,
+      reclaimedMB: Math.round(reclaimed / 1e5) / 10, problems,
+    }, null, 2), 'utf8');
+  } catch (e) { /* non-fatal, as ever */ }
+  if (reclaimed) console.log(`prune: reclaimed ${mb(reclaimed)} of orphaned backups`);
   console.log(`prune: ${touched} record(s) rewritten, ${mb(freed)} freed`);
   process.exit(0);
 }
