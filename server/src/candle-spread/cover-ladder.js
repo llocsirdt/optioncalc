@@ -122,7 +122,12 @@ function limitNow(p, opts) {
   // Never bid above the market: the fill happens at the market anyway, and a limit above it just
   // advertises how much we were willing to overpay.
   let capped = false;
-  if (o.neverExceedMark && p.mark != null && limit > p.mark) { limit = r2(p.mark); capped = true; }
+  // NEVER CLAMP TO AN IMPOSSIBLE MARK. A cover is a vertical, so its mark lives in [0, W]; anything
+  // outside that is a broken quote, and clamping the ladder down to it would walk the resting limit to
+  // one tick -- the same failure that booked 154 covers at $5 on 2026-09-16. When the mark is not usable
+  // the ladder simply does not cap this step and re-tests on the next observation with a fresh quote.
+  const markUsable = p.mark != null && Number.isFinite(p.mark) && p.mark >= 0 && p.mark <= W;
+  if (o.neverExceedMark && markUsable && limit > p.mark) { limit = r2(p.mark); capped = true; }
   if (limit > maxPay) { limit = maxPay; capped = true; }
   const q = Math.max(tick, Math.round(limit / tick) * tick);
   return { limit: r2(q), step, steps: nSteps, ideal, maxPay, start, capped, atMax: step >= nSteps };

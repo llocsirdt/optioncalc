@@ -124,5 +124,23 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   ok(overWidth.error && /outside/.test(overWidth.error), `a credit above the width is refused, not clamped (${overWidth.error})`);
 }
 
+// ── THE LADDER MUST NOT WALK DOWN TO A BROKEN MARK ──────────────────────────────────────────────────
+// cover-ladder's neverExceedMark rule caps the resting limit at the market. With a negative mark that cap
+// walked the limit to one tick — the same $5-cover failure, arriving by a different route.
+{
+  const CL = require('../../src/candle-spread/cover-ladder');
+  const base = { spreadWidth: 40, tick: 0.05, openCost: 21.6, minLock: 4, restingMs: 60000, underlyingMove: 0 };
+  const opts = { neverExceedMark: true, stepDollars: 0.25, steps: 8, stepSeconds: 30 };
+  const sane = CL.limitNow({ ...base, mark: 14.4 }, opts);
+  ok(sane.limit > 1, `a usable mark still caps the ladder (limit ${sane.limit})`);
+  for (const bad of [-32.2, -0.01, 41, 1e6]) {
+    const r = CL.limitNow({ ...base, mark: bad }, opts);
+    ok(r.limit > 1, `mark ${bad} does not walk the ladder to a tick (got ${r.limit})`);
+    ok(!r.capped, `and is not treated as a cap (mark ${bad})`);
+  }
+  const noMark = CL.limitNow({ ...base, mark: null }, opts);
+  ok(noMark.limit > 1, 'a missing mark leaves the ladder alone');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

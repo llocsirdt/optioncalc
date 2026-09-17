@@ -117,7 +117,9 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // width rather than widening it, so `wing === W` always and the lock arithmetic below stays true.
   const bookLegs = shift ? CL.coverLegsFor(pos.side, anchor, W, 'debit') : plan.legs;
   const brl = resolveLegs(bookLegs, deps.getLeg);
-  const bookMark = brl.error ? null : round2(brl.longMid - brl.shortMid);
+  // A broken quote here used to clamp to one tick and BOOK a cover at $0.05. null falls through to
+  // lockTarget below, which is the honest answer: price it off the lock, not off a number that cannot be.
+  const bookMark = brl.error ? null : saneMark(bookLegs, round2(brl.longMid - brl.shortMid));
   // COVER PRICING (deps.coverPriceMode, default 'lock' = the historical behaviour).
   //   'lock' — rest at W - openCost - minLock: a price derived from a HOPED-FOR profit, not from the
   //            market. Measured on the real 2026-09-09 session this put 733 of 735 unfilled covers BELOW
@@ -151,8 +153,11 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     else if (markMode) {
       // Pay the market. The sent limit is the SENT legs' own mark plus the slip, independent of the
       // booked target above (they can differ when a wing-shift moved the legs).
-      const m = round2(srl.longMid - srl.shortMid);
-      price = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
+      // Was Math.max(tick, m + slip): a negative mark from a broken chain became a $0.05 cover order.
+      // Leaving price at 0 makes the `if (price > 0)` guard below skip the send, so the cover simply is
+      // not placed this bar and is retried on the next one with a fresh quote.
+      const m = saneMark(sendLegs, round2(srl.longMid - srl.shortMid));
+      if (m != null) price = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
     }
     else { price = L.roundToTick(round2(W - pos.limit - ML), tick); }   // debit: rest at the profit-lock target, shifted or not
     if (price > 0) {
@@ -272,7 +277,9 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const coverBookLegs = (rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, 'debit');   // debit-canonical (floor P&L)
   // Booked cover price = min(target = W−openLimit, coverMark+tick) — same as resolveRestingCovers, so the
   // locked floor (W − openLimit − coverLimit) matches the sequential path exactly.
-  const coverMark = CO.spreadNet(coverBookLegs, mid);
+  // Same clamp, same failure: a broken quote used to book the combo's cover leg at one tick.
+  const coverMark = saneMark(coverBookLegs, CO.spreadNet(coverBookLegs, mid));
+  if (coverMark == null) { decisions.push({ action: 'combo-skip', reason: 'cover mark not sane', winner: winner.id }); return false; }
   const coverLimit = L.roundToTick(Math.max(tick, Math.min(round2(W - winner.limit), coverMark + tick)), tick);
 
   // 3) re-resolve the open against a TEMP ledger = the real one PLUS the cover, so the open can't net
@@ -1393,6 +1400,9 @@ function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
   if (error) return { error, positionId: pos.id, longStrike };
   const mark = round2(longMid - shortMid);
   const limit = L.coverLimitFromMark(mark, cfg.spreadWidth, cfg.tickIncrement);
+  // null = the mark is outside [0, W] and cannot be a real cover price. Same shape as the `error` return
+  // above, so the candidate is simply dropped from the selection rather than priced off a broken quote.
+  if (limit == null) return { error: `cover mark ${mark} impossible on a ${cfg.spreadWidth} spread`, positionId: pos.id, longStrike };
   const floor = round2((cfg.spreadWidth - pos.limit - limit) * 100 * cfg.quantity);
   const peakExtra = round2(L.coverPeakExtra(pos.shortStrike, longStrike, cfg.spreadWidth) * 100 * cfg.quantity);
   return {
@@ -1724,6 +1734,21 @@ function spreadQuote(legs, getLeg) {
   return ok ? { mark: round2(mark), bid: round2(bid), ask: round2(ask) } : { mark: null, bid: null, ask: null };
 }
 
+// EVERY price this engine sends or books starts life as a spread mark, and a mark computed from a broken
+// chain is worse than no mark at all. The clamps downstream -- Math.max(tick, x), Math.min(ceiling, x) --
+// turn an impossible number into a plausible-looking ORDER instead of a refusal. That produced all three
+// of 2026-09-16's pricing failures: 154 covers booked at $5 (clamped up from a negative mark), a $995
+// NET_CREDIT open on a $10 spread (clamped down from a broken credit), and fills priced at one tick.
+//
+// saneMark is the single choke point. It returns the mark, or NULL when the quote is structurally
+// impossible -- and null is exactly what these paths already treat as "cannot price this", because every
+// one of them was written to cope with an unquotable leg. So the fix reuses handling that already exists
+// and is already tested, rather than adding a new refusal branch per clamp.
+function saneMark(legs, mark) {
+  if (mark == null || !Number.isFinite(mark)) return null;
+  return SQ.verticalSanity(legs, mark).ok ? mark : null;
+}
+
 function coverMarkNow(legs, getLeg) {
   let v = 0;
   for (const l of legs) {
@@ -1731,7 +1756,9 @@ function coverMarkNow(legs, getLeg) {
     if (!q || q.mid == null) return null;
     v += (l.side === 'long' ? 1 : -1) * q.mid;
   }
-  return round2(v);
+  // Gated here rather than at the six call sites: this IS the "what is this spread worth" helper, and an
+  // impossible answer must not be distinguishable from an unanswerable one.
+  return saneMark(legs, round2(v));
 }
 
 // RESTING-cover fill model (see the cover step): a working cover fills when its real mark reaches
@@ -1981,7 +2008,18 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // never fills still carries the evidence of how close it came.
     noteMarkLow(pc, quote, pc.target);
     if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
-    const fill = round2(Math.max(tick, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
+    // THE MAIN COVER FILL PATH, and where most of 2026-09-16's 154 bogus fills were booked. The guard
+    // above only asks whether the mark reached the target, which an IMPOSSIBLE mark passes trivially:
+    // -32.20 is comfortably below any positive target. The fill price then floored at one tick, so a
+    // 40-wide cover booked for $5 and the book recorded it as a nearly free lock. Refuse the quote
+    // instead -- the order stays working and is re-tested on the next observation with a fresh one.
+    const sane = SQ.verticalSanity(pc.legs, mark);
+    if (!sane.ok) {
+      decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: sane.reason, target: pc.target });
+      continue;
+    }
+    // Floor at the MARK, not at a tick: a fill never prices below what the thing is marked at.
+    const fill = round2(Math.max(mark, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
     // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
     // order working and re-check next candle. Covers that improve (or hold) the floor always book.
     if (govOn(deps)) {

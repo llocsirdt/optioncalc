@@ -242,6 +242,12 @@ function roundToTick(price, tick) {
 // the ask so it fills, bounded by a loose sanity ceiling (width − 1 tick) and a tick floor.
 // No sub-market cap (unlike debitLimit's width/2×1.05, which suppressed fills on ATM spreads).
 function coverLimitFromMark(mark, spreadWidth, tick) {
+  // REFUSE, DO NOT CLAMP. A cover is a vertical: it cannot be worth less than nothing or more than its
+  // width, so a mark outside [0, W] is a broken quote and not a price to be tidied into range. The old
+  // Math.max(tick, ...) turned a negative mark into a $0.05 cover -- 154 of those booked on 2026-09-16 --
+  // and Math.min(ceil, ...) would pin an absurdly high one to the ceiling the same way. null means "cannot
+  // price this", which every caller already handles, because an unquotable leg produces it too.
+  if (mark == null || !Number.isFinite(mark) || mark < 0 || mark > spreadWidth) return null;
   const ceil = spreadWidth - tick;
   const limit = roundToTick(mark + tick, tick);
   return round2(Math.max(tick, Math.min(limit, ceil)));
