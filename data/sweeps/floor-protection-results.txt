@@ -1,3 +1,7 @@
+[dotenv@17.2.3] injecting env (6) from .env -- tip: ✅ audit secrets and track compliance: https://dotenvx.com/ops
+🔧 Creating MarketApiClient singleton instance
+🔧 Creating TradingApiClient singleton instance
+[candle-spread] ARMED SELECTION: v7-10 -> dryRun="test" (unfillable test orders); still gated by isProd + CANDLE_SPREAD_LIVE
 FLOOR-PROTECTION SWEEP — 922 days, 10 variants, 14 configs
 
   control                      $23,331,377                  worstSum    -$64,444   negDays  2791

@@ -142,5 +142,43 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   ok(noMark.limit > 1, 'a missing mark leaves the ladder alone');
 }
 
+// ── FILL DIRECTION: a credit order fills when the market comes UP to it ─────────────────────────────
+// A DEBIT order fills when the mark falls to the limit (you pay at most that). A CREDIT order is the
+// mirror: it fills when the mark RISES to the limit, because you must receive at least that. Testing a
+// credit order with the debit inequality books a fill exactly when the real order would NOT have filled.
+//
+// Measured on 2026-09-17 before the fix: 18 of 60 credit-sent opens (30%) were booked filled while the
+// best credit mark all day never reached the asked credit.
+{
+  const trader = require('../../src/candle-spread/trader');
+  // Bull put CREDIT spread: short the higher strike, long the lower. Its credit = P(hi) - P(lo).
+  const legs = [{ side: 'short', type: 'P', strike: 29400 }, { side: 'long', type: 'P', strike: 29390 }];
+  const chain = (hi, lo) => (t, k) => ({ mid: k === 29400 ? hi : lo, bid: 0, ask: 200, symbol: `NDX_${t}${k}` });
+  const ASK = 4.20;                       // the credit we are asking for
+
+  // Market short of our price: credit mark 4.10 against an ask of 4.20 -- the real order does not fill.
+  const short = trader.markFill(legs, ASK, chain(10.10, 6.00), 0.05, {}, 'CREDIT');
+  ok(!short.fillable, `a credit mark of 4.10 does not fill a 4.20 ask (mark ${short.mark})`);
+  // THE REGRESSION GUARD: under the old debit inequality this same quote WOULD have filled, because
+  // the debit-space mark is below the limit. That is the exact bug.
+  ok(trader.markFill(legs, ASK, chain(10.10, 6.00), 0.05, {}).fillable,
+    'and the debit test would (wrongly) have filled it — which is what was happening');
+
+  // Market reaches the ask: fills, and never for less than asked.
+  const hit = trader.markFill(legs, ASK, chain(10.30, 6.00), 0.05, {}, 'CREDIT');
+  ok(hit.fillable, `a credit mark of 4.30 fills a 4.20 ask (mark ${hit.mark})`);
+  ok(hit.fill >= ASK, `and receives at least the asked credit (got ${hit.fill})`);
+  ok(hit.fill <= 4.30, `and never more than the market (got ${hit.fill})`);
+
+  // Exactly at the ask fills too — a limit order trades at its limit.
+  ok(trader.markFill(legs, ASK, chain(10.20, 6.00), 0.05, {}, 'CREDIT').fillable, 'exactly at the ask fills');
+
+  // DEBIT is unchanged, both directions.
+  const dLegs = [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29400 }];
+  const dChain = (lo, hi) => (t, k) => ({ mid: k === 29390 ? lo : hi, bid: 0, ask: 200, symbol: `NDX_${t}${k}` });
+  ok(trader.markFill(dLegs, 6.00, dChain(11, 5), 0.05, {}).fillable, 'a debit fills when the mark is at/below the limit');
+  ok(!trader.markFill(dLegs, 6.00, dChain(12, 5), 0.05, {}).fillable, 'and not when the mark is above it');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1658,7 +1658,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
-function markFill(legs, limit, getLeg, tick, deps) {
+function markFill(legs, limit, getLeg, tick, deps, net) {
   const q = spreadQuote(legs, getLeg);
   const mark = q.mark;
   const base = { mark, bid: q.bid, ask: q.ask };
@@ -1694,6 +1694,25 @@ function markFill(legs, limit, getLeg, tick, deps) {
           badQuote: `parity off by ${pd.residual} on a ${pd.width} spread (calls ${pd.callMid} + puts ${pd.putMid})` };
       }
     }
+  }
+  // DIRECTION. A DEBIT order fills when the market comes DOWN to it: you pay at most the limit. A CREDIT
+  // order is the mirror — it fills when the market comes UP to it, because you must RECEIVE at least the
+  // limit. Testing a credit order with the debit inequality books a fill whenever the mark is merely
+  // BELOW the asked credit, which is precisely when the real order would not have filled.
+  //
+  // Measured on 2026-09-17: 18 of 60 credit-sent opens (30%) were booked filled while the best credit
+  // mark all day never reached the asked credit — short by 1 to 5 ticks mostly, one by 1.70 on a 20-wide.
+  //
+  // The engine records positions DEBIT-CANONICAL, and testing the debit twin is only equivalent while
+  // sentLimit == W - debitLimit exactly. It is not: 40 of 60 differed, because the debit limit rounds UP
+  // to a tick while the credit side does not, so the debit test is systematically the easier of the two.
+  // So the test has to run against the order that is actually resting.
+  if (net === 'CREDIT') {
+    // spreadQuote signs long +, short -, so a credit structure marks NEGATIVE; the credit received is -mark.
+    const credit = round2(-mark);
+    if (credit < limit) return { ...base, parity, fillable: false, fill: null };
+    // Concede at most a tick below the asked credit, never below the market.
+    return { ...base, parity, fillable: true, fill: round2(Math.min(credit, Math.max(limit, credit - tick))) };
   }
   if (mark > limit) return { ...base, parity, fillable: false, fill: null };
   // The floor is the MARK, not one tick. Flooring at `tick` is what turned a nonsense mark into a $5
@@ -1867,8 +1886,14 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   if (!st.pendingOpenId) return 0;
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
-  const chk = markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement);
-  noteMarkLow(pos, chk, pos.limit);
+  // TEST THE ORDER THAT IS ACTUALLY RESTING. For a capital-recapture credit twin that is the CREDIT
+  // spread at sentLimit, not the debit-canonical record — see the direction note in markFill. The record
+  // stays debit-canonical either way; only the fill TEST follows the sent order.
+  const sentCredit = pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLimit != null;
+  const chk = sentCredit
+    ? markFill(pos.sentLegs, pos.sentLimit, deps.getLeg, cfg.tickIncrement, deps, 'CREDIT')
+    : markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement, deps);
+  noteMarkLow(pos, chk, sentCredit ? pos.sentLimit : pos.limit);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
@@ -2056,6 +2081,13 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
     st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
     pos.coverSentNet = pc.sentNet;
+    // PERSIST THE CREDIT ACTUALLY ASKED. The cover books and tests entirely in DEBIT-canonical space,
+    // which is only equivalent to the credit order really resting while sentCredit == W - target. On
+    // 2026-09-17 that equivalence broke on the OPEN side (40 of 60 twins differed, and 18 of 60 booked
+    // fills the real order would not have got) and the cover side could not be checked at all, because
+    // sentCredit lived only on pendingCover and was dropped on fill. Recording it makes the same audit
+    // possible here instead of assuming the cover path is fine because nothing has bitten yet.
+    pos.coverSentCredit = pc.sentCredit != null ? pc.sentCredit : null;
     pos.pendingCover = null;
     decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark,
       bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk,
@@ -2066,6 +2098,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 module.exports = {
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
+  markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
   buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
