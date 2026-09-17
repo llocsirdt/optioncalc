@@ -469,12 +469,16 @@ function bookFloorNow(st, extra) {
 // Engages only once the peak clears floorRatchetMinPeak. Without that guard a fraction-of-peak budget is
 // zero while the peak is zero, which would block the morning's first trade and every trade after it.
 // Returns the floor level an open must not push the book below, or null when the ratchet is not engaged.
-function ratchetLimit(st, deps) {
+function ratchetLimit(st, deps, nowMin) {
   if (!deps || deps.floorRatchet !== true) return null;
   const peak = st.peakFloor;
   if (!(peak > 0)) return null;
   const minPeak = deps.floorRatchetMinPeak != null ? deps.floorRatchetMinPeak : 1000;
   if (peak < minPeak) return null;
+  // AFTER-MINUTE GATE (ET minute-of-day). An always-on ratchet measured -$1.75M over 765 days: it fires
+  // through the productive 10:00-14:00 window and is dormant on the days that set the worst floor. The
+  // live give-back was concentrated after 14:00. null = no time gate, i.e. the rejected behaviour.
+  if (deps.floorRatchetAfterMin != null && !(nowMin >= deps.floorRatchetAfterMin)) return null;
   const frac = deps.floorGiveBackFrac != null ? deps.floorGiveBackFrac : 0.25;
   return peak * (1 - frac);
 }
@@ -1109,14 +1113,14 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // Evaluated on the FINAL res, after any leg-uniqueness shift, so we gate what we would actually send.
       const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
-    } else if (ratchetLimit(st, deps) != null
-        && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps)) {
+    } else if (ratchetLimit(st, deps, etMinutesOf(candleTime)) != null
+        && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps, etMinutesOf(candleTime))) {
       // FLOOR RATCHET OPEN GATE — this open would surrender more of the day's locked floor than the
       // give-back budget allows. Same evaluation point as the governor gate (the FINAL res, post-shift),
       // for the same reason: gate what we would actually send. The two are independent — the governor
       // bounds the ABSOLUTE loss, this one bounds the RETREAT FROM THE PEAK, and a book can be nowhere
       // near lossMax while still giving back a won floor.
-      const lim = ratchetLimit(st, deps);
+      const lim = ratchetLimit(st, deps, etMinutesOf(candleTime));
       const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-ratchet', side: openSide, projectedFloor: projected,
         peakFloor: round2(st.peakFloor), ratchetFloor: round2(lim), limit: res.limit });

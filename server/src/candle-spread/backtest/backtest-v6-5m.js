@@ -293,8 +293,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   let ratchetBlocked = 0;     // opens refused by the ratchet — reported so a null result is distinguishable
   // The level an open must not push the book below, or null when the ratchet is not engaged. Identical
   // shape to the live ratchetLimit() so the two engines refuse the same orders.
-  const ratchetFloorLimit = () => {
+  // AFTER-MINUTE GATE. Measured 2026-09-16: an always-on ratchet LOST $1.75M over 765 days because it
+  // fires during the 10:00-14:00 window where the trading is good, and is dormant on the days that
+  // actually set the worst floor. The live give-back was concentrated after 14:00, so gate it on the
+  // clock and leave the productive middle of the day alone. null = no time gate (the rejected behaviour).
+  const ratchetAfterMin = opts.floorRatchetAfterMin != null ? opts.floorRatchetAfterMin : null;
+  const ratchetFloorLimit = (nowMin) => {
     if (!floorRatchet || !(peakFloor > 0) || peakFloor < ratchetMinPeak) return null;
+    if (ratchetAfterMin != null && !(nowMin >= ratchetAfterMin)) return null;
     return peakFloor * (1 - ratchetGiveBack);
   };
   const floorOffset = opts.floorOffset === true;
@@ -1040,7 +1046,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // FLOOR RATCHET GATE — independent of the governor and evaluated on the same FINAL `o`. A book can
       // sit far inside lossMax and still be handing back everything it won, which is exactly the case the
       // governor cannot reach.
-      const _ratLim = ratchetFloorLimit();
+      const _ratLim = ratchetFloorLimit(etMinute(bars[i].dt));
       const ratchetOk = _ratLim == null || geoDecline
         || floorOf({ legs: o.legs, limit: o.limit, covered: false }) >= _ratLim;
       if (!ratchetOk) ratchetBlocked++;
@@ -1267,7 +1273,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
     // is a different finding from "the ratchet did nothing because it was off".
     ratchet: floorRatchet ? { giveBackFrac: ratchetGiveBack, minPeak: ratchetMinPeak,
-      peakFloor: Math.round(peakFloor), blocked: ratchetBlocked } : null
+      afterMin: ratchetAfterMin, peakFloor: Math.round(peakFloor), blocked: ratchetBlocked } : null
   };
 }
 

@@ -1152,7 +1152,7 @@ function buildEngineDeps(run, live) {
       // see (a book can be nowhere near lossMax and still hand back everything it won). Read off `deps`,
       // so like every other engine opt it MUST be listed here or the flag is a silent live no-op.
       floorRatchet: run.floorRatchet, floorRatchetMinPeak: run.floorRatchetMinPeak,
-      floorGiveBackFrac: run.floorGiveBackFrac,
+      floorGiveBackFrac: run.floorGiveBackFrac, floorRatchetAfterMin: run.floorRatchetAfterMin,
       // LOW-COST RISK OFFSET — the governor's only REPAIR tool (everything else it does is preventive:
       // block an open, defer a cover). Buys the far-side spread with the best floor-lift per dollar once
       // the floor is through the target. Tuning knobs fall back to the trader's defaults when unset.
