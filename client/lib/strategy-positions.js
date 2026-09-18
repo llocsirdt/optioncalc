@@ -50,12 +50,17 @@
   // legs { qty (signed × quantity), type ('c'|'p'), strike, cost (dollars, net on the long leg) }.
   function spreadToLegs(spreadLegs, netLimit, qty) {
     const netCost = Math.round((netLimit || 0) * 100 * qty);   // net debit in dollars (× 100)
-    return spreadLegs.map((l) => ({
-      qty: (l.side === 'long' ? 1 : -1) * qty,
-      type: String(l.type).toLowerCase(),
-      strike: l.strike,
-      cost: l.side === 'long' ? netCost : 0,
-    }));
+    // THE NET COST BELONGS TO THE STRUCTURE, NOT TO EACH LONG LEG. It used to be attached to EVERY long
+    // leg, which is right for a vertical (exactly one long) and double-counts anything with two: a fly or
+    // condor booked its whole debit twice. On 2026-09-17 that overstated v6-20's cost by $732 — exactly
+    // one fly's debit — and flies are live on 25 variants, so every one of them read too expensive.
+    // Carried on the FIRST long leg so the per-leg rows still show where the money went.
+    let assigned = false;
+    return spreadLegs.map((l) => {
+      const isLong = l.side === 'long';
+      const cost = (isLong && !assigned) ? (assigned = true, netCost) : 0;
+      return { qty: (isLong ? 1 : -1) * qty, type: String(l.type).toLowerCase(), strike: l.strike, cost };
+    });
   }
 
   // run: the record from /api/v1/candle-spread/runs/:symbol/:expiration. opts.includeUnfilled (default
@@ -126,31 +131,23 @@
       const openLegCount = legs.length;         // everything after this index is cover
       let cLegs = null, cAmt = 0, cCredit = false, cEpoch = null;
       if (pos.covered && coverByT && pos.coverLegs && pos.coverLegs.length) {
-        const ord = coverByPos.get(pos.id);   // the EXACT cover order (legs + price + net) from the log
-        if (ord && ord.legs) { cCredit = ord.net === 'CREDIT'; cLegs = ord.legs; cAmt = ord.limit || 0; }
-        else { cLegs = pos.coverLegs; cAmt = pos.coverLimit || 0; }   // fallback: debit-canonical
-        // PRICE COMES FROM THE FILL, not from the order log. The log holds the order AS FIRST SENT, which
-        // was the whole truth when a cover rested at one price and filled there. The ladder and give-up
-        // both REPRICE, so sent and filled diverge: on 2026-09-16 a cover sent at 10.00 was walked to
-        // 19.30 by give-up and booked there, and this table showed "$1,000 DB" — the original target — for
-        // a fill that cost $1,930. Legs and net still come from the log (a credit twin's legs are only
-        // there); pos.coverLimit is the authoritative price.
-        // LEGS AND PRICE MUST SHARE A CONVENTION. cLegs came from the order log, so for a recapture
-        // cover they are the CREDIT twin's legs; pos.coverLimit is the DEBIT-canonical fill. Assigning it
-        // straight into cAmt and then negating it below (cCredit ? -cAmt : cAmt) values the credit legs at
-        // a debit price — which is why the compare page read -$975 on v7-10 at 29447 where the engine's
-        // own settlement said $2,840 and the debug page said $3,140, all for the same book on 2026-09-17.
-        // The fill IS the authoritative price; it just has to be translated into the credit space those
-        // legs live in, which is the spread's width less the debit paid.
-        if (pos.coverLimit != null) {
-          if (cCredit) {
-            const ks = cLegs.map((l) => l.strike);
-            const w = Math.max(...ks) - Math.min(...ks);
-            cAmt = Math.round((w - pos.coverLimit) * 100) / 100;
-          } else {
-            cAmt = pos.coverLimit;
-          }
-        }
+        const ord = coverByPos.get(pos.id);   // kept for the TRADES TABLE (what was actually sent)
+        // VALUED FROM THE POSITION, NOT THE LOG. The log is not a reliable description of what was
+        // BOOKED: on 2026-09-17, 2 of 91 covers had log legs at different strikes than the cover actually
+        // recorded (wing shifts and re-sends; the index keeps only the last matching event), so valuing
+        // from it prices a cover that was never held. Worse, pairing the log's CREDIT twin legs with
+        // pos.coverLimit — the DEBIT fill — and negating it is what put this page at -$975 on v7-10 at
+        // 29447 where the engine said $2,840 for the same book.
+        //
+        // pos.coverLegs/coverLimit are what the engine wrote when the cover filled, and they are exact
+        // rather than approximate: a credit twin at the same strikes satisfies
+        // payoff(twin) + credit == payoff(debit pair) - debit whenever credit == W - debit, so the pair
+        // values identically either way. Deriving the credit from the log's asking price instead moves
+        // fleet P&L by thousands, always flatteringly — which is how this page briefly showed nearly
+        // every variant profitable.
+        cLegs = pos.coverLegs;
+        cAmt = pos.coverLimit != null ? pos.coverLimit : 0;
+        cCredit = false;                       // debit-canonical: positive cost, canonical legs
         // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
         // cover ORDER's own time from the log, and only then to the open (never earlier than the open).
         cEpoch = pos.coverEpoch || (ord && epochFrom5m(ord.time)) || oEpoch;

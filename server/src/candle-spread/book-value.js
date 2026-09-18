@@ -58,9 +58,8 @@
    *   asOfEpoch      include only positions opened by then, and apply a cover only if it booked by then
    *   quantity       fallback contract count when a position carries none
    *   includeUnfilled treat working orders as held (default false — an unfilled order is not a position)
-   *   coverPriceFromFill  use pos.coverLimit rather than the order log's price (default true). The log
-   *                  holds the price AS FIRST SENT; the ladder and give-up both REPRICE, so on 2026-09-16
-   *                  a cover sent at 10.00 filled at 19.30. The fill is what was paid.
+   * Covers are always valued from the position's own record — see the note at the cover branch for why
+   * the order log cannot be trusted for this.
    */
   function heldBook(record, opts) {
     const o = opts || {};
@@ -68,7 +67,6 @@
     const cfg = (record && record.config) || {};
     const asOf = o.asOfEpoch != null ? o.asOfEpoch : null;
     const byPos = coverOrders(record && record.events);
-    const useFillPrice = o.coverPriceFromFill !== false;
     const legs = [];           // every contract held, with its own quantity
     let cash = 0;              // dollars: positive = paid out, negative = received
     const parts = [];
@@ -88,26 +86,21 @@
       const coveredNow = pos.covered && (asOf == null || (pos.coverEpoch != null && pos.coverEpoch <= asOf));
       let cLegs = null, cCost = 0;
       if (coveredNow && pos.coverLegs && pos.coverLegs.length) {
-        const ord = byPos.get(pos.id);
-        if (ord && ord.legs) {
-          cLegs = ord.legs;
-          const price = (useFillPrice && pos.coverLimit != null) ? pos.coverLimit : (ord.limit || 0);
-          // The price and the legs must come from the SAME convention. Taking the credit twin's legs and
-          // then negating a debit-canonical price is what put the compare page at -$975; when the
-          // authoritative fill price is used for a CREDIT cover it has to be translated into credit
-          // space, which is the spread's width less the debit paid.
-          if (ord.net === 'CREDIT') {
-            const ks = cLegs.map((l) => l.strike);
-            const W = Math.max(...ks) - Math.min(...ks);
-            const credit = (useFillPrice && pos.coverLimit != null) ? r2(W - pos.coverLimit) : (ord.limit || 0);
-            cCost = -credit;
-          } else {
-            cCost = price;
-          }
-        } else {
-          cLegs = pos.coverLegs;                     // fallback: debit-canonical, price matches
-          cCost = pos.coverLimit || 0;
-        }
+        // THE COVER IS VALUED FROM THE POSITION, NOT THE ORDER LOG.
+        //
+        // The log is not a reliable description of what was BOOKED: on 2026-09-17, 2 of 91 covers had log
+        // legs at different strikes than the cover actually recorded (wing shifts and re-sends, and the
+        // index keeps only the last matching event), so valuing from it prices a cover that was never
+        // held. pos.coverLegs/coverLimit are what the engine wrote when the cover filled.
+        //
+        // This is DEBIT-CANONICAL, and that is exact rather than an approximation: a credit twin at the
+        // same strikes satisfies payoff(twin) + credit == payoff(debit pair) - debit whenever
+        // credit == W - debit, so the pair values identically either way. The residual is the real
+        // credit-vs-debit pricing gap, which the record simply does not preserve — and inventing it from
+        // the log's asking price, as an earlier pass here did, moved fleet P&L by thousands in the
+        // flattering direction. Better to be exactly parity-correct than approximately real.
+        cLegs = pos.coverLegs;
+        cCost = pos.coverLimit != null ? pos.coverLimit : 0;
         for (const l of cLegs) legs.push({ ...l, quantity: qty });
         cash += cCost * 100 * qty;
       }

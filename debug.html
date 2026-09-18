@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.8.98</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.9.1</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -773,12 +773,19 @@ function buildCell(pos, se, dom, rec, underAt) {
     for (const l of oLegs) legs.push({ ...l, quantity: qty, cost: p.limit });
     cost += oCost * 100 * qty;
     if (p.covered) {
-      const ord = orders.get(p.id);
-      const cl = (ord && ord.legs) ? ord.legs : (p.coverLegs || []);
-      const climit = (ord && ord.limit != null) ? ord.limit : (p.coverLimit || 0);
-      const isCredit = ord ? ord.net === 'CREDIT' : (p.coverSentNet === 'CREDIT');
+      // VALUED FROM THE POSITION, NOT THE ORDER LOG — the same rule the compare page and the engine now
+      // follow, so all three draw one curve. The log is not a reliable description of what was BOOKED: on
+      // 2026-09-17, 2 of 91 covers had log legs at different strikes than the cover actually recorded
+      // (wing shifts and re-sends; the index keeps only the last matching event), and its price is the
+      // order AS FIRST SENT, which the ladder and give-up both reprice.
+      //
+      // Debit-canonical here is exact, not an approximation: a credit twin at the same strikes satisfies
+      // payoff(twin) + credit == payoff(debit pair) - debit whenever credit == W - debit, so the pair
+      // values identically either way.
+      const cl = p.coverLegs || [];
+      const climit = p.coverLimit || 0;
       for (const l of cl) legs.push({ ...l, quantity: qty, cost: climit });
-      cost += (isCredit ? -climit : climit) * 100 * qty;   // a credit cover RECLAIMS cash
+      cost += climit * 100 * qty;
     }
   }
   if (!legs.length) return null;
