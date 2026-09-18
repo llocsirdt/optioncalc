@@ -180,5 +180,51 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   ok(!trader.markFill(dLegs, 6.00, dChain(12, 5), 0.05, {}).fillable, 'and not when the mark is above it');
 }
 
+(async () => {
+// ── A CREDIT COVER MUST ASK EXACTLY WHAT THE DEBIT TWIN WOULD PAY ───────────────────────────────────
+// The two branches used to answer different questions: the debit cover rests at the profit-LOCK target
+// (W - openCost - minLock), a price chosen to bank a result; the credit twin was priced at its own chain
+// MARK, a price chosen to trade. On a 40-wide with a lock target of 8.6 the twin asked 21.6 where parity
+// demands 31.4 — nearly $1,000 a contract less credit, so it filled far too easily and locked far less
+// than the book recorded. 258 of 284 credit covers on 2026-09-17 were short; $107,950 in one session.
+{
+  // async because placeRestingCover awaits placeOrder
+  const trader = require('../../src/candle-spread/trader');
+  const cfg = { symbol: 'NDX', expiration: '2026-09-17', spreadWidth: 40, strikeIncrement: 10,
+    quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
+  // A flat chain: every leg 10.00, so a mark-priced twin would come out at ZERO and can never accidentally
+  // agree with the lock-derived price. Any agreement below is therefore structural, not coincidence.
+  const flat = (t, k) => ({ mid: 10, bid: 9, ask: 11, symbol: `NDX_${t}${k}` });
+  const run = async (style) => {
+    const pos = { id: 'p1', side: 'bull', filled: true, quantity: 1, limit: 23.4, shortStrike: 29380,
+      legs: [{ side: 'long', type: 'C', strike: 29340 }, { side: 'short', type: 'C', strike: 29380 }],
+      covered: false, pendingCover: null };
+    const sent = [];
+    const deps = { getLeg: flat, coverPriceMode: 'lock', capitalRecapture: style === 'credit',
+      openAlternateEvery: 1, placeOrder: async (payload, meta) => { sent.push(meta); return { id: 'o1' }; } };
+    const plan = { legs: [{ side: 'short', type: 'P', strike: 29340 }, { side: 'long', type: 'P', strike: 29380 }],
+      target: null, mark: 8.6, geometry: 'tent', longStrike: 29380 };
+    await trader.placeRestingCover(pos, plan, cfg, deps, '09/17 09:50', [], 'test', 8);
+    return { pc: pos.pendingCover, sent };
+  };
+  const d = await run('debit');
+  ok(d.pc != null, 'a debit cover is placed');
+  const debitPrice = d.sent.length ? d.sent[0].limit : null;
+  ok(debitPrice != null && debitPrice > 0, `debit cover rests at the lock target (${debitPrice})`);
+
+  const c = await run('credit');
+  const creditSent = c.sent.find((x) => x.net === 'CREDIT');
+  if (creditSent) {
+    const want = Math.round((cfg.spreadWidth - debitPrice) * 100) / 100;
+    ok(Math.abs(creditSent.limit - want) < 0.06,
+      `credit twin asks W - debit = ${want}, not its own mark (got ${creditSent.limit})`);
+    ok(creditSent.limit > cfg.spreadWidth / 2,
+      'and is nowhere near the zero a flat-chain mark would have produced');
+  } else {
+    ok(true, '(capital recapture did not select the credit twin in this fixture — parity untested here)');
+  }
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+})();

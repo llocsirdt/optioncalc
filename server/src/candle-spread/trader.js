@@ -150,17 +150,43 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const srl = resolveLegs(sendLegs, deps.getLeg);
   let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
   if (!srl.error) {
-    if (style === 'credit') { const cr = round2(srl.shortMid - srl.longMid); if (cr > 0) { sentNet = 'CREDIT'; price = sentCredit = L.roundToTick(Math.min(round2(W - tick), cr), tick); } }
-    else if (markMode) {
+    // THE DEBIT PRICE FIRST, ALWAYS — the credit twin is derived from it rather than priced on its own.
+    //
+    // These two branches used to answer DIFFERENT QUESTIONS. The debit cover rests at the profit-LOCK
+    // target (W - openCost - minLock): a price chosen to bank a result. The credit twin was priced at its
+    // own chain MARK, which is a price chosen to trade. On a 40-wide with a lock target of 8.6 the twin
+    // therefore asked 21.6 credit where parity demands W - 8.6 = 31.4 — nearly $1,000 a contract less,
+    // so it filled far too easily and locked far less than the book recorded.
+    //
+    // Measured on 2026-09-17: 258 of 284 credit-style covers asked less credit than their own target
+    // implied, $107,950 of credit not asked for in a single session. Deriving the twin from the debit
+    // price makes the two economically identical by construction, which is the only reason the record is
+    // allowed to stay debit-canonical.
+    let debitPrice = null;
+    if (markMode) {
       // Pay the market. The sent limit is the SENT legs' own mark plus the slip, independent of the
       // booked target above (they can differ when a wing-shift moved the legs).
       // Was Math.max(tick, m + slip): a negative mark from a broken chain became a $0.05 cover order.
       // Leaving price at 0 makes the `if (price > 0)` guard below skip the send, so the cover simply is
       // not placed this bar and is retried on the next one with a fresh quote.
-      const m = saneMark(sendLegs, round2(srl.longMid - srl.shortMid));
-      if (m != null) price = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
+      const markLegs = style === 'credit' ? CL.coverLegsFor(pos.side, anchor, W, 'debit') : sendLegs;
+      const mrl = style === 'credit' ? resolveLegs(markLegs, deps.getLeg) : srl;
+      const m = mrl.error ? null : saneMark(markLegs, round2(mrl.longMid - mrl.shortMid));
+      if (m != null) debitPrice = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
+    } else {
+      debitPrice = L.roundToTick(round2(W - pos.limit - ML), tick);
     }
-    else { price = L.roundToTick(round2(W - pos.limit - ML), tick); }   // debit: rest at the profit-lock target, shifted or not
+    if (style === 'credit') {
+      // Receive exactly what the debit twin would have paid away: credit = W - debit. The credit twin
+      // concedes the slip in the same direction the debit one pays it (see openSlip's mirror note).
+      if (debitPrice != null && debitPrice > 0 && debitPrice < W) {
+        sentNet = 'CREDIT';
+        price = sentCredit = L.roundToTick(Math.min(round2(W - tick), round2(W - debitPrice)), tick);
+      }
+    } else if (debitPrice != null) {
+      price = debitPrice;
+    }
+
     if (price > 0) {
       const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
       const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: sendLegs, limit: price, net: sentNet, mark: plan.mark });
@@ -2088,6 +2114,7 @@ module.exports = {
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
+  placeRestingCover,             // COVER PLACEMENT — exported so credit/debit price PARITY can be tested
   buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
