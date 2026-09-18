@@ -132,22 +132,37 @@
       let cLegs = null, cAmt = 0, cCredit = false, cEpoch = null;
       if (pos.covered && coverByT && pos.coverLegs && pos.coverLegs.length) {
         const ord = coverByPos.get(pos.id);   // kept for the TRADES TABLE (what was actually sent)
-        // VALUED FROM THE POSITION, NOT THE LOG. The log is not a reliable description of what was
-        // BOOKED: on 2026-09-17, 2 of 91 covers had log legs at different strikes than the cover actually
-        // recorded (wing shifts and re-sends; the index keeps only the last matching event), so valuing
-        // from it prices a cover that was never held. Worse, pairing the log's CREDIT twin legs with
-        // pos.coverLimit — the DEBIT fill — and negating it is what put this page at -$975 on v7-10 at
-        // 29447 where the engine said $2,840 for the same book.
+        // EMIT THE COVER AS IT WAS SENT — but derive it, never read the order log for this.
         //
-        // pos.coverLegs/coverLimit are what the engine wrote when the cover filled, and they are exact
-        // rather than approximate: a credit twin at the same strikes satisfies
-        // payoff(twin) + credit == payoff(debit pair) - debit whenever credit == W - debit, so the pair
-        // values identically either way. Deriving the credit from the log's asking price instead moves
-        // fleet P&L by thousands, always flatteringly — which is how this page briefly showed nearly
-        // every variant profitable.
-        cLegs = pos.coverLegs;
-        cAmt = pos.coverLimit != null ? pos.coverLimit : 0;
-        cCredit = false;                       // debit-canonical: positive cost, canonical legs
+        // The log is not a reliable description of what was BOOKED: on 2026-09-17, 2 of 91 covers had log
+        // legs at DIFFERENT STRIKES than the cover actually recorded (wing shifts, re-sends, and the index
+        // keeps only the last matching event). Its price is the order AS FIRST SENT, which the ladder and
+        // give-up both reprice. pos.coverLegs/coverLimit are what the engine wrote at fill.
+        //
+        // The credit twin is DERIVABLE from those: same strikes, same sides, option type flipped. So the
+        // as-sent form needs no log at all.
+        //
+        // WHY BOTHER, when the curve is identical either way. Terminal value is parity-invariant — a
+        // canonical pair at debit C and its twin at credit W-C are worth the same at every price, which is
+        // why valuing canonically was not wrong. CASH IS NOT INVARIANT: a credit cover brings money IN,
+        // and the two representations differ by W per covered position. Emitting canonically made the UI's
+        // "Total Cost" read $13,385 for v7-10 on 2026-09-17 where the real cash was ~$4,485, and showed
+        // 8 of 48 orders as credits instead of 22 — because every cover rendered as a debit.
+        const cw = (() => { const k = pos.coverLegs.map((l) => l.strike); return Math.max(...k) - Math.min(...k); })();
+        cCredit = pos.coverSentNet === 'CREDIT';
+        if (cCredit) {
+          // Same strikes and sides, opposite option type. coverSentCredit is authoritative where the run
+          // recorded it; before that field existed the parity equivalent is exact once the twin is priced
+          // as W - debit, which is what the engine now does.
+          cLegs = pos.coverLegs.map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' }));
+          // THE FILL, TRANSLATED — not coverSentCredit, which is what was ASKED. coverLimit is what was
+          // RECEIVED, and a cover can fill through its ask; mixing ask and fill across the two
+          // representations breaks the parity the debit-canonical record depends on.
+          cAmt = Math.round((cw - (pos.coverLimit || 0)) * 100) / 100;
+        } else {
+          cLegs = pos.coverLegs;
+          cAmt = pos.coverLimit != null ? pos.coverLimit : 0;
+        }
         // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
         // cover ORDER's own time from the log, and only then to the open (never earlier than the open).
         cEpoch = pos.coverEpoch || (ord && epochFrom5m(ord.time)) || oEpoch;

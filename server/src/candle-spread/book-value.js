@@ -99,8 +99,27 @@
         // credit-vs-debit pricing gap, which the record simply does not preserve — and inventing it from
         // the log's asking price, as an earlier pass here did, moved fleet P&L by thousands in the
         // flattering direction. Better to be exactly parity-correct than approximately real.
-        cLegs = pos.coverLegs;
-        cCost = pos.coverLimit != null ? pos.coverLimit : 0;
+        // AS SENT, but DERIVED — never read the order log for this. The log is not a reliable record of
+        // what was booked (2 of 91 covers on 2026-09-17 had log legs at different strikes than the cover
+        // recorded) and its price is the order as FIRST sent, which the ladder and give-up reprice. The
+        // credit twin is derivable from the canonical pair: same strikes, same sides, type flipped.
+        //
+        // Terminal value is parity-invariant, so this does not move `valueAt` — a canonical pair at debit
+        // C and its twin at credit W-C are worth the same at every price. CASH is not invariant, and
+        // `cash` is what the UI reports as Total Cost, so the representation has to be the real one.
+        const ck = pos.coverLegs.map((l) => l.strike);
+        const cw = Math.max(...ck) - Math.min(...ck);
+        if (pos.coverSentNet === 'CREDIT') {
+          cLegs = pos.coverLegs.map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' }));
+          // THE FILL, TRANSLATED — not coverSentCredit. That field is what was ASKED; coverLimit is what
+          // was RECEIVED, and a cover can fill better than its ask. Using the ask on the twin while the
+          // canonical side uses the fill breaks parity by exactly that difference, which is what the
+          // capital-recapture suite caught (terminal P&L 995 vs 0 on a cover that filled through its ask).
+          cCost = -r2(cw - (pos.coverLimit || 0));
+        } else {
+          cLegs = pos.coverLegs;
+          cCost = pos.coverLimit != null ? pos.coverLimit : 0;
+        }
         for (const l of cLegs) legs.push({ ...l, quantity: qty });
         cash += cCost * 100 * qty;
       }

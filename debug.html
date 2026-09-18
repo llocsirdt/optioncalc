@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.9.1</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.9.2</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -782,8 +782,16 @@ function buildCell(pos, se, dom, rec, underAt) {
       // Debit-canonical here is exact, not an approximation: a credit twin at the same strikes satisfies
       // payoff(twin) + credit == payoff(debit pair) - debit whenever credit == W - debit, so the pair
       // values identically either way.
-      const cl = p.coverLegs || [];
-      const climit = p.coverLimit || 0;
+      // AS SENT, but DERIVED from the position — the credit twin is the canonical pair with its option
+      // type flipped, so no order-log lookup is needed. Terminal value is parity-invariant (this does not
+      // move the curve); CASH is not, and a credit cover genuinely brings money in.
+      const ck0 = (p.coverLegs || []).map((l) => l.strike);
+      const cw = ck0.length ? Math.max(...ck0) - Math.min(...ck0) : 0;
+      const cCred = p.coverSentNet === 'CREDIT';
+      const cl = cCred ? (p.coverLegs || []).map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' })) : (p.coverLegs || []);
+      // The FILL translated, not the ask: coverLimit is what was received, coverSentCredit only what was
+      // asked, and mixing the two across representations breaks parity.
+      const climit = cCred ? -Math.round((cw - (p.coverLimit || 0)) * 100) / 100 : (p.coverLimit || 0);
       for (const l of cl) legs.push({ ...l, quantity: qty, cost: climit });
       cost += climit * 100 * qty;
     }
