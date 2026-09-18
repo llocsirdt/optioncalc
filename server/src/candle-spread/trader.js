@@ -277,6 +277,13 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
       await deps.placeOrder(plan.payload, { kind: 'cover', of: p.id, legs: plan.legs, limit: plan.limit, mark: plan.mark, note: 'cover-to-stack' });
       p.covered = true; p.coverId = nextId('cov'); p.coverLimit = plan.limit; p.coverLegs = plan.legs;
     }
+    // ONLY IF A COVER ACTUALLY EXISTS. This flag tells capState to treat the position's at-risk capital as
+    // freed, and it used to be set unconditionally — including when placeRestingCover returned early on
+    // `cover-skip-leg` or (since the unsent-cover fix) `cover-not-sent`. Nothing anywhere clears it, so a
+    // single failed lock removed that position from the cap for the whole session. Reproduced: a $2,200
+    // uncovered winner whose cover could not be sent took totalUncov from $2,200 to $0 and flipped riskCap
+    // from BLOCKED to OK, admitting an open the cap existed to refuse.
+    if (!p.covered && !p.pendingCover) { tried.add(p.id); continue; }   // lock did not happen — still at risk
     p.stackLocked = true; locked++;
   }
   if (locked) decisions.push({ action: 'cover-to-stack', locked, forOpen: openSide, minMark: round2(lockMin) });
@@ -2255,7 +2262,8 @@ module.exports = {
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
-  placeRestingCover,             // COVER PLACEMENT — exported so credit/debit price PARITY can be tested
+  placeRestingCover,
+  coverToStackFreeBudget, capState,   // CAP ACCOUNTING — exported so stackLocked's effect can be tested             // COVER PLACEMENT — exported so credit/debit price PARITY can be tested
   buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and

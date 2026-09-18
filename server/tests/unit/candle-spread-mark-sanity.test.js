@@ -401,6 +401,44 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     ok(good.pos.covered === true, 'and it books when the market is already there');
   }
 
+  // ── stackLocked MUST MEAN A LOCK ACTUALLY HAPPENED ────────────────────────────────────────────────
+  // capState treats a stackLocked position's at-risk capital as freed. The flag was set unconditionally
+  // after placeRestingCover, including when that returned early — and nothing anywhere clears it, so one
+  // failed lock removed a position from the cap for the whole session. Reproduced: a $2,200 uncovered
+  // winner whose cover could not be sent took totalUncov from $2,200 to $0 and flipped riskCap from
+  // BLOCKED to OK, admitting the very open the cap existed to refuse.
+  {
+    const cfg = { symbol: 'NDX', expiration: '2026-09-18', spreadWidth: 40, strikeIncrement: 10,
+      quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
+    const broken = (ty, k) => {
+      if (ty === 'C' && k === 29360) return { mid: 70, bid: 69, ask: 71, symbol: 'a' };
+      if (ty === 'C' && k === 29400) return { mid: 40, bid: 39, ask: 41, symbol: 'b' };
+      if (ty === 'C') return null;                      // the credit twin cannot be quoted -> no send
+      return { mid: k === 29400 ? 12 : 20, bid: 11, ask: 21, symbol: `P${k}` };
+    };
+    const whole = (ty, k) => ({ mid: ty === 'C' ? (k === 29360 ? 70 : k === 29400 ? 40 : 24)
+      : (k === 29400 ? 12 : 20), bid: 1, ask: 99, symbol: `${ty}${k}` });
+    const mkWinner = () => ({ id: 'w1', side: 'bull', filled: true, quantity: 1, limit: 22,
+      shortStrike: 29400, covered: false, pendingCover: null,
+      legs: [{ side: 'long', type: 'C', strike: 29360 }, { side: 'short', type: 'C', strike: 29400 }] });
+    const res = { limit: 20, legs: [] };
+    const run = async (chain) => {
+      const w = mkWinner(), st = { positions: [w] };
+      await trader.coverToStackFreeBudget(st, res, 'bull', cfg, { getLeg: chain, capitalRecapture: true,
+        creditCoverFrac: 0.65, coverPriceMode: 'lock', underlying: 29400, coverToStack: true,
+        coverToStackMinFrac: 0.5, riskCap: 3000, placeOrder: async () => ({ orderId: 'o' }) }, [], '09/18 10:00');
+      return { w, cap: trader.capState(st, res, 'bull', cfg, { getLeg: chain, riskCap: 3000 }) };
+    };
+    const failed = await run(broken);
+    ok(!failed.w.stackLocked, 'a lock that could not be sent does NOT set stackLocked');
+    ok(failed.cap.totalUncov === 2200, `so its risk stays counted ($${failed.cap.totalUncov}) — the regression`);
+    ok(failed.cap.ok === false, 'and the cap still refuses the open it was meant to refuse');
+
+    const ok2 = await run(whole);
+    ok(ok2.w.stackLocked === true, 'a lock that really rests DOES set it');
+    ok(ok2.cap.totalUncov === 0 && ok2.cap.ok, 'freeing the budget as designed');
+  }
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 })();
