@@ -24,7 +24,8 @@ const FY = require('./fly-convert');   // valley repair: flies/condors — SHARE
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest   // shared peak->floor wing planner (same module the backtest uses)
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
-const SQ = require('./spread-quote');   // net spread quotes + mark validation (parity / neighbour / ceiling)
+const SQ = require('./spread-quote');
+const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
 
@@ -1616,28 +1617,16 @@ function snapshotSpreads(getLeg, center, incr, windowStrikes) {
 // come from the order log (order_simulated dry-run / order_sent live, keyed by meta.of). Falls back to
 // debit-canonical only when an order isn't found. See feedback_use_real_numbers_not_derived.
 function computeTerminalPnl(state, cfg, settle, events) {
-  const coverByPos = new Map();
-  for (const e of events || []) {
-    if ((e.type === 'order_simulated' || e.type === 'order_sent') && e.meta && e.meta.of && e.meta.legs && /cover/.test(e.meta.kind || '')) coverByPos.set(e.meta.of, e.meta);
-  }
-  const positions = [];
-  let total = 0;
-  for (const pos of state.positions || []) {
-    if (!pos.filled) continue;
-    const qty = pos.quantity || cfg.quantity;
-    const oCredit = pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLegs.length;
-    let value = L.legsPayoff(oCredit ? pos.sentLegs : pos.legs, settle);
-    let cost = oCredit ? -(pos.sentLimit || 0) : pos.limit;
-    if (pos.covered && pos.coverLegs) {
-      const ord = coverByPos.get(pos.id);   // the EXACT cover order (real legs + price + net)
-      if (ord && ord.legs) { value += L.legsPayoff(ord.legs, settle); cost += (ord.net === 'CREDIT' ? -(ord.limit || 0) : (ord.limit || 0)); }
-      else { value += L.legsPayoff(pos.coverLegs, settle); cost += (pos.coverLimit || 0); }   // fallback: debit-canonical
-    }
-    const pnl = round2((value - cost) * 100 * qty);
-    total = round2(total + pnl);
-    positions.push({ id: pos.id, side: pos.side, covered: !!pos.covered, geometry: pos.coverGeometry || null, value: round2(value), cost: round2(cost), pnl });
-  }
-  return { settle, total, floor: state.realizedPnl, positions };
+  // ONE IMPLEMENTATION, shared with both UI pages — see book-value.js. Four hand-written copies of this
+  // calculation had drifted into four different answers for the same book (2026-09-17: +$3,140 on debug,
+  // -$975 on compare, $2,840 here, $4,120 from RC.bookPnl).
+  //
+  // coverPriceFromFill: the price paid is the FILL price, not the order-log price. The log holds the
+  // order AS FIRST SENT and the ladder and give-up both reprice, so a cover sent at 10.00 and walked to
+  // 19.30 was being valued at 10.00. On 2026-09-17 that moved single variants by up to $3,380 (it roughly
+  // washes out across the fleet, +$210 over eight). See feedback_use_real_numbers_not_derived.
+  const out = BV.terminalAt({ state, config: cfg, events }, settle, { coverPriceFromFill: true });
+  return { settle: out.settle, total: out.total, floor: state.realizedPnl, positions: out.positions };
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }

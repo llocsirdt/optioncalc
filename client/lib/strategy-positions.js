@@ -135,7 +135,22 @@
         // 19.30 by give-up and booked there, and this table showed "$1,000 DB" — the original target — for
         // a fill that cost $1,930. Legs and net still come from the log (a credit twin's legs are only
         // there); pos.coverLimit is the authoritative price.
-        if (pos.coverLimit != null) cAmt = pos.coverLimit;
+        // LEGS AND PRICE MUST SHARE A CONVENTION. cLegs came from the order log, so for a recapture
+        // cover they are the CREDIT twin's legs; pos.coverLimit is the DEBIT-canonical fill. Assigning it
+        // straight into cAmt and then negating it below (cCredit ? -cAmt : cAmt) values the credit legs at
+        // a debit price — which is why the compare page read -$975 on v7-10 at 29447 where the engine's
+        // own settlement said $2,840 and the debug page said $3,140, all for the same book on 2026-09-17.
+        // The fill IS the authoritative price; it just has to be translated into the credit space those
+        // legs live in, which is the spread's width less the debit paid.
+        if (pos.coverLimit != null) {
+          if (cCredit) {
+            const ks = cLegs.map((l) => l.strike);
+            const w = Math.max(...ks) - Math.min(...ks);
+            cAmt = Math.round((w - pos.coverLimit) * 100) / 100;
+          } else {
+            cAmt = pos.coverLimit;
+          }
+        }
         // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
         // cover ORDER's own time from the log, and only then to the open (never earlier than the open).
         cEpoch = pos.coverEpoch || (ord && epochFrom5m(ord.time)) || oEpoch;
