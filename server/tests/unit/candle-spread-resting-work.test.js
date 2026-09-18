@@ -13,6 +13,7 @@ const trader = require('../../src/candle-spread/trader');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } };
+const round2 = (n) => Math.round(n * 100) / 100;
 
 const cfg = { symbol: 'NDX', expiration: '2026-08-30', spreadWidth: 20, strikeIncrement: 10, quantity: 1,
   tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'rw' };
@@ -231,6 +232,92 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
   ok(trader.pendingHedges(mk(0), 'offset', 1).n === 0, 'and zero when nothing is working');
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
-process.exit(fail ? 1 : 0);
+
+// ---- WORKING A CREDIT COVER -----------------------------------------------------------------------
+// "there's no difference between a debit order and a credit order, we're only using credit to recapture
+// capital, the risk is the same, the reward is the same, we want to walk every order, open or cover, debit
+// or credit ... debits our price goes up, we're willing to pay more for the fill, credits the price goes
+// down, we're accepting less to get the fill" (user, 2026-09-18).
+//
+// workRestingCovers used to `continue` on any credit cover, so 23 of 174 resting covers on 2026-09-17 and
+// 150 of 406 on 09-16 were never worked once between placement and the close.
+(async () => {
+  const W = 20, cCfg = { ...cfg, spreadWidth: W };
+  const bookLegs = legs;                                     // debit-canonical booking: long C21990 / short C22010
+  const twinLegs = [{ side: 'short', type: 'P', strike: 21990 }, { side: 'long', type: 'P', strike: 22010 }];
+  // target 4.25 with a 12.95 ask is DELIBERATELY not a parity pair (W - 4.25 = 15.75): it is the real shape
+  // seen in the store, where the twin is priced off the SENT legs and the booked target off the cover
+  // geometry. A ladder that re-derived the credit would jump it 2.80 on the first step.
+  const mkPos = (over = {}, pcOver = {}) => ({ id: 'p1', side: 'bull', filled: true, covered: false,
+    quantity: 1, limit: 6.0, shortStrike: 22010, ...over,
+    pendingCover: { legs: bookLegs, target: 4.25, openCost: 6.0, minLock: 0, placedEpoch: 1,
+      placedUnder: 22000, orderId: 'ord-1', sentNet: 'CREDIT', sentCredit: 12.95, sentLegs: twinLegs, ...pcOver } });
+
+  const work = async (pos, m = 18) => {
+    const sent = [];
+    await trader.workRestingCovers({ positions: [pos] }, cCfg,
+      (pos._d = []), { getLeg: legAt(m), coverLadder: true, ladderStepDollars: 0.25, underlying: 22000,
+        replaceOrder: async (id, payload, meta) => { sent.push({ payload, meta }); return { orderId: id }; } }, 22000);
+    return { d: pos._d, sent, pc: pos.pendingCover };
+  };
+
+  const cre = await work(mkPos());
+  const rep = cre.d.find(x => x.action === 'cover-reprice');
+  ok(!!rep, 'a CREDIT cover is worked at all — the regression this whole block exists for');
+  ok(rep && rep.to > rep.from, `the booked debit target walks UP (${rep && rep.from} -> ${rep && rep.to})`);
+  ok(rep && rep.sentTo < rep.sentFrom, `and the credit actually asked walks DOWN (${rep && rep.sentFrom} -> ${rep && rep.sentTo})`);
+  ok(rep && Math.abs((rep.to - rep.from) - (rep.sentFrom - rep.sentTo)) < 0.001,
+    `the credit concedes exactly what the debit ladder conceded (${rep && round2(rep.to - rep.from)} vs ${rep && round2(rep.sentFrom - rep.sentTo)})`);
+  ok(cre.pc.sentCredit === (rep && rep.sentTo), 'and the walked price is what now rests on the record');
+  ok(Math.abs(cre.pc.sentCredit - (W - cre.pc.target)) > 0.5,
+    `NOT re-derived as W - target (${cre.pc.sentCredit} vs ${round2(W - cre.pc.target)}) — that matched on 0 of 173 real covers`);
+
+  // The replace has to reach the broker as the order that is actually resting: the TWIN, priced as a credit.
+  ok(cre.sent.length === 1, 'the working order is replaced, once');
+  ok(cre.sent[0] && cre.sent[0].payload.orderType === 'NET_CREDIT', 'replaced as a NET_CREDIT order, not a debit');
+  ok(cre.sent[0] && cre.sent[0].payload.price === cre.pc.sentCredit, 'at the conceded credit');
+  ok(cre.sent[0] && cre.sent[0].meta.legs === twinLegs, 'on the SENT legs (the twin), never the booked debit legs');
+
+  // A debit cover must be untouched by all of this.
+  const deb = await work(mkPos({}, { sentNet: 'DEBIT', sentCredit: null, sentLegs: bookLegs }));
+  const dRep = deb.d.find(x => x.action === 'cover-reprice');
+  ok(!!dRep && dRep.to > dRep.from, 'a DEBIT cover still walks its own limit up');
+  ok(dRep && dRep.sentTo === undefined, 'and reports no credit side');
+  ok(deb.sent[0] && deb.sent[0].payload.orderType === 'NET_DEBIT', 'replaced as a NET_DEBIT order');
+  ok(deb.sent[0] && deb.sent[0].payload.price === deb.pc.target, 'at the laddered debit target');
+
+  // Conceding past zero is not a cheaper order, it is a nonsensical one.
+  const tiny = await work(mkPos({}, { sentCredit: 0.10 }));
+  ok(tiny.pc.sentCredit >= cCfg.tickIncrement - 1e-9 && tiny.pc.sentCredit > 0,
+    `the credit floors at a tick rather than going through zero (got ${tiny.pc.sentCredit})`);
+
+  // A SENT PRICE MUST BE A CLEAN CENT. roundToTick multiplies back out in binary floating point, so 24
+  // ticks came back as 12.950000000000001; the fill test compares that against a round2'd market credit,
+  // so a market offering exactly 12.95 was refused. 47 of 173 real resting credit covers (27%) carried
+  // the hair, always high, so it could only ever cost a fill.
+  for (const seed of [12.95, 19.45, 8.15, 3.35, 1.20]) {
+    const t = await work(mkPos({}, { sentCredit: seed }));
+    const c = t.pc.sentCredit;
+    ok(c === Math.round(c * 100) / 100, `a walked credit is an exact cent, not ${c} (from ${seed})`);
+  }
+
+  // THE POINT OF ALL OF IT: the conceded price is the price that fills.
+  const p2 = mkPos();
+  await work(p2);
+  const asked = p2.pendingCover.sentCredit;
+  // Offer exactly the conceded credit and not a cent more: mark = W - asked on the booked legs.
+  const d2 = [];
+  trader.resolveRestingCovers({ positions: [p2], realizedPnl: 0 }, cCfg, legAt(round2(W - asked)), d2, {});
+  ok(p2.covered === true, `the cover fills at the price it was walked to (asked ${asked})`);
+  ok(d2.some(x => x.action === 'cover-fill'), 'and books as a fill');
+
+  // The same order at its ORIGINAL ask would not have filled on that quote — which is what the walk bought.
+  const p3 = mkPos();
+  const d3 = [];
+  trader.resolveRestingCovers({ positions: [p3], realizedPnl: 0 }, cCfg, legAt(round2(W - asked)), d3, {});
+  ok(p3.covered === false, 'while the un-walked order at 12.95 would still be resting on the same quote');
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+  process.exit(fail ? 1 : 0);
+})().catch((e) => { console.log('FAIL: threw ->', e && e.message); process.exit(1); });

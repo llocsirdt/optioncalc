@@ -186,7 +186,13 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       // concedes the slip in the same direction the debit one pays it (see openSlip's mirror note).
       if (debitPrice != null && debitPrice > 0 && debitPrice < W) {
         sentNet = 'CREDIT';
-        price = sentCredit = L.roundToTick(Math.min(round2(W - tick), round2(W - debitPrice)), tick);
+        // round2 AFTER roundToTick: `Math.round(x/tick)*tick` is not exact in binary, so 24 ticks comes
+        // back as 12.950000000000001 rather than 12.95. The resting-cover fill test asks
+        // `creditNow >= sentCredit` against a round2'd market credit, so that hair refuses a market
+        // offering exactly the price we asked. It bit 47 of 173 resting credit covers (27%) across
+        // 2026-09-16/17, and always in the direction that COSTS a fill — the epsilon is high, so we
+        // silently ask for a fraction of a cent more than we meant to.
+        price = sentCredit = round2(L.roundToTick(Math.min(round2(W - tick), round2(W - debitPrice)), tick));
       }
     } else if (debitPrice != null) {
       price = debitPrice;
@@ -211,6 +217,12 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
   pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
+  // THE INSTRUMENT THAT IS ACTUALLY RESTING. `legs` above is the debit-canonical BOOKING, which for a
+  // credit cover is a different instrument entirely (the twin, option type flipped). Without this the
+  // ladder could only ever rebuild the booked legs, so working a credit cover would have replaced the
+  // real order with a DEBIT order on the wrong structure. Identical to `legs` for every debit cover,
+  // shifted or not, so it costs nothing there.
+  pos.pendingCover.sentLegs = sendLegs;
   // `mark` MUST be the mark of the legs actually booked. It used to log plan.mark — the mark of the
   // UNSHIFTED plan that was never sent — sitting next to a target taken from a different instrument, which
   // made a correctly-priced order read as a buy limit far above the market. planMark is kept, named, when
@@ -2057,6 +2069,54 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   return 0;
 }
 
+// CONCEDE ON A RESTING COVER — the one place a working cover's price moves, whichever space it was sent in.
+//
+// "there's no difference between a debit order and a credit order, we're only using credit to recapture
+// capital, the risk is the same, the reward is the same, we want to walk every order, open or cover, debit
+// or credit ... debits our price goes up, we're willing to pay more for the fill, credits the price goes
+// down, we're accepting less to get the fill" (user, 2026-09-18). Credit covers used to be skipped outright
+// — 23 of 174 resting covers on 2026-09-17 and 150 of 406 on 09-16 sat untouched from placement to the
+// close, never once worked, which is the opposite of the standing rule that an order is worked and never
+// hoped for.
+//
+// The LADDER decides how much to concede, in debit space, where its whole calibration lives. This applies
+// that concession to the order really at the broker.
+//
+// BY THE DELTA, NOT BY PARITY. The obvious move is to re-derive the credit as W - target the way the OPEN
+// ladder does, and it is wrong here: an open's sentLimit IS W - limit by construction, but a cover's
+// sentCredit is derived from the SENT legs' debit price, which parts company with the booked `target`
+// whenever the cover geometry picks a long strike other than short ± W. Measured across 2026-09-16/17,
+// W - target equalled sentCredit on 0 of 173 resting credit covers (asked 12.95 where the twin implies
+// 15.75 on a 20-wide). Re-deriving would have jumped every one of them to a different price under the
+// guise of a ladder step. Moving by the DELTA preserves whatever relationship the placement established
+// and concedes exactly what the ladder asked for.
+//
+// The credit floors at one tick: conceding past zero is not a cheaper order, it is a nonsensical one.
+async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra) {
+  const tick = cfg.tickIncrement;
+  const credit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
+  pc.target = to;                                  // the booked target moves with the working limit, or we
+                                                   // would fill on one price and book at another
+  let sentFrom = from, sentTo = to, net = 'DEBIT';
+  if (credit) {
+    sentFrom = pc.sentCredit;
+    sentTo = round2(Math.max(tick, L.roundToTick(round2(pc.sentCredit - round2(to - from)), tick)));
+    pc.sentCredit = sentTo;
+    net = 'CREDIT';
+  }
+  const legs = credit ? (pc.sentLegs || pc.legs) : pc.legs;
+  if (deps.replaceOrder && pc.orderId) {
+    const srl = resolveLegs(legs, deps.getLeg);
+    if (!srl.error) {
+      const payload = buildOrderPayload(srl.resolved, sentTo, pos.quantity || cfg.quantity, net);
+      const r = await deps.replaceOrder(pc.orderId, payload, { kind, of: pos.id, fromLimit: sentFrom, legs, net });
+      if (r && r.orderId) pc.orderId = r.orderId;
+    }
+  }
+  decisions.push({ action: kind, positionId: pos.id, from, to, sentNet: net,
+    ...(credit ? { sentFrom, sentTo } : {}), ...(extra || {}) });
+}
+
 async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   // Either mechanism can be enabled alone: the ladder walks price on a schedule, give-up reacts to the
   // position turning. They compose — give-up supersedes the ladder for a position it fires on.
@@ -2070,7 +2130,6 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   for (const pos of st.positions) {
     if (!pos.filled || pos.covered || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
-    if (pc.sentNet === 'CREDIT') continue;         // credit covers price off a different rule; not laddered
     const mark = coverMarkNow(pc.legs, deps.getLeg);
 
     // GIVE-UP RULE (deps.coverGiveUp) — "better to fill at a small locked profit or even a small loss
@@ -2095,18 +2154,8 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick);
         if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
-          const from = pc.target;
-          pc.target = give;
           pc.gaveUp = true;
-          if (deps.replaceOrder && pc.orderId) {
-            const srl = resolveLegs(pc.legs, deps.getLeg);
-            if (!srl.error) {
-              const payload = buildOrderPayload(srl.resolved, give, pos.quantity || cfg.quantity, 'DEBIT');
-              const r = await deps.replaceOrder(pc.orderId, payload, { kind: 'cover-giveup', of: pos.id, fromLimit: from, legs: pc.legs });
-              if (r && r.orderId) pc.orderId = r.orderId;
-            }
-          }
-          decisions.push({ action: 'cover-giveup', positionId: pos.id, from, to: give, mark,
+          await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 });
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market
@@ -2124,20 +2173,9 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     // per order per day; the minMove guard below covers the pinned-to-mark case.
     const stepChanged = pc.ladderStep == null || next.step !== pc.ladderStep;
     if (!LAD.shouldReprice(pc.target, next.limit, tick, { stepChanged, spreadWidth: W, minMoveFrac: deps.ladderMinMoveFrac })) continue;
-    const from = pc.target;
     pc.ladderStep = next.step;
-    pc.target = next.limit;                        // the booked target moves with the working limit, or we
-                                                   // would fill on one price and book at another
-    if (deps.replaceOrder && pc.orderId) {
-      const srl = resolveLegs(pc.legs, deps.getLeg);
-      if (!srl.error) {
-        const payload = buildOrderPayload(srl.resolved, next.limit, pos.quantity || cfg.quantity, 'DEBIT');
-        const r = await deps.replaceOrder(pc.orderId, payload, { kind: 'cover-reprice', of: pos.id, fromLimit: from, legs: pc.legs });
-        if (r && r.orderId) pc.orderId = r.orderId;
-      }
-    }
-    decisions.push({ action: 'cover-reprice', positionId: pos.id, from, to: next.limit,
-      step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax });
+    await concedeCover(pos, pc, next.limit, pc.target, cfg, deps, decisions, 'cover-reprice',
+      { step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax });
   }
 }
 
