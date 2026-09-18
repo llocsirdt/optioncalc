@@ -174,8 +174,34 @@
       let unfilledCover = null;
       if (!pos.covered) {
         const uc = coverByPos.get(pos.id);
-        if (uc && uc.legs && uc.legs.length)
-          unfilledCover = { legs: fmtSpread(uc.legs, qty), net: uc.net === 'CREDIT' ? 'CREDIT' : 'DEBIT', limit: uc.limit || 0, time: etCandleTime(uc.time), epoch: epochFrom5m(uc.time) };
+        if (uc && uc.legs && uc.legs.length) {
+          const cNet = uc.net === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+          // THE PRICE IT IS WORKING AT, NOT THE PRICE IT WAS PLACED AT. The order log records the
+          // placement; the cover ladder then walks `pendingCover.target` for the rest of the day
+          // (cover-reprice fired 6,125 times on 2026-09-17) and logs no new order event, so the log's
+          // price goes stale the moment the ladder moves. On 2026-09-17 that was 160 of 174 resting
+          // covers — 92% — and every one of them in the same direction: the row showed a price $4.50
+          // cheaper on average (up to $12.55) than the order actually resting at the broker. A table
+          // whose stated purpose is to reconcile 1:1 against the broker's working orders has to show
+          // the broker's price. The ladder works in DEBIT space, so a credit twin is W - target.
+          //
+          // CREDITS ARE NOT DERIVED FROM THE DEBIT TWIN. workRestingCovers skips a credit cover outright
+          // ("credit covers price off a different rule; not laddered"), so its sent price never goes
+          // stale and the log is already right. Deriving one anyway would reintroduce the very
+          // non-equivalence that cost us before: W - target matched sentCredit on 0 of 173 resting credit
+          // covers across 2026-09-16/17 (e.g. asked 12.95, twin implies 15.75 on a 20-wide). The credit
+          // actually resting is `sentCredit`, and nothing else is.
+          const pc2 = pos.pendingCover;
+          const working = cNet === 'CREDIT'
+            ? (pc2 && pc2.sentCredit != null ? pc2.sentCredit : null)
+            : (pc2 && pc2.target != null ? pc2.target : null);
+          unfilledCover = { legs: fmtSpread(uc.legs, qty), net: cNet,
+            limit: working != null ? working : (uc.limit || 0),
+            // Kept so the row can say what it was originally sent at — the ladder's concession is
+            // information, and hiding it would trade one missing truth for another.
+            placedLimit: uc.limit || 0, laddered: working != null && Math.abs(working - (uc.limit || 0)) >= 0.01,
+            time: etCandleTime(uc.time), epoch: epochFrom5m(uc.time) };
+        }
       }
       allLegs.push(...legs);
       for (let i = 0; i < legs.length; i++) allLegEpochs.push(i < openLegCount ? oEpoch : cEpoch);

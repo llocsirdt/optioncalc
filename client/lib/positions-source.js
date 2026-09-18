@@ -96,7 +96,9 @@
       if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0, legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * q), net: p.coverNet || 'DEBIT' });
       // A resting cover order that was placed but never filled: shown as a dimmed row so every order the
       // engine sent to the broker is visible (matches the broker's rejected/working orders 1:1).
-      else if (p.unfilledCover) evs.push({ id: p.id, type: 'cover', unfilled: true, side: p.side, time: p.unfilledCover.time, epoch: p.unfilledCover.epoch || (p.openEpoch || 0) + 1, legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * q), net: p.unfilledCover.net || 'DEBIT' });
+      else if (p.unfilledCover) evs.push({ id: p.id, type: 'cover', unfilled: true, side: p.side, time: p.unfilledCover.time, epoch: p.unfilledCover.epoch || (p.openEpoch || 0) + 1, legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * q), net: p.unfilledCover.net || 'DEBIT',
+        // The ladder has conceded price since this was sent (see strategy-positions): show where it started.
+        placedCost: p.unfilledCover.laddered ? Math.round((p.unfilledCover.placedLimit || 0) * 100 * q) : null });
     });
     if (!evs.length) { box.innerHTML = ''; return; }
     // Number positions #1.. by open time (earliest = #1); covers inherit their open's number.
@@ -106,10 +108,10 @@
     const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
     const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
     // ⬡ for a hedge: visually distinct from both the open triangles and the cover diamond.
-    const glyph = e => (/^off-|^wing-/.test(e.id)) ? '⬡'
+    const glyph = e => (/^off-|^wing-|^fly-/.test(e.id)) ? '⬡'
       : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
     const coveredIds = new Set(evs.filter(e => e.type === 'cover' && !e.unfilled).map(e => e.id));   // FILLED covers only
-    const isHedge = (e) => /^off-|^wing-/.test(e.id);
+    const isHedge = (e) => /^off-|^wing-|^fly-/.test(e.id);
     const opens = evs.filter(e => e.type === 'open' && !isHedge(e)).length;
     const hedges = evs.filter(e => e.type === 'open' && isHedge(e)).length;
     const covers = evs.filter(e => e.type === 'cover').length;
@@ -120,12 +122,17 @@
       // to reshape the risk curve, not as strategy positions — they are never covered, so labelling them
       // "OPEN*" claimed they were exposed positions awaiting a cover. A wing may also be a SINGLE leg
       // (wingNaked buys an uncapped long), which reads as malformed next to two-legged spreads.
-      const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : null;
+      // A FLY IS A HEDGE TOO. This tested only off-/wing-, so a fly (id `fly-*`, side `fly`, hedge:true)
+      // matched neither, fell through to the strategy-open branch and rendered as `▼ OPEN*` — an exposed
+      // position awaiting a cover, which is exactly what a fly is not. It is the same mistake this comment
+      // block was written to fix for offsets and wings, repeated when flies were added.
+      const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : /^fly-/.test(e.id) ? 'FLY' : null;
       const isUncov = open && !hedge && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
       const label = hedge ? hedge
         : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
       const cr = e.net === 'CREDIT';
-      const costStr = cr ? `+${usd(e.cost)}` : usd(e.cost);   // credit = cash received → leading +
+      const costStr = (cr ? `+${usd(e.cost)}` : usd(e.cost))   // credit = cash received → leading +
+        + (e.placedCost != null ? ` <span class="ps-muted" title="sent at ${usd(e.placedCost)}; the cover ladder has since walked it to ${usd(e.cost)}">(sent ${usd(e.placedCost)})</span>` : '');
       return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`

@@ -398,7 +398,7 @@ function statsOf(rec) {
   const se = (rec.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
   const covered = pos.filter((p) => p.covered).length;
   const unfilled = pos.filter((p) => p.pendingCover && !p.covered).length;
-  const isHedge = (p) => p.hedge || /^off-|^wing-/.test(p.id || '');
+  const isHedge = (p) => p.hedge || /^off-|^wing-|^fly-/.test(p.id || '');
   return {
     terminal: se && se.terminalPnl != null ? se.terminalPnl : null,
     floor: se && se.floorPnl != null ? se.floorPnl : null,
@@ -513,7 +513,12 @@ function orderEvents(rec, src) {
     // Hedge kind: live encodes it in the id prefix (off-/wing-), the backtest record carries explicit
     // hedge/wing flags (its ids are bt-N). Read BOTH so a backtest offset is not mislabelled "OPEN*",
     // i.e. an exposed position waiting on a cover it will never get.
-    e.hedgeKind = (e.raw.wing || /^wing-/.test(e.id)) ? 'WING' : (e.raw.hedge || /^off-/.test(e.id)) ? 'OFFSET' : null;
+    // ORDER MATTERS: a fly carries `hedge: true` as well as `fly: true`, so testing hedge first labelled
+    // every fly OFFSET. FLY is already a label this page knows (see REFUSED, which maps fly-nofill to it),
+    // so the row was being told a kind the rest of the page contradicts.
+    e.hedgeKind = (e.raw.wing || /^wing-/.test(e.id)) ? 'WING'
+      : (e.raw.fly || /^fly-/.test(e.id)) ? 'FLY'
+      : (e.raw.hedge || /^off-/.test(e.id)) ? 'OFFSET' : null;
   }
 
   // ORDERS THAT WERE PLACED AND NEVER FILLED — opens, offsets, wings and flies.
@@ -572,7 +577,7 @@ function renderOrders() {
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
     ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
-    ['markLow', 'the BEST price this order ever saw, followed by a DWELL fraction: how many observations had the mark at or through the price sent, out of how many times we looked (every 30s while it worked). 1/47 is a graze a real order may well have missed; 22/47 is a price the market genuinely sat at.  while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ had a bid/ask wider than the distance the mark travelled below our limit, which is exactly that case.'],
+    ['markLow', 'the BEST price this order ever saw, followed by a DWELL fraction: how many observations had the mark at or through the price sent, out of how many times we looked (every 30s while it worked). 1/47 is a graze a real order may well have missed; 22/47 is a price the market genuinely sat at.  while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ kept being watched AFTER it booked and the market barely came back to the price it filled at — a graze rather than a price the market sat at. Rows with no post-fill observations yet are left unflagged rather than guessed at.'],
     ['ceiling', 'W − openCost − minLock: the most the rule allows. This is what gets sent'],
     ['gap', 'sent − mark. Negative means it rests BELOW the market and only fills if the market comes to it'],
     ['cover?', 'was a profitable cover even available at placement (mark ≤ ceiling)?'],
@@ -615,6 +620,10 @@ function renderOrders() {
       : (pc.looks != null ? pc.looks : (r.coverLooks != null ? r.coverLooks : null));
     const through2 = open ? (r.atOrThrough != null ? r.atOrThrough : null)
       : (pc.atOrThrough != null ? pc.atOrThrough : (r.coverAtOrThrough != null ? r.coverAtOrThrough : null));
+    // POST-FILL OBSERVATION — the only dwell evidence that actually discriminates. See the suspect rule.
+    const fc = r.filledCover || {};
+    const postLooks = open ? r.throughLooks : (fc.throughLooks != null ? fc.throughLooks : r.coverThroughLooks);
+    const postAt = open ? r.throughAt : (fc.throughAt != null ? fc.throughAt : r.coverThroughAt);
     const lowBid = open ? (r.markLowBid != null ? r.markLowBid : null)
       : (pc.markLowBid != null ? pc.markLowBid : (r.coverMarkLowBid != null ? r.coverMarkLowBid : null));
     const lowAsk = open ? (r.markLowAsk != null ? r.markLowAsk : null)
@@ -651,9 +660,20 @@ function renderOrders() {
           // worth seeing — but it no longer raises a warning.
           const through = (markLow != null && sent != null) ? Math.round((sent - markLow) * 100) / 100 : null;
           const spr = (lowBid != null && lowAsk != null) ? Math.round((lowAsk - lowBid) * 100) / 100 : null;
-          // A single touch across five or more looks. Below five observations there is not enough to call
-          // it either way, so it stays unflagged rather than crying wolf on a short-lived order.
-          const suspect = looks != null && looks >= 5 && (through2 || 0) <= 1;
+          // THE PRE-FILL COUNTER CANNOT ANSWER THIS, so it is no longer asked. An order books on the FIRST
+          // observation that reaches its price, and the counter stops there — measured on 2026-09-17,
+          // atOrThrough is exactly 1 on all 485 filled covers and all 666 filled opens, and `looks` is 1
+          // on every filled open. So `atOrThrough <= 1` is true by construction for everything that filled,
+          // and the old rule reduced to `looks >= 5` — "this order rested a while" — which it then drew as
+          // a warning on 84.4% of cover rows (100% of still-resting ones, where "the market never reached
+          // it" is simply what unfilled MEANS and the ** suffix already says so). A flag that fires on five
+          // rows in six is one the eye learns to skip, which is how the previous spread-width rule died.
+          //
+          // The discriminating evidence is what the market did AFTER the fill: a price it never returned to
+          // was a graze, one it went through repeatedly was real. resolveRestingCovers keeps feeding a
+          // filled cover observations for exactly this (throughLooks/throughAt). Where that evidence does
+          // not exist yet the row says nothing, which is the honest answer — not a warning.
+          const suspect = postLooks != null && postLooks >= 5 && (postAt || 0) <= 1;
           const dwell = looks ? `\nseen at or through the price sent on ${through2 || 0} of ${looks} observation(s)`
             + ((through2 || 0) === 0 ? ' — the market never actually reached it'
               : (through2 || 0) === 1 ? ' — a single touch, which a real order may well have missed' : '') : '';
@@ -664,7 +684,8 @@ function renderOrders() {
                 : 'never reached the price sent'))
               + (spr != null ? `\nbid/ask at that moment: ${lowBid} / ${lowAsk}  (spread ${spr})` : '\nno bid/ask recorded')
               + dwell
-              + (suspect ? '\n\n⚠ the mark reached this price on only one look out of ' + looks + ' — a graze, not a price the market sat at. A resting order may well have missed it.' : '');
+              + (postLooks ? `\nafter it booked, the mark came back to this price on ${postAt || 0} of ${postLooks} further observation(s)` : '')
+            + (suspect ? '\n\n⚠ after booking, the market returned to this price on at most one of ' + postLooks + ' observations — a graze, not a price it sat at. A real resting order may well have missed it.' : '');
           const col = suspect ? 'var(--loss)' : (through != null && through > 0 ? 'var(--profit)' : '');
           // Inline escape: this file has no `esc` helper (that is compare.html's), and calling one threw a
           // ReferenceError out of renderOrders — taking the orders table AND the risk curve down with it.
