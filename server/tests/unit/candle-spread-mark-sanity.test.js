@@ -268,6 +268,48 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     ok(d.covered === true, 'a debit cover still fills when the mark falls to its target');
   }
 
+  // ── EVIDENCE CAPTURE: direction-aware dwell, placement stamp, post-fill tracking ───────────────────
+  // Three gaps the user found while auditing trades after the fact: bid/ask were recorded at the low-water
+  // mark and at the fill but never at PLACEMENT; the underlying was never stamped on an order at all; and
+  // dwell counting stopped the moment an order filled, so a mark that grazed the limit once and one the
+  // market later went a dollar through were indistinguishable afterwards.
+  {
+    const dbg = { markLow: null };
+    // DEBIT: reached when the mark falls TO the limit.
+    trader.noteMarkLow(dbg, { mark: 12, bid: 11, ask: 13, underlying: 29400 }, 10, 'DEBIT');
+    ok(dbg.looks === 1 && !dbg.atOrThrough, 'a debit above its limit counts a look, not a touch');
+    trader.noteMarkLow(dbg, { mark: 9.5, bid: 9, ask: 10, underlying: 29390 }, 10, 'DEBIT');
+    ok(dbg.atOrThrough === 1, 'and counts the touch when the mark falls to it');
+    ok(dbg.markLow === 9.5 && dbg.markLowUnder === 29390, 'keeping the best price and the underlying there');
+
+    // CREDIT is the mirror — and the bug this replaces made atOrThrough equal looks on EVERY credit
+    // order, because a credit structure marks negative and `mark <= limit` was trivially true.
+    const cr = { markLow: null };
+    trader.noteMarkLow(cr, { mark: -10, bid: -12, ask: -8, underlying: 29400 }, 12, 'CREDIT');
+    ok(cr.looks === 1 && !cr.atOrThrough, 'a credit of 10 does not reach a 12 ask');
+    trader.noteMarkLow(cr, { mark: -13, bid: -14, ask: -12, underlying: 29420 }, 12, 'CREDIT');
+    ok(cr.atOrThrough === 1, 'and does reach it at a credit of 13');
+    ok(cr.markLow === -13, 'best credit kept (most negative canonical mark)');
+
+    // POST-FILL: keeps watching, separately, and records how far through it went.
+    const pf = { markLow: null, filled: true };
+    trader.noteMarkLow(pf, { mark: 8, bid: 7, ask: 9 }, 10, 'DEBIT');
+    trader.noteMarkLow(pf, { mark: 6.5, bid: 6, ask: 7 }, 10, 'DEBIT');
+    ok(pf.looks == null, 'a filled order stops accruing pre-fill dwell');
+    ok(pf.throughLooks === 2 && pf.throughAt === 2, 'and accrues post-fill looks instead');
+    ok(pf.throughBest === 3.5, `recording how far through the market went (${pf.throughBest})`);
+    const graze = { markLow: null, filled: true };
+    trader.noteMarkLow(graze, { mark: 9.99, bid: 9, ask: 11 }, 10, 'DEBIT');
+    ok(graze.throughBest < 0.02, 'a graze is distinguishable from a decisive fill');
+
+    // PLACEMENT STAMP: first observation only, so it records the market when the order went out.
+    const pl = {};
+    trader.notePlaced(pl, { mark: 5, bid: 4, ask: 6 }, 29401.5);
+    trader.notePlaced(pl, { mark: 9, bid: 8, ask: 10 }, 29500);
+    ok(pl.placedMark === 5 && pl.placedBid === 4 && pl.placedAsk === 6, 'placement keeps the FIRST quote');
+    ok(pl.placedUnder === 29401.5, 'and stamps the underlying on the order itself');
+  }
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 })();

@@ -1688,7 +1688,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 function markFill(legs, limit, getLeg, tick, deps, net) {
   const q = spreadQuote(legs, getLeg);
   const mark = q.mark;
-  const base = { mark, bid: q.bid, ask: q.ask };
+  const base = { mark, bid: q.bid, ask: q.ask, underlying: deps && deps.underlying != null ? deps.underlying : null };
   if (mark == null || limit == null || !(limit > 0)) return { ...base, fillable: false, fill: null };
   // STRUCTURAL GATE, BEFORE the price comparison. `mark > limit` is the only test this used to make, and
   // an IMPOSSIBLE mark passes it trivially: a debit spread marked -32.20 is not above any positive limit,
@@ -1844,19 +1844,61 @@ function coverMarkNow(legs, getLeg) {
 // day would book a structure bought for a peak that is long gone. Default 10 minutes — two candles.
 // Push the low-water mark down and, when it improves, snapshot the QUOTE that produced it. One helper
 // for all three resting order types so the three cannot drift apart on what "the low" means.
-function noteMarkLow(o, chk, limit) {
+// EVERY OBSERVATION OF A WORKING ORDER, in the direction the order actually fills.
+//
+// `net` says which side of the limit counts. A DEBIT order is reached when the mark falls TO it; a CREDIT
+// order when the credit RISES to it. Counting a credit order with the debit inequality made `atOrThrough`
+// equal `looks` on every credit order ever placed — the mark of a credit structure is negative, so
+// `mark <= limit` was trivially true — which quietly destroyed the one statistic that says whether a fill
+// was real. `best` is likewise the best price the order ever saw in ITS OWN direction.
+//
+// AFTER A FILL, KEEP WATCHING. `throughLooks`/`throughBest` record how far the market went beyond our
+// price once we had already booked, which is what separates a graze from a genuine fill: a mark that
+// touched the limit once and a mark that spent the afternoon a dollar through it produce the same
+// markLow and are very different claims. Nothing here changes a decision — it is evidence for reading the
+// fill afterwards.
+function noteMarkLow(o, chk, limit, net) {
   if (chk.mark == null) return;
+  const credit = net === 'CREDIT';
+  // The price in the order's OWN space: a credit structure marks negative, and the credit is its inverse.
+  const px = credit ? round2(-chk.mark) : chk.mark;
+  const reached = limit != null && (credit ? px >= limit : px <= limit);
+  if (o.filled) {
+    // Post-fill: how decisively did it go through, and for how long.
+    o.throughLooks = (o.throughLooks || 0) + 1;
+    if (reached) {
+      o.throughAt = (o.throughAt || 0) + 1;
+      const by = round2(credit ? px - limit : limit - px);
+      if (o.throughBest == null || by > o.throughBest) o.throughBest = by;
+    }
+    return;
+  }
   // DWELL, not just the extreme. `looks` counts every observation of this working order and `atOrThrough`
-  // how many of them had the mark at or below the price we sent. A single tick grazing our limit and the
-  // market sitting there for ten minutes produce an IDENTICAL markLow, and they are very different claims
-  // about whether a real order would have been hit — 1-of-47 is a graze, 22-of-47 is a fill.
+  // how many of them had the market at or through the price we sent. A single tick grazing our limit and
+  // the market sitting there for ten minutes produce an IDENTICAL extreme, and they are very different
+  // claims about whether a real order would have been hit — 1-of-47 is a graze, 22-of-47 is a fill.
   o.looks = (o.looks || 0) + 1;
-  if (limit != null && chk.mark <= limit) o.atOrThrough = (o.atOrThrough || 0) + 1;
-  if (o.markLow != null && chk.mark >= o.markLow) return;
+  if (reached) o.atOrThrough = (o.atOrThrough || 0) + 1;
+  // Keep the BEST price seen in the order's own direction (lowest debit / highest credit).
+  const better = o.markLow == null || (credit ? px > round2(-o.markLow) : px < o.markLow);
+  if (!better) return;
   o.markLow = chk.mark;
   o.markLowBid = chk.bid;
   o.markLowAsk = chk.ask;
   o.markLowSpread = (chk.bid != null && chk.ask != null) ? round2(chk.ask - chk.bid) : null;
+  if (chk.underlying != null) o.markLowUnder = chk.underlying;
+}
+
+// STAMP THE MARKET AT PLACEMENT. bid/ask were recorded only at the low-water mark and at the fill, never
+// at the moment the order was created, and the underlying was never stamped on an order at all — it lived
+// on the candle event, so reconstructing "where was NDX when this went out" meant joining on time. Every
+// after-the-fact question asked in this session needed one of these.
+function notePlaced(o, chk, underlying) {
+  if (!o || o.placedMark != null) return;              // first observation only
+  o.placedMark = chk && chk.mark != null ? chk.mark : null;
+  o.placedBid = chk ? chk.bid : null;
+  o.placedAsk = chk ? chk.ask : null;
+  o.placedUnder = underlying != null ? round2(underlying) : null;
 }
 
 // What is already WORKING of a given hedge kind. The counters (wingCount/flyCount/offCount) and their
@@ -1880,7 +1922,8 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     if (pos.filled !== false || !pos.pendingHedge) continue;
     const ph = pos.pendingHedge;
     const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement);
-    noteMarkLow(pos, chk, ph.limit);
+    noteMarkLow(pos, chk, ph.limit, 'DEBIT');
+    notePlaced(pos, chk, deps.underlying);
     if (chk.fillable) {
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
@@ -1920,7 +1963,8 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   const chk = sentCredit
     ? markFill(pos.sentLegs, pos.sentLimit, deps.getLeg, cfg.tickIncrement, deps, 'CREDIT')
     : markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement, deps);
-  noteMarkLow(pos, chk, sentCredit ? pos.sentLimit : pos.limit);
+  noteMarkLow(pos, chk, sentCredit ? pos.sentLimit : pos.limit, sentCredit ? 'CREDIT' : 'DEBIT');
+  notePlaced(pos, chk, deps.underlying);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
@@ -2049,6 +2093,15 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
 function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
   const tick = cfg.tickIncrement;
   for (const pos of st.positions) {
+    // POST-FILL OBSERVATION: a cover that has already booked keeps being watched (see the note where
+    // filledCover is set) so we can tell a graze from a decisive fill after the fact.
+    if (pos.filled && !pos.pendingCover && pos.filledCover) {
+      const fq = spreadQuote(pos.filledCover.legs, getLeg);
+      const fc = pos.filledCover;
+      const fCred = fc.sentNet === 'CREDIT' && fc.sentCredit != null;
+      noteMarkLow(fc, fq, fCred ? fc.sentCredit : fc.target, fCred ? 'CREDIT' : 'DEBIT');
+      continue;
+    }
     if (!pos.filled || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
     const quote = spreadQuote(pc.legs, getLeg);
@@ -2058,7 +2111,11 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // of one, so `markLow` vs `target` finally answers "did the market actually come to our price, and by
     // how much?" — which a single mark at placement cannot. Recorded before the fill test so a cover that
     // never fills still carries the evidence of how close it came.
-    noteMarkLow(pc, quote, pc.target);
+    // The dwell has to be measured against the order RESTING: a credit twin against its own credit,
+    // a debit against the canonical target.
+    const pcCredit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
+    noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT');
+    notePlaced(pc, quote, deps && deps.underlying);
     // TEST THE ORDER THAT IS ACTUALLY RESTING. `mark` and `pc.target` are DEBIT-CANONICAL, but when
     // capital recapture sent the credit twin the thing at the broker is a CREDIT at pc.sentCredit, and a
     // credit fills when the market comes UP to it. Those two tests coincide only while
@@ -2149,6 +2206,13 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // sentCredit lived only on pendingCover and was dropped on fill. Recording it makes the same audit
     // possible here instead of assuming the cover path is fine because nothing has bitten yet.
     pos.coverSentCredit = pc.sentCredit != null ? pc.sentCredit : null;
+    // KEEP THE FILLED COVER OBSERVABLE. It used to be dropped here, which ended all evidence the moment
+    // it booked — so a cover that just grazed its price and one the market later went a dollar through
+    // looked identical afterwards. `filledCover` carries the same object forward and resolveRestingCovers
+    // keeps feeding it observations, accruing throughLooks/throughAt/throughBest for the rest of the day.
+    // It is evidence only; nothing reads it to make a decision.
+    pc.filled = true;
+    pos.filledCover = pc;
     pos.pendingCover = null;
     decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark,
       bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk,
@@ -2166,6 +2230,7 @@ module.exports = {
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and
   // a caller that takes only the first will reprice forever and never book anything.
   resolveRestingCovers,
+  noteMarkLow, notePlaced,       // EVIDENCE CAPTURE — dwell direction, placement stamp, post-fill dwell
   resolvePendingOpen,
   resolvePendingHedges,
   pendingHedges,      // exported so the loop-termination guards are directly testable
