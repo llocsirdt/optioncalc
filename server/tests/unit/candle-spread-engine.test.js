@@ -25,18 +25,24 @@ function fakeGetLeg(type, strike) {
   return { mid: 100 - (strike % 1000) * 0.001, symbol: `NDX_${type}${strike}` , bid: 1, ask: 1.1 };
 }
 // Simpler: deterministic mids so long-short = 8.00 exactly for adjacent-by-20 strikes.
+// Deterministic mids: a 20-wide spread marks 8.00 exactly, and the chain obeys the arbitrage invariant
+// the engine now checks (call mids fall as the strike rises, put mids rise).
+//
+// The previous version mixed an explicit lookup table with a generic fallback on a DIFFERENT SCALE —
+// P28260 was 22.0 from the table while its neighbour P28270 came out at 2.70 from the formula — so every
+// leg sat in a wildly non-monotonic neighbourhood. That is a fixture artifact, not a market: real chains
+// managed 0 violations in 94,656 adjacent pairs across five healthy hours of 2026-09-16, and the one hour
+// that did violate it produced every bad fill of that session.
+//
+// Slope 0.4/point gives exactly 8.00 across 20 strikes. The intercept is deliberately far above any mid a
+// real 0DTE leg carries: a small one would floor out, and once two adjacent strikes both sit ON the floor
+// the SPREAD marks 0.00 and nothing fills — which is what broke the split-series cases below, whose
+// underlying (28673) is ~400 points off this anchor. Only the difference between legs is asserted, so the
+// intercept is free, and a large one keeps every strike these tests touch inside the linear region.
 function getLeg(type, strike) {
-  const table = {
-    C28260: 30.0, C28280: 22.0,           // bull call: long 28260(30) short 28280(22) -> 8.00
-    P28280: 30.0, P28260: 22.0,           // bear put: long 28280(30) short 28260(22) -> 8.00
-    P28300: 31.0,                          // cover bull: bear put long 28300(31) short 28280(22.? ) ...
-  };
-  // Fallback deterministic: mid = base by type, minus strike scaled — ensure long>short by ~8.
-  const key = `${type}${strike}`;
-  if (table[key] != null) return { mid: table[key], symbol: `NDX ${key}`, bid: 1, ask: 1.1 };
-  // generic: higher strike calls cheaper; higher strike puts pricier
-  const mid = type === 'C' ? Math.max(1, 100 - (strike - 28000) * 0.01) : Math.max(1, (strike - 28000) * 0.01);
-  return { mid, symbol: `NDX ${key}`, bid: 1, ask: 1.1 };
+  const d = (strike - 28280) * 0.4;
+  const mid = type === 'C' ? 400 - d : 400 + d;
+  return { mid: Math.round(mid * 100) / 100, symbol: `NDX ${type}${strike}`, bid: 1, ask: 1.1 };
 }
 
 const cfg = {

@@ -17,11 +17,18 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
 const cfg = { symbol: 'NDX', expiration: '2026-08-30', spreadWidth: 20, strikeIncrement: 10, quantity: 1,
   tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'rw' };
 // A bull call spread 21990/22010, priced so the SPREAD mark is exactly `m`. Moving both legs by the same
-// amount would leave the spread unchanged (long - short cancels it), which is why this sets the long leg
-// alone — the first version of this fixture made that mistake and every "market moved" case silently
-// tested a stationary mark.
+// amount would leave the spread unchanged (long - short cancels it), which is why this tilts the chain
+// around the short strike — the first version of this fixture made that mistake and every "market moved"
+// case silently tested a stationary mark.
+//
+// It quotes the whole chain, not just the two strikes in the spread, because the engine now checks a
+// leg against its NEIGHBOURS: a call mid may not rise as the strike rises, nor a put mid fall. The
+// previous version answered 2 for every strike but 21990, so 21990 sat $m above the strike below it —
+// free money, and the gate (rightly) refused to fill against it. Interpolating linearly across the
+// chain gives the same spread mark with a shape the no-arbitrage condition actually admits.
 const legAt = (m) => (type, strike) => {
-  const mid = strike === 21990 ? Math.round((2 + m) * 100) / 100 : 2;
+  const away = (type === 'C' ? 22010 - strike : strike - 21990) / 20;
+  const mid = Math.round((2 + m * away) * 100) / 100;
   return { mid, symbol: `NDX_${type}${strike}`, bid: mid - 0.2, ask: mid + 0.2 };
 };
 const legs = [{ side: 'long', type: 'C', strike: 21990 }, { side: 'short', type: 'C', strike: 22010 }];
@@ -83,8 +90,10 @@ function restingOpen(limit) {
 // Each was previously booked the instant it was priced, against the very marks that priced it — an
 // offset from those mids, a wing or fly from the ASK while the test read the MID. None could be refused.
 const hLegs = [{ side: 'long', type: 'C', strike: 29100 }, { side: 'short', type: 'C', strike: 29140 }];
+// Interpolated across the chain rather than tilting one strike, for the no-arbitrage reason given at legAt.
 const hLegAt = (m) => (type, strike) => {
-  const mid = strike === 29100 ? Math.round((2 + m) * 100) / 100 : 2;
+  const away = (type === 'C' ? 29140 - strike : strike - 29100) / 40;
+  const mid = Math.round((2 + m * away) * 100) / 100;
   return { mid, symbol: `NDX_${type}${strike}`, bid: mid - 0.2, ask: mid + 0.2 };
 };
 const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{

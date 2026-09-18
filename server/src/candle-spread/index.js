@@ -1139,6 +1139,9 @@ function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`;
 function buildEngineDeps(run, live) {
   return Object.assign({
       dryRun: run.dryRun,
+      // Needed by the chain-monotonicity gate in markFill to find each leg's neighbours. Listed in
+      // NOT_ENGINE_OPTS as geo-consumed, so it is not contract-checked, but the gate reads it off deps.
+      strikeIncrement: run.strikeIncrement,
       signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
       // v8 risk-cap opts (undefined for other variants → cap logic inert)
       riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,

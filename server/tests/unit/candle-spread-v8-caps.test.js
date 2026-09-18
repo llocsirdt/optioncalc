@@ -29,8 +29,16 @@ async function bar(record, decision, getLeg, deps = {}) {
 const cheapCall = { C21990: 30, C22010: 22 };
 const deepCall = { C21990: 19, C22010: 1 };
 const put = strike => Math.max(0.5, (strike - 22000) * 0.5); // for cover tent legs
+// Every OTHER call strike is extrapolated along the line through the two anchors above, because the engine
+// now refuses to fill against a chain where a call mid rises with the strike. The old fallback was a fixed
+// slope off 22050 that had nothing to do with the anchor table: on the cheap chain it put C21980 at 28
+// BELOW C21990 at 30, and on the deep chain (slope 0.9, not 0.4) the two disagreed even harder. Reading
+// the slope out of the table keeps each chain internally consistent whatever the anchors are set to.
 const mkGetLeg = calls => (type, strike) => {
-  const mid = type === 'C' ? (calls[`C${strike}`] != null ? calls[`C${strike}`] : Math.max(0.5, (22050 - strike) * 0.4)) : put(strike);
+  const slope = (calls.C22010 - calls.C21990) / 20;
+  const mid = type === 'C'
+    ? (calls[`C${strike}`] != null ? calls[`C${strike}`] : Math.max(0.5, calls.C21990 + (strike - 21990) * slope))
+    : put(strike);
   return { mid, symbol: `NDX_${type}${strike}`, bid: mid - 0.05, ask: mid + 0.05 };
 };
 

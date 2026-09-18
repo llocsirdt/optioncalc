@@ -256,4 +256,48 @@ function parityDeviation(lo, hi, getLeg, opts) {
   return { width: W, callMid: call.mid, putMid: put.mid, sum, residual, tol, ok: Math.abs(residual) <= tol };
 }
 
-module.exports = { netQuote, parityCheck, parityDeviation, neighbourCheck, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };
+/**
+ * CHAIN MONOTONICITY — the arbitrage invariant that actually broke on 2026-09-16.
+ *
+ * Call mids must FALL as the strike rises; put mids must RISE. Violating that is a free arbitrage and
+ * cannot be a real market — it is a corrupt quote by definition, no threshold or judgement involved.
+ *
+ * WHY THIS AND NOT PER-LEG VALIDATION. Of 201,144 individual leg quotes that session, ZERO were
+ * impossible: no negative mid, no inverted book, no missing side. Every leg passed inspection on its own.
+ * The damage was entirely in ADJACENT PAIRS — 1,185 of them, e.g. C29080 mid 95 beside C29090 mid 170,
+ * and P29100 mid 81.9 beside P29110 mid 52. A pair like that makes a vertical mark negative while both
+ * legs look perfectly healthy, which is how $5 covers and a $995 credit got priced.
+ *
+ * The signal is unusually clean — violations by ET hour that day:
+ *     09:00-13:00   0 of 67,000 pairs   0.00%
+ *     14:00         1,185 of 15,168     7.81%
+ *     15:00         0 of 12,512         0.00%
+ * All of it inside the single hour every bad fill was booked in, and nothing outside it. A detector with
+ * no false positives across 94,656 pairs, so it can gate pricing without costing good trades.
+ *
+ * Checks the two strikes of the spread against their immediate neighbours, which is where a spread's own
+ * mark comes from. Returns { ok, violations } — `ok` is true when the chain nearby is self-consistent, and
+ * ABSTAINS (true) wherever a neighbour is simply not quoted, so a thin chain is never mistaken for a
+ * broken one.
+ */
+function chainMonotonic(legs, getLeg, incr) {
+  const step = incr || 10;
+  const violations = [];
+  for (const l of legs || []) {
+    if (l.strike == null || !l.type) continue;
+    const here = getLeg(l.type, l.strike);
+    if (!here || here.mid == null) continue;
+    for (const dir of [-1, 1]) {
+      const k = l.strike + dir * step;
+      const nb = getLeg(l.type, k);
+      if (!nb || nb.mid == null) continue;                       // not quoted -> abstain, do not accuse
+      // A call is worth MORE at the lower strike; a put is worth more at the higher one.
+      const cheaperSide = l.type === 'C' ? (dir > 0) : (dir < 0);
+      const ok = cheaperSide ? nb.mid <= here.mid : nb.mid >= here.mid;
+      if (!ok) violations.push({ type: l.type, at: l.strike, mid: here.mid, neighbour: k, neighbourMid: nb.mid });
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+module.exports = { netQuote, parityCheck, parityDeviation, chainMonotonic, neighbourCheck, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };

@@ -153,7 +153,10 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   const trader = require('../../src/candle-spread/trader');
   // Bull put CREDIT spread: short the higher strike, long the lower. Its credit = P(hi) - P(lo).
   const legs = [{ side: 'short', type: 'P', strike: 29400 }, { side: 'long', type: 'P', strike: 29390 }];
-  const chain = (hi, lo) => (t, k) => ({ mid: k === 29400 ? hi : lo, bid: 0, ask: 200, symbol: `NDX_${t}${k}` });
+  // Only the two modelled strikes are quoted. A catch-all that answers for every strike would invent a
+  // non-monotonic neighbourhood and trip the chain gate — a fixture artifact, not a market.
+  const chain = (hi, lo) => (t, k) => (k === 29400 ? { mid: hi, bid: 0, ask: 200, symbol: `NDX_${t}${k}` }
+    : k === 29390 ? { mid: lo, bid: 0, ask: 200, symbol: `NDX_${t}${k}` } : null);
   const ASK = 4.20;                       // the credit we are asking for
 
   // Market short of our price: credit mark 4.10 against an ask of 4.20 -- the real order does not fill.
@@ -175,7 +178,8 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
 
   // DEBIT is unchanged, both directions.
   const dLegs = [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29400 }];
-  const dChain = (lo, hi) => (t, k) => ({ mid: k === 29390 ? lo : hi, bid: 0, ask: 200, symbol: `NDX_${t}${k}` });
+  const dChain = (lo, hi) => (t, k) => (k === 29390 ? { mid: lo, bid: 0, ask: 200, symbol: `NDX_${t}${k}` }
+    : k === 29400 ? { mid: hi, bid: 0, ask: 200, symbol: `NDX_${t}${k}` } : null);
   ok(trader.markFill(dLegs, 6.00, dChain(11, 5), 0.05, {}).fillable, 'a debit fills when the mark is at/below the limit');
   ok(!trader.markFill(dLegs, 6.00, dChain(12, 5), 0.05, {}).fillable, 'and not when the mark is above it');
 }

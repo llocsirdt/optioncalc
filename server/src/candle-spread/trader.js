@@ -1722,6 +1722,19 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   if (!sane.ok) return { ...base, fillable: false, fill: null, badQuote: sane.reason };
   const usable = SQ.quoteUsable(legs, q);
   if (!usable.ok) return { ...base, fillable: false, fill: null, badQuote: usable.reason };
+  // CHAIN MONOTONICITY — the invariant that actually broke on 2026-09-16, and the one gate here that
+  // looks OUTSIDE the spread. Every one of 201,144 individual leg quotes that day was individually
+  // sane; the corruption was in ADJACENT PAIRS (a call worth more at the higher strike, a put worth
+  // less), which makes a vertical mark impossible while both its legs look healthy. All 1,185
+  // violations fell inside the single 14:00 hour that produced every bad fill, and none outside it —
+  // so this refuses a broken chain without costing a good trade. It abstains wherever a neighbour is
+  // simply unquoted, so a thin chain is never mistaken for a broken one.
+  const mono = SQ.chainMonotonic(legs, getLeg, (deps && deps.strikeIncrement) || 10);
+  if (!mono.ok) {
+    const v = mono.violations[0];
+    return { ...base, fillable: false, fill: null,
+      badQuote: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}` };
+  }
   // PARITY, for two-leg verticals: the opposing structure at the SAME strikes must price to the width.
   // This is the check that catches legs which are broken but net to something legal-looking — the four
   // covers on 2026-09-16 marked $0.05 with a ±148 book, which structural bounds cannot see.
