@@ -2059,7 +2059,28 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // how much?" — which a single mark at placement cannot. Recorded before the fill test so a cover that
     // never fills still carries the evidence of how close it came.
     noteMarkLow(pc, quote, pc.target);
-    if (mark == null || mark > pc.target) continue;      // not fillable yet — keep resting
+    // TEST THE ORDER THAT IS ACTUALLY RESTING. `mark` and `pc.target` are DEBIT-CANONICAL, but when
+    // capital recapture sent the credit twin the thing at the broker is a CREDIT at pc.sentCredit, and a
+    // credit fills when the market comes UP to it. Those two tests coincide only while
+    // sentCredit == W - target; they did not, because the twin was priced off its own mark until 2096509,
+    // so the debit test held covers that the real order had already filled.
+    //
+    // Measured on 2026-09-17: of 94 credit covers left resting all day, 92 (98%) saw a credit mark that
+    // reached the price they were asking. Those positions stayed UNCOVERED and carried the full naked
+    // risk of the open for the rest of the session. This is the cover-side mirror of the credit OPEN fill
+    // bug fixed in 53b12b7, and the reason the earlier audit missed it is that it asked whether FILLED
+    // credit covers deserved to fill — never whether the unfilled ones deserved not to.
+    const creditRest = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
+    if (mark == null) continue;
+    if (creditRest) {
+      const ks = (pc.legs || []).map((l) => l.strike);
+      const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
+      // The credit the market is offering for the twin, by parity with the canonical mark.
+      const creditNow = round2(cw - mark);
+      if (!(creditNow >= pc.sentCredit)) continue;       // market has not come up to our ask yet
+    } else if (mark > pc.target) {
+      continue;                                          // debit: not fillable yet — keep resting
+    }
     // THE MAIN COVER FILL PATH, and where most of 2026-09-16's 154 bogus fills were booked. The guard
     // above only asks whether the mark reached the target, which an IMPOSSIBLE mark passes trivially:
     // -32.20 is comfortably below any positive target. The fill price then floored at one tick, so a
@@ -2070,8 +2091,21 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: sane.reason, target: pc.target });
       continue;
     }
-    // Floor at the MARK, not at a tick: a fill never prices below what the thing is marked at.
-    const fill = round2(Math.max(mark, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
+    // THE PRICE, IN THE SPACE THE ORDER WAS SENT IN, then booked debit-canonically.
+    // A debit pays at most its target and never below the market. A credit RECEIVES at least what it
+    // asked and never more than the market — the mirror — and the book records the canonical equivalent,
+    // W - credit, so floor/settlement/cover logic keeps seeing one convention.
+    let fill;
+    if (creditRest) {
+      const ks = (pc.legs || []).map((l) => l.strike);
+      const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
+      const creditNow = round2(cw - mark);
+      const got = round2(Math.min(creditNow, Math.max(pc.sentCredit, round2(creditNow - tick))));
+      fill = round2(cw - got);
+    } else {
+      // Floor at the MARK, not at a tick: a fill never prices below what the thing is marked at.
+      fill = round2(Math.max(mark, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));
+    }
     // GOVERNOR COVER DEFERRAL — booking this cover would un-hedge the book past the ceiling. Leave the
     // order working and re-check next candle. Covers that improve (or hold) the floor always book.
     if (govOn(deps)) {

@@ -225,6 +225,49 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   }
 }
 
+  // ── A RESTING CREDIT COVER FILLS WHEN THE MARKET COMES UP TO IT ───────────────────────────────────
+  const trader = require('../../src/candle-spread/trader');
+  // resolveRestingCovers tested `mark > pc.target`, both DEBIT-CANONICAL, while the order actually at the
+  // broker was a CREDIT at pc.sentCredit. Those tests coincide only while sentCredit == W - target, which
+  // they did not, so covers sat unfilled that the real order had already filled: of 94 credit covers left
+  // resting on 2026-09-17, 92 (98%) saw a credit mark that reached their ask. Those positions carried the
+  // open's full naked risk for the rest of the day.
+  {
+    const cfg = { symbol: 'NDX', expiration: '2026-09-17', spreadWidth: 40, strikeIncrement: 10,
+      quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
+    // Canonical cover legs worth `m` as a debit; the twin's credit is therefore 40 - m.
+    const chainAt = (m) => (t, k) => ({ mid: k === 29390 ? 20 : 20 - m, bid: 0, ask: 60, symbol: `NDX_${t}${k}` });
+    const mk = (sentCredit, target) => ({
+      id: 'p', side: 'bear', filled: true, quantity: 1, limit: 21.8, shortStrike: 29430,
+      legs: [{ side: 'long', type: 'P', strike: 29470 }, { side: 'short', type: 'P', strike: 29430 }],
+      covered: false,
+      pendingCover: { legs: [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29430 }],
+        target, sentNet: 'CREDIT', sentCredit, placedEpoch: 1 },
+    });
+    // Canonical mark 25.45 => the twin is worth 14.55 of credit. An ask of 12.65 has been reached.
+    const a = mk(12.65, 14.2);
+    trader.resolveRestingCovers({ positions: [a] }, cfg, chainAt(25.45), [], {});
+    ok(a.covered === true, 'a credit cover fills once the credit mark reaches its ask');
+    // Booked debit-canonically: W - credit received, never the stale debit target.
+    ok(a.coverLimit != null && a.coverLimit > 25 && a.coverLimit < 28,
+      `and books W - credit received (${a.coverLimit})`);
+    // THE REGRESSION GUARD: the old debit test (25.45 > 14.2) would have left this resting.
+    ok(25.45 > 14.2, 'and the old debit-canonical test would have refused it — the bug');
+
+    // Market not yet up to the ask: canonical mark 30 => credit 10, below a 12.65 ask.
+    const b = mk(12.65, 14.2);
+    trader.resolveRestingCovers({ positions: [b] }, cfg, chainAt(30), [], {});
+    ok(!b.covered, 'and does NOT fill while the credit mark is short of the ask');
+
+    // A DEBIT cover is unchanged: fills when the mark falls to its target.
+    const d = { ...mk(null, 27), pendingCover: undefined };
+    d.pendingCover = { legs: [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29430 }],
+      target: 27, sentNet: 'DEBIT', placedEpoch: 1 };
+    d.covered = false;
+    trader.resolveRestingCovers({ positions: [d] }, cfg, chainAt(25.45), [], {});
+    ok(d.covered === true, 'a debit cover still fills when the mark falls to its target');
+  }
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 })();
