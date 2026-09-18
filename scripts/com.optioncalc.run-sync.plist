@@ -12,10 +12,14 @@
          2026-09-16 and took 09-09 through 09-14 with it, because the sync script existed and had never
          been scheduled: it last ran around 09-08. Until run state moves to S3, this local archive is the
          only durable copy. -->
+    <!-- Runs the COPY in Application Support, not the repo file. macOS TCC blocks a background agent
+         from exec'ing anything under ~/Documents (exit 126, "Operation not permitted"), which is how the
+         first install silently never ran. capture-cron.sh is installed the same way for the same reason;
+         the repo copy stays the source of truth and is re-copied after edits. -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/tdriscoll/Documents/surf/optioncalc/scripts/candle-spread-sync.sh</string>
+        <string>/Users/tdriscoll/Library/Application Support/optioncalc/candle-spread-sync.sh</string>
     </array>
 
     <!-- Weekdays at 18:00 local (ET) — after EOD settlement has written the closing books, and half an
