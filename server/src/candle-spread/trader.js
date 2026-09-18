@@ -141,14 +141,19 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     : lockTarget;
   // placedEpoch / placedUnder are what the ladder walks on: how long this has rested and how far the
   // underlying has travelled since. Without them a resting order has no way to know it has gone stale.
-  pos.pendingCover = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike,
+  // BUILT, NOT YET ATTACHED. This used to be assigned to pos.pendingCover here, before the send below —
+  // which is inside `if (!srl.error)` and `if (price > 0)`. When the SENT legs are unquotable (they are a
+  // different instrument from the booked ones whenever the style is credit or the resolver shifted) or
+  // the price comes back non-positive, no order goes to the broker at all — but the pending cover existed
+  // anyway, and resolveRestingCovers would book it as filled and credit its floor to realizedPnl.
+  // A lock reported for an order that was never placed. Attached only after a send is confirmed.
+  const pending = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike,
     markAtPlace: plan.mark, placedAt: candleTime, placedEpoch: Date.now(), placedUnder: deps.underlying != null ? deps.underlying : null,
     minLock: ML, openCost: pos.limit };
-  pos.coverStatus = 'resting';
   // SEND the resolved cover (debit or credit) at the resolved wing.
   const sendLegs = (style === 'debit' && !shift) ? plan.legs : CL.coverLegsFor(pos.side, anchor, W, style);
   const srl = resolveLegs(sendLegs, deps.getLeg);
-  let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0;
+  let restOrderId = null, sentNet = 'DEBIT', sentCredit = null, price = 0, sentOk = false;
   if (!srl.error) {
     // THE DEBIT PRICE FIRST, ALWAYS — the credit twin is derived from it rather than priced on its own.
     //
@@ -191,8 +196,18 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
       const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: sendLegs, limit: price, net: sentNet, mark: plan.mark });
       restOrderId = (placed && placed.orderId) || null;
+      sentOk = true;
     }
   }
+  // NOTHING WAS SENT -> NOTHING RESTS. Leave the position uncovered so it is visible as exposed and is
+  // retried next bar with a fresh quote, rather than silently carrying a lock it does not have.
+  if (!sentOk) {
+    decisions.push({ action: 'cover-not-sent', positionId: pos.id, style, target,
+      reason: srl.error ? `sent legs unquotable (${srl.error})` : 'no valid price' });
+    return;
+  }
+  pos.pendingCover = pending;
+  pos.coverStatus = 'resting';
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
   pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
@@ -1994,10 +2009,26 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   const step = deps.openLadderStepDollars != null ? deps.openLadderStepDollars
     : (deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25);
   const ceiling = pos.cap != null ? pos.cap : Infinity;
-  const next = round2(Math.min(pos.limit + step, ceiling, chk.mark));
+  // THE LADDER WALKS IN DEBIT SPACE, ALWAYS. `chk` follows the order that is RESTING, so for a credit
+  // twin chk.mark is the CREDIT structure's mark — which is NEGATIVE. Feeding that to
+  // Math.min(pos.limit + step, ceiling, mark) returns the negative every time, `next > pos.limit` is
+  // never true, and the order is never worked: 43.2% of opens on 2026-09-17 were credit-sent, across the
+  // 74 variants that run the ladder. Introduced by the fill-direction fix (53b12b7) — before it, chk was
+  // always the debit quote and this read correctly.
+  //
+  // The market's DEBIT-space mark is the bound either way (an open is a BUY; walking toward the market
+  // means paying more), so quote the canonical legs for it. The twin's ask is then re-derived as
+  // W - limit, which is how placeRestingCover keeps the two economically identical by construction.
+  const ladderMark = sentCredit ? spreadQuote(pos.legs, deps.getLeg).mark : chk.mark;
+  if (ladderMark == null) return 0;
+  const next = round2(Math.min(pos.limit + step, ceiling, ladderMark));
   if (next > pos.limit) {
+    const ks = (pos.legs || []).map((l) => l.strike);
+    const w = ks.length ? Math.max(...ks) - Math.min(...ks) : cfg.spreadWidth;
     decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
-      from: pos.limit, to: next, mark: chk.mark, cap: pos.cap });
+      from: pos.limit, to: next, mark: ladderMark, cap: pos.cap,
+      ...(sentCredit ? { sentFrom: pos.sentLimit, sentTo: round2(w - next) } : {}) });
+    if (sentCredit) pos.sentLimit = round2(w - next);
     pos.limit = next;
     return 1;
   }

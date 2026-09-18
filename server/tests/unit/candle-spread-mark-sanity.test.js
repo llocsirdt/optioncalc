@@ -310,6 +310,97 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     ok(pl.placedUnder === 29401.5, 'and stamps the underlying on the order itself');
   }
 
+  // ── THE OPEN LADDER MUST WORK A CREDIT TWIN TOO ───────────────────────────────────────────────────
+  // The ladder walks in DEBIT space. When the fill test started following the RESTING order (53b12b7),
+  // chk.mark became the credit structure's mark — NEGATIVE — so Math.min(limit + step, ceiling, mark)
+  // returned the negative every time and `next > limit` was never true. 43.2% of opens on 2026-09-17
+  // were credit-sent, across the 74 variants that run the ladder: all of them would have rested unworked
+  // all session, against feedback_opens_must_fill.
+  {
+    const cfg = { symbol: 'NDX', expiration: '2026-09-18', spreadWidth: 10, strikeIncrement: 10,
+      quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
+    // Debit spread marks 6.50 against a 6.00 limit (no fill); the twin is therefore worth 3.50 of credit
+    // against a 4.50 ask (no fill either). Neither fills, so the ladder is the only thing that can act.
+    const chain = (ty, k) => ({ mid: ty === 'C' ? (k === 29390 ? 20 : 13.5) : (k === 29390 ? 6 : 9.5),
+      bid: 0, ask: 40, symbol: `NDX_${ty}${k}` });
+    const mk = (credit) => ({ id: 'p1', side: 'bull', filled: false, quantity: 1, limit: 6.0, cap: 7.0,
+      openTime: '09/18 10:00',
+      legs: [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29400 }],
+      ...(credit ? { sentNet: 'CREDIT', sentLimit: 4.5,
+        sentLegs: [{ side: 'short', type: 'P', strike: 29400 }, { side: 'long', type: 'P', strike: 29390 }] } : {}) });
+    const run = (credit) => {
+      const pos = mk(credit), d = [];
+      trader.resolvePendingOpen({ positions: [pos], pendingOpenId: 'p1' }, cfg,
+        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395,
+          replaceOrder: async () => ({}) }, d);
+      return { pos, reprice: d.find((x) => x.action === 'open-reprice') };
+    };
+    const deb = run(false), cre = run(true);
+    ok(deb.reprice && deb.pos.limit === 6.25, `a debit open is worked toward the market (${deb.pos.limit})`);
+    ok(cre.reprice && cre.pos.limit === 6.25, `and so is a CREDIT twin (${cre.pos.limit}) — the regression`);
+    // The twin's ask must move the opposite way, and stay parity-exact against the new debit limit.
+    ok(cre.pos.sentLimit === 3.75, `the twin asks LESS credit as it walks (${cre.pos.sentLimit})`);
+    ok(Math.abs(cre.pos.limit + cre.pos.sentLimit - cfg.spreadWidth) < 0.001,
+      'and limit + ask still equals the width — parity preserved by construction');
+    // Neither may walk past the ceiling it was gated on.
+    const capped = (() => {
+      const pos = mk(true); pos.cap = 6.10; const d = [];
+      trader.resolvePendingOpen({ positions: [pos], pendingOpenId: 'p1' }, cfg,
+        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395,
+          replaceOrder: async () => ({}) }, d);
+      return pos;
+    })();
+    ok(capped.limit <= 6.10, `the ladder still respects the cap (${capped.limit})`);
+  }
+
+  // ── A COVER THAT WAS NEVER SENT MUST NOT BE BOOKED ────────────────────────────────────────────────
+  // pendingCover used to be attached BEFORE the send, which sits behind `if (!srl.error)` and
+  // `if (price > 0)`. The SENT legs are a different instrument from the BOOKED ones whenever the style is
+  // credit or the resolver shifted, so the send can fail on an unquotable leg while the booked legs quote
+  // fine. resolveRestingCovers then booked it as filled and credited its floor to realizedPnl — a lock
+  // reported for an order that never reached the broker.
+  {
+    const cfg = { symbol: 'NDX', expiration: '2026-09-18', spreadWidth: 40, strikeIncrement: 10,
+      quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
+    // The OPEN's calls quote and are deep ITM, so the style resolves to credit; the credit twin then
+    // reaches a call strike the chain cannot quote, while the booked puts quote perfectly.
+    const broken = (ty, k) => {
+      if (ty === 'C' && k === 29360) return { mid: 70, bid: 69, ask: 71, symbol: 'a' };
+      if (ty === 'C' && k === 29400) return { mid: 40, bid: 39, ask: 41, symbol: 'b' };
+      if (ty === 'C') return null;
+      return { mid: k === 29400 ? 12 : 20, bid: 11, ask: 21, symbol: `P${k}` };
+    };
+    const whole = (ty, k) => ({ mid: ty === 'C' ? (k === 29360 ? 70 : k === 29400 ? 40 : 24)
+      : (k === 29400 ? 12 : 20), bid: 1, ask: 99, symbol: `${ty}${k}` });
+    const mk = () => ({ id: 'p1', side: 'bull', filled: true, quantity: 1, limit: 22, shortStrike: 29400,
+      covered: false, pendingCover: null,
+      legs: [{ side: 'long', type: 'C', strike: 29360 }, { side: 'short', type: 'C', strike: 29400 }] });
+    const plan = { legs: [{ side: 'short', type: 'P', strike: 29400 }, { side: 'long', type: 'P', strike: 29440 }],
+      mark: 8, geometry: 'tent', longStrike: 29440 };
+    const run = async (chain) => {
+      const pos = mk(), sent = [], d = [];
+      await trader.placeRestingCover(pos, plan, cfg, { getLeg: chain, capitalRecapture: true,
+        creditCoverFrac: 0.65, coverPriceMode: 'lock', underlying: 29400,
+        placeOrder: async (p, m) => { sent.push(m); return { orderId: 'o' }; } }, '09/18 10:00', d, 't', 8);
+      // Snapshot the resting order BEFORE resolving: a healthy cover can fill on its first observation,
+      // and pendingCover is then moved to filledCover, so checking it afterwards asks the wrong question.
+      const resting = pos.pendingCover;
+      trader.resolveRestingCovers({ positions: [pos] }, cfg, chain, [], {});
+      return { pos, sent, d, resting };
+    };
+    const bad = await run(broken);
+    ok(bad.sent.length === 0, 'nothing reaches the broker when the sent legs are unquotable');
+    ok(!bad.pos.pendingCover, 'and no pending cover is attached');
+    ok(!bad.pos.covered, 'so the position is NOT booked as covered — the regression');
+    ok(bad.d.some((x) => x.action === 'cover-not-sent'), 'and the failure is recorded, not silent');
+
+    const good = await run(whole);
+    ok(good.sent.length === 1 && good.resting, 'a healthy cover still sends and rests');
+    ok(good.resting.sentNet === 'CREDIT' && good.resting.target === 10,
+      'carrying the right net and target');
+    ok(good.pos.covered === true, 'and it books when the market is already there');
+  }
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 })();
