@@ -429,7 +429,19 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   if (style === 'credit') {
     const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark);
     if (!c.error) { payload = c.payload; sentNet = 'CREDIT'; sentLegs = c.legs; sentLimit = c.limit; }
-    else if (legStyle) { decisions.push({ action: 'open-skip-leg', side: openSide, error: 'twin credit unquotable' }); return; }  // forced twin: can't fall back to a conflicting debit
+    else if (legStyle) {
+      // FORCED TWIN — leg-uniqueness picked the credit style because the debit legs conflict with a
+      // position we already hold, so there is no debit to fall back to and the open is abandoned.
+      //
+      // RECORD WHY. These went from 11 a day to 126 the day the twin gained a parity check and a range
+      // refusal (both of which replaced a silent clamp), and the generic message made it impossible to
+      // tell an over-strict gate from a genuinely unquotable chain. The refusal reason distinguishes
+      // them: `disagrees with parity` is the tolerance biting, `outside [0, W]` is a credit that cannot
+      // exist, anything else is the chain. Do not tune either threshold without reading this first.
+      decisions.push({ action: 'open-skip-leg', side: openSide, error: 'twin credit unquotable',
+        reason: c.error, style: legStyle, lower: res.lower, upper: res.upper, debitMark: res.mark });
+      return;
+    }
     else decisions.push({ action: 'credit-open-fallback', side: openSide, error: c.error });   // recapture-only: fall back to debit
   }
   const placed = await deps.placeOrder(payload, { kind: 'open', side: openSide, legs: sentLegs, limit: sentLimit, net: sentNet, mark: res.mark });
