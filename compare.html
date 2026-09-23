@@ -92,25 +92,34 @@
      TOP-RIGHT, opposite the variant id, and sized with it: at 9px and .28 opacity the glyphs were too
      small to tell apart and the untriggered ones were barely on the screen at all. The off state is now a
      SOLID grey rather than a faded colour — readable, and still obviously not the live state. */
-  .cell .cname .feat { font:13px ui-monospace,monospace; display:flex; gap:3px; align-items:center;
-    margin-left:auto; white-space:nowrap; line-height:1; }
+  .cell .feat { font:13px ui-monospace,monospace; display:flex; gap:3px; align-items:center;
+    white-space:nowrap; line-height:1; justify-content:flex-start; margin-top:1px; flex-wrap:wrap; }
+  /* ORDER COUNTS — top right, where the feature strip used to be. Tight and fixed-width-ish so a long
+     variant id keeps its line: four short pairs beat four icon+count pairs at the same information. */
+  .cell .cname .cnt { font:10px ui-monospace,monospace; display:flex; gap:4px; align-items:center;
+    margin-left:auto; white-space:nowrap; line-height:1; letter-spacing:0; }
+  .cell .cname .cnt i { font-style:normal; display:inline-flex; align-items:baseline; gap:0; }
+  .cell .cname .cnt i b { font-weight:600; opacity:.55; margin-left:.5px; font-size:9px; }
+  .cell .cname .cnt i.o { color:#2f6f8f; } .cell .cname .cnt i.c { color:#2f8f6f; }
+  .cell .cname .cnt i.u { color:#9aa3ab; } .cell .cname .cnt i.u.hot { color:#c0564f; }
+  .cell .cname .cnt i.h { color:#6b5ea8; }
   /* Each glyph is its own TAP TARGET, so the padding is the point rather than decoration: at 6px apart
      with no padding the hit areas touched and a thumb could not reliably pick one. The padding widens
      the target without pushing the glyphs apart visually — the gap shrinks to 3px to pay for it, and the
      strip ends up the same width while every target is roughly twice the area. */
-  .cell .cname .feat i { font-style:normal; cursor:pointer; white-space:nowrap; padding:5px 4px;
+  .cell .feat i { font-style:normal; cursor:pointer; white-space:nowrap; padding:5px 4px;
     border-radius:3px; display:inline-flex; align-items:center; gap:1px; }
-  .cell .cname .feat i:active { background:rgba(127,127,127,.18); }
-  .cell .cname .feat i.lad { color:#4a7fb5; } .cell .cname .feat i.giv { color:#9a5bb8; }
-  .cell .cname .feat i.off { color:#2f8f6f; } .cell .cname .feat i.wng { color:#b5822a; }
-  .cell .cname .feat i.stk { color:#6f9b21; } .cell .cname .feat i.gov { color:#c0564f; }
+  .cell .feat i:active { background:rgba(127,127,127,.18); }
+  .cell .feat i.lad { color:#4a7fb5; } .cell .feat i.giv { color:#9a5bb8; }
+  .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
+  .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
   /* AFTER the colour rules and at equal specificity, so the untriggered grey wins without !important. */
-  .cell .cname .feat i:not(.on) { color:#7b858f; }
+  .cell .feat i:not(.on) { color:#7b858f; }
   /* The count always renders, 0 included. A bare glyph made "enabled but quiet" and "fired" look like
      two different KINDS of thing; with a number on both, the strip reads as one row of counters and the
      difference is just the value — which is what it actually is. */
-  .cell .cname .feat i b { font-weight:700; font-size:11px; }
-  .cell .cname .feat i:not(.on) b { font-weight:400; }
+  .cell .feat i b { font-weight:700; font-size:11px; }
+  .cell .feat i:not(.on) b { font-weight:400; }
   /* TAP DETAIL — `title` only works on hover, so on a phone the strip was unreadable: you could see THAT
      something fired and never what. Tapping a glyph opens this; tapping anywhere else closes it. */
   .feattip { position:absolute; z-index:40; max-width:290px; background:var(--bg,#fff); color:var(--fg,#111);
@@ -196,7 +205,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.2</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.9.3</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -429,7 +438,15 @@ async function loadBacktestRuns(date, sym, variants, onProgress) {
     const bundle = await fetchJson(replayUrl(date));
     const out = {};
     for (const [v, rec] of Object.entries(bundle.runs || {})) out[v] = rec;
-    if (Object.keys(out).length) return { runs: out, via: 'bundle', symbol: bundle.symbol || sym, date: bundle.date || date };
+    // THE BUNDLE HAS TO CARRY POSITIONS, not merely exist. The comment above used to say /replay 404s on
+    // the deployed box forever, so "it answered" was taken as "it is good" — that stopped being true.
+    // Prod now returns HTTP 200 with 80 runs and ZERO of them holding a single position (1 event each),
+    // and because the fetch resolved, the fan-out below never ran. Every overlay curve silently became
+    // `{empty:true}` and the backtest lines vanished from all 50 cells with no error anywhere.
+    // Counting positions rather than runs makes the fallback fire on an empty bundle exactly as it does
+    // on a missing one, and lets a repaired generator start being used again without another edit here.
+    const withPositions = Object.values(out).filter((r) => ((r && r.state && r.state.positions) || []).length).length;
+    if (withPositions) return { runs: out, via: 'bundle', symbol: bundle.symbol || sym, date: bundle.date || date };
   } catch (e) { /* no bundle on this host — fan out below */ }
   const list = (variants && variants.length) ? variants : Object.keys(baselines || {});
   if (!list.length) { const e = new Error('no variants to request'); e.status = 404; throw e; }
@@ -608,10 +625,15 @@ function render() {
       const signCls = d.underPnl == null ? '' : d.underPnl > 0 ? ' pos' : d.underPnl < 0 ? ' neg' : '';
       html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}  (double-click → open in debug)\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
         + (fTier ? `<div class="stateBar ${fTier === 'f' ? 'fav' : fTier === 'w' ? 'favw' : 'avo'}"></div>` : '')
-        + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}${featStrip(v)}</div>`
+        + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}${countStrip(v)}</div>`
         + (fTier ? `<div class="lift ${fTier}">${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d</div>` : '')
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
         + axis
+        // FEATURE STRIP, now BELOW the chart. It used to sit top-right beside the variant id and the two
+        // together were wider than the cell: a long name like v0-20-cATM wrapped to a second line, and on
+        // the widest strips the cell itself grew past its 184px. The id is the thing you scan by, so it
+        // gets the header row to itself and the strip takes the full width down here, where it has room.
+        + featStrip(v)
         + (cellsB[v] && cellsB[v].underPnl != null && d.underPnl != null
             ? `<div class="cmp">${CMP_LABEL[0]} ${usd(d.underPnl)} · <span class="b">${CMP_LABEL[1]} ${usd(cellsB[v].underPnl)}</span> · Δ ${usd(cellsB[v].underPnl - d.underPnl)}</div>`
             : '')
@@ -964,6 +986,30 @@ function featSummary(rec) {
     out.push({ ...f, n: fired.length, enabled, lines: fired });
   }
   return out;
+}
+// ORDER COUNTS — the top-right strip. Opens / Covers / Unfilled / Hedges, abbreviated "#O #C #U #H".
+// These are counts of ORDERS, which is a different question from the feature strip below the chart: that
+// says which mechanisms fired, this says what the day actually consisted of. Hedges are deliberately ONE
+// number (offsets + wings + flies) — the split matters when you are debugging a hedge, not when you are
+// scanning 80 cells for which variant traded.
+function orderCounts(rec) {
+  const ps = (rec && rec.state && rec.state.positions) || [];
+  const isHedge = (p) => !!p.hedge || /^(off|wing|fly)-/.test(p.id || '');
+  let o = 0, c = 0, u = 0, h = 0;
+  for (const p of ps) {
+    if (isHedge(p)) { if (p.filled) h++; else u++; continue; }
+    if (p.filled) o++; else u++;                       // an open that never filled is an unfilled order
+    if (p.covered) c++;
+    else if (p.pendingCover) u++;                      // a cover that rested all day and never booked
+  }
+  return { o, c, u, h };
+}
+function countStrip(v) {
+  const k = orderCounts(records[v]);
+  return `<span class="cnt" title="${k.o} opens · ${k.c} covers · ${k.u} unfilled (opens and covers that never booked)`
+    + ` · ${k.h} hedges (offsets + wings + flies)">`
+    + `<i class="o">${k.o}<b>O</b></i><i class="c">${k.c}<b>C</b></i>`
+    + `<i class="u${k.u ? ' hot' : ''}">${k.u}<b>U</b></i><i class="h">${k.h}<b>H</b></i></span>`;
 }
 function featStrip(v) {
   const fs = featSummary(records[v]);
