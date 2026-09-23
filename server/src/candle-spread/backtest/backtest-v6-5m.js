@@ -346,6 +346,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
+  let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
   let gateCutoff = 0, gateFloor = 0;   // opens blocked by the stop-opening gates
   let flyCount = 0, flySpent = 0;      // valley-repair structures bought
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
@@ -707,6 +708,37 @@ function runDay5m(bars, signalFn, opts = {}) {
         const through = pos.side === 'bull' ? (pos.shortStrike - S) : (S - pos.shortStrike);
         if (through >= pts) giveUp = true;
       }
+      // ⛔ MEASURED AND REJECTED 2026-09-22 — kept only so the measurement is reproducible. Do not enable,
+      // and do not re-measure without reading the experiments-log entry first. 922 days, 8 variants, every
+      // arm worse: fleet $22.60M -> $19.36M at the LEAST bad arm (-14.3%) and drawdown got WORSE. Cover
+      // fill rose hugely (v9-40-unc 46.5% -> 80.4%) and P&L fell anyway. Exactly one cell improved
+      // risk-adjusted return anywhere (v9-10 @ 14:30/35%, ret/DD 335 -> 353) and it still cost $277k.
+      // The 8-day prod counterfactual that motivated it (+$413,850, positive on all 8) did not survive
+      // contact with 765 days — the note below is the original rationale, preserved.
+      //
+      // DECAY STOP, GATED BY THE CLOCK (opts.decayStop = fraction of cost, opts.decayStopAfter = "HH:MM").
+      // The user's framing, 2026-09-22: "effectively a stop loss but gated by time, so we're giving the
+      // market a chance to reverse, as our strategies are designed to expect, but trying to salvage
+      // capital when the decay would accelerate and likely eat up what is left."
+      //
+      // WHY IT IS NOT give-up. Give-up triggers on the underlying crossing back through the position's
+      // own short strike — a position that WAS winning and turned. This triggers on the position having
+      // already decayed to a fraction of what was paid for it, whether it ever won or not, which is the
+      // adversely-selected inventory the cover mechanism never reaches: a cover fills when the position
+      // moves in our FAVOUR, so what stays uncovered is what went against us.
+      //
+      // WHY THE CLOCK GATE IS NOT OPTIONAL. Measured as a counterfactual over 8 days of stored chain
+      // snapshots, the same fraction with NO gate is -$67,879, and gated it is strongly positive — before
+      // roughly 13:00 a 0DTE position still has time to reverse, after it does not. This is the whole
+      // premise: buy the reversals time, then stop paying for them.
+      //
+      // Uncapped, unlike give-up: give-up bounds its price at break-even + giveUpMaxLoss x W because it is
+      // exiting a trade that may still be near even. Here the loss is ALREADY in the mark, so a cap would
+      // only refuse the fill and leave the position to decay the rest of the way.
+      let decayed = false;
+      if (opts.decayStop > 0 && pc.openCost > 0 && nowET.slice(-5) >= (opts.decayStopAfter || '14:30')) {
+        if (legsMark(pos.legs, S, tau, iv) <= opts.decayStop * pc.openCost) decayed = true;
+      }
       let workingTarget = pc.target;
       // PRECEDENCE: give-up SUPERSEDES the ladder. The ladder is a schedule for conceding price while the
       // trade is still fine; once the position has turned, the schedule is the wrong answer and we go to
@@ -719,7 +751,10 @@ function runDay5m(bars, signalFn, opts = {}) {
         // never pay more than break-even + the bounded loss, and never chase above the mark
         workingTarget = roundTick(Math.min(mk + TICK, round2(G.WIDTH - pc.openCost + cap)));
       }
-      if (!giveUp && ladderOn && pc.openCost != null) {
+      if (!giveUp && decayed) {
+        workingTarget = roundTick(legsMark(pc.legs, S, tau, iv) + TICK);   // go to the market
+      }
+      if (!giveUp && !decayed && ladderOn && pc.openCost != null) {
         // `mark` MUST be passed: cover-ladder's neverExceedMark defaults to TRUE, so omitting it let the
         // backtest walk the working limit ABOVE the current market. With the fill test being
         // `legsMark(...) <= workingTarget`, a limit above the mark fills instantly AND books at a price
@@ -735,6 +770,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }, ladderOpts).limit;
       }
       if (giveUp) giveUps++;
+      if (decayed && !giveUp) decayStops++;
       if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
@@ -1226,7 +1262,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
