@@ -230,6 +230,11 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   decisions.push({ action: 'cover-rest', positionId: pos.id, target, legs: bookLegs,
     mark: bookMark != null ? bookMark : plan.mark, planMark: shift ? plan.mark : undefined,
     geometry: plan.geometry, longStrike: plan.longStrike, orderId: restOrderId, sentNet,
+    // THE PRICE IN THE SPACE IT WAS SENT IN. `target` is debit-canonical, so on a credit cover this
+    // decision recorded a number the order never asked for — and the debug table's Cost column shows the
+    // credit, so the placement price could not be matched to it. cover-reprice already logs sentFrom/
+    // sentTo; the placement had no equivalent until now.
+    sentCredit: sentNet === 'CREDIT' ? sentCredit : undefined,
     shift: shift || undefined, minLock: ML || undefined, note });
 }
 

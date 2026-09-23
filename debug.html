@@ -504,15 +504,29 @@ function orderEvents(rec, src) {
       legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * (p.quantity || 1)),
       net: p.unfilledCover.net || 'DEBIT' });
   });
-  // HOW HARD THE ORDER HAD TO BE WORKED. An open is placed at one price and the ladder walks it; both
-  // facts belong on the position's OWN row, which is what `worked` carries (see the `worked` column).
-  const worked = new Map();
+  // HOW HARD THE ORDER HAD TO BE WORKED — for BOTH order types. An open is placed at one price and the
+  // open ladder walks it; a cover is placed at one price and the cover ladder (plus give-up) walks it
+  // harder, 1,108 repricings across 46 covers on v7-40-unc 2026-09-22 against 23 for its opens. Keyed
+  // separately because a cover row carries its OPEN's position id: one map each, or the cover inherits
+  // the open's history, which is exactly what it did on first writing.
+  //
+  // Each records the price in the space THAT order was sent in, so it reads against the row's own Cost:
+  // a credit order's placement and walk in credit, a debit's in debit.
+  const workedOpen = new Map(), workedCover = new Map();
+  const bump = (m, id, placed, isReprice) => {
+    const w = m.get(id) || { placed: null, n: 0 };
+    if (placed != null && w.placed == null) w.placed = placed;
+    if (isReprice) w.n++;
+    m.set(id, w);
+  };
   for (const ev of (rec.events || [])) for (const d of (ev.decisions || [])) {
     if (!d.positionId) continue;
-    const w = worked.get(d.positionId) || { placed: null, n: 0 };
-    if (d.action === 'open' && w.placed == null) w.placed = d.limit;
-    if (d.action === 'open-reprice') { w.n++; if (w.placed == null) w.placed = d.from; }
-    worked.set(d.positionId, w);
+    const cred = d.sentNet === 'CREDIT';
+    if (d.action === 'open') bump(workedOpen, d.positionId, cred ? d.sentLimit : d.limit, false);
+    else if (d.action === 'open-reprice') bump(workedOpen, d.positionId, cred ? d.sentFrom : d.from, true);
+    else if (d.action === 'cover-rest') bump(workedCover, d.positionId, cred ? d.sentCredit : d.target, false);
+    else if (d.action === 'cover-reprice' || d.action === 'cover-giveup')
+      bump(workedCover, d.positionId, cred ? d.sentFrom : d.from, true);
   }
   const seq = new Map();
   evs.filter((e) => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
@@ -520,7 +534,7 @@ function orderEvents(rec, src) {
   for (const e of evs) {
     e.src = src; e.W = W; e.ML = ML; e.raw = raw[e.id] || {}; e.sp = byId[e.id] || null;
     e.seq = seq.get(e.id); e.isCovered = coveredIds.has(e.id);
-    e.worked = worked.get(e.id) || null;
+    e.worked = (e.type === 'cover' ? workedCover : workedOpen).get(e.id) || null;
     // The real fill moment for a cover, when the record carries one (added 2026-09-23; older runs do not).
     const _fa = e.type === 'cover' && !e.unfilled && raw[e.id] ? raw[e.id].coverFilledAt : null;
     e.filledAt = _fa ? new Date(_fa).toLocaleTimeString('en-US',
@@ -598,10 +612,13 @@ function renderOrders() {
       + 'not be quoted at all, since an open limit ceils to a tick at or above its own mark'],
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
-    ['worked', 'what the order was PLACED at, and how many times the ladder repriced it before it filled. '
-      + '"22.95 →2" means it went out at 22.95 and was walked twice. A blank means it filled on the first '
-      + 'look, with no working at all. This replaces the phantom OPEN** rows that used to appear for every '
-      + 'open that did not fill instantly: the order and the position it became are one row, not two.'],
+    ['worked', 'what the order was PLACED at, and how many times it was repriced before it filled — for '
+      + 'OPENS and COVERS alike, each in the space that order was sent in (a credit order in credit). '
+      + '"9.15 →41" means it went out at 9.15 and was walked 41 times; read against Cost it shows how '
+      + 'much price was conceded to get the fill. Covers are worked far harder than opens: on v7-40-unc '
+      + '2026-09-22 all 46 covers were repriced (median 15, max 70) against 5 of 47 opens. A blank means '
+      + 'it filled at its placement price with no working. This also replaces the phantom OPEN** rows '
+      + 'that used to appear for every open that did not fill instantly.'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
     ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
     ['markLow', 'the BEST price this order ever saw, followed by a DWELL fraction: how many observations had the mark at or through the price sent, out of how many times we looked (every 30s while it worked). 1/47 is a graze a real order may well have missed; 22/47 is a price the market genuinely sat at.  while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ kept being watched AFTER it booked and the market barely came back to the price it filled at — a graze rather than a price the market sat at. Rows with no post-fill observations yet are left unflagged rather than guessed at.'],
@@ -720,11 +737,12 @@ function renderOrders() {
           const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through2 || 0}/${looks}</span>` : '';
           return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${frac}${suspect ? ' ⚠' : ''}</td>`;
         })();
-    // OPEN ROWS ONLY. `worked` is keyed by position id and a cover row carries its open's id, so without
-    // this the cover inherited the OPEN's placement price and reprice count — #15 read "20.75 →1" and #5
-    // "22.95 →3" against cover legs those prices never belonged to.
-    const wk = open ? e.worked : null;
-    const workedCell = `<td class="m">${(wk && wk.placed != null && (wk.n > 0 || (r.limit != null && Math.abs(wk.placed - r.limit) >= 0.005)))
+    // Each row's OWN history — opens and covers are both worked, and e.worked was picked from the map
+    // matching this row's type upstream.
+    const wk = e.worked;
+    const sentPx = e.cost != null ? Math.abs(e.cost) / 100 : null;   // the row's own price, either space
+    const moved = wk && wk.placed != null && (wk.n > 0 || (sentPx != null && Math.abs(wk.placed - sentPx) >= 0.005));
+    const workedCell = `<td class="m">${moved
       ? `${num(wk.placed)}${wk.n ? ` <span style="color:var(--muted)">→${wk.n}</span>` : ''}` : '—'}</td>`;
     const diag = open
       ? workedCell + `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
