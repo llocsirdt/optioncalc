@@ -386,8 +386,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   st.direction = openSide; st.openN = (st.openN || 0) + 1;
 
   // 7) combo cash: ONE net impact for the whole order (+debit / −credit). Does not touch P&L.
-  st.cashDeployed = round2((st.cashDeployed || 0) + cn.net * 100 * qty);
-  st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+  noteCash(st, cn.net * 100 * qty);
 
   decisions.push({ action: 'combo-lock-open', winner: winner.id, openId: pos.id, coverId: winner.coverId, net: cn.side, limit: price, legs: resolvedMerged.length, lockedFloor: floor, cashDeployed: st.cashDeployed });
   return true;
@@ -523,10 +522,11 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   resolvePendingOpen(st, cfg, deps, decisions);
   st.direction = openSide;
   st.openN = (st.openN || 0) + 1;
-  // Signed cash ledger (+paid debit, -received credit). Does NOT touch P&L — pure capital view.
-  const cashDelta = (sentNet === 'CREDIT' ? -sentLimit : res.limit) * 100 * cfg.quantity;
-  st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
-  st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+  // CASH IS BOOKED AT THE FILL, NOT HERE — see noteCash() at the open-fill site. This used to add the
+  // order's cash the moment it was SENT, which counted capital for orders that never filled and were
+  // cancelled on the next candle, and counted the PLACEMENT price for an order the ladder then walked
+  // somewhere else. resolvePendingOpen is called just above, so a marketable order still books within
+  // this same call.
   // itmStrikes/placementsTried are present only under adaptive placement — recording WHICH placement was
   // taken is what makes maxItmStrikes answerable from live data instead of only from the backtest.
   decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed,
@@ -1719,6 +1719,21 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
+// SIGNED CASH LEDGER — one entry point, so every order type books the same way and at the same moment.
+// +paid debit, -received credit. Does NOT touch P&L; it is the pure capital view behind /status
+// cashDeployed / peakCashDeployed.
+//
+// BOOKED AT THE FILL, ALWAYS. Opens used to book at PLACEMENT (so a cancelled order left its cash behind
+// forever, and a laddered order booked a price it never traded at) and hedges never booked at all —
+// floor-offset, wing and fly each pay a real debit, and across 2026-09-17/18/21/22 that was $147,665 of
+// spend the ledger simply never saw, on 354 filled hedges across 144 of 320 runs. Covers already booked
+// at the fill; now everything does.
+function noteCash(st, dollars) {
+  st.cashDeployed = round2((st.cashDeployed || 0) + dollars);
+  st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+  return st.cashDeployed;
+}
+
 function markFill(legs, limit, getLeg, tick, deps, net) {
   const q = spreadQuote(legs, getLeg);
   const mark = q.mark;
@@ -1975,6 +1990,8 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
       const spent = chk.fill * 100 * (pos.quantity || cfg.quantity);
+      noteCash(st, spent);          // a hedge is always a DEBIT — it pays, and the ledger must see it
+
       if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
@@ -2014,7 +2031,9 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
   notePlaced(pos, chk, deps.underlying);
   if (chk.fillable) {
     pos.filled = true; pos.orderStatus = 'filled';
-    decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit,
+    // The price that actually traded: a credit open receives sentLimit, a debit one pays its limit.
+    noteCash(st, (sentCredit ? -(pos.sentLimit || 0) : (pos.limit || 0)) * 100 * (pos.quantity || cfg.quantity));
+    decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit, cashDeployed: st.cashDeployed,
       mark: chk.mark, bid: chk.bid, ask: chk.ask,
       markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
       looks: pos.looks, atOrThrough: pos.atOrThrough, restedSince: pos.openTime });
@@ -2285,8 +2304,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // not touch P&L — the floor above is booked from the debit-canonical target either way.
     const q = pos.quantity || cfg.quantity;
     const cashDelta = pc.sentNet === 'CREDIT' ? -(pc.sentCredit || 0) * 100 * q : fill * 100 * q;
-    st.cashDeployed = round2((st.cashDeployed || 0) + cashDelta);
-    st.peakCashDeployed = Math.max(st.peakCashDeployed || 0, st.cashDeployed);
+    noteCash(st, cashDelta);
     pos.coverSentNet = pc.sentNet;
     // PERSIST THE CREDIT ACTUALLY ASKED. The cover books and tests entirely in DEBIT-canonical space,
     // which is only equivalent to the credit order really resting while sentCredit == W - target. On
@@ -2310,6 +2328,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 }
 
 module.exports = {
+  noteCash,
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested

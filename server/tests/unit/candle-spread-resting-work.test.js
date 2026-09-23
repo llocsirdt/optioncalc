@@ -317,6 +317,61 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
   trader.resolveRestingCovers({ positions: [p3], realizedPnl: 0 }, cCfg, legAt(round2(W - asked)), d3, {});
   ok(p3.covered === false, 'while the un-walked order at 12.95 would still be resting on the same quote');
 
+  // ---- THE CASH LEDGER BOOKS AT THE FILL, FOR EVERY ORDER TYPE -------------------------------------
+  // Opens used to book at PLACEMENT, so an order that never filled and was cancelled next candle left its
+  // cash behind forever; hedges never booked at all. Measured on 4 prod days x 80 variants: $147,665 of
+  // real hedge debit the ledger never saw, on 354 filled hedges across 144 of 320 runs. /status reports
+  // this field as deployed capital, so it has to mean what it says.
+  {
+    const cCfg = { ...cfg, spreadWidth: 20 };
+    // an OPEN that does not fill books nothing
+    const noFill = restingOpen(1.00);                      // limit 1.00 against a mark of 10.60
+    noFill.cashDeployed = 0;
+    trader.resolvePendingOpen(noFill, cCfg, { getLeg: legAt(10.60), coverLadder: false }, []);
+    ok(noFill.positions[0].filled === false, 'setup: the open did not fill');
+    ok(!noFill.cashDeployed, `an unfilled open books NO cash (got ${noFill.cashDeployed})`);
+
+    // the same open, once it fills, books the debit it paid
+    const filled = restingOpen(10.80);
+    filled.cashDeployed = 0;
+    trader.resolvePendingOpen(filled, cCfg, { getLeg: legAt(10.60), coverLadder: false }, []);
+    const p = filled.positions[0];
+    ok(p.filled === true, 'setup: the open filled');
+    ok(filled.cashDeployed === Math.round(p.limit * 100 * 100) / 100,
+      `a filled DEBIT open books +${p.limit * 100} (got ${filled.cashDeployed})`);
+    ok(filled.peakCashDeployed === filled.cashDeployed, 'and the peak moves with it');
+
+    // a CREDIT open RECEIVES cash, so the ledger goes negative
+    const cred = restingOpen(10.80);
+    cred.cashDeployed = 0;
+    const cp = cred.positions[0];
+    cp.sentNet = 'CREDIT'; cp.sentLimit = 9.20;
+    // The credit twin of a LONG call spread K1/K2 is the bull PUT spread: long K1 put, short K2 put.
+    // Reversed, it prices as a debit and never fills — spreadQuote signs long +, short -, so the twin
+    // must mark NEGATIVE for `credit = -mark` to be the credit received.
+    cp.sentLegs = [{ side: 'long', type: 'P', strike: 21990 }, { side: 'short', type: 'P', strike: 22010 }];
+    trader.resolvePendingOpen(cred, cCfg, { getLeg: legAt(10.60), coverLadder: false }, []);
+    ok(cred.positions[0].filled === true, 'setup: the credit twin filled');
+    ok(cred.cashDeployed === -920, `a filled CREDIT open RECLAIMS cash (got ${cred.cashDeployed})`);
+
+    // a HEDGE pays a real debit and the ledger must see it
+    const hst = pendingHedge('wing', 1.20, 1000);
+    hst.cashDeployed = 0;
+    trader.resolvePendingHedges(hst, cCfg, { getLeg: hLegAt(1.00), nowMs: 1000 }, []);
+    const h = hst.positions[0];
+    ok(h.filled === true, 'setup: the hedge filled');
+    ok(hst.cashDeployed === Math.round(h.limit * 100 * 100) / 100,
+      `a filled hedge books its debit (got ${hst.cashDeployed}, paid ${h.limit})`);
+    ok(hst.wingSpent === hst.cashDeployed, 'and agrees with the wing budget, which already counted at the fill');
+
+    // an unfilled hedge books nothing
+    const hno = pendingHedge('fly', 1.20, 1000);
+    hno.cashDeployed = 0;
+    trader.resolvePendingHedges(hno, cCfg, { getLeg: hLegAt(2.00), nowMs: 1000 }, []);
+    ok(hno.positions[0].filled === false && !hno.cashDeployed,
+      `an unfilled hedge books NO cash (got ${hno.cashDeployed})`);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);
