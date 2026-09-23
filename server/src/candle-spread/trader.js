@@ -1919,11 +1919,24 @@ function coverMarkNow(legs, getLeg) {
 // touched the limit once and a mark that spent the afternoon a dollar through it produce the same
 // markLow and are very different claims. Nothing here changes a decision — it is evidence for reading the
 // fill afterwards.
-function noteMarkLow(o, chk, limit, net) {
+function noteMarkLow(o, chk, limit, net, parityWidth) {
   if (chk.mark == null) return;
   const credit = net === 'CREDIT';
-  // The price in the order's OWN space: a credit structure marks negative, and the credit is its inverse.
-  const px = credit ? round2(-chk.mark) : chk.mark;
+  // THE PRICE IN THE ORDER'S OWN SPACE — and a credit order can be quoted TWO different ways, which is
+  // what broke this. It depends entirely on WHICH legs the caller quoted:
+  //
+  //   OPEN path   — quotes `pos.sentLegs`, the credit twin itself. A credit structure marks NEGATIVE, so
+  //                 the credit received is `-mark`.
+  //   COVER path  — quotes `pc.legs`, the DEBIT-CANONICAL cover. That marks POSITIVE, and the credit is
+  //                 `W - mark` by parity — exactly what the fill test in resolveRestingCovers computes.
+  //
+  // Applying the open convention to a cover gave px = -10.50 against a 29.50 ask, so `reached` was false
+  // on every observation a credit cover ever saw: 1,027 of 1,027 filled credit covers across 2026-09-18,
+  // 09-21 and 09-22 carried a null/zero dwell counter, against 0 of 2,177 debit covers. Orders that
+  // genuinely filled AT their limit reported "the market never reached this price", and the debug table's
+  // graze warning fired on all of them. `parityWidth` tells this function which convention it is in.
+  const own = (m) => credit ? (parityWidth != null ? round2(parityWidth - m) : round2(-m)) : m;
+  const px = own(chk.mark);
   const reached = limit != null && (credit ? px >= limit : px <= limit);
   if (o.filled) {
     // Post-fill: how decisively did it go through, and for how long.
@@ -1941,8 +1954,9 @@ function noteMarkLow(o, chk, limit, net) {
   // claims about whether a real order would have been hit — 1-of-47 is a graze, 22-of-47 is a fill.
   o.looks = (o.looks || 0) + 1;
   if (reached) o.atOrThrough = (o.atOrThrough || 0) + 1;
-  // Keep the BEST price seen in the order's own direction (lowest debit / highest credit).
-  const better = o.markLow == null || (credit ? px > round2(-o.markLow) : px < o.markLow);
+  // Keep the BEST price seen in the order's own direction (lowest debit / highest credit). Uses the same
+  // conversion as `px` above, or the two disagree about which observation was better.
+  const better = o.markLow == null || (credit ? px > own(o.markLow) : px < o.markLow);
   if (!better) return;
   o.markLow = chk.mark;
   o.markLowBid = chk.bid;
@@ -2207,7 +2221,10 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       const fq = spreadQuote(pos.filledCover.legs, getLeg);
       const fc = pos.filledCover;
       const fCred = fc.sentNet === 'CREDIT' && fc.sentCredit != null;
-      noteMarkLow(fc, fq, fCred ? fc.sentCredit : fc.target, fCred ? 'CREDIT' : 'DEBIT');
+      const fks = (fc.legs || []).map((l) => l.strike);
+      const fw = fks.length ? Math.max(...fks) - Math.min(...fks) : cfg.spreadWidth;
+      noteMarkLow(fc, fq, fCred ? fc.sentCredit : fc.target, fCred ? 'CREDIT' : 'DEBIT',
+        fCred ? fw : undefined);
       continue;
     }
     if (!pos.filled || !pos.pendingCover) continue;
@@ -2222,7 +2239,10 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // The dwell has to be measured against the order RESTING: a credit twin against its own credit,
     // a debit against the canonical target.
     const pcCredit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
-    noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT');
+    const pcks = (pc.legs || []).map((l) => l.strike);
+    const pcw = pcks.length ? Math.max(...pcks) - Math.min(...pcks) : cfg.spreadWidth;
+    noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT',
+      pcCredit ? pcw : undefined);
     notePlaced(pc, quote, deps && deps.underlying);
     // TEST THE ORDER THAT IS ACTUALLY RESTING. `mark` and `pc.target` are DEBIT-CANONICAL, but when
     // capital recapture sent the credit twin the thing at the broker is a CREDIT at pc.sentCredit, and a

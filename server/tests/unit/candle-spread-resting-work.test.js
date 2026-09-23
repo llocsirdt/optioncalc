@@ -372,6 +372,48 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
       `an unfilled hedge books NO cash (got ${hno.cashDeployed})`);
   }
 
+  // ---- A CREDIT COVER'S DWELL COUNTER MUST COUNT ---------------------------------------------------
+  // noteMarkLow reads a credit order's price as `-mark`, which is right when the caller quoted the TWIN
+  // (the open path) and wrong when it quoted the DEBIT-CANONICAL cover (the cover path, where the credit
+  // is `W - mark` by parity — exactly what the fill test uses). With the wrong convention `reached` was
+  // false on every observation: 1,027 of 1,027 filled credit covers across 2026-09-18/21/22 carried a
+  // null dwell counter, against 0 of 2,177 debit covers, so orders that filled AT their limit reported
+  // "the market never reached this price".
+  {
+    const W = 20;
+    // A debit-canonical cover marking exactly 8.00 -> the credit twin is worth W - 8 = 12.00.
+    const dq = { mark: 8.00, bid: 7.9, ask: 8.1 };
+    const cred = {};
+    trader.noteMarkLow(cred, dq, 12.00, 'CREDIT', W);        // asked 12.00, market offers 12.00
+    ok(cred.looks === 1, 'the observation is counted');
+    ok(cred.atOrThrough === 1, `a credit cover AT its ask counts as reached (got ${cred.atOrThrough})`);
+
+    const short = {};
+    trader.noteMarkLow(short, dq, 12.05, 'CREDIT', W);       // asked more than the market offers
+    ok(short.looks === 1 && !short.atOrThrough,
+      `and one asking MORE than the market offers does not (got ${short.atOrThrough})`);
+
+    // Without parityWidth the open convention still applies: the twin itself marks negative.
+    const twin = {};
+    trader.noteMarkLow(twin, { mark: -12.00, bid: -12.1, ask: -11.9 }, 12.00, 'CREDIT');
+    ok(twin.atOrThrough === 1, 'the OPEN convention (quote of the twin, marks negative) still works');
+
+    // markLow must track the BEST credit, i.e. the LOWEST debit mark, and must not flip-flop.
+    const best = {};
+    trader.noteMarkLow(best, { mark: 9.00, bid: 8.9, ask: 9.1 }, 12.00, 'CREDIT', W);
+    trader.noteMarkLow(best, { mark: 7.00, bid: 6.9, ask: 7.1 }, 12.00, 'CREDIT', W);
+    trader.noteMarkLow(best, { mark: 8.00, bid: 7.9, ask: 8.1 }, 12.00, 'CREDIT', W);
+    ok(best.markLow === 7.00, `markLow keeps the lowest debit = highest credit (got ${best.markLow})`);
+    // credits are W - mark = 11.00, 13.00, 12.00 against a 12.00 ask -> the last two reach, the first does not
+    ok(best.looks === 3 && best.atOrThrough === 2,
+      `and counts every look, 2 of 3 at or through 12.00 (got ${best.atOrThrough}/${best.looks})`);
+
+    // A DEBIT cover is unaffected by any of this.
+    const deb = {};
+    trader.noteMarkLow(deb, dq, 8.00, 'DEBIT');
+    ok(deb.atOrThrough === 1 && deb.markLow === 8.00, 'a debit cover still counts against its own target');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);
