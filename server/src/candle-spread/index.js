@@ -573,6 +573,80 @@ function applyLadderCfg(v) {
 // governor removed; putting a cap back on it would not be "the same experiment on another variant", it
 // would delete the variant's reason to exist. Naming a `-unc` variant in CANDLE_SPREAD_CAPPRES is
 // therefore refused OUT LOUD by validateSelectors rather than quietly ignored.
+// ── MEASURED PER-VARIANT LOSS CAPS (2026-09-23) ─────────────────────────────────────────────────────
+// The generic cap was maxCapFor(w) = max(2*w*100, LOSS_TARGET + w*100) — $6k/$7k/$9k at W=10/20/40 — a
+// number derived from the width and nothing else. These are measured: 402 (variant, cap) runs over 765
+// days, in docs/RISK-CAP-SHEET.md with the raw CSVs in docs/risk-cap-sweep/.
+//
+// SELECTION (user's rule): the LOWEST cap that holds its bound over all 765 days and does not degrade
+// ret/DD, PLUS $500 of headroom — "i certainly dont want to lose out on a potential trade and have the
+// governor block something just to save $500 risk" — EXCEPT where the curve is sharp enough that the
+// headroom costs more than 10% of ret/DD, where it sits on the optimum instead. Taken on 22, skipped on
+// 16. On several the +$500 measured BETTER than the base (v8-20 -21%, v9-20 -17%): blocking is convex,
+// so the opens it recovers more than pay for the looser bound.
+//
+// WHY THESE ARE WORTH TRUSTING: 394 of the 402 measured caps HOLD EXACTLY — worst realized never exceeds
+// the cap. That is what makes them additive across variants, which is the whole point (user: "if i know
+// what our strategies can hold honest limits to that will give me the confidence to decide to run one,
+// two, or any number in parallel and decide which ones i'm willing to run together"). A subset's worst
+// case is the SUM of its caps. The 8 that fail all sit at the tightest rung and miss by $41-$396, about
+// one spread: the governor gates OPENS on the projected floor, so once a position exists its own loss can
+// carry past the cap when the cheapest openable spread already costs more than the headroom left. None of
+// those 8 values is used here — notably v6-20 stays at $2,000 because $2,500 realized -$2,541.
+//
+// Sum of stated caps across the fleet: $298,000 -> $194,000. Eight variants are absent deliberately —
+// nothing tighter held without degrading them (v0-20, v1-20, v3-40, v6-40, v4-40-cATM, v7-20-cATM,
+// v8-20-cATM, v9-20-cATM), so they keep the generic cap.
+//
+// W=40 CAVEAT, recorded so it is not re-learned: fleet ret/DD is FLAT across the entire W=40 range, so
+// tightening there shrinks P&L and drawdown proportionally — it buys a smaller worst DAY and nothing
+// risk-adjusted. Every W=40 arm still draws $20k-$90k at every rung. The day is bounded; the month is
+// not. Narrowing the spread is the lever at that width, not the cap.
+const TUNED_CAPS = new Map([
+  // W=10
+  ['v5-10', 1500],
+  ['v7-10', 1500],
+  ['v8-10', 1500],
+  ['v1-10', 2000],
+  ['v4-10', 2000],
+  ['v6-10', 2000],
+  ['v2-10', 2500],
+  ['v9-10', 2500],
+  ['v0-10', 3000],
+  // W=20
+  ['v3-20', 2500],
+  ['v8-20', 2500],
+  ['v3-20-cATM', 3500],
+  ['v0-20-cATM', 4000],
+  ['v5-20', 4000],
+  ['v1-20-cATM', 4500],
+  ['v2-20', 4500],
+  ['v2-20-cATM', 4500],
+  ['v4-20', 4500],
+  ['v4-20-cATM', 4500],
+  ['v5-20-cATM', 4500],
+  ['v9-20', 4500],
+  ['v6-20-cATM', 6500],
+  ['v7-20', 6500],
+  // W=40
+  ['v7-40', 3000],
+  ['v0-40', 5000],
+  ['v2-40', 5500],
+  ['v8-40-cATM', 5500],
+  ['v1-40', 6000],
+  ['v2-40-cATM', 6000],
+  ['v8-40', 6000],
+  ['v4-40', 7000],
+  ['v5-40', 7000],
+  ['v5-40-cATM', 7000],
+  ['v7-40-cATM', 7000],
+  ['v0-40-cATM', 7500],
+  ['v3-40-cATM', 7500],
+  ['v9-40', 7500],
+  ['v9-40-cATM', 7500],
+  ['v1-40-cATM', 8000],
+  ['v6-40-cATM', 8500],]);
+
 function applyExperiments(v, { capPreset = true } = {}) {
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
@@ -591,6 +665,15 @@ function applyExperiments(v, { capPreset = true } = {}) {
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
     v.lossTarget = Math.round(0.7 * v.lossMax);
+  }
+  // MEASURED CAP LAST, so it wins over both the width-derived generic and the CAPPRES preset — it is the
+  // only one of the three backed by a 765-day measurement of this exact variant. It moves v7-10 off the
+  // preset's $1,000 to its measured peak $1,500 (+19% P&L, ret/DD 809 -> 850) and v7-40 from $4,000 DOWN
+  // to $3,000, which is both tighter and better (ret/DD 41 -> 59).
+  const tuned = capPreset ? TUNED_CAPS.get(v.variant) : null;
+  if (tuned != null) {
+    v.lossMax = tuned;
+    v.lossTarget = Math.round(0.7 * tuned);
   }
   if (LADDER_LIVE.has(v.variant)) applyLadderCfg(v);
   // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30% is a
