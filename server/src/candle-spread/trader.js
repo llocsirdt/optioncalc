@@ -2318,6 +2318,13 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     pos.coverLooks = pc.looks || null; pos.coverAtOrThrough = pc.atOrThrough || null;
     pos.coverTime = st.lastCandleTime || null;   // CANDLE time of the cover (for NQ-chart trade plotting)
     pos.coverEpoch = st.lastCandleEpoch || null;
+    // WHEN IT ACTUALLY FILLED. coverTime/coverEpoch are deliberately CANDLE-aligned because the NQ chart
+    // plots trades on candles — but resting covers are resolved by the sub-bar worker roughly every 30s,
+    // so up to ten fills inside one candle all carry the same stamp. On 2026-09-22 v7-40-unc that made 14
+    // covers read "14:20", and the same spread booked anywhere from 12.15 to 14.90 — prices a single
+    // instant cannot produce, which is exactly how you could tell the stamp was not the fill time.
+    // Recorded separately so the table can say when, without moving what the chart plots.
+    pos.coverFilledAt = deps && deps.nowMs != null ? deps.nowMs : null;
     const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
     st.realizedPnl = round2(st.realizedPnl + floor);
     // Signed cash ledger: a credit cover RECLAIMS ~width cash (-), a debit cover PAYS the fill (+). Does

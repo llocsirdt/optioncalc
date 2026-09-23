@@ -521,6 +521,10 @@ function orderEvents(rec, src) {
     e.src = src; e.W = W; e.ML = ML; e.raw = raw[e.id] || {}; e.sp = byId[e.id] || null;
     e.seq = seq.get(e.id); e.isCovered = coveredIds.has(e.id);
     e.worked = worked.get(e.id) || null;
+    // The real fill moment for a cover, when the record carries one (added 2026-09-23; older runs do not).
+    const _fa = e.type === 'cover' && !e.unfilled && raw[e.id] ? raw[e.id].coverFilledAt : null;
+    e.filledAt = _fa ? new Date(_fa).toLocaleTimeString('en-US',
+      { hour12: false, timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null;
     // Hedge kind: live encodes it in the id prefix (off-/wing-), the backtest record carries explicit
     // hedge/wing flags (its ids are bt-N). Read BOTH so a backtest offset is not mislabelled "OPEN*",
     // i.e. an exposed position waiting on a cover it will never get.
@@ -716,7 +720,10 @@ function renderOrders() {
           const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through2 || 0}/${looks}</span>` : '';
           return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${frac}${suspect ? ' ⚠' : ''}</td>`;
         })();
-    const wk = e.worked;
+    // OPEN ROWS ONLY. `worked` is keyed by position id and a cover row carries its open's id, so without
+    // this the cover inherited the OPEN's placement price and reprice count — #15 read "20.75 →1" and #5
+    // "22.95 →3" against cover legs those prices never belonged to.
+    const wk = open ? e.worked : null;
     const workedCell = `<td class="m">${(wk && wk.placed != null && (wk.n > 0 || (r.limit != null && Math.abs(wk.placed - r.limit) >= 0.005)))
       ? `${num(wk.placed)}${wk.n ? ` <span style="color:var(--muted)">→${wk.n}</span>` : ''}` : '—'}</td>`;
     const diag = open
@@ -733,7 +740,7 @@ function renderOrders() {
     // the src tag say which engine placed the order.
     return `<tr class="td-${e.type}${e.src === 'bt' ? ' td-bt' : ''}${isUncov ? ' td-uncovered' : ''}${e.unfilled && !e.noFill ? ' td-unfilled' : ''}${e.noFill ? ' td-nofill' : ''}${hedge && !e.noFill ? ' td-hedge' : ''}" title="${e.src}:${e.id}${e.noFill ? `  (placed at ${e.cost / 100}, mark ${e.mark != null ? e.mark : '—'} — never filled)` : ''}">`
       + (both ? `<td class="srcTag" style="color:${e.src === 'bt' ? 'var(--bt)' : '#555'}">${e.src === 'bt' ? 'BT' : 'LIVE'}</td>` : '')
-      + `<td>${e.time || '—'}</td><td>#${e.seq || '?'}</td>`
+      + `<td${e.filledAt ? ` title="filled at ${e.filledAt}; the column shows the CANDLE it was recorded in, which is what the chart plots"` : ''}>${e.time || '—'}${e.filledAt ? ` <span style="color:var(--muted);font-size:9.5px">${e.filledAt}</span>` : ''}</td><td>#${e.seq || '?'}</td>`
       // Hedge rows take the row's purple here too (the inline colour otherwise beats tr.td-hedge).
       + `<td style="color:${hedge ? '#6b5ea8' : color(e.side)}">${glyph(e)} ${label}</td>`
       + `<td class="legs">${e.legs}</td>`
