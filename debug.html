@@ -504,12 +504,23 @@ function orderEvents(rec, src) {
       legs: p.unfilledCover.legs, cost: Math.round((p.unfilledCover.limit || 0) * 100 * (p.quantity || 1)),
       net: p.unfilledCover.net || 'DEBIT' });
   });
+  // HOW HARD THE ORDER HAD TO BE WORKED. An open is placed at one price and the ladder walks it; both
+  // facts belong on the position's OWN row, which is what `worked` carries (see the `worked` column).
+  const worked = new Map();
+  for (const ev of (rec.events || [])) for (const d of (ev.decisions || [])) {
+    if (!d.positionId) continue;
+    const w = worked.get(d.positionId) || { placed: null, n: 0 };
+    if (d.action === 'open' && w.placed == null) w.placed = d.limit;
+    if (d.action === 'open-reprice') { w.n++; if (w.placed == null) w.placed = d.from; }
+    worked.set(d.positionId, w);
+  }
   const seq = new Map();
   evs.filter((e) => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
   const coveredIds = new Set(evs.filter((e) => e.type === 'cover' && !e.unfilled).map((e) => e.id));
   for (const e of evs) {
     e.src = src; e.W = W; e.ML = ML; e.raw = raw[e.id] || {}; e.sp = byId[e.id] || null;
     e.seq = seq.get(e.id); e.isCovered = coveredIds.has(e.id);
+    e.worked = worked.get(e.id) || null;
     // Hedge kind: live encodes it in the id prefix (off-/wing-), the backtest record carries explicit
     // hedge/wing flags (its ids are bt-N). Read BOTH so a backtest offset is not mislabelled "OPEN*",
     // i.e. an exposed position waiting on a cover it will never get.
@@ -532,11 +543,17 @@ function orderEvents(rec, src) {
   // refusal, with the mark it saw and the limit it sent.
   const REFUSED = { 'floor-offset-nofill': 'OFFSET', 'wing-nofill': 'WING', 'fly-nofill': 'FLY' };
   let noFillSeq = 0;
+  // AN ORDER THAT FILLED LATER IS NOT A REFUSED ORDER. `open` logs filled:false whenever the fill test
+  // fails on the FIRST observation — but the order then rests, gets worked, and usually fills. Emitting a
+  // row for that decision put the same order in the table twice: once as OPEN** claiming it never filled,
+  // and once as the position it became. On v7-40-unc 2026-09-22, 9 of the 10 OPEN** rows were this
+  // phantom and exactly 1 was a genuine never-fill.
+  const everFilled = new Set((rec.state && rec.state.positions || []).filter(p => p.filled).map(p => p.id));
   for (const ev of (rec.events || [])) {
     const t = (ev.candle && ev.candle.time) || ev.time || null;
     for (const d of (ev.decisions || [])) {
       // An open whose fill test failed. It logs filled:false here and is cancelled at the next candle.
-      const isOpen = d.action === 'open' && d.filled === false;
+      const isOpen = d.action === 'open' && d.filled === false && !everFilled.has(d.positionId);
       const kind = REFUSED[d.action];
       if (!isOpen && !kind) continue;
       // Format with the SAME producer the position rows use (exported from strategy-positions.js), so a
@@ -545,7 +562,9 @@ function orderEvents(rec, src) {
       const px = d.limit != null ? d.limit : 0;
       evs.push({ id: `nofill-${src}-${noFillSeq++}`, type: isOpen ? 'open' : 'cover', unfilled: true,
         noFill: true, noFillKind: isOpen ? 'OPEN' : kind, side: d.side || null, time: t,
-        epoch: ev.candleEpoch || 0, legs, cost: Math.round(px * 100), net: d.sentNet || 'DEBIT',
+        // `ev.candleEpoch` EXISTS NOWHERE in the repo, so this was always 0 and every refused row sorted
+        // above the 09:35 open. The event's own ISO stamp is the real thing.
+        epoch: Date.parse(ev.time) || 0, legs, cost: Math.round(px * 100), net: d.sentNet || 'DEBIT',
         mark: d.mark != null ? d.mark : null, src, W, ML, raw: {}, sp: null, seq: null, isCovered: false,
         hedgeKind: isOpen ? null : kind });
     }
@@ -575,6 +594,10 @@ function renderOrders() {
       + 'not be quoted at all, since an open limit ceils to a tick at or above its own mark'],
     ['Legs', 'the spread as actually sent'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
+    ['worked', 'what the order was PLACED at, and how many times the ladder repriced it before it filled. '
+      + '"22.95 →2" means it went out at 22.95 and was walked twice. A blank means it filled on the first '
+      + 'look, with no working at all. This replaces the phantom OPEN** rows that used to appear for every '
+      + 'open that did not fill instantly: the order and the position it became are one row, not two.'],
     ['open %W', 'open cost as a fraction of width — capFrac caps this, and the closer to it, the less room a cover has'],
     ['mark', 'the MARK this order was tested against when it was placed. Shown for EVERY order type now, not just covers: "filled" is only as trustworthy as the price behind it, and a row with no mark cannot be audited at all.'],
     ['markLow', 'the BEST price this order ever saw, followed by a DWELL fraction: how many observations had the mark at or through the price sent, out of how many times we looked (every 30s while it worked). 1/47 is a graze a real order may well have missed; 22/47 is a price the market genuinely sat at.  while it was working — the low-water mark, pushed down on every 30s sub-bar observation whether or not it filled. Against `ceiling` it answers the question a single placement mark cannot: did the market actually come to our price, and by how much did it go through? A markLow well below the price we paid means the fill was comfortable; one sitting exactly at it means the fill was marginal and a real order might not have got it. Hover for the BID/ASK at that instant — a mid can fall because the market traded down, or because the BID collapsed while the ask never moved, and only the second is untradeable. A row flagged ⚠ kept being watched AFTER it booked and the market barely came back to the price it filled at — a graze rather than a price the market sat at. Rows with no post-fill observations yet are left unflagged rather than guessed at.'],
@@ -693,11 +716,14 @@ function renderOrders() {
           const frac = looks ? `<span style="color:var(--muted);font-size:9.5px"> ${through2 || 0}/${looks}</span>` : '';
           return `<td${col ? ` style="color:${col}"` : ''} title="${attr}">${num(markLow)}${frac}${suspect ? ' ⚠' : ''}</td>`;
         })();
+    const wk = e.worked;
+    const workedCell = `<td class="m">${(wk && wk.placed != null && (wk.n > 0 || (r.limit != null && Math.abs(wk.placed - r.limit) >= 0.005)))
+      ? `${num(wk.placed)}${wk.n ? ` <span style="color:var(--muted)">→${wk.n}</span>` : ''}` : '—'}</td>`;
     const diag = open
-      ? `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
+      ? workedCell + `<td class="${r.limit / W > 0.55 ? 'l' : 'm'}">${r.limit != null && W ? Math.round(r.limit / W * 100) + '%' : '—'}</td>`
         + markCell + markLowCell
         + '<td class="m">—</td><td class="m">—</td><td class="m">—</td>'
-      : '<td class="m">—</td>'
+      : workedCell + '<td class="m">—</td>'
         + markCell + markLowCell
         + `<td class="m">${num(ceiling)}</td>`
         + `<td class="${gap != null && gap < 0 ? 'l' : 'm'}">${gap == null ? '—' : (gap > 0 ? '+' : '') + num(gap)}</td>`
