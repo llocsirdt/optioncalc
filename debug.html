@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.9.3</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.9.4</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -876,6 +876,13 @@ function buildCell(pos, se, dom, rec, underAt) {
   const legs = [];
   let cost = 0;
   for (const p of pos) {
+    // AN ORDER STILL WORKING IS NOT IN THE BOOK. At full day this is handed the raw state.positions, which
+    // includes opens that never filled, and their legs AND their cost were both counted; the moment the
+    // slider moved, bookAsOf routed through strategyRunToOptionArray (which excludes them by default) and
+    // they vanished. So the curve JUMPED between "full day" and the first scrub tick, on the same book.
+    // `=== false` rather than `!p.filled`, matching RC.bookPnl: a backtest position may carry no flag at
+    // all, and absence is not a claim that it failed to fill.
+    if (p.filled === false) continue;
     const qty = p.quantity || 1;
     // The OPEN can be a credit too (capitalRecapture alternates debit/credit opens to reclaim cash), in
     // which case the real order is pos.sentLegs at pos.sentLimit and the cash flows IN, not out.
