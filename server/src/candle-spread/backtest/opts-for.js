@@ -46,6 +46,13 @@ function optsFor(v, env) {
   // risk cap — it applies to the `-unc` twins too, so those isolate the CAPS rather than the policy.
   if (v.continuousCover) o.continuousCover = true;
   if (v.continuousCoverMinLockFrac != null) o.continuousCoverMinLockFrac = v.continuousCoverMinLockFrac;
+  // CAPITAL TRIGGER — credit orders fire to RECLAIM deployed capital rather than on a counter
+  // (openAlternateEvery) or a depth (creditCoverFrac). Added to the live deps and the backtest engine in
+  // c6e9c24 but NOT here, which took the whole on-demand backtest endpoint down with a 500: the variant
+  // contract refuses to run a variant carrying a field the consumer would silently drop. The guard was
+  // right — dropping it would have made every on-demand backtest model a DIFFERENT credit policy than the
+  // live engine trades, under the same variant name.
+  if (v.creditCapitalTrigger != null) o.creditCapitalTrigger = v.creditCapitalTrigger;
   // Cover POLICY (when to arm) + GEOMETRY (where the offsetting spread sits) — the v0-v3 axis.
   if (v.coverGeometry) o.coverGeometry = v.coverGeometry;
   if (v.continuousCoverArmFrac != null) o.continuousCoverArmFrac = v.continuousCoverArmFrac;

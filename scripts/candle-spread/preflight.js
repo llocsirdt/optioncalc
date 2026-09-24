@@ -32,6 +32,11 @@ const CHECKS = [
     fail: 'a live run sets a field only one engine implements' },
   { name: 'VARIANT DISTINCTNESS', script: 'audit-variant-distinctness.js',
     fail: 'two variants are behaviourally identical' },
+  // Added 2026-09-23 after ENGINE PARITY passed while every on-demand backtest was answering HTTP 500.
+  // Parity asks whether both ENGINES implement a field; this asks whether every CONSUMER that maps a
+  // variant onto engine opts forwards it. The capital trigger satisfied the first and failed the second.
+  { name: 'OPTS CONSUMERS', script: 'audit-opts-consumers.js',
+    fail: 'a consumer refuses or would silently drop a field some variant sets' },
 ];
 
 const strip = (s) => s.split('\n')
