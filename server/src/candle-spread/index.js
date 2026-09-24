@@ -1513,12 +1513,27 @@ async function processGroup(runs, kind) {
     harvestIv = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * IIV.ivMultAt(etm);
   } catch (e) { /* leave 0 → observer skips */ }
 
-  // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
+  // ONE BAD RECORD MUST NOT STOP THE OTHER 79. store.initRun now THROWS in a single case — the run file is
+// corrupt AND could not be moved aside — because writing over it is the failure it exists to prevent. That
+// is correct, but three of the loops below call it once per variant, so an unthrowable throw would abort
+// the whole pass and skip every healthy variant with it. Catch per variant, log loudly, skip that one.
+function initRunSafe(cfg, tradeDate, where) {
+  try {
+    return store.initRun(cfg, tradeDate);
+  } catch (e) {
+    console.error(`[candle-spread] ${where}: cannot open the record for ${cfg.variant} — ${e && e.message}`);
+    console.error('  this variant is SKIPPED this pass; the others continue. Fix the file, do not delete it.');
+    return null;
+  }
+}
+
+// Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
     try {
       const cfg = { ...run, expiration };
       delete cfg.signalFn;   // functions don't serialize; keep the persisted run config JSON-clean
-      const record = store.initRun(cfg, tradeDate);
+      const record = initRunSafe(cfg, tradeDate, 'candle close');
+      if (!record) continue;
       const getLeg = trader.makeLegAccessor(chainData, expiration);
       const placeOrder = makePlaceOrder(run, record);
       const replaceOrder = makeReplaceOrder(run, record);
@@ -1642,7 +1657,8 @@ async function runRestingWork() {
     const pending = [];
     for (const run of RUNS) {
       const cfg = { ...run, expiration: run.expiration || tradeDate };
-      const record = store.initRun(cfg, tradeDate);
+      const record = initRunSafe(cfg, tradeDate, 'sub-bar worker');
+      if (!record) continue;
       const st = record.state || {};
       const hasOpen = !!st.pendingOpenId;
       const hasCover = (st.positions || []).some(p => p.filled !== false && !p.covered && p.pendingCover);
@@ -1720,7 +1736,8 @@ async function runOrderPollInner() {
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
     const cfg = { ...run, expiration: run.expiration || todayEST() };
-    const record = store.initRun(cfg, todayEST());
+    const record = initRunSafe(cfg, todayEST(), 'order poller');
+    if (!record) continue;
     const outstanding = (record.state.liveOrders || []).some(o => !om.isTerminal(o));
     if (!outstanding) continue;
     try {
@@ -1758,7 +1775,8 @@ async function eodSettlementInner() {
 
     for (const run of runs) {
       const cfg = { ...run, expiration: run.expiration || todayEST() };
-      const record = store.initRun(cfg, todayEST());
+      const record = initRunSafe(cfg, todayEST(), 'EOD settlement');
+      if (!record) continue;
       let px = settle, pxSource = settleSource;
       if (px == null) {
         // SETTLE ON THE PRICING INSTRUMENT OR NOT AT ALL. The comment here has always said "NOT
