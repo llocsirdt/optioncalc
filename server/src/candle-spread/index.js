@@ -1154,6 +1154,20 @@ function makeReplaceOrder(run, record) {
     try {
       const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
       const newId = (resp && resp.orderId) ? resp.orderId : orderId;
+      // A REPLACEMENT IS A NEW ORDER AT THE BROKER. Nothing tracked it, so after the first ladder step the
+      // live order was invisible: never polled for a fill, never auto-cancelled in test mode, never swept
+      // when stale. Meanwhile the OLD id stayed in liveOrders and polls to REPLACED -> 'canceled' ->
+      // terminal, so the record claimed a dead order and missed a live one. In test mode that is the worse
+      // half: the replaced order rests at Schwab past TEST_CANCEL_MS with nothing to pull it.
+      if (newId && newId !== orderId) {
+        om.retireOrder(record, orderId, 'replaced');
+        om.trackOrder(record, {
+          orderId: newId, kind: (meta && meta.kind) || 'replace',
+          positionId: (meta && (meta.of || meta.positionId)) || null,
+          net: sendPayload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
+          testMode: isTest, legs: meta && meta.legs, placedAt: Date.now()
+        });
+      }
       store.appendEvent(record, {
         type: 'order_replaced', meta, payload: sendPayload, orderId, newOrderId: newId, testMode: isTest,
         note: `reprice ${meta && meta.fromLimit} -> ${payload.price}`
@@ -1592,9 +1606,16 @@ async function runRestingWork() {
     for (const { run, cfg, record } of pending) {
       const st = record.state;
       const decisions = [];
-      const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying });
+      // THE WORKER HAS TO REACH THE BROKER TOO. These were missing, so concedeCover's
+      // `if (deps.replaceOrder && pc.orderId)` was false on every sub-bar pass: the ladder and give-up
+      // moved pc.target/pc.sentCredit and logged cover-reprice while the resting Schwab order never
+      // moved, and resolveRestingCovers then booked fills at prices that order never asked for. The
+      // worker runs every 30s against the tick's ~5 minutes, so it is where most repricing happens —
+      // measured on v7-10 for 2026-09-23, 14 of 39 cover repricings (36%) never left the process.
+      const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying,
+        placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record) });
       try {
-        trader.resolvePendingOpen(st, cfg, deps, decisions);
+        await trader.resolvePendingOpen(st, cfg, deps, decisions);
         trader.resolvePendingHedges(st, cfg, deps, decisions);
         if (cfg.coverFillModel === 'resting') {
           // BOTH, and in this order, exactly as processCandleClose does it (trader.js). workRestingCovers

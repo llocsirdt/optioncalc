@@ -566,6 +566,11 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     // rather than only "was it through at the two instants we happened to look".
     markLow: res.mark,
     orderStatus: placed.status, filled: false, covered: false, coverId: null,
+    // THE BROKER'S HANDLE. Never recorded before, which is why neither the open ladder nor cancel-open
+    // could reach the order they were talking about: the ladder walked pos.limit in memory while the real
+    // order rested at its placement price, and cancel-open deleted the position while the order stayed
+    // live at Schwab. A resting cover has carried its orderId since placeRestingCover; an open did not.
+    orderId: (placed && placed.orderId) || null,
     openedAt: new Date().toISOString(),
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
@@ -577,7 +582,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // Resolve immediately against THIS observation too, so an order that is already marketable does not
   // wait 30s for no reason. The point is not to delay fills, it is to stop asserting them: this call reads
   // the same chain, so it will usually fill at once — and when the market has moved away it will not.
-  resolvePendingOpen(st, cfg, deps, decisions);
+  await resolvePendingOpen(st, cfg, deps, decisions);
   st.direction = openSide;
   st.openN = (st.openN || 0) + 1;
   // CASH IS BOOKED AT THE FILL, NOT HERE — see noteCash() at the open-fill site. This used to add the
@@ -1067,7 +1072,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         st.positions = st.positions.filter(p => p.id !== pos.id);
         st.pendingOpenId = null;
       } else {
-        resolvePendingOpen(st, cfg, deps, decisions);   // still our view — try to fill it, else work it
+        await resolvePendingOpen(st, cfg, deps, decisions);   // still our view — try to fill it, else work it
       }
     }
   }
@@ -2124,7 +2129,10 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
   return filled;
 }
 
-function resolvePendingOpen(st, cfg, deps, decisions) {
+// ASYNC since the open ladder now replaces at the broker. Every state mutation still happens BEFORE
+// the first await, so a caller that does not await still observes the updated book synchronously —
+// which is what the unit tests rely on. No caller uses the return value.
+async function resolvePendingOpen(st, cfg, deps, decisions) {
   if (!st.pendingOpenId) return 0;
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
@@ -2187,8 +2195,25 @@ function resolvePendingOpen(st, cfg, deps, decisions) {
     decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
       from: pos.limit, to: next, mark: ladderMark, cap: pos.cap,
       ...(sentCredit ? { sentFrom: pos.sentLimit, sentTo: round2(w - next) } : {}) });
-    if (sentCredit) pos.sentLimit = round2(w - next);
+    const sentTo = sentCredit ? round2(w - next) : next;
+    if (sentCredit) pos.sentLimit = sentTo;
     pos.limit = next;
+    // AND TELL THE BROKER. This walked pos.limit purely in memory: markFill then booked an open-fill at
+    // the walked price while the real order still rested at the price it was placed at. The engine went
+    // on to cover a position it did not own. Covers have gone out through concedeCover since b901054;
+    // opens never went out at all.
+    if (deps.replaceOrder && pos.orderId) {
+      const sendLegs = sentCredit && pos.sentLegs && pos.sentLegs.length ? pos.sentLegs : pos.legs;
+      const srl = resolveLegs(sendLegs, deps.getLeg);
+      if (!srl.error) {
+        const payload = buildOrderPayload(srl.resolved, sentTo, pos.quantity || cfg.quantity,
+          sentCredit ? 'CREDIT' : 'DEBIT');
+        const r = await deps.replaceOrder(pos.orderId, payload,
+          { kind: 'open-reprice', of: pos.id, fromLimit: sentCredit ? pos.sentLimit : pos.limit, legs: sendLegs,
+            net: sentCredit ? 'CREDIT' : 'DEBIT' });
+        if (r && r.orderId) pos.orderId = r.orderId;
+      }
+    }
     return 1;
   }
   decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,

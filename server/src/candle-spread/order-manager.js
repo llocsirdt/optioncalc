@@ -77,6 +77,22 @@ function unfillablePrice(payload, frac, spreadWidth, tick) {
   return sent < real ? sent : null;
 }
 
+// Drop an order the broker has superseded, so the poller stops chasing an id that no longer exists.
+//
+// A Schwab replace CANCELS the old order and creates a new one. Without this the old id stayed in
+// liveOrders, polled to REPLACED -> 'canceled' -> terminal, and the record ended the day claiming a dead
+// order while the live replacement was tracked by nothing at all.
+function retireOrder(record, orderId, why) {
+  const live = (record.state && record.state.liveOrders) || [];
+  const i = live.findIndex((o) => o && o.orderId === orderId);
+  if (i < 0) return false;
+  const [gone] = live.splice(i, 1);
+  record.state.liveOrders = live;
+  store.appendEvent(record, { type: 'order_retired', orderId, why: why || 'superseded',
+    kind: gone && gone.kind, note: `stopped tracking #${orderId} (${why || 'superseded'})` });
+  return true;
+}
+
 // Record a freshly-sent real order so the poller can track it.
 function trackOrder(record, o) {
   record.state.liveOrders = record.state.liveOrders || [];
@@ -161,4 +177,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { unfillablePrice, trackOrder, reconcile, isTerminal, mapStatus, extractFillPrice, TERMINAL, DEAD };
+module.exports = { unfillablePrice, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, TERMINAL, DEAD };

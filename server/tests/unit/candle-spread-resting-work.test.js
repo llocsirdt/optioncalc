@@ -477,6 +477,54 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     ok(got > ask, 'and a cover can fill BETTER than it asked — which is why the two differ');
   }
 
+  // ---- THE OPEN LADDER MUST MOVE THE ORDER, NOT ONLY THE INTENTION -----------------------------------
+  // It walked pos.limit in memory with no replaceOrder call anywhere in the function, so markFill then
+  // booked an open-fill at the walked price while the real order still rested where it was placed — and
+  // the engine went on to cover a position it did not own. Covers have gone out through concedeCover
+  // since b901054; opens never went out at all.
+  {
+    const mk = (over = {}) => {
+      const st = { positions: [], pendingOpenId: 'p1', lastUnderlying: 22000 };
+      st.positions.push({ id: 'p1', side: 'bull', legs, quantity: 1, limit: 10.20, cap: 13, filled: false,
+        orderStatus: 'working', openTime: '08/30 10:00', covered: false, pendingCover: null,
+        orderId: 'brk-1', ...over });
+      return st;
+    };
+    const sent = [];
+    const deps = { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25,
+      replaceOrder: async (id, payload, meta) => { sent.push({ id, price: payload.price, meta }); return { orderId: 'brk-2' }; } };
+
+    const st = mk();
+    await trader.resolvePendingOpen(st, cfg, deps, []);
+    const p = st.positions[0];
+    ok(p.limit === 10.45, `the ladder still walks the limit (${p.limit})`);
+    ok(sent.length === 1, 'and now sends a replacement to the broker');
+    ok(sent[0] && sent[0].id === 'brk-1', 'against the order id the open recorded when it was placed');
+    ok(sent[0] && sent[0].price === 10.45, `at the new price (${sent[0] && sent[0].price})`);
+    ok(p.orderId === 'brk-2', 'and adopts the id the replace returned');
+
+    // A credit twin replaces in CREDIT space, the mirror direction.
+    // Asking MORE credit than the twin is currently worth, so it rests and the ladder gets to run. (At
+    // 9.80 against a twin worth 13.50 it simply fills, which is correct but tests nothing here.)
+    const cst = mk({ sentNet: 'CREDIT', sentLimit: 14.00,
+      sentLegs: [{ side: 'long', type: 'P', strike: 21990 }, { side: 'short', type: 'P', strike: 22010 }] });
+    sent.length = 0;
+    await trader.resolvePendingOpen(cst, cfg, deps, []);
+    const c = cst.positions[0];
+    ok(c.limit === 10.45 && c.sentLimit === 9.55,
+      `the twin's ask is re-derived from parity as the debit walks up: 20 - 10.45 (${c.sentLimit})`);
+    ok(sent.length === 1 && sent[0].price === 9.55, `and the replacement carries the credit price (${sent[0] && sent[0].price})`);
+    ok(sent[0].meta.net === 'CREDIT', 'as a CREDIT order');
+
+    // No broker handle, or no replaceOrder (dry run) — walk the intention, send nothing, never throw.
+    const noId = mk({ orderId: null }); sent.length = 0;
+    await trader.resolvePendingOpen(noId, cfg, deps, []);
+    ok(noId.positions[0].limit === 10.45 && sent.length === 0, 'no orderId: still ladders, sends nothing');
+    const dry = mk(); sent.length = 0;
+    await trader.resolvePendingOpen(dry, cfg, { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25 }, []);
+    ok(dry.positions[0].limit === 10.45, 'dry run with no replaceOrder still ladders and does not throw');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);
