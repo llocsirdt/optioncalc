@@ -318,10 +318,25 @@ async function load() {
   showErr('');
   const variant = $('variant').value, date = $('date').value;
   if (!variant || !date) return;
-  const base = $('src').value === 'backtest' ? BT_BASE : LIVE_BASE;
+  const isBt = $('src').value === 'backtest';
+  const base = isBt ? BT_BASE : LIVE_BASE;
   $('meta').textContent = 'loading…';
   try {
-    record = await getJson(`${base}/api/v1/candle-spread/runs/NDX/${date}?date=${date}&variant=${variant}&cb=${Date.now()}`);
+    // src=backtest MUST use the on-demand BACKTEST endpoint, not /runs/.
+    //
+    // /runs/ serves STORED run records and has no notion of a source — so against a prod BT_BASE it
+    // returned the LIVE run and this page drew it labelled "backtest". Caught 2026-09-23 on v6-40: debug
+    // showed 21 positions and a $14,539 terminal, byte-identical to the live archive record, while the
+    // actual backtest for that variant and day has 2 positions and -$405. That is why the backtest curve
+    // here disagreed with the one on the compare page — compare was right; this page was drawing the live
+    // book twice. It would have looked correct on a dev box where replay bundles happen to be stored as
+    // runs, which is presumably how it survived.
+    //
+    // Same endpoint the OVERLAY already uses (loadBacktest) and the same one compare.html fans out to, so
+    // all three now draw one backtest.
+    record = await getJson(isBt
+      ? `${base}/api/v1/candle-spread/backtest?symbol=NDX&date=${date}&variant=${encodeURIComponent(variant)}&cb=${Date.now()}`
+      : `${base}/api/v1/candle-spread/runs/NDX/${date}?date=${date}&variant=${variant}&cb=${Date.now()}`);
   } catch (e) {
     record = null; showErr(`no run for ${variant} on ${date} (${e.message})`);
     $('meta').textContent = ''; $('orders').innerHTML = ''; $('summary').innerHTML = '';
@@ -1088,7 +1103,15 @@ function renderCurve(pos, se, T) {
   if (cb) cb.style.aspectRatio = `${CW} / ${CH}`;
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   $('date').value = _p.get('date') || today;
-  if (_p.get('src')) $('src').value = _p.get('src');
+  // NORMALISE the source param instead of assigning it blind. Setting a <select> to a value none of its
+  // options carry leaves it unselected, so `?src=bt` silently fell back to live and the page then drew a
+  // LIVE book on a URL that said backtest — with nothing on screen saying so. Accept the short forms the
+  // other pages use and ignore anything else rather than half-applying it.
+  {
+    const raw = (_p.get('src') || '').toLowerCase();
+    const want = /^(bt|backtest)$/.test(raw) ? 'backtest' : /^live$/.test(raw) ? 'live' : null;
+    if (want) $('src').value = want;
+  }
   await loadVariants();
   await loadBaselines();
   await load();
