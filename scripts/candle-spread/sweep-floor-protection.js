@@ -106,23 +106,48 @@ function runOne(v, cfg) {
 
 (function main() {
   console.log(`FLOOR-PROTECTION SWEEP — ${DAYS.length} days, ${PANEL.length} variants, ${CONFIGS.length} configs\n`);
+  // EVERY DELTA HERE IS MEASURED AGAINST `base`, AND `base` IS ONLY EVER FILLED BY THE CONTROL ARM. With
+  // no control in CONFIGS it stays empty, `base[nm] || 0` reads 0 for every variant, and each arm's delta
+  // becomes its ENTIRE total — every arm a spectacular winner, ranked confidently, against nothing.
+  if (!CONFIGS.some((c) => c.label === 'control')) {
+    console.error('  ✗ no arm labelled "control" — every delta below would be measured against zero. Exiting 2.');
+    process.exit(2);
+  }
   const base = {};
   const rows = [];
   for (const cfg of CONFIGS) {
-    let total = 0, worstSum = 0, negSum = 0, blocked = 0, gated = 0;
+    let total = 0, worstSum = 0, negSum = 0, blocked = 0, gated = 0, noWorst = 0;
     const per = {};
     for (const name of PANEL) {
       const v = runs.find((r) => r.variant === name);
-      if (!v) { console.error(`  (no such variant: ${name})`); continue; }
+      // A SKIPPED VARIANT MAKES THE ARMS INCOMPARABLE. This logged and carried on, so an arm that could
+      // not run one of the panel was summed over a SMALLER set and its total compared to a control summed
+      // over the full one — a difference of tens of thousands of dollars attributed to the arm.
+      if (!v) {
+        console.error(`\n  ✗ no such variant in the live roster: ${name}. The panel and the roster disagree,`);
+        console.error('    and an arm summed over a different set than the control is not a comparison. Exiting 2.\n');
+        process.exit(2);
+      }
       const r = runOne(v, cfg);
       per[name] = r.total;
-      total += r.total; worstSum += (r.worst || 0); negSum += r.neg; blocked += r.blocked; gated += r.gated;
+      // `r.worst` is null when the arm produced no days at all. `|| 0` read that as "worst case zero" —
+      // the best possible outcome — so an arm that ran nothing looked safest. Count it as unknown.
+      if (r.worst == null) noWorst++; else worstSum += r.worst;
+      total += r.total; negSum += r.neg; blocked += r.blocked; gated += r.gated;
     }
     if (cfg.label === 'control') Object.assign(base, per);
-    const delta = total - PANEL.reduce((s, nm) => s + (base[nm] || 0), 0);
-    rows.push({ ...cfg, total, delta, worstSum, negSum, blocked, gated, per });
+    // The delta is only meaningful over the variants the CONTROL actually produced. `base[nm] || 0`
+    // credited an arm with the full total of any variant the control had missed.
+    const missing = PANEL.filter((nm) => base[nm] == null);
+    if (cfg.label !== 'control' && missing.length) {
+      console.error(`\n  ✗ the control produced no total for: ${missing.join(', ')}.`);
+      console.error('    Those variants would be credited to every arm in full. Exiting 2.\n');
+      process.exit(2);
+    }
+    const delta = cfg.label === 'control' ? 0 : total - PANEL.reduce((s, nm) => s + base[nm], 0);
+    rows.push({ ...cfg, total, delta, worstSum, negSum, blocked, gated, noWorst, per });
     console.log(`  ${cfg.label.padEnd(26)} ${usd(total).padStart(13)}  ${(cfg.label === 'control' ? '' : usd(delta)).padStart(13)}`
-      + `   worstSum ${usd(worstSum).padStart(11)}   negDays ${String(negSum).padStart(5)}`);
+      + `   worstSum ${usd(worstSum).padStart(11)}${noWorst ? `(+${noWorst} unknown)` : ''}   negDays ${String(negSum).padStart(5)}`);
   }
   // Winners, by delta against the control.
   const ranked = rows.filter((r) => r.label !== 'control').sort((a, b) => b.delta - a.delta);
@@ -133,7 +158,7 @@ function runOne(v, cfg) {
   if (best && best.delta <= 0) console.log('NO ARM BEATS THE CONTROL — both ideas fail on this panel.');
   console.log('\nPER-VARIANT for the best arm:');
   if (best) for (const nm of PANEL) {
-    const d = (best.per[nm] || 0) - (base[nm] || 0);
+    const d = best.per[nm] - base[nm];
     console.log(`  ${nm.padEnd(14)} ${usd(base[nm]).padStart(12)} -> ${usd(best.per[nm]).padStart(12)}   ${usd(d).padStart(11)}`);
   }
 })();
