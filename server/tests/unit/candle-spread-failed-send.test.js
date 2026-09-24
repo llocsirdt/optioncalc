@@ -61,6 +61,51 @@ const ACCEPT = async () => ({ status: 'sent', filled: true, orderId: 'ok-1' });
     ok(d.some(x => x.action === 'open-not-sent'), 'and says so');
   }
 
+  // ---- A STRATEGY CANCEL MUST REACH THE BROKER ------------------------------------------------------
+  // cancel-open deleted the position locally and left the order working at Schwab. The engine then opened
+  // the OTHER side, so both were live and both could fill — double, opposed exposure on a view the engine
+  // no longer held. A reversal is the core signal, so this happened on ordinary days.
+  {
+    const cancels = [];
+    const cancelOrder = async (id, meta) => { cancels.push({ id, meta }); return { status: 'cancelled', orderId: id }; };
+    const bands = { bollinger20_2: { upper: 22400, lower: 22100, middle: 22250 } };
+    const mkRec = (variant) => store.initRun({ ...cfg, variant }, '2026-09-24');
+
+    // A working BULL open, then a candle whose signal wants BEAR.
+    const run = async (deps) => {
+      const rec = mkRec('cx' + Math.random().toString(36).slice(2, 7));
+      rec.state.positions = [{ id: 'p1', side: 'bull', legs, quantity: 1, limit: 8.0, filled: false,
+        orderStatus: 'working', covered: false, pendingCover: null, orderId: 'brk-9', openTime: '09/24 10:00' }];
+      rec.state.pendingOpenId = 'p1';
+      await trader.processCandleClose(rec, { timeEST: '09/24 10:05', open: 1, high: 2, low: 0, close: 1, indicators: bands },
+        { timeEST: '09/24 10:00', open: 2, high: 2, low: 1, close: 1, indicators: bands },
+        { getLeg, placeOrder: ACCEPT, dryRun: true, underlying: 22000,
+          signalFn: () => ({ openSide: 'bear' }), ...deps });
+      return rec;
+    };
+
+    const rec = await run({ cancelOrder });
+    const d = (rec.events || []).flatMap((e) => e.decisions || []);
+    const co = d.find((x) => x.action === 'cancel-open');
+    ok(!!co, 'a reversal still cancels the working open');
+    ok(cancels.length === 1 && cancels[0].id === 'brk-9',
+      `and the cancel reaches the broker against the recorded order id (${cancels.length} sent)`);
+    ok(co && co.cancelSent === true, 'the decision records that it was sent');
+    ok(!rec.state.positions.some((p) => p.id === 'p1'), 'and the position is gone locally');
+
+    // No cancelOrder wired (dry run) — cancel locally, send nothing, never throw.
+    cancels.length = 0;
+    const rec2 = await run({});
+    const co2 = (rec2.events || []).flatMap((e) => e.decisions || []).find((x) => x.action === 'cancel-open');
+    ok(!!co2 && co2.cancelSent === false, 'with no sender it still cancels locally and says it did not send');
+    ok(cancels.length === 0, 'and nothing went out');
+
+    // A cancel that REJECTS must not break the tick — the local decision stands either way.
+    cancels.length = 0;
+    const rec3 = await run({ cancelOrder: async () => { throw new Error('already filled'); } });
+    ok(!rec3.state.positions.some((p) => p.id === 'p1'), 'a failed cancel still removes the position locally');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);

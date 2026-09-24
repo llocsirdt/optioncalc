@@ -133,7 +133,9 @@ async function reconcile(record, deps, opts = {}) {
   if (!deps || !deps.tradingClient || !deps.accountHash) return;
   const now = opts.now || Date.now();
   const testCancelAfterMs = opts.testCancelAfterMs != null ? opts.testCancelAfterMs : 60000;
-  const staleOpenCancelMs = opts.staleOpenCancelMs != null ? opts.staleOpenCancelMs : 15 * 60 * 1000;
+  // Was 15 minutes, which is SHORTER than a normal open's working life and so fought the strategy. As an
+  // orphan backstop it only needs to be shorter than the session.
+  const staleOpenCancelMs = opts.staleOpenCancelMs != null ? opts.staleOpenCancelMs : 90 * 60 * 1000;
 
   for (const o of los) {
     if (isTerminal(o)) continue;
@@ -160,8 +162,18 @@ async function reconcile(record, deps, opts = {}) {
     }
     // 2) Still working — decide whether to cancel it.
     const age = now - (o.placedAt || now);
+    // THE SWEEP IS A BACKSTOP, NOT A POLICY. The strategy's design is that an open RESTS all day and is
+    // cancelled only on a reversal (trader.js), and the strategy now sends that cancel itself. This swept
+    // a live open at 15 minutes regardless, so the engine went on laddering an order the order manager had
+    // already killed and eventually booked a phantom fill against it — two components with opposite
+    // beliefs about the same order and no way for either to notice.
+    //
+    // It still exists, because it is the ONLY thing that catches an order orphaned by a crash, a failed
+    // strategy cancel, or a replace whose new id was lost. The horizon is long enough not to contradict a
+    // strategy that is still actively working the order. Test orders are untouched: those must be pulled
+    // quickly and nothing else is watching them.
     const wantCancel = (o.testMode && age >= testCancelAfterMs)          // test order: pull it so nothing lingers
-      || (!o.testMode && o.kind === 'open' && age >= staleOpenCancelMs);  // stale live OPEN that never filled
+      || (!o.testMode && o.kind === 'open' && age >= staleOpenCancelMs);  // orphan backstop, not a schedule
     if (wantCancel) {
       try {
         await deps.tradingClient.orderDelete(deps.accountHash, o.orderId);

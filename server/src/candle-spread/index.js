@@ -1182,6 +1182,41 @@ function makeReplaceOrder(run, record) {
   };
 }
 
+// CANCEL ONE ORDER AT THE BROKER. Same three gates as every other sender, and the same shape of result.
+//
+// The capability already existed — order-manager's reconcile calls orderDelete on its own 20s timer — but
+// nothing the STRATEGY decided ever reached it. A reversal cancelled the position in memory and left the
+// order live; the only thing that eventually pulled it was om's stale-open sweep, up to 15 minutes later.
+function makeCancelOrder(run, record) {
+  const mode = run.dryRun;
+  const wantsRealSend = mode === false || mode === 'test';
+  return async function cancelOrder(orderId, meta) {
+    const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
+      && DEPS.tradingClient && DEPS.accountHash && orderId;
+    if (!canSend) {
+      const why = !orderId ? 'no-order-id' : mode === true ? 'dryRun'
+        : !(DEPS && DEPS.isProd) ? 'dev-mode' : !LIVE_ARMED ? 'disarmed' : 'no-client';
+      store.appendEvent(record, { type: 'order_simulated', by: why, meta, orderId, note: `cancel not sent (${why})` });
+      return { status: `simulated:${why}`, orderId };
+    }
+    try {
+      await DEPS.tradingClient.orderDelete(DEPS.accountHash, orderId);
+      om.retireOrder(record, orderId, (meta && meta.kind) || 'strategy-cancel');
+      store.appendEvent(record, { type: 'order_cancelled', meta, orderId,
+        note: `cancelled #${orderId}${meta && meta.reason ? ` (${meta.reason})` : ''}` });
+      console.log(`[candle-spread] ${run.variant} CANCEL #${orderId}${meta && meta.reason ? ` — ${meta.reason}` : ''}`);
+      return { status: 'cancelled', orderId };
+    } catch (e) {
+      // An order already filled or already gone cannot be cancelled, and that is not worth failing a tick
+      // over — but it IS worth recording, because it means the engine's belief and the broker's state had
+      // already diverged.
+      store.appendEvent(record, { type: 'order_error', meta, orderId, note: `Schwab cancel failed: ${e && e.message}` });
+      console.error(`[candle-spread] ${run.variant} CANCEL FAILED #${orderId}: ${e && e.message}`);
+      return { status: 'error', orderId, error: e && e.message };
+    }
+  };
+}
+
 function makePlaceOrder(run, record) {
   const mode = run.dryRun;                        // true | 'test' | false
   const wantsRealSend = mode === false || mode === 'test';
@@ -1488,7 +1523,8 @@ async function processGroup(runs, kind) {
       const placeOrder = makePlaceOrder(run, record);
       const replaceOrder = makeReplaceOrder(run, record);
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
-        getLeg, placeOrder, replaceOrder, A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol,
+        getLeg, placeOrder, replaceOrder, cancelOrder: makeCancelOrder(run, record),
+        A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol,
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs
@@ -1613,7 +1649,8 @@ async function runRestingWork() {
       // worker runs every 30s against the tick's ~5 minutes, so it is where most repricing happens —
       // measured on v7-10 for 2026-09-23, 14 of 39 cover repricings (36%) never left the process.
       const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying,
-        placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record) });
+        placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record),
+        cancelOrder: makeCancelOrder(run, record) });
       try {
         await trader.resolvePendingOpen(st, cfg, deps, decisions);
         trader.resolvePendingHedges(st, cfg, deps, decisions);

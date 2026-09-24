@@ -1067,7 +1067,21 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       const reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side);
       if (reversed) {
         pos.orderStatus = 'cancelled';
+        // AND CANCEL IT AT THE BROKER. This deleted the position locally and left the order working at
+        // Schwab. The engine then opened the OTHER side, so both orders were live and both could fill —
+        // double, opposed exposure on a view the engine no longer held. Nothing pulled it except the
+        // order manager's stale sweep, up to 15 minutes later, and only because its kind happens to be
+        // 'open'; a reversal is the core signal, so this is a normal-day occurrence, not an edge case.
+        //
+        // Fire-and-forget on purpose: the local decision stands either way (the order was placed on a
+        // view we have abandoned), and a cancel that fails is recorded by the sender. Waiting on Schwab
+        // here would stall the tick for every variant behind it.
+        if (deps.cancelOrder && pos.orderId) {
+          Promise.resolve(deps.cancelOrder(pos.orderId, { kind: 'cancel-open', of: pos.id, reason: 'reversal' }))
+            .catch(() => { /* the sender logs it; never let a cancel break the tick */ });
+        }
         decisions.push({ action: 'cancel-open', positionId: pos.id, side: pos.side, limit: pos.limit,
+          orderId: pos.orderId || null, cancelSent: !!(deps.cancelOrder && pos.orderId),
           reason: openSide && openSide !== pos.side ? `reversal → ${openSide}` : `cover signal on ${pos.side}` });
         st.positions = st.positions.filter(p => p.id !== pos.id);
         st.pendingOpenId = null;
