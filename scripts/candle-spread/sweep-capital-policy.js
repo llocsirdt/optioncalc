@@ -56,7 +56,7 @@ if(KNOB==='frac'||KNOB==='both') for(const f of [0.25,0.35,0.50,0.65,0.80]) ARMS
 // is to hold deployment near the threshold, not to drive it negative.
 // k=0 leaves creditCapitalTrigger falsy, so the engine falls through to the CURRENT hand-set rules —
 // that row is the control and is labelled as one rather than as a trigger setting.
-if(KNOB==='trig'||KNOB==='both') for(const k of [0,0.25,0.5,0.75,1,1.5,2,3])
+if(KNOB==='trig'||KNOB==='both') for(const k of (arg('--rungs','0,0.25,0.5,0.75,1,1.5,2,3')).split(',').map(Number))
   ARMS.push({label: k===0 ? 'CONTROL (today)' : `trig=${k}xW`, o:{creditCapitalTrigger:k}, scale:true});
 const agg={};
 console.log('variant        arm            peak capital   avg capital        total P&L   credit%  cvrWing  cvrSkip  shift');

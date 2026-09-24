@@ -62,10 +62,49 @@ const CACHE_DIR = process.env.CANDLE_BACKTEST_CACHE_DIR
 const CACHE_MAX = Number(process.env.CANDLE_BACKTEST_CACHE_MAX || 60);
 const cacheFile = (date) => path.join(CACHE_DIR, `dual-${date}.json`);
 
+
+// IS THIS DAY FINISHED? A complete RTH session's last 5m bar closes at 15:55 ET (minute 955) — the same
+// LAST_ACTION_MIN the live engine uses. Anything short of that is a session still in progress.
+//
+// This exists because an on-demand build was cached UNCONDITIONALLY. Ask for a date's backtest while its
+// market is still open and buildDualDay returns however many 1m bars exist so far; writeCachedDay then
+// froze that stump permanently and every later request got it. Caught 2026-09-23: the cached day ran
+// 09:35 to 09:55 — five bars — so the backtest "traded" 2 positions against the live run's 21, and the
+// compare overlay drew that as the day the candles implied. 09-21 was caught the same way at 23 bars.
+// 09-18 and 09-22, first requested after their closes, are complete at 77.
+const LAST_ACTION_MIN = 15 * 60 + 55;
+function etMinuteOf(ms) {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit',
+    minute: '2-digit', hour12: false }).formatToParts(new Date(ms));
+  const h = +(p.find((x) => x.type === 'hour') || {}).value;
+  const m = +(p.find((x) => x.type === 'minute') || {}).value;
+  return h * 60 + m;
+}
+function dayIsComplete(day) {
+  const bars = (day && day.bars) || [];
+  if (!bars.length) return false;
+  const last = bars[bars.length - 1];
+  const t = last && (last.dt != null ? last.dt : last.datetime);
+  return Number.isFinite(t) && etMinuteOf(t) >= LAST_ACTION_MIN;
+}
+// Today in ET, so a partial cache for a PAST date can be thrown away and rebuilt while today's stays
+// usable (rebuilding it every request would hammer Schwab for a day that is still moving anyway).
+function etToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+}
+
 function readCachedDay(date) {
   try {
     const j = JSON.parse(fs.readFileSync(cacheFile(date), 'utf8'));
-    if (j && Array.isArray(j.bars) && j.bars.length) return j;
+    if (!j || !Array.isArray(j.bars) || !j.bars.length) return null;
+    // A partial cache written during a session that has since ENDED is wrong and will stay wrong, so drop
+    // it and let the caller rebuild. Self-heals the entries already poisoned by the old behaviour without
+    // needing anyone to clear the cache directory by hand.
+    if (!dayIsComplete(j) && date < etToday()) {
+      try { fs.unlinkSync(cacheFile(date)); } catch (e) { /* best effort */ }
+      return null;
+    }
+    return j;
   } catch (e) { /* miss */ }
   return null;
 }
@@ -140,8 +179,12 @@ async function resolveDay(date, priceHistory) {
   if (typeof priceHistory !== 'function') return null;
   const built = await buildDualDay(date, priceHistory);
   if (!built) return null;
-  writeCachedDay(built);
-  return { dir: CACHE_DIR, model: 'dual (NQ signal / NDX pricing) — built on demand', day: built, onDemand: true, cached: false };
+  // Only a FINISHED day is worth keeping. A day still in progress is served for this request and thrown
+  // away, so the next request after the close rebuilds it whole instead of inheriting a stump forever.
+  const complete = dayIsComplete(built);
+  if (complete) writeCachedDay(built);
+  return { dir: CACHE_DIR, model: 'dual (NQ signal / NDX pricing) — built on demand', day: built,
+    onDemand: true, cached: false, partial: !complete };
 }
 
 async function runDayRecord({ date, variant, symbol, priceHistory }) {
@@ -237,4 +280,5 @@ function availableDates() {
   return [...new Set(out)].sort();
 }
 
-module.exports = { runDayRecord, availableDates, iso };
+module.exports = {
+  dayIsComplete, runDayRecord, availableDates, iso };
