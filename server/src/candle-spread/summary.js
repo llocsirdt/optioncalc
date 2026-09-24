@@ -46,7 +46,52 @@ function collectDecisionRows(record) {
     for (const d of ev.decisions || []) {
       switch (d.action) {
         case 'open':
-          rows.push({ time: t, action: 'OPEN', side: d.side, strikes: fmtLegs(d.legs), price: d.limit, note: d.filled ? 'filled' : 'working' });
+          // NET, AND THE PRICE THAT WAS ACTUALLY ASKED. `d.limit` is the DEBIT-CANONICAL price; when
+          // capital recapture sends the credit twin, the order at the broker is a different instrument at
+          // a different number, and this row showed neither — so the day summary read as an all-debit
+          // session and its prices could not be matched against the broker's order list. The live rows
+          // have always carried `net`; the intended-strategy rows did not.
+          rows.push({ time: t, action: 'OPEN', side: d.side, strikes: fmtLegs(d.legs), price: d.limit,
+            net: d.sentNet === 'CREDIT' ? 'CR' : 'DB',
+            sent: d.sentNet === 'CREDIT' && d.sentLimit != null ? d.sentLimit : null,
+            note: d.filled ? 'filled' : 'working' });
+          break;
+        // A REFUSED ORDER IS PART OF THE DAY. These were all swept into the `default` and omitted, so a
+        // session where the broker rejected an open, or leg-uniqueness blocked one, or the lock could not
+        // be sent, summarised identically to one where everything went out cleanly.
+        case 'open-not-sent':
+          rows.push({ time: t, action: 'OPEN-X', side: d.side, strikes: fmtLegs(d.legs), price: d.limit,
+            net: d.net === 'CREDIT' ? 'CR' : 'DB', note: `NOT SENT: ${d.reason || 'send failed'}` });
+          break;
+        case 'cover-not-sent':
+          rows.push({ time: t, action: 'COVER-X', side: '', strikes: '', price: d.target,
+            note: `NOT SENT: ${d.reason || 'send failed'}` });
+          break;
+        case 'combo-lock-open':
+          rows.push({ time: t, action: 'COMBO', side: '', strikes: `${d.legs} legs`, price: d.limit,
+            net: d.net === 'CREDIT' ? 'CR' : 'DB',
+            note: `lock ${d.winner} + open ${d.openId}, floor ${money(d.lockedFloor)}` });
+          break;
+        // HEDGES. offsets, wings and flies are real orders that spend real money — up to the $1,500 daily
+        // fly budget alone — and none of them appeared in this summary at all.
+        case 'floor-offset':
+        case 'wing':
+        case 'fly':
+          rows.push({ time: t, action: d.action.toUpperCase().replace('FLOOR-', ''), side: '',
+            strikes: fmtLegs(d.legs), price: d.limit != null ? d.limit : null,
+            note: `${d.tag || ''} cost ${money(d.cost)}${d.ratio != null ? ` (${d.ratio}:1)` : ''}`.trim() });
+          break;
+        case 'offset-fill':
+        case 'wing-fill':
+        case 'fly-fill':
+          rows.push({ time: t, action: d.action.toUpperCase(), side: '', strikes: fmtLegs(d.legs),
+            price: d.fillPrice, note: `cost ${money(d.cost)}` });
+          break;
+        case 'offset-expire':
+        case 'wing-expire':
+        case 'fly-expire':
+          rows.push({ time: t, action: d.action.toUpperCase(), side: '', strikes: fmtLegs(d.legs),
+            price: d.limit, note: 'expired unfilled' });
           break;
         case 'cover':
           rows.push({ time: t, action: 'COVER', side: d.side || '', strikes: fmtLegs(d.legs), price: d.limit, note: d.geometry || '' });
@@ -89,9 +134,15 @@ function collectTotals(record) {
   const rows = collectDecisionRows(record);
   return {
     opens: rows.filter(r => r.action === 'OPEN').length,
+    creditOpens: rows.filter(r => r.action === 'OPEN' && r.net === 'CR').length,
     covers: rows.filter(r => r.action === 'COVER' || r.action === 'COVER-REST').length,
     coverFills: rows.filter(r => r.action === 'COVER-FILL').length,
     cancels: rows.filter(r => r.action === 'CANCEL').length,
+    // Counted, because "nothing was refused today" and "refusals were never in this view" looked the same.
+    notSent: rows.filter(r => r.action === 'OPEN-X' || r.action === 'COVER-X').length,
+    hedges: rows.filter(r => ['OFFSET', 'WING', 'FLY'].includes(r.action)).length,
+    hedgeFills: rows.filter(r => ['OFFSET-FILL', 'WING-FILL', 'FLY-FILL'].includes(r.action)).length,
+    combos: rows.filter(r => r.action === 'COMBO').length,
     settle: eod ? eod.settle : null,
     terminalPnl: eod ? eod.terminalPnl : null,
     floorPnl: eod ? eod.floorPnl : (record.state ? record.state.realizedPnl : null)
