@@ -2347,9 +2347,32 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // -32.20 is comfortably below any positive target. The fill price then floored at one tick, so a
     // 40-wide cover booked for $5 and the book recorded it as a nearly free lock. Refuse the quote
     // instead -- the order stays working and is re-tested on the next observation with a fresh one.
+    // ALL THE GATES markFill RUNS, not just the first one.
+    //
+    // This path re-implements the price comparison inline (it has to — the credit side tests the twin's
+    // ask against a parity-converted mark, which markFill's sign-flip convention does not express), and
+    // it only ever ran verticalSanity. So the two gates written BECAUSE of 2026-09-16 guarded opens and
+    // hedges while covers — the orders that actually booked the 154 bogus fills, and the orders that book
+    // realizedPnl — were checked by the weakest test in the file.
+    //
+    // chainMonotonic is the one that matters here: every leg quote that day was individually sane, and
+    // the corruption was in ADJACENT PAIRS (a call worth more at the higher strike). All 1,185 violations
+    // fell inside the single 14:00 hour that produced every bad cover, and none outside it.
     const sane = SQ.verticalSanity(pc.legs, mark);
     if (!sane.ok) {
       decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: sane.reason, target: pc.target });
+      continue;
+    }
+    const usable = SQ.quoteUsable(pc.legs, quote);
+    if (!usable.ok) {
+      decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: usable.reason, target: pc.target });
+      continue;
+    }
+    const cmono = SQ.chainMonotonic(pc.legs, getLeg, (deps && deps.strikeIncrement) || cfg.strikeIncrement || 10);
+    if (!cmono.ok) {
+      const v = cmono.violations[0];
+      decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, target: pc.target,
+        reason: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}` });
       continue;
     }
     // THE PRICE, IN THE SPACE THE ORDER WAS SENT IN, then booked debit-canonically.

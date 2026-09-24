@@ -239,8 +239,21 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   {
     const cfg = { symbol: 'NDX', expiration: '2026-09-17', spreadWidth: 40, strikeIncrement: 10,
       quantity: 1, tickIncrement: 0.05, coverSelector: 'fixed-mark', coverFillModel: 'resting', variant: 'tst' };
-    // Canonical cover legs worth `m` as a debit; the twin's credit is therefore 40 - m.
-    const chainAt = (m) => (t, k) => ({ mid: k === 29390 ? 20 : 20 - m, bid: 0, ask: 60, symbol: `NDX_${t}${k}` });
+    // Canonical cover legs (long C29390 / short C29430, 40 wide) worth `m` as a debit; the twin's credit
+    // is therefore 40 - m.
+    //
+    // A REAL CHAIN, not a catch-all. The cover fill path now runs every gate markFill does — quoteUsable
+    // and chainMonotonic as well as verticalSanity — and the previous fixture failed both by
+    // construction: `bid: 0, ask: 60` on every leg is not a usable two-sided market, and answering
+    // `20 - m` for every strike except 29390 put that one strike m dollars above its own neighbour, which
+    // is the exact arbitrage the monotonic gate exists to refuse. Interpolating across the chain gives
+    // the same spread mark with a shape that could exist.
+    const chainAt = (m) => (t, k) => {
+      const away = (t === 'C' ? 29430 - k : k - 29390) / 40;      // calls fall as strike rises, puts rise
+      const v = Math.round((10 + m * away) * 100) / 100;          // long - short across the pair == m
+      return { mid: v, bid: Math.round((v - 0.6) * 100) / 100, ask: Math.round((v + 0.6) * 100) / 100,
+        symbol: `NDX_${t}${k}` };
+    };
     const mk = (sentCredit, target) => ({
       id: 'p', side: 'bear', filled: true, quantity: 1, limit: 21.8, shortStrike: 29430,
       legs: [{ side: 'long', type: 'P', strike: 29470 }, { side: 'short', type: 'P', strike: 29430 }],
@@ -374,8 +387,21 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
       if (ty === 'C') return null;
       return { mid: k === 29400 ? 12 : 20, bid: 11, ask: 21, symbol: `P${k}` };
     };
-    const whole = (ty, k) => ({ mid: ty === 'C' ? (k === 29360 ? 70 : k === 29400 ? 40 : 24)
-      : (k === 29400 ? 12 : 20), bid: 1, ask: 99, symbol: `${ty}${k}` });
+    // A chain that could exist: calls fall as the strike rises, puts rise, and every leg has a real
+    // two-sided market. The cover fill path runs chainMonotonic and quoteUsable now, and the previous
+    // version failed both — it answered 24 for every unlisted call (so C29390 sat BELOW C29400, free
+    // money) and 20 for every unlisted put (so P29390 sat ABOVE P29400), on a 1/99 book.
+    // Slopes chosen to preserve exactly what this test needs: the OPEN marks 70 - 40 = 30, comfortably
+    // over creditCoverFrac x 40 = 26 so the style still resolves to CREDIT, and the booked put cover
+    // marks 20 - 12 = 8, so the credit twin is already worth 40 - 8 = 32 against its 30 ask and books.
+    const whole = (ty, k) => {
+      const v = ty === 'C'
+        ? Math.round((70 - 0.75 * (k - 29360)) * 100) / 100     // 29360:70  29400:40  29440:10
+        : Math.round((12 + 0.20 * (k - 29400)) * 100) / 100;    // 29400:12  29440:20
+      const mid = Math.max(0.05, v);
+      return { mid, bid: Math.round((mid - 0.5) * 100) / 100, ask: Math.round((mid + 0.5) * 100) / 100,
+        symbol: `${ty}${k}` };
+    };
     const mk = () => ({ id: 'p1', side: 'bull', filled: true, quantity: 1, limit: 22, shortStrike: 29400,
       covered: false, pendingCover: null,
       legs: [{ side: 'long', type: 'C', strike: 29360 }, { side: 'short', type: 'C', strike: 29400 }] });
