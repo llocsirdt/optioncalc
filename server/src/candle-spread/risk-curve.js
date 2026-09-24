@@ -96,6 +96,33 @@ function bookFloor(positions, extra, pad) {
   }
   if (extra && extra.legs) for (const l of extra.legs) push(l.strike);
   if (!ks.length) return 0;
+  // UNBOUNDED TAILS FIRST. Past the outermost strike the payoff is exactly linear — there are no strikes
+  // left to bend it — so a sampled window cannot see a loss that keeps growing. It returns the value at
+  // whatever point it happened to sample and calls that the floor.
+  //
+  // This is the floor the day-loss governor bounds, the floor the ratchet watches, and the floor every
+  // open is gated on. A book with a net short call is unbounded above; a net short put is unbounded below
+  // (to zero); and either way the honest answer is -Infinity, which is what shared/portfolio-risk.js has
+  // always returned for the same shape. Without it, `lossMax` is not a bound at all on such a book — it
+  // is a bound on one arbitrary sample of it.
+  //
+  // LATENT TODAY, not live: 0 of 807 archived books carry a net short tail, because everything held is a
+  // balanced vertical or a tent of them. It becomes real the moment an unpaired short enters — a credit
+  // cover valued as-sent, a hedge leg that did not get its pair, a wing-shift that left one side behind.
+  let netCall = 0, netPut = 0;
+  const addLegs = (legs, qty) => {
+    for (const l of legs || []) {
+      const n = (l.side === 'long' ? 1 : -1) * (l.quantity || qty || 1);
+      if (l.type === 'C') netCall += n; else netPut += n;
+    }
+  };
+  for (const p of positions || []) {
+    if (!p || p.filled === false || !p.legs) continue;
+    addLegs(p.legs, p.quantity);
+    if (p.covered && p.coverLegs) addLegs(p.coverLegs, p.quantity);
+  }
+  if (extra && extra.legs) addLegs(extra.legs, extra.quantity);
+  if (netCall < 0 || netPut < 0) return -Infinity;
   let lo = Infinity, hi = -Infinity;
   for (const k of ks) { if (k < lo) lo = k; if (k > hi) hi = k; }
   const step = pad || 10;
