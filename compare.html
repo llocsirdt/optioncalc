@@ -205,7 +205,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.3</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.9.4</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -476,16 +476,31 @@ function pnlAtPrice(curve, price) {
   return last.y;
 }
 
-function analyzeLegs(legs, underlying) {
+// `domain` (optional {min,max}) forces the curve onto someone else's x-range.
+//
+// THE OVERLAY NEEDS THIS. Every cell derived its range from its OWN strikes, and the backtest book trades
+// DIFFERENT strikes than the live one — but svgCurve plots both against the PRIMARY's xMin/xMax. So the
+// backtest curve was sampled over one domain and drawn against another: it stopped short of the axis on
+// one or both sides and its shape sat shifted against the live curve it exists to be compared with.
+// Sampling it over the primary's domain is the whole point — two books, one price axis.
+function analyzeLegs(legs, underlying, domain) {
   if (!legs || !legs.length) return { empty: true };
   const strikes = legs.map((l) => l.strike);
   const minStrike = Math.min(...strikes), maxStrike = Math.max(...strikes);
   const range = maxStrike - minStrike;
   const padding = Math.max(50, range * 0.25);
-  const step = Math.max(1, range / 200 || 1);
+  let step = Math.max(1, range / 200 || 1);
   // Range spans the traded strikes (padded) AND the current underlying, so the price line + curve share one scale.
   let minPrice = Math.max(0.01, minStrike - padding), maxPrice = maxStrike + padding;
   if (Number.isFinite(underlying)) { minPrice = Math.min(minPrice, underlying); maxPrice = Math.max(maxPrice, underlying); }
+  if (domain && Number.isFinite(domain.min) && Number.isFinite(domain.max) && domain.max > domain.min) {
+    minPrice = domain.min; maxPrice = domain.max;
+    // Borrow the STEP as well, not just the endpoints. Recomputing it from the domain gave the overlay a
+    // different sample grid (200 points vs the primary's 300) whose last sample fell a few points short of
+    // maxPrice — so the curve still stopped before the right edge. Same min, same max, same step means the
+    // two curves are sampled at identical prices and can be compared point for point.
+    if (Number.isFinite(domain.step) && domain.step > 0) step = domain.step;
+  }
   const totalCost = legs.reduce((s, l) => s + (l.cost || 0), 0);
   const raw = PortfolioRisk.calculatePortfolioValueAtExpiration(legs, minPrice, maxPrice, step);
   const curve = raw.map((p) => ({ x: p.closingPrice, y: p.totalIntrinsicValue - totalCost }));
@@ -493,8 +508,13 @@ function analyzeLegs(legs, underlying) {
   const avg = curve.reduce((s, p) => s + p.y, 0) / curve.length;
   const lo = Math.min(...curve.map((p) => p.y)), hi = Math.max(...curve.map((p) => p.y));
   const under = Number.isFinite(underlying) ? underlying : null;
-  return { curve, worst: risk.lockedInProfit, best: risk.profitPotential, avg, lo, hi,
-    xMin: curve[0].x, xMax: curve[curve.length - 1].x, underlying: under, underPnl: under != null ? pnlAtPrice(curve, under) : null,
+  return { curve, step, worst: risk.lockedInProfit, best: risk.profitPotential, avg, lo, hi,
+    xMin: curve[0].x, xMax: curve[curve.length - 1].x,
+    // The range that was REQUESTED, as opposed to xMin/xMax which are the first and last points actually
+    // sampled. The overlay has to borrow this one: handing it xMax (already a sample short of maxPrice)
+    // made its own loop stop a further step early, so the curve still missed the right edge by a point.
+    pMin: minPrice, pMax: maxPrice,
+    underlying: under, underPnl: under != null ? pnlAtPrice(curve, under) : null,
     unboundedLoss: risk.unboundedUpsideRisk || risk.unboundedDownsideRisk, unboundedGain: risk.unboundedUpsideGain };
 }
 
@@ -1081,7 +1101,7 @@ function applyTime(T) {
   // different sessions, and 4 weeks of epochs would make the slider meaningless. Each cell converts that
   // minute through its OWN anchor, so scrubbing to 11:00 shows every day at 11:00.
   const byMinute = GRID_MODE === 'date' && T != null;
-  const build = (src, dest) => {
+  const build = (src, dest, domainOf) => {
     for (const v of Object.keys(src)) {
       try {
         const di = dayIndex[v];
@@ -1100,7 +1120,8 @@ function applyTime(T) {
           ? (di2 ? underAtMinute(di2, T) : null)
           : under;
         const u = uNow != null ? uNow : (ownSettle != null ? ownSettle : (src[v].state && src[v].state.lastUnderlying));
-        dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined) : { empty: true };
+        const dom = domainOf ? domainOf(v) : null;
+        dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined, dom) : { empty: true };
       } catch (e) { dest[v] = { err: 'calc' }; }
     }
   };
@@ -1108,7 +1129,12 @@ function applyTime(T) {
   // The overlay is rebuilt at the SAME epoch off the same underlying, so any separation between the two
   // curves is a difference in the BOOKS, not in where the slider put them.
   for (const k of Object.keys(cellsB)) delete cellsB[k];
-  if (Object.keys(recordsB).length) build(recordsB, cellsB);
+  // Borrow the primary cell's domain so both curves are sampled over the same prices. Falls back to the
+  // overlay's own range when the primary has no book for that variant (nothing to line up against).
+  if (Object.keys(recordsB).length) build(recordsB, cellsB, (v) => {
+    const c = cells[v];
+    return (c && Number.isFinite(c.pMin) && Number.isFinite(c.pMax)) ? { min: c.pMin, max: c.pMax, step: c.step } : null;
+  });
   render();
 }
 
@@ -1155,7 +1181,17 @@ function setupSlider() {
     lbl.textContent = 'full day';
     return;
   }
-  s.min = dayMin; s.max = dayMax; s.step = 300000; s.value = dayMax; s.disabled = false;   // 5-min steps
+  // THE TOP OF THE SLIDER HAS TO BE REACHABLE. A range input can only land on min + n*step, so with
+  // max = dayMax and a 5-minute step the highest selectable value was 20:00:00.000Z while dayMax — the
+  // settlement event's own stamp — was 20:00:05.818Z. currentT() then returned that value instead of null
+  // (it is strictly < dayMax), the view took the INTRADAY path, and underlyingAt() dropped the settle
+  // point for being later than T. Scrubbing to the far right therefore showed the 15:55 candle, 30420,
+  // where the day actually settled at 30470. On load nothing had been dragged, so the full-day path ran
+  // and the same cell read correctly — which is why it only broke after touching the scrubber.
+  // Rounding the top UP to a whole step makes it reachable and >= dayMax, so the end is the end.
+  const STEP = 300000;
+  const top = dayMin + Math.ceil((dayMax - dayMin) / STEP) * STEP;
+  s.min = dayMin; s.max = top; s.step = STEP; s.value = top; s.disabled = false;   // 5-min steps
   lbl.textContent = 'full day';
 }
 
