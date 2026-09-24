@@ -12,9 +12,17 @@
 const RC = require('./risk-curve');
 
 // Worst book P&L over the reachable settle band [spot-band, spot+band].
+//
+// SAMPLED AT THE STRIKES, not on a bare grid. `spot` is a fractional index price and `band` is a fractional
+// expected move, so `spot - band + k*step` lands on a strike essentially never — and a terminal P&L curve's
+// extrema live ONLY at strikes and endpoints. The min this returns was therefore systematically shallower
+// than the real one, and it is the objective that decides which hedge gets bought. RC.bandPoints unions the
+// grid with every strike in the book; see its note for the measurement.
 function reachableFloor(positions, spot, band, step) {
   let m = Infinity;
-  for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(positions, S); if (v < m) m = v; }
+  for (const S of RC.bandPoints(positions, spot - band, spot + band, step)) {
+    const v = RC.bookPnl(positions, S); if (v < m) m = v;
+  }
   return m;
 }
 
@@ -56,7 +64,9 @@ function bestHedge(positions, mark, spot, opts) {
   if (oldFloor >= 0) return null;   // no reachable loss to harvest
   // which side is the loss on? sample the band's worst point
   let worstS = spot, worstV = Infinity;
-  for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(positions, S); if (v < worstV) { worstV = v; worstS = S; } }
+  for (const S of RC.bandPoints(positions, spot - band, spot + band, step)) {
+    const v = RC.bookPnl(positions, S); if (v < worstV) { worstV = v; worstS = S; }
+  }
   const zoneSide = worstS >= spot ? 'above' : 'below';
   // CONVICTION gate: the loss zone only costs us if the underlying REACHES it. Only hedge when momentum
   // points toward that side (opts.trend +1 = up → hedge an ABOVE loss; -1 = down → hedge a BELOW loss).

@@ -131,9 +131,12 @@ function planWings(book, opts) {
   const maxWings = o.maxWings != null ? o.maxWings : 4;
   const minRatio = o.minRatio != null ? o.minRatio : 3;
   const tailSig = o.tailSigmas != null ? o.tailSigmas : 3;   // how far out "it really moved" is priced
+  // SAMPLED AT THE STRIKES (RC.bandPoints), not on a bare grid started from a fractional spot. The min of a
+  // piecewise-linear payoff is at a strike or an endpoint, so a grid that lands on neither understates the
+  // very quantity this greedy loop maximises. See RC.bandPoints.
   const reach = b => {
     let m = Infinity;
-    for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(b, S); if (v < m) m = v; }
+    for (const S of RC.bandPoints(b, spot - band, spot + band, step)) { const v = RC.bookPnl(b, S); if (v < m) m = v; }
     return m;
   };
   const shape0 = curveShape(book, { step });

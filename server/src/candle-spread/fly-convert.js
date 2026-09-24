@@ -140,9 +140,12 @@ function planFlies(book, opts) {
   const budget = o.budget != null ? o.budget : Infinity;
   const maxFlies = o.maxFlies != null ? o.maxFlies : 2;
   const minRatio = o.minRatio != null ? o.minRatio : 3;
+  // SAMPLED AT THE STRIKES (RC.bandPoints). A FLY is the extreme case: its entire lift is one point at the
+  // body strike, so a grid that never lands on a strike cannot see the structure it is being asked to
+  // score. Measured on the real v7-20 book, true apex $2,700 against $2,432 sampled. See RC.bandPoints.
   const reach = (b) => {
     let m = Infinity;
-    for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(b, S); if (v < m) m = v; }
+    for (const S of RC.bandPoints(b, spot - band, spot + band, step)) { const v = RC.bookPnl(b, S); if (v < m) m = v; }
     return m;
   };
   // SHORTFALL — the objective a fly needs, and the reason this module does not just reuse planWings'.
@@ -158,9 +161,20 @@ function planFlies(book, opts) {
   // even when the global minimum is pinned elsewhere, so progress is visible and the SECOND pass can go
   // after the other valley. The reachable minimum is still enforced as a hard constraint below (a fly may
   // never make the floor worse), so this buys sensitivity without giving up the guarantee planWings has.
+  // Shortfall is an INTEGRAL, so it wants evenly-spaced samples — but it is compared only against itself
+  // (s0 - shortfall(trial)), and both sides must therefore see the same points, including the kink a fly
+  // creates. Trapezoid over the union: each sample weighted by half the distance to its neighbours, so
+  // adding a strike between two grid points cannot change the measure merely by being counted.
   const shortfall = (b) => {
+    const xs = RC.bandPoints(b, spot - band, spot + band, step);
     let s = 0;
-    for (let S = spot - band; S <= spot + band; S += step) { const v = RC.bookPnl(b, S); if (v < 0) s += -v; }
+    for (let i = 0; i < xs.length; i++) {
+      const v = RC.bookPnl(b, xs[i]);
+      if (v >= 0) continue;
+      const lo = i === 0 ? xs[0] : (xs[i - 1] + xs[i]) / 2;
+      const hi = i === xs.length - 1 ? xs[i] : (xs[i] + xs[i + 1]) / 2;
+      s += -v * ((hi - lo) / step);          // /step keeps the scale comparable to the old point sum
+    }
     return s;
   };
   const curve0 = RC.riskCurve(book, { step, pad: o.pad != null ? o.pad : 400 });

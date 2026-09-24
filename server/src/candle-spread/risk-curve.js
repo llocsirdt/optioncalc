@@ -32,6 +32,31 @@ function bookPnl(positions, S) {
   return t;
 }
 
+// SAMPLE POINTS FOR A BAND — the uniform grid PLUS every strike inside it, plus both endpoints.
+//
+// A terminal P&L curve is piecewise-linear with kinks ONLY at strikes, so its extrema over an interval are
+// at a strike or at an endpoint and nowhere else. A uniform grid started from a fractional price therefore
+// misses every extremum it is trying to find. This mattered because the hedge planners' whole objective is
+// an extremum: reachableFloor is a min over the band, and a butterfly's entire lift is ONE POINT at the
+// body strike, so the structure being scored is precisely the one a grid cannot see. Measured on the real
+// v7-20 book: true apex $2,700 against $2,432 sampled — a 10% understatement of the thing being bought,
+// and worse at coarser steps.
+//
+// book-value.js:curve does the same union for the same reason. Endpoints are included because the band is
+// a hard window: the worst REACHABLE outcome may well be at its edge.
+function bandPoints(positions, lo, hi, step) {
+  if (!(hi > lo)) return [lo];
+  const st = step > 0 ? step : Math.max(1, (hi - lo) / 240);
+  const xs = new Set([r2(lo), r2(hi)]);
+  for (let S = lo; S <= hi; S += st) xs.add(r2(S));
+  for (const p of positions || []) {
+    for (const group of [p && p.legs, p && p.coverLegs]) {
+      for (const l of group || []) if (l && l.strike >= lo && l.strike <= hi) xs.add(l.strike);
+    }
+  }
+  return [...xs].sort((a, b) => a - b);
+}
+
 // The curve as [[S, pnl], ...] over [lo, hi] step `step`. Default window auto-brackets the strikes ± a pad.
 function riskCurve(positions, opts) {
   const o = opts || {};
@@ -134,4 +159,4 @@ function bookFloor(positions, extra, pad) {
   return m;
 }
 
-module.exports = { payoff, positionPnl, bookPnl, riskCurve, analyzeCurve, bookFloor };
+module.exports = { payoff, positionPnl, bookPnl, bandPoints, riskCurve, analyzeCurve, bookFloor };
