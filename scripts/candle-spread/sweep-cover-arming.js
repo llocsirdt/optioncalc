@@ -81,21 +81,37 @@ function measure(v, extra) {
 }
 
 const RUNS = buildRuns();
-console.log(`\nCOVER-ARMING SWEEP — ${days.length} days · geometry held at TENT`);
+const { parallelMap, workerCount } = require('./lib/parallel');
+
+(async function main() {
+// ONE UNIT PER (variant, armFrac, oppRatio), control included — independent and CPU-bound. The panel is
+// resolved FIRST so a bad name fails before we fork 8 processes. parallelMap returns a keyed object; the
+// loops below read it in CANONICAL order. --workers N to fan out. See lib/parallel.
+const PANEL = NAMES.map((name) => ({ name, v: RUNS.find((r) => r.variant === name) }));
+const UNITS = [];
+for (const { name, v } of PANEL) {
+  if (!v) continue;
+  UNITS.push({ key: `${name}\u0000ctl`, v, extra: { continuousCoverArmFrac: null, continuousCoverOppRatio: null } });
+  for (const a of ARM) { if (a == null) continue;
+    for (const o of OPP) UNITS.push({ key: `${name}\u0000${a}\u0000${o}`, v, extra: { continuousCoverArmFrac: a, continuousCoverOppRatio: o } }); }
+}
+const RES = await parallelMap(UNITS, (u) => measure(u.v, u.extra));
+
+console.log(`\nCOVER-ARMING SWEEP — ${days.length} days · geometry held at TENT`
+  + `${workerCount() > 1 ? ` · ${workerCount()} workers` : ''}`);
 console.log('armFrac null = cover immediately (the v0 control). oppRatio null = risk-only arming.\n');
 
-for (const name of NAMES) {
-  const v = RUNS.find((r) => r.variant === name);
+for (const { name, v } of PANEL) {
   if (!v) { console.log(`${name}: not a current variant`); continue; }
   // Control: cover everything immediately, exactly as v0 does.
-  const ctl = measure(v, { continuousCoverArmFrac: null, continuousCoverOppRatio: null });
+  const ctl = RES[`${name}\u0000ctl`];
   console.log(`═══ ${name} ═══   CONTROL (instant): ${usd(ctl.total)} · ret/DD ${ctl.retDD} · worst ${usd(ctl.worst)} · maxDD30 ${usd(ctl.dd)} · win ${ctl.win}%`);
   console.log('armFrac'.padEnd(9) + 'oppRatio'.padStart(9) + 'total'.padStart(13) + 'vs ctl'.padStart(12) + 'worst'.padStart(10) + 'maxDD30'.padStart(11) + 'ret/DD'.padStart(8) + 'win'.padStart(6));
   const rows = [];
   for (const a of ARM) {
     if (a == null) continue;                    // the control above IS armFrac null
     for (const o of OPP) {
-      const m = measure(v, { continuousCoverArmFrac: a, continuousCoverOppRatio: o });
+      const m = RES[`${name}\u0000${a}\u0000${o}`];
       rows.push({ a, o, ...m });
       console.log(String(a).padEnd(9) + String(o == null ? '—' : o).padStart(9) + usd(m.total).padStart(13)
         + ((m.total >= ctl.total ? '+' : '') + usd(m.total - ctl.total).replace('$', '$')).padStart(12)
@@ -109,3 +125,4 @@ for (const name of NAMES) {
     + (beatRet.length ? ` — best ${Math.max(...beatRet.map(r => r.retDD))} at armFrac ${beatRet.sort((x, y) => y.retDD - x.retDD)[0].a}/opp ${beatRet[0].o ?? '—'}` : ''));
   console.log('');
 }
+})().catch((e) => { console.error('\n  \u2717 sweep failed:', e && e.message, '\n'); process.exit(2); });

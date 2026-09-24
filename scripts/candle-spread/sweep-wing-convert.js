@@ -119,14 +119,28 @@ const ARMS = [
   ['  naked only, lambda 1', { ...W, wingNaked: true, wingUpsideLambda: 1.0 }],
 ];
 
-console.log(`\nWING CONVERSION SWEEP — ${days.length} days · first full-history measurement`);
+const { parallelMap, workerCount } = require('./lib/parallel');
+
+(async function main() {
+// ONE UNIT PER (variant, arm), control included — independent and CPU-bound. parallelMap forks this
+// script once per worker (--workers N) and returns a keyed object; the loops below read it in CANONICAL
+// order so the table never depends on which core finished first. See lib/parallel.
+const UNITS = [];
+for (const v of RUNS) {
+  UNITS.push({ key: `${v.variant}\u0000__control`, v, extra: {} });
+  for (const [label, extra] of ARMS) UNITS.push({ key: `${v.variant}\u0000${label}`, v, extra });
+}
+const RES = await parallelMap(UNITS, (u) => measure(u.v, u.extra));
+
+console.log(`\nWING CONVERSION SWEEP — ${days.length} days · first full-history measurement`
+  + `${workerCount() > 1 ? ` · ${workerCount()} workers` : ''}`);
 console.log('endFloor+ = share of traded days finishing with a GUARANTEED profit (the metric wings target)\n');
 for (const v of RUNS) {
-  const ctl = measure(v, {});
+  const ctl = RES[`${v.variant}\u0000__control`];
   console.log(`═══ ${v.variant} ═══  control: ${usd(ctl.total)} · ret/DD ${ctl.retDD} · worst ${usd(ctl.worst)} · endFloor+ ${ctl.endPosPct}%`);
   console.log('  arm'.padEnd(23) + 'total'.padStart(13) + 'vs ctl'.padStart(12) + 'worst'.padStart(10) + 'maxDD30'.padStart(11) + 'ret/DD'.padStart(8) + 'endFloor+'.padStart(11) + 'wings'.padStart(8) + 'spent'.padStart(12));
   for (const [label, extra] of ARMS) {
-    const m = measure(v, extra);
+    const m = RES[`${v.variant}\u0000${label}`];
     console.log('  ' + label.padEnd(21) + usd(m.total).padStart(13) + ((m.total >= ctl.total ? '+' : '') + usd(m.total - ctl.total)).padStart(12)
       + usd(m.worst).padStart(10) + usd(m.dd).padStart(11) + String(m.retDD).padStart(8)
       + ((m.endPosPct + '%') + (m.endPosPct > ctl.endPosPct ? '↑' : m.endPosPct < ctl.endPosPct ? '↓' : ' ')).padStart(11)
@@ -134,3 +148,4 @@ for (const v of RUNS) {
   }
   console.log('');
 }
+})().catch((e) => { console.error('\n  \u2717 sweep failed:', e && e.message, '\n'); process.exit(2); });

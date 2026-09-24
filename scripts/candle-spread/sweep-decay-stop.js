@@ -62,16 +62,30 @@ if(process.argv.includes('--anchor')){
 // costs ~75s per variant-arm; the full 12-cell grid would have run 20+ hours.
 const GRID=[{gate:'14:00',fr:0.35},{gate:'14:30',fr:0.35},{gate:'15:00',fr:0.50}];
 
+const { parallelMap, workerCount } = require('./lib/parallel');
+
+(async function main(){
+// ONE UNIT PER (variant, arm), BASE included. parallelMap forks this script once per worker (--workers N)
+// and returns a keyed object; the loop below reads it in CANONICAL order so the table does not depend on
+// which core finished first. See lib/parallel.
+const UNITS=[];
+for(const v of RUNS){
+  UNITS.push({key:`${v.variant}\u0000BASE`, v, o:{}});
+  for(const g of GRID) UNITS.push({key:`${v.variant}\u0000${g.gate}/${Math.round(g.fr*100)}%`, v, o:{decayStop:g.fr,decayStopAfter:g.gate}});
+}
+const RES=await parallelMap(UNITS,(u)=>run(u.v,u.o));
+
 const agg={};
+console.log(`DECAY-STOP SWEEP${workerCount()>1?` · ${workerCount()} workers`:''}`);
 console.log('variant        arm              total        avg/day     worst      maxDD    ret/DD  <=-1k  covFill  stops');
 for(const v of RUNS){
-  const base=run(v,{});
+  const base=RES[`${v.variant}\u0000BASE`];
   const line=(nm,r)=>console.log(`${v.variant.padEnd(14)} ${nm.padEnd(15)} ${usd(r.total).padStart(12)} ${usd(r.avg).padStart(10)} ${usd(r.worst).padStart(10)} ${usd(r.dd).padStart(10)} ${(r.retDD===Infinity?'inf':r.retDD.toFixed(1)).padStart(7)} ${String(r.sub1k).padStart(5)}  ${r.covFill.toFixed(1)}%  ${String(r.stops).padStart(5)}`);
   line('BASE',base);
   (agg.BASE=agg.BASE||{t:0,w:0,dd:0,n:0}); agg.BASE.t+=base.total; agg.BASE.dd+=base.dd; agg.BASE.n++;
   for(const g of GRID){
-    const r=run(v,{decayStop:g.fr,decayStopAfter:g.gate});
     const k=`${g.gate}/${Math.round(g.fr*100)}%`;
+    const r=RES[`${v.variant}\u0000${k}`];
     line(k,r);
     (agg[k]=agg[k]||{t:0,dd:0,n:0}); agg[k].t+=r.total; agg[k].dd+=r.dd; agg[k].n++;
   }
@@ -84,3 +98,4 @@ for(const k of ['BASE',...GRID.map(g=>`${g.gate}/${Math.round(g.fr*100)}%`)]){
   const a=agg[k]; if(!a) continue;
   console.log(`${k.padEnd(15)} ${usd(a.t).padStart(13)} ${(k==='BASE'?'':usd(a.t-B)).padStart(13)} ${usd(a.dd).padStart(13)}`);
 }
+})().catch((e)=>{ console.error('\n  ✗ sweep failed:', e && e.message, '\n'); process.exit(2); });

@@ -58,12 +58,25 @@ if(KNOB==='frac'||KNOB==='both') for(const f of [0.25,0.35,0.50,0.65,0.80]) ARMS
 // that row is the control and is labelled as one rather than as a trigger setting.
 if(KNOB==='trig'||KNOB==='both') for(const k of (arg('--rungs','0,0.25,0.5,0.75,1,1.5,2,3')).split(',').map(Number))
   ARMS.push({label: k===0 ? 'CONTROL (today)' : `trig=${k}xW`, o:{creditCapitalTrigger:k}, scale:true});
+const { parallelMap, workerCount } = require('./lib/parallel');
+
+(async function main(){
+// ONE UNIT PER (variant, arm). The scaled trigger is resolved HERE so the child computes exactly what the
+// parent would have; parallelMap returns a keyed object and the loop below reads it in CANONICAL order.
+// --workers N to fan out. See lib/parallel.
+const UNITS=[];
+for(const v of RUNS) for(const a of ARMS){
+  const o = a.scale ? { creditCapitalTrigger: a.o.creditCapitalTrigger * (v.spreadWidth || 20) * 100 } : a.o;
+  UNITS.push({key:`${v.variant}\u0000${a.label}`, v, o});
+}
+const RES=await parallelMap(UNITS,(u)=>run(u.v,u.o));
+
 const agg={};
+console.log(`CAPITAL-POLICY SWEEP${workerCount()>1?` · ${workerCount()} workers`:''}`);
 console.log('variant        arm            peak capital   avg capital        total P&L   credit%  cvrWing  cvrSkip  shift');
 for(const v of RUNS){
   for(const a of ARMS){
-    const o = a.scale ? { creditCapitalTrigger: a.o.creditCapitalTrigger * (v.spreadWidth || 20) * 100 } : a.o;
-    const r=run(v,o);
+    const r=RES[`${v.variant}\u0000${a.label}`];
     console.log(`${v.variant.padEnd(14)} ${a.label.padEnd(14)} ${usd(r.peakReal).padStart(12)} ${usd(r.avgReal).padStart(13)} ${usd(r.total).padStart(16)} ${(r.credShare.toFixed(0)+'%').padStart(8)} ${String(r.coverWing).padStart(8)} ${String(r.coverSkip).padStart(8)} ${String(r.shift).padStart(6)}`);
     const g=agg[a.label]=agg[a.label]||{p:0,a:0,t:0,c:0,n:0,cw:0,cs:0,sh:0};
     g.p+=r.peakReal; g.a+=r.avgReal; g.t+=r.total; g.c+=r.credShare; g.n++; g.cw+=r.coverWing; g.cs+=r.coverSkip; g.sh+=r.shift;
@@ -75,3 +88,4 @@ console.log('arm            peak capital   avg capital        total P&L   credit
 for(const k of Object.keys(agg)){ const g=agg[k];
   console.log(`${k.padEnd(14)} ${usd(g.p/g.n).padStart(12)} ${usd(g.a/g.n).padStart(13)} ${usd(g.t).padStart(16)} ${((g.c/g.n).toFixed(0)+'%').padStart(8)} ${String(g.cw).padStart(8)} ${String(g.cs).padStart(8)} ${String(g.sh).padStart(6)}`);
 }
+})().catch((e)=>{ console.error('\n  ✗ sweep failed:', e && e.message, '\n'); process.exit(2); });

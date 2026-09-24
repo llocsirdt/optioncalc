@@ -104,8 +104,26 @@ function runOne(v, cfg) {
   return { total, avg: n ? total / n : 0, worst: worst === Infinity ? null : worst, neg, n, blocked, gated };
 }
 
-(function main() {
-  console.log(`FLOOR-PROTECTION SWEEP — ${DAYS.length} days, ${PANEL.length} variants, ${CONFIGS.length} configs\n`);
+const { parallelMap, workerCount } = require('./lib/parallel');
+
+(async function main() {
+  // WORK OUT THE PANEL BEFORE ANYTHING ELSE, because a bad panel must fail before we fork 8 processes.
+  for (const name of PANEL) {
+    if (!runs.find((r) => r.variant === name)) {
+      console.error(`\n  ✗ no such variant in the live roster: ${name}. The panel and the roster disagree,`);
+      console.error('    and an arm summed over a different set than the control is not a comparison. Exiting 2.\n');
+      process.exit(2);
+    }
+  }
+  // ONE UNIT PER (arm, variant) — independent, CPU-bound, and the natural grain. parallelMap forks this
+  // script once per worker and returns a keyed object; the loops below then read it in CANONICAL order,
+  // so the table does not depend on which core finished first. --workers N to fan out (see lib/parallel).
+  const units = [];
+  for (const cfg of CONFIGS) for (const name of PANEL) units.push({ key: `${cfg.label}\u0000${name}`, cfg, name });
+  const RES = await parallelMap(units, (u) => runOne(runs.find((r) => r.variant === u.name), u.cfg));
+
+  console.log(`FLOOR-PROTECTION SWEEP — ${DAYS.length} days, ${PANEL.length} variants, ${CONFIGS.length} configs`
+    + `${workerCount() > 1 ? ` · ${workerCount()} workers` : ''}\n`);
   // EVERY DELTA HERE IS MEASURED AGAINST `base`, AND `base` IS ONLY EVER FILLED BY THE CONTROL ARM. With
   // no control in CONFIGS it stays empty, `base[nm] || 0` reads 0 for every variant, and each arm's delta
   // becomes its ENTIRE total — every arm a spectacular winner, ranked confidently, against nothing.
@@ -119,16 +137,10 @@ function runOne(v, cfg) {
     let total = 0, worstSum = 0, negSum = 0, blocked = 0, gated = 0, noWorst = 0;
     const per = {};
     for (const name of PANEL) {
-      const v = runs.find((r) => r.variant === name);
-      // A SKIPPED VARIANT MAKES THE ARMS INCOMPARABLE. This logged and carried on, so an arm that could
-      // not run one of the panel was summed over a SMALLER set and its total compared to a control summed
-      // over the full one — a difference of tens of thousands of dollars attributed to the arm.
-      if (!v) {
-        console.error(`\n  ✗ no such variant in the live roster: ${name}. The panel and the roster disagree,`);
-        console.error('    and an arm summed over a different set than the control is not a comparison. Exiting 2.\n');
-        process.exit(2);
-      }
-      const r = runOne(v, cfg);
+      // The panel/roster check ran up front, before the fork. (It used to live here and merely log-and-
+      // continue, which summed an arm over a SMALLER set than the control — tens of thousands of dollars
+      // attributed to the arm.)
+      const r = RES[`${cfg.label}\u0000${name}`];
       per[name] = r.total;
       // `r.worst` is null when the arm produced no days at all. `|| 0` read that as "worst case zero" —
       // the best possible outcome — so an arm that ran nothing looked safest. Count it as unknown.
@@ -161,4 +173,4 @@ function runOne(v, cfg) {
     const d = best.per[nm] - base[nm];
     console.log(`  ${nm.padEnd(14)} ${usd(base[nm]).padStart(12)} -> ${usd(best.per[nm]).padStart(12)}   ${usd(d).padStart(11)}`);
   }
-})();
+})().catch((e) => { console.error('\n  ✗ sweep failed:', e && e.message, '\n'); process.exit(2); });
