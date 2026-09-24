@@ -515,17 +515,36 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
 // Build the P&L-equivalent CREDIT open order (parity twin of the debit vertical at the same strikes):
 // bull → sell the bull put spread, bear → sell the bear call spread. NET_CREDIT priced at the mid credit
 // (short leg richer than long). Used only for capital recapture; returns { legs, limit, credit, payload }.
-function buildCreditOpenOrder(side, lower, upper, cfg, getLeg, debitMark) {
+// `debitLimit` is the price the DEBIT order would have been sent at, and when it is supplied the twin is
+// DERIVED from it as W - debitLimit rather than priced off its own mids. See the note at `asked`.
+function buildCreditOpenOrder(side, lower, upper, cfg, getLeg, debitMark, debitLimit) {
   const legs = CL.openLegsFor(side, lower, upper, 'credit');
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
+  const W = cfg.spreadWidth;
   const credit = round2(shortMid - longMid);
   if (!(credit > 0)) return { error: `non-positive credit (${credit}) — bad quotes` };
   // MIRROR THE SLIP. A debit twin pays a tick OVER the mark to be crossed; the credit twin has to concede
   // the same economics by ACCEPTING a tick less credit. Slipping only the debit side would make the two
   // twins economically different orders, which breaks the parity the recapture alternation depends on —
   // it is exactly what the capital-recapture and leg-uniqueness tests caught.
-  const asked = round2(credit - openSlip(cfg));
+  //
+  // THE TWIN IS DERIVED FROM THE DEBIT PRICE, NOT PRICED ON ITS OWN — the same correction the COVER twin
+  // got, for the same reason. The position RECORD stays debit-canonical, and the only thing that makes
+  // that legal is that the twin is the SAME position: terminal value is parity-invariant exactly when
+  // sentLimit == W - limit. Pricing the credit off its own mids and slipping it made that an accident
+  // rather than an identity — and the parity tolerance below is max(4 ticks, 10% of W), which is $2.00 on
+  // a 20-wide, so sentLimit != W - limit BY CONSTRUCTION, within a band worth $200 a contract.
+  //
+  // Everything downstream assumes the identity: risk-curve's positionPnl (and therefore the day-loss
+  // governor and the floor ratchet) values the debit-canonical legs at pos.limit and never looks at
+  // sentLimit at all; book-value and strategy-positions use the real cash. With the twin derived, those
+  // agree by construction instead of within a tolerance nobody measured.
+  //
+  // The slip mirrors itself for free: debitLimit already carries the tick paid to cross, so W - debitLimit
+  // is the fair credit MINUS that same tick — a twin that concedes exactly what its debit pays.
+  const fromParity = (debitLimit != null && Number.isFinite(debitLimit)) ? round2(W - debitLimit) : null;
+  const asked = fromParity != null ? fromParity : round2(credit - openSlip(cfg));
   // PARITY CHECK ON THE TWIN, and the reason this exists. The credit twin is supposed to be the SAME
   // position as the debit vertical at these strikes, so by put-call parity it must receive exactly
   // W - debitMark. On 2026-09-16 at 14:00 the put legs came back broken and `credit` computed to 9.95 on
@@ -537,7 +556,6 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg, debitMark) {
   // Nothing else could have caught this. markFill gates FILLS, not placements, and structurally a 9.95
   // credit on a 10-wide spread is legal (|mark| <= W, credit <= 0), so mark sanity passes it too. Only the
   // twin identity is exact enough to convict it.
-  const W = cfg.spreadWidth;
   if (debitMark != null && Number.isFinite(debitMark)) {
     const fair = round2(W - debitMark);
     const tol = Math.max(4 * cfg.tickIncrement, 0.1 * W);   // friction + a tick or two, not a judgement call
@@ -550,8 +568,12 @@ function buildCreditOpenOrder(side, lower, upper, cfg, getLeg, debitMark) {
   if (!(asked > 0) || asked > round2(W - cfg.tickIncrement)) {
     return { error: `credit ${asked} outside [0, ${round2(W - cfg.tickIncrement)}] on a ${W} spread — bad quotes` };
   }
-  const limit = L.roundToTick(asked, cfg.tickIncrement);
-  return { legs, limit, credit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'CREDIT') };
+  // round2 AFTER roundToTick: Math.round(x/tick)*tick is not exact in binary, so a price comes back as
+  // 12.950000000000001 and every later `sentLimit === W - limit` comparison misses by a hair. The resting
+  // credit cover lost 47 of 173 fills (27%) to exactly this before it was fixed there.
+  const limit = round2(L.roundToTick(asked, cfg.tickIncrement));
+  return { legs, limit, credit, parityDerived: fromParity != null,
+    payload: buildOrderPayload(resolved, limit, cfg.quantity, 'CREDIT') };
 }
 
 // Book a filled/assumed open into state (shared by the normal path and the cover-to-stack rescue path).
@@ -581,7 +603,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
   let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
   if (style === 'credit') {
-    const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark);
+    const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark, res.limit);
     if (!c.error) { payload = c.payload; sentNet = 'CREDIT'; sentLegs = c.legs; sentLimit = c.limit; }
     else if (legStyle) {
       // FORCED TWIN — leg-uniqueness picked the credit style because the debit legs conflict with a

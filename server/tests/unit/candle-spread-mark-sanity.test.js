@@ -122,6 +122,31 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   // And the ceiling is a REFUSAL now, not a clamp -- that is what hid the bug.
   const overWidth = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(200, 180), null);
   ok(overWidth.error && /outside/.test(overWidth.error), `a credit above the width is refused, not clamped (${overWidth.error})`);
+
+  // ── THE TWIN IS DERIVED FROM THE DEBIT LIMIT, NOT PRICED OFF ITS OWN MIDS ──────────────────────────
+  // The record stays DEBIT-CANONICAL, and the only thing that makes that legal is that the twin is the
+  // same position: terminal value is parity-invariant exactly when sentLimit == W - limit. Priced off its
+  // own chain and slipped, that held only within the tolerance above — max(4 ticks, 10% of W), $2.00 on a
+  // 20-wide. Measured across candle-spread-archive: 5,422 of 6,022 credit-sent opens (90%) had
+  // sentLimit != W - limit, mean $76 a contract, and it was still 86% on 2026-09-23. The bias ran toward
+  // asking LESS credit than parity (356 of 561 that day), so it gave away money AND broke the identity.
+  //
+  // The chain here prices the twin at 6.80 on its own while the debit limit is 3.15. Derived, the twin
+  // must ask 10 - 3.15 = 6.85 — the debit's own price mirrored, to the cent.
+  const derived = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(10, 3.2), 3, 3.15);
+  ok(!derived.error, `the derived twin is sent (${derived.error || 'ok'})`);
+  ok(derived.limit === 6.85, `and asks exactly W - debitLimit = 6.85 (got ${derived.limit})`);
+  ok(derived.parityDerived === true, 'and says it was derived rather than priced');
+  ok(Math.round((derived.limit + 3.15) * 100) / 100 === 10,
+    'so sentLimit + limit == W exactly — the identity every downstream valuation assumes');
+  // Without the debit limit it falls back to its own mids, which is what produced the 90%.
+  const priced = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(10, 3.2), 3);
+  ok(!priced.parityDerived, 'omitting the debit limit still prices off the chain');
+  ok(priced.limit !== derived.limit,
+    `and lands somewhere else (${priced.limit} vs ${derived.limit}) — that gap is the finding`);
+  // A derived price that cannot exist is still refused: the range gate runs on the asked price either way.
+  const tooBig = trader.buildCreditOpenOrder('bull', 29120, 29130, cfg, chain(10, 3), 3, -5);
+  ok(tooBig.error && /outside/.test(tooBig.error), `a derived credit above the width is refused too (${tooBig.error})`);
 }
 
 // ── THE LADDER MUST NOT WALK DOWN TO A BROKEN MARK ──────────────────────────────────────────────────
