@@ -149,6 +149,46 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
   ok(tooBig.error && /outside/.test(tooBig.error), `a derived credit above the width is refused too (${tooBig.error})`);
 }
 
+// ── THE OPEN'S PRICE IS GATED WHERE IT IS BUILT ─────────────────────────────────────────────────────
+// buildOpenAtStrikes was the last pricing path with no quote gate at all — it only ever asked
+// `limit > 0`. A broken chain marking a 40-wide at +0.02 passes that, ceils to $0.05, and the order goes
+// to the broker at 0.1% of what the spread is worth. Same shape as the $5 covers of 2026-09-16, arriving
+// through the one door still open, and on the OPEN side, where the money is actually committed.
+{
+  const trader = require('../../src/candle-spread/trader');
+  const cfg = { spreadWidth: 40, strikeIncrement: 10, tickIncrement: 0.05, quantity: 1, capFrac: 0.65 };
+  const q = (mid, t, k) => ({ mid, bid: Math.max(0, mid - 0.2), ask: mid + 0.2, symbol: `NDX_${t}${k}` });
+  // HEALTHY: calls fall 0.6/point, so a 40-wide bull call spread marks 24 — over the 65% ceiling, which
+  // is a DECLINE (a different answer from a refusal, and the one the ceiling is supposed to give).
+  const healthy = (t, k) => q(t === 'C' ? Math.max(0.05, 100 - (k - 29000) * 0.6) : Math.max(0.05, (k - 29000) * 0.4), t, k);
+  const okRes = trader.buildOpenAtStrikes('bull', 29000, 29040, cfg, healthy);
+  ok(!okRes.error, `a healthy monotonic chain is priced, not refused (${okRes.error || 'ok'})`);
+
+  // BROKEN, the case that motivated this. The two traded legs come back at 75.92 and 75.90, so the
+  // 40-wide marks +0.02 — inside [0, W], so verticalSanity passes it, and `limit > 0` passes it. Its
+  // NEIGHBOURS are what convict it: C29010 is quoted at 94, richer than the C29000 above it, which is
+  // arbitrage and therefore a bad quote. Exactly the shape of 2026-09-16, where every individual leg
+  // looked healthy and the corruption lived in adjacent pairs.
+  const brokenPair = (t, k) => (t === 'C' && k === 29000 ? q(75.92, t, k)
+    : t === 'C' && k === 29040 ? q(75.90, t, k) : healthy(t, k));
+  const bad = trader.buildOpenAtStrikes('bull', 29000, 29040, cfg, brokenPair);
+  ok(bad.error, `a $0.02 mark on a 40-wide is refused (${bad.error || 'NOT REFUSED — sent at ' + bad.limit})`);
+  ok(!bad.payload, 'and no payload is built for it');
+  ok(/monotonic/.test(bad.error || ''), `and the reason names the chain (${bad.error})`);
+
+  // A mark that is not a price this structure can have at all — negative — is refused by sanity, before
+  // the chain is even consulted.
+  const inverted = (t, k) => (t === 'C' ? q(k === 29000 ? 5 : 60, t, k) : healthy(t, k));
+  const neg = trader.buildOpenAtStrikes('bull', 29000, 29040, cfg, inverted);
+  ok(neg.error, `a negative debit mark is refused (${neg.error || 'NOT REFUSED'})`);
+
+  // ABSTAIN, don't accuse: a chain that quotes only the two legs is THIN, not broken.
+  const thin = (t, k) => (t === 'C' && (k === 29000 || k === 29040) ? healthy(t, k) : null);
+  const thinRes = trader.buildOpenAtStrikes('bull', 29000, 29040, cfg, thin);
+  ok(!thinRes.error || !/monotonic/.test(thinRes.error),
+    `an unquoted neighbourhood is not called a broken chain (${thinRes.error || 'priced'})`);
+}
+
 // ── THE LADDER MUST NOT WALK DOWN TO A BROKEN MARK ──────────────────────────────────────────────────
 // cover-ladder's neverExceedMark rule caps the resting limit at the market. With a negative mark that cap
 // walked the limit to one tick — the same $5-cover failure, arriving by a different route.

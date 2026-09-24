@@ -1615,6 +1615,31 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
   const { mark, cap, exceedsCap, limit: atMark } = L.debitLimit(longMid, shortMid, cfg.spreadWidth, cfg.tickIncrement, cfg.capFrac);
+  // THE LAST PRICING PATH WITHOUT A QUOTE GATE. Every other one runs the mark through saneMark, and
+  // markFill runs all three structural gates before it books a fill — but this builds the PRICE WE SEND,
+  // and it only ever asked `limit > 0`. A broken chain marking a 40-wide at +0.02 passes that, ceils to
+  // $0.05, and the order goes to the broker at 0.1% of what the spread is worth. It is the same shape as
+  // the $5 covers of 2026-09-16 (a price that cannot be right, used instead of refused), arriving through
+  // the one door that was still open, and it is the open side — where the money is actually committed.
+  //
+  // Same two gates markFill uses, applied at BUILD time rather than at fill time:
+  //   verticalSanity — the mark must be a price this structure can have (0 <= debit <= width)
+  //   chainMonotonic — call mids fall as strike rises, put mids rise. All 1,185 violations on 2026-09-16
+  //                    fell inside the single 14:00 hour that produced every bad fill, and none outside
+  //                    it, so this refuses a broken chain without costing a good trade. It abstains where
+  //                    a neighbour is simply unquoted, so a thin chain is never mistaken for a broken one.
+  // Adaptive placement already treats `error` as "try the next placement", so a locally broken chain walks
+  // the strike rather than killing the open.
+  if (saneMark(legs, mark) == null) {
+    return { error: `mark ${mark} is not a price a ${cfg.spreadWidth}-wide debit spread can have`, mark };
+  }
+  {
+    const mono = SQ.chainMonotonic(legs, getLeg, cfg.strikeIncrement || 10);
+    if (!mono.ok) {
+      const v = mono.violations[0];
+      return { error: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}`, mark };
+    }
+  }
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
   // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
