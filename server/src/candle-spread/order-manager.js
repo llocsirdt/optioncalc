@@ -40,41 +40,59 @@ function mapStatus(schwabStatus) {
 //   CREDIT (we receive): a cheaper credit is MORE likely to fill (wrong way), so INVERT and DEMAND
 //     far too much credit -> price / frac, capped just under the spread width (the theoretical max,
 //     already unfillable) so we never send an absurd number Schwab would reject.
-// Never returns below one tick.
 //
-// RETURNS null WHEN IT CANNOT GUARANTEE UNFILLABILITY, and the caller must then not send at all. This is
-// the single safety property protecting a funded account while the engine runs in 'test' mode, and it had
-// two holes at the boundaries — both verified against the real module:
+// TEST MODE ALWAYS SENDS. The whole point of this mode is that a real order goes to Schwab and comes back
+// through the real lifecycle — placed, polled, auto-cancelled — so the path is exercised and the broker's
+// order list matches what the strategy wanted. An earlier version returned null when it could not PROVE
+// the price unfillable and the caller then skipped the send, which suppressed exactly the case worth
+// seeing (a broken chain) and made "orders sent" stop matching "orders intended".
 //
-//   NET_DEBIT  $0.05            -> $0.05   the Math.max(t, ...) floor returned the REAL price
-//   NET_CREDIT $19.95 on W=20   -> $19.95  the (spreadWidth - tick) cap returned the REAL price
+// Two boundaries exist where the transform cannot go past the real price, and both are broken-quote
+// territory rather than real markets:
+//   NET_DEBIT  real == one tick        -> price * frac cannot round BELOW a tick
+//   NET_CREDIT real >= spreadWidth - t -> the cap is already at or under the real price
+// Measured against the 11,659 orders really sent over 2026-09-18/21/22/23: the cheapest debit was $0.50
+// and the closest credit 94.5% of width, so neither has ever been reached.
 //
-// Neither was reachable in the 11,659 orders actually sent over 2026-09-18/21/22/23 (cheapest debit $0.50,
-// closest credit 94.5% of width). But a broken chain pricing a 40-wide fly at $0.05 is a documented
-// failure of this system, and that is precisely the input that lands on the debit floor. An order that
-// cannot be made unfillable must not be sent in test mode — silence is the safe answer, a fillable "test"
-// order is not.
+// In those two cases we send at the EXTREME — one tick for a debit, width minus a tick for a credit —
+// which is the least fillable price the instrument admits, and flag the order as not guaranteed. The
+// residual exposure is ONE TICK either way: a debit filled at a tick pays $5/contract for a spread worth
+// no more than that, and a credit filled at width-minus-a-tick receives within $5/contract of the most
+// the structure can ever be worth. $5 of theoretical exposure is the right price for never going blind.
+//
+// Returns { price, guaranteed, why } — or NULL only when the payload carries no usable price at all, in
+// which case there is no order to send in any mode.
 //
 // `frac` is clamped to (0,1): it MULTIPLIES a debit (must shrink it) and DIVIDES a credit (must grow it),
 // so a value of 1 or more sends at, or through, the real price. CANDLE_SPREAD_TEST_FRAC=1 did exactly
 // that while /status still reported "test (unfillable + auto-cancel)".
-function unfillablePrice(payload, frac, spreadWidth, tick) {
+function unfillableOrder(payload, frac, spreadWidth, tick) {
   const t = tick || 0.05;
   const f = Number(frac);
   const safeFrac = Number.isFinite(f) && f > 0 && f < 1 ? f : 0.1;
   const round = p => Math.round(Math.max(t, Math.round(p / t) * t) * 100) / 100; // tick-snap, 2dp clean
   const real = Number(payload && payload.price);
-  if (!Number.isFinite(real) || real <= 0) return null;
+  if (!Number.isFinite(real) || real <= 0) return null;   // nothing to send, in any mode
   if (payload.orderType === 'NET_CREDIT') {
+    const cap = spreadWidth != null ? round(spreadWidth - t) : null;
     const demand = round(real / safeFrac);
-    const cap = spreadWidth != null ? round(spreadWidth - t) : demand;
-    const sent = Math.min(demand, cap);
+    const price = cap != null ? Math.min(demand, cap) : demand;
     // We must DEMAND MORE credit than the market is offering. At or below the real ask it can fill.
-    return sent > real ? sent : null;
+    return price > real ? { price, guaranteed: true, why: null }
+      : { price: cap != null ? cap : price, guaranteed: false,
+          why: `credit ${real} is already at or above the width cap ${cap} — sending the cap, which is the most this structure can be worth` };
   }
-  const sent = round(real * safeFrac);
+  const price = round(real * safeFrac);
   // We must OFFER LESS than the real price. At or above it, it can fill.
-  return sent < real ? sent : null;
+  return price < real ? { price, guaranteed: true, why: null }
+    : { price: round(t), guaranteed: false,
+        why: `debit ${real} is already at the tick floor — sending one tick, the lowest price the book accepts` };
+}
+
+// Price-only shim. Kept because it reads naturally at a call site that does not care about the flag.
+function unfillablePrice(payload, frac, spreadWidth, tick) {
+  const u = unfillableOrder(payload, frac, spreadWidth, tick);
+  return u ? u.price : null;
 }
 
 // Drop an order the broker has superseded, so the poller stops chasing an id that no longer exists.
@@ -243,4 +261,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { unfillablePrice, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { unfillablePrice, unfillableOrder, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };

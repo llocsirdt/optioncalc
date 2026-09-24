@@ -1144,13 +1144,20 @@ function makeReplaceOrder(run, record) {
       return { status: `simulated:${why}`, orderId };
     }
     const isTest = mode === 'test';
-    const testPx = isTest ? om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
-    if (isTest && testPx == null) {
-      store.appendEvent(record, { type: 'order_simulated', by: 'unfillable-impossible', meta, payload,
-        note: `TEST replace skipped: ${payload.orderType} at ${payload.price} cannot be made unfillable` });
-      return { status: 'simulated:unfillable-impossible', orderId };
+    // Same rule as the place path: a replace is an order too, and a walked price that cannot be proven
+    // unfillable is still walked at the broker rather than dropped on the floor.
+    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    if (isTest && !testOrd) {
+      store.appendEvent(record, { type: 'order_simulated', by: 'no-price', meta, payload,
+        note: `no usable price on a ${payload.orderType} replace (${payload.price}) — leaving the order where it is` });
+      return { status: 'simulated:no-price', orderId };
     }
-    const sendPayload = isTest ? { ...payload, price: testPx } : payload;
+    if (isTest && !testOrd.guaranteed) {
+      store.appendEvent(record, { type: 'order_test_not_guaranteed', meta, orderId,
+        orderType: payload.orderType, realPrice: payload.price, sentPrice: testOrd.price, why: testOrd.why,
+        note: 'TEST replace SENT at the least fillable price this structure admits' });
+    }
+    const sendPayload = isTest ? { ...payload, price: testOrd.price } : payload;
     try {
       const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
       const newId = (resp && resp.orderId) ? resp.orderId : orderId;
@@ -1234,17 +1241,27 @@ function makePlaceOrder(run, record) {
     }
     // Real send. In test mode, rewrite the price to something that can't fill.
     const isTest = mode === 'test';
-    // TEST MODE MUST NOT SEND A FILLABLE ORDER. unfillablePrice returns null when it cannot guarantee one
-    // (a debit already at the tick floor, a credit already at width - tick), and the only safe response is
-    // not to send. A "test" order that can fill is the one thing this mode exists to prevent.
-    const testPx = isTest ? om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
-    if (isTest && testPx == null) {
-      store.appendEvent(record, { type: 'order_simulated', by: 'unfillable-impossible', meta, payload,
-        note: `TEST send skipped: ${payload.orderType} at ${payload.price} cannot be made unfillable` });
-      console.warn(`[candle-spread] ${run.variant} TEST SEND SKIPPED — ${payload.orderType} ${payload.price} cannot be made unfillable`);
-      return { status: 'simulated:unfillable-impossible', filled: true };
+    // TEST MODE ALWAYS SENDS. The point of this mode is that a REAL order reaches Schwab and comes back
+    // through the real lifecycle, so the path is exercised and the broker's order list matches what the
+    // strategy wanted. This used to SKIP the send whenever unfillableOrder could not prove the price
+    // unfillable — which suppressed exactly the case worth seeing (a broken chain) and made "orders sent"
+    // stop matching "orders intended". It now sends at the extreme the instrument admits and records that
+    // the guarantee is weak; residual exposure in that case is ONE TICK.
+    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    if (isTest && !testOrd) {
+      // No usable price on the payload at all — there is no order to send in any mode.
+      store.appendEvent(record, { type: 'order_simulated', by: 'no-price', meta, payload,
+        note: `no usable price on a ${payload.orderType} payload (${payload.price}) — nothing to send` });
+      console.warn(`[candle-spread] ${run.variant} NO PRICE on a ${payload.orderType} payload — not sent`);
+      return { status: 'error', filled: false, sent: false, error: 'no usable price' };
     }
-    const sendPayload = isTest ? { ...payload, price: testPx } : payload;
+    if (isTest && !testOrd.guaranteed) {
+      store.appendEvent(record, { type: 'order_test_not_guaranteed', meta,
+        orderType: payload.orderType, realPrice: payload.price, sentPrice: testOrd.price, why: testOrd.why,
+        note: 'TEST order SENT at the least fillable price this structure admits — not provably unfillable' });
+      console.warn(`[candle-spread] ${run.variant} TEST order not provably unfillable: ${testOrd.why}`);
+    }
+    const sendPayload = isTest ? { ...payload, price: testOrd.price } : payload;
     try {
       const resp = await DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, sendPayload);
       const orderId = resp && resp.orderId ? resp.orderId : null;
