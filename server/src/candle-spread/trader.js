@@ -553,7 +553,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
       net: sentNet, reason: (placed && placed.error) || 'send failed' });
     return;
   }
-  const openChk = markFill(res.legs, res.limit, deps.getLeg, cfg.tickIncrement);
+  // (a markFill call stood here and its result was never read — a full chain quote per open, computed and
+  // discarded. The fill decision is resolvePendingOpen's, a few lines down, and it runs its own.)
   const pos = {
     id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
     // Book what we OFFERED, not markFill's cheap-side price. markFill caps its fill at one tick through
@@ -758,7 +759,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     // of its own cost estimate; now the observed mark has to reach the limit we place, and the limit
     // carries the standard slip so it is likelier to be crossed for real.
     const limitPx = round2(best.debit + openSlip(cfg, deps));
-    const chk = markFill(best.hp.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    const chk = markFill(best.hp.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'floor-offset-nofill', legs: best.hp.legs, mark: null, limit: limitPx });
       break;
@@ -865,7 +866,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     if (!resolved.length) continue;
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a wing no longer books on its own cost estimate.
     const limitPx = round2(w.cost + openSlip(cfg, deps));
-    const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: null, limit: limitPx });
       continue;
@@ -962,7 +963,7 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
     if (!resolved.length) continue;
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a fly does not book on its planned cost either.
     const limitPx = round2(f.cost + openSlip(cfg, deps));
-    const chk = markFill(f.legs, limitPx, deps.getLeg, cfg.tickIncrement);
+    const chk = markFill(f.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'fly-nofill', tag: f.tag, legs: f.legs, mark: null, limit: limitPx });
       continue;
@@ -2110,7 +2111,14 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
   for (const pos of st.positions) {
     if (pos.filled !== false || !pos.pendingHedge) continue;
     const ph = pos.pendingHedge;
-    const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement);
+    // `deps` IS NOT OPTIONAL HERE. markFill reads deps.strikeIncrement to find each leg's neighbours for
+    // the chain-monotonicity gate, and deps.underlying to stamp the check. Omitting it — as this and the
+    // three hedge-placement sites did — fell back to a hardcoded increment of 10, so the gate that refuses
+    // a broken chain was probing strikes that need not exist and abstaining. Every live variant happens to
+    // use 10 today, which is exactly why this could not be noticed: the argument that would have made it
+    // wrong was the one nobody had varied. Hedges are the structures whose value lives at ONE strike, so
+    // they are the last place to run a weaker quote check than an open gets.
+    const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement, deps);
     noteMarkLow(pos, chk, ph.limit, 'DEBIT');
     notePlaced(pos, chk, deps.underlying);
     if (chk.fillable) {
