@@ -150,6 +150,20 @@ if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
 // PROVE THE ARM IS ARMED BEFORE SPENDING TEN MINUTES ON IT. The sweep above produced five identical
 // tables and looked like a clean null result; it was a plumbing bug. An experiment that cannot show its
 // treatment reached the engine has not produced a null result, it has produced nothing.
+// SAY WHAT WAS ACTUALLY USED, not what was typed. This read the CLI flag, so once the DEFAULT became the
+// live rule (slip 0, ceil the mark) an unflagged run still announced "order slip OFF (legacy rounding)" —
+// a header describing the opposite of what it did, in the file that gets archived as the record of the
+// run. Probe optsFor instead: it is the thing that decides.
+function effectiveSlip() {
+  try { return optsFor(RUNS[0]).orderSlipTicks; } catch (e) { return undefined; }
+}
+function slipLabel() {
+  const n = effectiveSlip();
+  if (n == null) return 'LEGACY rounding (round to nearest, no slip) — NOT what the live engine does';
+  if (n === 0) return 'order slip 0 — the LIVE rule (ceil the mark, add nothing)';
+  return `ORDER SLIP ${n} tick(s) over the ceiled mark — live has this lever OFF`;
+}
+
 function assertSlipArmed() {
   if (ORDER_SLIP == null) return;
   const probe = optsFor(RUNS[0]);
@@ -159,7 +173,7 @@ function assertSlipArmed() {
     process.exit(2);
   }
   const g = probe.geo && probe.geo.buildOpen && probe.geo.buildOpen('bull', 30000, 0.02, 0.18);
-  const base = buildOpts(RUNS[0], { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS, where: 'arm-check' });
+  const base = buildOpts(RUNS[0], { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS, where: 'arm-check', orderSlipTicks: 0 });
   const b = base.geo && base.geo.buildOpen && base.geo.buildOpen('bull', 30000, 0.02, 0.18);
   console.log(`  ARM CHECK: ${RUNS[0].variant} open at S=30000 prices ${b && b.limit} -> ${g && g.limit} with ${ORDER_SLIP} tick(s)`);
   if (ORDER_SLIP > 0 && g && b && g.limit <= b.limit) {
@@ -240,7 +254,7 @@ if (SLICE != null) {
 assertSlipArmed();
 console.log(`  pricing: ${HAS_PX ? 'cash NDX (px series) — signals off /NQ' : 'the signal series itself (single-instrument dataset)'}`);
 console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}`
-  + `${ORDER_SLIP != null ? ` · ORDER SLIP ${ORDER_SLIP} tick(s) over the ceiled mark` : ' · order slip OFF (legacy rounding)'}\n`);
+  + ` · ${slipLabel()}\n`);
 console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
 console.log('-'.repeat(78));
 

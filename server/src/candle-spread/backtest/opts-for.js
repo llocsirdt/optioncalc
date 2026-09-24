@@ -115,12 +115,15 @@ function optsFor(v, env) {
   // over it, bounded by the ceiling. `env.orderSlipTicks` lets a SWEEP set it for every variant at once
   // without touching the roster; a per-variant value wins. Absent on both = this engine's historical
   // rounding, so every committed baseline still reproduces exactly.
+  // Default 0 = THE LIVE RULE (ceil the mark, add nothing), adopted as the baseline 2026-09-24.
+  // `env.legacyRounding` restores the pre-adoption rounding for reproducing a historical baseline.
   const slip = v.orderSlipTicks != null ? v.orderSlipTicks
-    : (env && env.orderSlipTicks != null) ? env.orderSlipTicks : null;
+    : (env && env.orderSlipTicks != null) ? env.orderSlipTicks
+    : (env && env.legacyRounding === true) ? null : 0;
   o.geo = v.adaptiveGeo
     ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip })
     : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip });
-  if (slip != null) o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it
+  o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it (null = legacy)
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
   // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.
