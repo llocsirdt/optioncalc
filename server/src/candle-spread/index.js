@@ -1759,17 +1759,38 @@ async function eodSettlementInner() {
     for (const run of runs) {
       const cfg = { ...run, expiration: run.expiration || todayEST() };
       const record = store.initRun(cfg, todayEST());
-      let px = settle;
+      let px = settle, pxSource = settleSource;
       if (px == null) {
-        // Settle on the PRICING instrument (NDX underlying) — NOT candle.close (the NQ signal instrument,
-        // ~54 pts off). Prefer the persisted last underlying, else the last candle_close's underlying.
-        px = record.state && record.state.lastUnderlying != null ? Number(record.state.lastUnderlying) : null;
-        if (px == null) { const lastCC = [...record.events].reverse().find(ev => ev.type === 'candle_close'); px = lastCC ? Number(lastCC.underlying != null ? lastCC.underlying : lastCC.candle.close) : null; }
+        // SETTLE ON THE PRICING INSTRUMENT OR NOT AT ALL. The comment here has always said "NOT
+        // candle.close (the NQ signal instrument, ~54 pts off)" — and the last clause did exactly that,
+        // reading lastCC.candle.close whenever the stored underlying was missing. `candle` is the /NQ bar
+        // the SIGNAL is computed from; NDX is what the options settle against. A terminal P&L struck 54
+        // points off is not a slightly worse estimate of the day, it is a different day, and it was tagged
+        // 'run-underlying' either way so nothing downstream could tell. See feedback_nq_signals_ndx_pricing.
+        //
+        // Every fallback below is an NDX price. `priceCandle` is the pricing instrument's own OHLC bar,
+        // stamped on candle_close since 2026-09-23; older records simply do not have it, and then there is
+        // nothing left to settle on — which is the honest answer, not a reason to reach for the NQ bar.
+        if (record.state && record.state.lastUnderlying != null) {
+          px = Number(record.state.lastUnderlying); pxSource = 'run-underlying';
+        }
+        if (px == null) {
+          const withU = [...record.events].reverse().find((ev) => ev.type === 'candle_close' && ev.underlying != null);
+          if (withU) { px = Number(withU.underlying); pxSource = 'candle-underlying'; }
+        }
+        if (px == null) {
+          const withP = [...record.events].reverse().find((ev) => ev.type === 'candle_close' && ev.priceCandle && ev.priceCandle.close != null);
+          if (withP) { px = Number(withP.priceCandle.close); pxSource = 'price-candle-close'; }
+        }
       }
-      if (px == null) { store.appendEvent(record, { type: 'eod_settlement', variant: run.variant, note: 'no settle price available' }); continue; }
+      if (px == null || !(px > 0)) {
+        store.appendEvent(record, { type: 'eod_settlement', variant: run.variant,
+          note: 'no settle price available on the PRICING instrument — refusing to settle on the signal instrument' });
+        continue;
+      }
       const term = trader.computeTerminalPnl(record.state, cfg, px, record.events);
       store.appendEvent(record, {
-        type: 'eod_settlement', variant: run.variant, settle: px, settleSource: settleSource || 'run-underlying',
+        type: 'eod_settlement', variant: run.variant, settle: px, settleSource: pxSource || 'unknown',
         terminalPnl: term.total, floorPnl: term.floor, positions: term.positions
       });
       // Concise, at-a-glance day summary (orders/time/strikes/price + real broker outcomes),
