@@ -1563,7 +1563,24 @@ async function processGroup(runs, kind) {
 // failed attempt and the retry that succeeds. Both touch the same run records; the candle tick owns them
 // while it is running, and the worker skips rather than queues (it runs again in WORK_MS anyway).
 let tickBusy = false;
+// Declared here with the other guards rather than beside the poller: attemptTick reads it, and a `let`
+// used above its own declaration sits in the temporal dead zone — safe only because module load finishes
+// before any timer fires, which is not a property worth depending on.
+let pollBusy = false;
 function attemptTick(kind, retriesLeft) {
+  // DEFER IF A POLL IS MID-FLIGHT, do not skip. All three writers read-modify-write the WHOLE run record
+  // (store.initRun re-parses from disk, writeRun rewrites the file), so an overlap loses whichever write
+  // lands first — in full, silently, and leaving a file that parses perfectly. The poller already skips
+  // when a tick or worker is running; this closes the other direction.
+  //
+  // The tick DEFERS rather than skipping because it is the one pass that cannot be missed: it is the
+  // candle close, and everything else follows from it. A poll takes well under a second, so the retry
+  // costs latency and nothing else. Give up deferring after a few tries rather than drop the candle —
+  // a stuck pollBusy must never be able to stop the engine trading.
+  if (pollBusy && retriesLeft > 0) {
+    setTimeout(() => attemptTick(kind, retriesLeft - 1), 400);
+    return;
+  }
   const groups = {};
   tickBusy = true;
   for (const run of RUNS) { (groups[groupKey(run)] = groups[groupKey(run)] || []).push(run); }
@@ -1610,7 +1627,7 @@ const WORK_MS = Number(process.env.CANDLE_SPREAD_WORK_MS) || 30000;
 let workTimer = null;
 let workBusy = false;      // never overlap a pass with itself or with a candle tick
 async function runRestingWork() {
-  if (!started || workBusy || tickBusy) return;
+  if (!started || workBusy || tickBusy || pollBusy) return;
   if (!(DEPS && DEPS.getOrFetchChainData)) return;
   // RTH only, and not on the boundary itself — the candle tick owns that moment.
   const { weekday, hour, minute } = etParts(new Date());
@@ -1676,8 +1693,29 @@ async function runRestingWork() {
   }
 }
 
+// THE THIRD WRITER. The tick and the sub-bar worker already serialize against each other (tickBusy /
+// workBusy) because both mutate the same run records; the poller does not, and it is the one that writes
+// order_filled.
+//
+// store.initRun re-parses the record from disk on every call and writeRun rewrites the whole file, so
+// whoever writes last wins the WHOLE record, not just their field. A poll landing mid-tick silently
+// erases a cover the worker just booked, or the tick erases the fill the poller just recorded — and
+// nothing anywhere notices, because each wrote a file that parsed perfectly.
+//
+// Same guard as the worker: skip this pass rather than queue it. The poller runs every 20s and a missed
+// pass costs at most one cycle of fill-detection latency, which is far cheaper than a lost write.
 async function runOrderPoll() {
   if (!(LIVE_ARMED && DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return;
+  if (pollBusy || tickBusy || workBusy) return;
+  pollBusy = true;
+  try {
+    await runOrderPollInner();
+  } finally {
+    pollBusy = false;
+  }
+}
+
+async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
