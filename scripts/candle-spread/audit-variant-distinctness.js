@@ -39,6 +39,21 @@ const BODY = CONSUMERS.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join
 const IDENTITY = new Set(['variant', 'variantLabel', 'symbol', 'dryRun', 'label', 'key']);
 
 const runs = buildRuns();
+// AN EMPTY ROSTER PASSES EVERY TEST BELOW. With no runs there are no mirrors and no inert fields, so this
+// exited 0 announcing distinctness across nothing. The fleet is 80 variants; anything under a handful means
+// buildRuns() is broken or filtered, which is a failure to run the audit, not a clean result.
+if (runs.length < 8) {
+  console.error(`\n  ✗ buildRuns() returned ${runs.length} run(s) — the live roster is 80.`);
+  console.error('    A distinctness audit over an empty or truncated roster is not a pass. Exiting 2.');
+  process.exit(2);
+}
+// The consumer body is what the inert check greps. If it is empty every field looks unread, which would be
+// LOUD rather than silent, but the count is worth asserting so the failure names itself.
+if (!BODY || BODY.length < 10000) {
+  console.error(`\n  ✗ read only ${BODY.length} bytes from ${CONSUMERS.length} consumer file(s) in ${SRC}.`);
+  console.error('    Nothing can be judged "read" or "inert" against that. Exiting 2.');
+  process.exit(2);
+}
 // Functions must be compared by IDENTITY, not by source. Every family's signalFn is an at15(...) wrapper
 // whose source text is the same string, so stringifying them reported v4 == v5 (and v4 == v5 across all
 // 8 width/twin combinations) when the wrapped signals are entirely different functions. Each family

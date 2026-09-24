@@ -41,11 +41,25 @@ const BASE = arg('--base', 'https://d1kbxyxn33vpw2.cloudfront.net');
 const { buildRuns } = require('../../server/src/candle-spread/index');
 const VARIANTS = (ONLY ? ONLY.split(',') : buildRuns().map(r => r.variant));
 
+// A MISSING RECORD AND AN UNREACHABLE SERVER ARE DIFFERENT ANSWERS. This returned null for both, and the
+// audit counted both as "nothing to check" — so with prod down it reported RULE VIOLATIONS: 0 and exited
+// clean having examined nothing at all. Errors are now surfaced and counted; see the gate in main().
 async function fetchRun(variant) {
   const url = `${BASE}/api/v1/candle-spread/runs/NDX/${DATE}?date=${DATE}&variant=${variant}&cb=${Date.now()}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const j = await res.json();
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    fetchErrors.push(`${variant}: ${(e && e.message) || e}`);
+    return null;
+  }
+  if (!res.ok) {
+    // 404 is a legitimate "this variant did not run that day". Anything else is the audit being blocked.
+    if (res.status !== 404) fetchErrors.push(`${variant}: HTTP ${res.status}`);
+    return null;
+  }
+  let j;
+  try { j = await res.json(); } catch (e) { fetchErrors.push(`${variant}: bad JSON`); return null; }
   return (j && j.state) ? j : null;
 }
 function readLocal(variant) {
@@ -78,6 +92,9 @@ const tot = { open: {}, cover: {}, hedge: 0 };
 const byGeom = {};
 const violations = [];
 let files_read = 0;
+const fetchErrors = [];       // could-not-ask, as opposed to nothing-to-ask-about
+let opensChecked = 0;         // the number this audit's verdict actually rests on
+let approxSpots = 0;          // classifications made against a fallback underlying, not the placing candle
 
 async function main() {
 for (const variant of VARIANTS) {
@@ -88,7 +105,8 @@ for (const variant of VARIANTS) {
   if (!rows.length) continue;
   const spotAt = (label) => {
     if (label && byLabel.has(label)) return byLabel.get(label);
-    return rows[rows.length - 1].u;                   // no stamp -> last known (flagged as approx below)
+    approxSpots++;            // no stamp -> last known. Counted, because a verdict built mostly on the
+    return rows[rows.length - 1].u;   // close-of-day underlying is not a verdict about placement time.
   };
   for (const p of (rec.state && rec.state.positions) || []) {
     if (!p.legs || !p.legs.length) continue;
@@ -97,6 +115,7 @@ for (const variant of VARIANTS) {
     const oSpot = spotAt(p.openTime);
     const k = classify(p.legs, oSpot);
     tot.open[k] = (tot.open[k] || 0) + 1;
+    opensChecked++;
     if (k === 'allOTM') violations.push({ variant, kind: 'OPEN', time: p.openTime, spot: oSpot,
       legs: p.legs.map(l => (l.side === 'long' ? '+' : '-') + l.type + l.strike).join(' ') });
     const pc = p.pendingCover;
@@ -128,13 +147,34 @@ for (const [g, o] of Object.entries(byGeom)) {
   console.log('    ' + g.padEnd(10) + String(o.allITM || 0).padStart(9) + String(o.straddling || 0).padStart(12) + String(o.allOTM || 0).padStart(9));
 }
 
-console.log(`\n  RULE VIOLATIONS (opens with BOTH legs out of the money): ${violations.length}`);
+// NO EVIDENCE IS NOT A PASS. Everything above is descriptive; the line below is the audit's verdict, and
+// it must not be printed when nothing was examined. `violations.length === 0` is what a clean fleet looks
+// like AND what a dead endpoint looks like, so the count of opens actually classified decides which.
+if (fetchErrors.length) {
+  console.log(`\n  ✗ ${fetchErrors.length} variant(s) could not be read (not 404 — the audit was blocked):`);
+  for (const m of fetchErrors.slice(0, 10)) console.log(`      ${m}`);
+  if (fetchErrors.length > 10) console.log(`      ... and ${fetchErrors.length - 10} more`);
+}
+if (!opensChecked) {
+  console.log(`\n  ✗ NO VERDICT: 0 opens were classified (${files_read} record(s) read, ${VARIANTS.length} variant(s) tried).`);
+  console.log('    This is NOT "no violations" — nothing was checked. Exiting 2.');
+  console.log(LOCAL ? '    --local reads server/src/persistence/candle-spread-runs; is there a run for this date?'
+    : `    Check that ${BASE} is up and that ${DATE} has prod runs.`);
+  console.log('');
+  process.exit(2);
+}
+if (approxSpots) {
+  console.log(`\n  ! ${approxSpots} placement(s) had no matching candle stamp; moneyness there used the last`);
+  console.log('    known underlying, which biases toward the close. Treat those classifications as soft.');
+}
+
+console.log(`\n  RULE VIOLATIONS (opens with BOTH legs out of the money): ${violations.length} of ${opensChecked} opens checked`);
 for (const v of violations.slice(0, 25)) {
   console.log(`    ${v.variant.padEnd(13)} ${String(v.time).padEnd(12)} spot ${Math.round(v.spot)}   ${v.legs}`);
 }
 if (violations.length > 25) console.log(`    ... and ${violations.length - 25} more`);
 console.log('');
-process.exit(violations.length ? 1 : 0);
+process.exit(violations.length || fetchErrors.length ? 1 : 0);
 }
 
 main().catch(e => { console.error(e); process.exit(2); });

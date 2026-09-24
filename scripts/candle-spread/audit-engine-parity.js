@@ -110,7 +110,17 @@ try {
   for (const v of runs) for (const k of Object.keys(v)) {
     if (v[k] != null && v[k] !== false) liveSets[k] = (liveSets[k] || 0) + 1;
   }
-} catch (e) { liveSets = null; }
+} catch (e) {
+  // A ROSTER THAT WILL NOT LOAD IS A FAILURE, NOT AN UNKNOWN. This swallowed the error and set liveSets
+  // to null; every divergence then reported `live: null`, nothing classified as ACTIVE, and the audit
+  // exited 0 — so preflight printed "CLEAN" precisely when it had checked nothing. The one condition
+  // that makes this audit incapable of doing its job was the one it reported as passing.
+  console.error('\n  ✗ COULD NOT LOAD THE LIVE ROSTER — this audit cannot answer its question.');
+  console.error(`    ${(e && e.message) || e}`);
+  console.error('    Exiting 2. A divergence audit that cannot see the live side has not passed;');
+  console.error('    it has failed to run, and those must not look the same.');
+  process.exit(2);
+}
 
 const divergent = [];
 const aliasTargets = new Set(Object.values(ALIAS));

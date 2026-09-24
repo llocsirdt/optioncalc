@@ -73,5 +73,17 @@ console.log(`\n  credit asked SHORT of its lock target: ${over} of ${gaps.length
 console.log(`    mean ${mean.toFixed(2)} pts   max ${(gaps.length ? Math.max(...gaps) : 0).toFixed(2)} pts`
   + `   (~$${Math.round(mean * 100).toLocaleString()}/contract)`);
 console.log('\n  vs the 2026-09-17 pre-fix baseline: CREDIT 75.1% · DEBIT 72.6% · mean short 5.74');
-if (Math.abs(mean) < 0.1) console.log('  => the twin is now priced at parity, as intended.');
-else console.log('  => still mispriced; the twin is NOT being derived from the debit price.');
+// A VERDICT NEEDS SAMPLES. `mean` is 0 when gaps is empty, so with no credit covers at all this printed
+// "priced at parity, as intended" — the audit's strongest statement — off zero evidence. That is the same
+// defect as the parity audit's null roster: "I could not check" and "I checked and it is fine" must never
+// print the same thing.
+if (!gaps.length) {
+  console.log('\n  => NO VERDICT: not one credit cover in this data, so parity was not tested.');
+  console.log('     (a day with no credit covers is a finding in itself — creditCoverFrac may never have fired)');
+} else if (gaps.length < 10) {
+  console.log(`\n  => WEAK: only ${gaps.length} credit cover(s); mean ${mean.toFixed(2)} pts is not yet evidence either way.`);
+} else if (Math.abs(mean) < 0.1) {
+  console.log(`\n  => the twin is now priced at parity, as intended (n=${gaps.length}).`);
+} else {
+  console.log(`\n  => OFF PARITY by ${mean.toFixed(2)} pts on average (n=${gaps.length}).`);
+}
