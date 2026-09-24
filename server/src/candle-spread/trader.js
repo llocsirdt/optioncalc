@@ -55,17 +55,35 @@ function makeLegAccessor(chainData, expiration) {
 }
 
 // --- Order payload (Schwab shape) -----------------------------------------
+// THE STRATEGY TYPE HAS TO MATCH THE LEGS, and duplicated strikes have to be merged.
+//
+// This sent complexOrderStrategyType 'VERTICAL' for everything. A vertical is two legs; the engine also
+// sends 1-leg naked wings (wing-convert's `naked` shape) and 4-leg flies and condors, and Schwab is
+// entitled to reject a 4-leg order declared VERTICAL. Worse, a butterfly's body is the SAME strike twice
+// — CL emits it as two separate short legs — so the payload carried two identical SELL_TO_OPEN entries
+// at quantity 1 rather than one at quantity 2. Even if accepted, what comes back is not what was priced.
+//
+// mergeLegs (combo-order.js) already nets duplicate strikes and carries a per-leg quantity; it was only
+// ever wired into the combo path. Using it here makes every order type send what it actually means, and
+// a per-leg quantity now wins over the flat argument — which is also what makes qty > 1 correct on a fly.
+//
+// SINGLE / VERTICAL / CUSTOM is the same ladder combo-order.js already picks between.
 function buildOrderPayload(resolvedLegs, limit, quantity, net /* 'DEBIT'|'CREDIT' */) {
+  const merged = CO.mergeLegs(resolvedLegs, quantity);
+  // mergeLegs drops a strike whose net is zero. That cannot happen on any structure we send (it would be
+  // a spread against itself), but if it ever did, sending the un-merged legs is safer than sending none.
+  const legs = merged.length ? merged : resolvedLegs.map(l => ({ ...l, quantity }));
+  const strategy = legs.length === 1 ? 'NONE' : legs.length === 2 ? 'VERTICAL' : 'CUSTOM';
   return {
     orderType: net === 'CREDIT' ? 'NET_CREDIT' : 'NET_DEBIT',
     session: 'NORMAL',
     price: limit,
     duration: 'DAY',
     orderStrategyType: 'SINGLE',
-    complexOrderStrategyType: 'VERTICAL',
-    orderLegCollection: resolvedLegs.map(l => ({
+    complexOrderStrategyType: strategy,
+    orderLegCollection: legs.map(l => ({
       instruction: l.side === 'long' ? 'BUY_TO_OPEN' : 'SELL_TO_OPEN',
-      quantity,
+      quantity: l.quantity || quantity,
       instrument: { symbol: l.symbol, assetType: 'OPTION' }
     }))
   };
