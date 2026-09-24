@@ -175,6 +175,19 @@ function runDay5m(bars, signalFn, opts = {}) {
   const trackCap = opts.trackCapital === true;
   const creditFrac = opts.creditCoverFrac != null ? opts.creditCoverFrac : 0.65;
   const altEvery = opts.openAlternateEvery || 3;   // alternate open type debit/credit every N opens
+  // CAPITAL TRIGGER (opts.creditCapitalTrigger, dollars; 0/unset = off, so baselines are byte-identical).
+  // When set it REPLACES both hand-set rules above. Neither was ever measured, and both decide debit-vs-
+  // credit on something other than the thing they exist to control: `altEvery` alternates on a COUNT and
+  // `creditFrac` fires on how deep the position is. The purpose of a credit order here is to RECLAIM
+  // capital already laid out, so the trigger is the capital itself — pay debits until deployment reaches
+  // the trigger, then take credits until it falls back. A thermostat, not a bias.
+  //
+  // WHY NOT SIMPLY MAXIMISE CREDIT (user, 2026-09-23): "negative capital is just a number, going negative
+  // is no better than keeping near zero, so no reason to intentionally bias toward credits beyond just
+  // recapturing the capital already laid out." Biasing to credit drives avgReal deeply negative (v7-20 at
+  // creditFrac 0.35: peak $2,043 but average -$12,663) and buys nothing — an idle credit balance is not
+  // capacity. The trigger holds deployment NEAR the threshold from both sides instead.
+  const capTrigger = opts.creditCapitalTrigger > 0 ? opts.creditCapitalTrigger : 0;
   // CASH views: depD/peakD = all-debit. depC/peakC = credit-cover-on-ITM. depA/peakA = user's CONTINUOUS
   // ALTERNATING opens (N debit, N credit, ...) + ITM credit covers → keeps cash oscillating low all day,
   // decoupled from any ceiling. peakUncov = peak UNCOVERED at-risk (the margin view; = what the account
@@ -818,7 +831,12 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
           depD += cd; peakD = Math.max(peakD, depD);
-          const itm = legsMark(pos.legs, S, tau, iv) >= creditFrac * G.WIDTH;   // ITM enough → credit cover reclaims cash
+          // Credit when the trigger says capital needs reclaiming, else the depth rule. The structural
+          // collapse works at ANY depth — coverLegsFor anchors the cover at the position's own short
+          // strike, so the credit twin always lands on it and the pair becomes a butterfly. creditFrac
+          // was only ever choosing when the credit is LARGE, not when the collapse is available.
+          const itm = capTrigger ? (depR >= capTrigger)
+            : legsMark(pos.legs, S, tau, iv) >= creditFrac * G.WIDTH;   // ITM enough → credit cover reclaims cash
           if (itm) { const back = (G.WIDTH - pos.coverLimit) * 100 * QTY; depC -= back; depA -= back; nCredit++; }
           else { depC += cd; depA += cd; nDebitCov++; }
           peakC = Math.max(peakC, depC); peakA = Math.max(peakA, depA);
@@ -1147,7 +1165,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
           // ALTERNATING opens: first N debit (pay), next N credit (receive ~the debit-equivalent at
           // ATM by parity), repeat → net cash oscillates instead of draining.
-          const creditOpen = Math.floor(openN / altEvery) % 2 === 1;
+          const creditOpen = capTrigger ? (depR >= capTrigger) : (Math.floor(openN / altEvery) % 2 === 1);
           depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
           // depR: real-legs cash — on a credit turn, the parity credit spread (+cash); else the debit (-cash).
           const oStrikes = o.legs.map(l => l.strike), oLo = Math.min(...oStrikes), oHi = Math.max(...oStrikes);
