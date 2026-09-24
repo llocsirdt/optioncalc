@@ -49,6 +49,77 @@ const deps = {
   const dec = decisions.find(d => d.action === 'combo-lock-open');
   ok(dec && dec.openId === (newPos && newPos.id), 'combo-lock-open decision logged');
 
+  // ── THE PRICE BELONGS TO THE SPREAD THAT INCURRED IT ────────────────────────────────────────────
+  // cn.side/cn.limit describe the whole FOUR-LEG order. Both halves were stamped with them, so a
+  // credit-style cover inside a net-DEBIT combo recorded coverSentNet 'DEBIT' — and every valuation then
+  // priced the debit twin of legs that were never sent — while the open recorded the combo's own net as
+  // its sentLimit, which book-value reads as `-sentLimit` for a credit open: one position carrying the
+  // cash of the entire order.
+  {
+    const dec = decisions.find((d) => d.action === 'combo-lock-open');
+    ok(dec.coverNet === (winner.coverLegs && winner.coverSentNet),
+      `the decision and the position agree on the cover's own net (${dec.coverNet} / ${winner.coverSentNet})`);
+    ok(['DEBIT', 'CREDIT'].includes(winner.coverSentNet), 'the cover carries a net of its own');
+    ok(winner.coverSentNet !== 'DEBIT' || !winner.coverSentCredit,
+      'a debit cover carries no credit figure');
+    // The two shares must reconstruct the order exactly — that is what makes them an attribution rather
+    // than two more guesses.
+    const signed = (net, amt) => (net === 'CREDIT' ? -amt : amt);
+    const sum = Math.round((signed(dec.coverNet, dec.coverPart) + signed(dec.openNet, dec.openPart)) * 100) / 100;
+    const orderSigned = signed(dec.net, dec.limit);
+    ok(Math.abs(sum - orderSigned) < 0.011,
+      `cover share ${dec.coverPart} ${dec.coverNet} + open share ${dec.openPart} ${dec.openNet} = the order's ${orderSigned}`);
+    ok(newPos.sentLimit === dec.openPart && newPos.sentNet === dec.openNet,
+      `the open records its OWN share (${newPos.sentLimit} ${newPos.sentNet}), not the combo's ${dec.limit} ${dec.net}`);
+    ok(newPos.comboLimit === dec.limit && newPos.comboNet === dec.net,
+      'while still carrying the order-level figure, so the fill can be reconciled');
+  }
+
+  // ── A SLID COVER SENDS THE STRIKES IT RESERVED ──────────────────────────────────────────────────
+  // coverSentLegs and coverBookLegs were both built at winner.shortStrike, ignoring rc.anchor. When the
+  // resolver slid the cover deeper ITM to dodge a leg conflict, the ORDER went out at the unslid strikes
+  // while deps._ledger.record(rc.legs) reserved the slid ones — an instrument nothing had validated, and
+  // strikes reserved that were never traded.
+  {
+    const w2 = { id: 'pos-9', side: 'bull', shortStrike: 90,
+      legs: [{ side: 'long', type: 'C', strike: 70 }, { side: 'short', type: 'C', strike: 90 }],
+      limit: 5, quantity: 1, filled: true, covered: false, pendingCover: null };
+    const st3 = { positions: [w2], realizedPnl: 0, cashDeployed: 0, peakCashDeployed: 0, openN: 6,
+      direction: 'bull', legLedger: {}, lastCandleTime: 't', lastCandleEpoch: 1 };
+    const led3 = LL.makeLegLedger(st3.legLedger);
+    led3.record(w2.legs);
+    // Block BOTH ideal covers at the 90 anchor, so the resolver has to SLIDE: long P90 collides with the
+    // debit cover's short P90, and short C110 collides with the credit twin's long C110. The resolver
+    // answers anchor 100 / shift 10 / credit — and note what the OLD code would have sent at
+    // winner.shortStrike: short C90 / long C110, i.e. the exact leg the ledger had just refused.
+    led3.record([{ side: 'long', type: 'P', strike: 90 }, { side: 'short', type: 'C', strike: 110 }]);
+    const preLedger = { ...st3.legLedger };
+    const sent3 = [];
+    const deps3 = { ...deps, _ledger: led3,
+      placeOrder: async (payload, meta) => { sent3.push({ payload, meta }); return { status: 'filled', filled: true, orderId: 'x' }; } };
+    const d3 = [];
+    const okPlaced = await trader.tryComboLockAndOpen(st3, res, 'bull', cfg, deps3, d3, 't');
+    const dec3 = d3.find((d) => d.action === 'combo-lock-open');
+    if (!okPlaced || !dec3) {
+      ok(sent3.length === 0, 'a cover that cannot be resolved sends nothing at all');
+    } else {
+      const sentStrikes = (sent3[0].meta.coverLegs || []).map((l) => l.type + l.strike).sort().join(' ');
+      const recorded = Object.keys(st3.legLedger).sort();
+      const inLedger = (sent3[0].meta.coverLegs || []).every((l) => recorded.includes(l.type + l.strike));
+      ok(inLedger, `every cover leg SENT is a leg the ledger reserved (sent ${sentStrikes})`);
+      ok(dec3.coverShift > 0, `the resolver really slid (anchor ${dec3.coverAnchor}, shift ${dec3.coverShift}) — otherwise this case proves nothing`);
+      // The point of the resolver is that the order never contradicts a strike already held the other way.
+      const clash = (sent3[0].meta.coverLegs || []).filter((l) => {
+        const held = preLedger[l.type + l.strike];
+        return held && held !== l.side && held.side !== l.side;
+      });
+      ok(!clash.length, `no SENT cover leg contradicts a strike already held (${clash.map((l) => l.side[0] + l.type + l.strike).join(' ') || 'none'})`);
+      const bookShort = (w2.coverLegs || []).find((l) => l.side === 'short');
+      ok(bookShort && bookShort.strike === dec3.coverAnchor,
+        `and the BOOKED cover sits at that same anchor (${bookShort && bookShort.strike})`);
+    }
+  }
+
   // NEGATIVE: with comboOrders off / no winner deep enough, it declines (returns false, sends nothing)
   const st2 = { positions: [], realizedPnl: 0, legLedger: {}, openN: 0 };
   const sent2 = [];

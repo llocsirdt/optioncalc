@@ -417,8 +417,15 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const wantCredit = creditPreferred(st, deps, cand.m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W);
   const rc = LL.resolveCover(winner.side, winner.shortStrike, W, deps._ledger, { preferStyle: wantCredit ? 'credit' : 'debit', incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
   if (rc.resolution === 'skip') return false;
-  const coverSentLegs = (rc.style === 'debit' && rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, rc.style);
-  const coverBookLegs = (rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, 'debit');   // debit-canonical (floor P&L)
+  // SEND WHAT THE RESOLVER APPROVED. Both of these were built at `winner.shortStrike`, ignoring rc.anchor —
+  // so whenever the resolver SLID the cover deeper ITM to avoid a leg conflict, the order went out at the
+  // UNSLID strikes while `deps._ledger.record(rc.legs)` below reserved the slid ones. The engine then held
+  // an instrument it had not validated and had reserved strikes it had not traded, from one line.
+  // (rc.wing is always W now — the slide is parallel — so the old `rc.wing === W` ternary also meant a
+  // debit cover took plan.legs unconditionally, slide or no slide.)
+  const cAnchor = rc.anchor != null ? rc.anchor : winner.shortStrike;
+  const coverSentLegs = rc.legs;                                                     // exactly what was resolved
+  const coverBookLegs = CL.coverLegsFor(winner.side, cAnchor, W, 'debit');           // debit-canonical (floor P&L)
   // Booked cover price = min(target = W−openLimit, coverMark+tick) — same as resolveRestingCovers, so the
   // locked floor (W − openLimit − coverLimit) matches the sequential path exactly.
   // Same clamp, same failure: a broken quote used to book the combo's cover leg at one tick.
@@ -442,6 +449,18 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const slip = deps.comboSlip != null ? deps.comboSlip : 0.05;
   const cn = CO.comboNet(coverSentLegs, openSentLegs, mid, slip);
   if (!cn) return false;
+  // ATTRIBUTE THE PRICE TO EACH SPREAD. cn.side/cn.limit describe the WHOLE four-leg order, and both the
+  // cover and the open were stamped with them: a credit-style cover inside a net-DEBIT combo recorded
+  // coverSentNet 'DEBIT' (so every valuation priced the debit twin of legs that were never sent), and the
+  // open recorded sentLimit = the combo's net — the price of FOUR legs — as its own. book-value reads that
+  // as `-sentLimit` for a credit open, so one position was carrying the whole order's cash.
+  //
+  // comboNet already returns the two mid nets; the slip is per leg, so splitting it by leg count is exact:
+  // coverPart + openPart === cn.net, to the cent.
+  const coverPart = round2(cn.coverNet + slip * coverSentLegs.length);
+  const openPart = round2(cn.openNet + slip * openSentLegs.length);
+  const coverSide = coverPart < 0 ? 'CREDIT' : 'DEBIT';
+  const openSide2 = openPart < 0 ? 'CREDIT' : 'DEBIT';
   const merged = CO.mergeLegs([...coverSentLegs, ...openSentLegs], qty);
   const resolvedMerged = [];
   for (const l of merged) { const q = deps.getLeg(l.type, l.strike); if (!q || q.symbol == null) return false; resolvedMerged.push({ ...l, symbol: q.symbol }); }
@@ -461,7 +480,9 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   // 5) book the COVER onto the winner (mirrors resolveRestingCovers) — floor from the debit-canonical legs
   winner.covered = true; winner.coverId = nextId('cov'); winner.coverLegs = coverBookLegs; winner.coverLimit = coverLimit;
   winner.coverStatus = 'filled'; winner.coverTime = st.lastCandleTime || null; winner.coverEpoch = st.lastCandleEpoch || null;
-  winner.coverSentNet = cn.side; winner.viaCombo = true;
+  winner.coverSentNet = coverSide;
+  if (coverSide === 'CREDIT') winner.coverSentCredit = round2(Math.abs(coverPart));
+  winner.viaCombo = true;
   const floor = round2((W - winner.limit - coverLimit) * 100 * (winner.quantity || qty));
   st.realizedPnl = round2(st.realizedPnl + floor);
 
@@ -471,7 +492,11 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
     shortStrike: openBook.shortStrike, mark: openBook.mark, cap: openBook.cap, limit: openBook.limit,
     orderStatus: placed.status, filled: !!placed.filled, covered: false, coverId: null,
     openedAt: new Date().toISOString(), openTime: st.lastCandleTime || null, openEpoch: st.lastCandleEpoch || null,
-    sentNet: cn.side, sentLimit: price, sentLegs: openSentLegs, viaCombo: winner.id
+    sentNet: openSide2, sentLimit: round2(Math.abs(openPart)), sentLegs: openSentLegs, viaCombo: winner.id,
+    // The combo's own net and the price actually sent, kept alongside — the position's sentLimit is its
+    // SHARE of that order, and losing the order-level number would make the two impossible to reconcile
+    // against the broker's single fill.
+    comboNet: cn.side, comboLimit: price
   };
   st.positions.push(pos);
   deps._ledger.record(openSentLegs);
@@ -480,7 +505,10 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   // 7) combo cash: ONE net impact for the whole order (+debit / −credit). Does not touch P&L.
   noteCash(st, cn.net * 100 * qty);
 
-  decisions.push({ action: 'combo-lock-open', winner: winner.id, openId: pos.id, coverId: winner.coverId, net: cn.side, limit: price, legs: resolvedMerged.length, lockedFloor: floor, cashDeployed: st.cashDeployed });
+  decisions.push({ action: 'combo-lock-open', winner: winner.id, openId: pos.id, coverId: winner.coverId,
+    net: cn.side, limit: price, legs: resolvedMerged.length, lockedFloor: floor, cashDeployed: st.cashDeployed,
+    coverNet: coverSide, coverPart: round2(Math.abs(coverPart)), openNet: openSide2, openPart: round2(Math.abs(openPart)),
+    coverAnchor: cAnchor, coverShift: rc.shift || 0, coverStyle: rc.style, resolution: rc.resolution });
   return true;
 }
 
