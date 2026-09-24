@@ -94,6 +94,9 @@
   .cell .cname .mk .v { color:#c0564f; }      /* setup: avoid */
   .cell .lift { font:9px ui-monospace,monospace; text-align:right; margin-top:-1px; }
   .cell .lift.f { color:#6f9b21; } .cell .lift.w { color:#7c8794; } .cell .lift.v { color:#c0564f; }
+  /* A watch-tier AVOID states its measured lift in muted grey and draws no bar — see the note at
+     engineState.avow for why an unproven pattern must not paint a warning. */
+  .cell .lift.vw { color:#7c8794; }
   /* FEATURE STRIP — what this strategy had ON, and what actually FIRED this session. A grey glyph is a
      feature that was enabled but never triggered; that distinction is the whole point of the strip, since
      "enabled" and "did something" are very different facts when reading a day.
@@ -218,7 +221,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.5</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.9.6</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -641,14 +644,17 @@ function render() {
       const isWatch = engineState.watch.has(v), isArmed = engineState.armed.has(v);
       const fLift = engineState.fav.has(v) ? engineState.fav.get(v)
                   : engineState.favw.has(v) ? engineState.favw.get(v)
-                  : engineState.avo.has(v) ? engineState.avo.get(v) : null;
-      const fTier = engineState.fav.has(v) ? 'f' : engineState.favw.has(v) ? 'w' : engineState.avo.has(v) ? 'v' : null;
+                  : engineState.avo.has(v) ? engineState.avo.get(v)
+                  : engineState.avow.has(v) ? engineState.avow.get(v) : null;
+      const fTier = engineState.fav.has(v) ? 'f' : engineState.favw.has(v) ? 'w'
+                  : engineState.avo.has(v) ? 'v' : engineState.avow.has(v) ? 'vw' : null;
       const setupNote = fTier ? engineState.setups
         .filter(x => [...(x.favors || []), ...(x.avoid || [])].some(e => e.v === v))
         .map(x => `\n${x.label}: ${x.expect}\n  ${v} measured lift ${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/day`
           + `\n  fires on ${x.firesPct}% of days (n=${x.n}), ${x.tested}\n  ${x.caveat}`).join('') : '';
       const stateTitle = (isWatch ? '\n◆ on the 6-variant watchlist' : '')
-        + (isArmed ? '\n⚡ ARMED (this variant is sending orders)' : '') + setupNote;
+        + (isArmed ? '\n⚡ ARMED (this variant is sending orders)' : '')
+        + (fTier === 'vw' ? '\n(watch tier — the pattern below is NOT statistically established)' : '') + setupNote;
       const marks = (isWatch || isArmed || fTier)
         ? `<span class="mk">${isWatch ? '<span class="d">◆</span>' : ''}${isArmed ? '<span class="a">⚡</span>' : ''}`
           + `${fTier === 'f' ? '<span class="f">▲</span>' : fTier === 'w' ? '<span class="w">△</span>' : fTier === 'v' ? '<span class="v">▽</span>' : ''}</span>`
@@ -657,7 +663,7 @@ function render() {
       // settled close, so the border reflects how the day actually ended.
       const signCls = d.underPnl == null ? '' : d.underPnl > 0 ? ' pos' : d.underPnl < 0 ? ' neg' : '';
       html += `<td class="cell${partial ? ' is-partial' : ''}${isWatch ? ' wl' : ''}${signCls}${isArmed ? ' armed' : ''}" title="${v}  (double-click → open in debug)\nnow @ ${d.underlying != null ? Math.round(d.underlying) : '—'} → ${d.underPnl != null ? usd(d.underPnl) : '—'} · max ${bStr} · max loss ${wStr}${btTitle}${aliasTitle}${partTitle}${stateTitle}">`
-        + `<div class="stateBar${fTier ? (fTier === 'f' ? ' fav' : fTier === 'w' ? ' favw' : ' avo') : ' none'}"></div>`
+        + `<div class="stateBar${fTier === 'f' ? ' fav' : fTier === 'w' ? ' favw' : fTier === 'v' ? ' avo' : ' none'}"></div>`
         + `<div class="cname"><b>${cellName}</b>${aliasBadge}${partBadge}${marks}${hmax}${countStrip(v)}</div>`
         + `<div class="lift${fTier ? ' ' + fTier : ''}">${fTier ? `${fLift >= 0 ? '+' : '-'}$${Math.abs(fLift).toLocaleString()}/d` : '&nbsp;'}</div>`
         + `<div class="chartwrap">${svgCurve(v, d, yMin, yMax, bt, cellsB[v])}${nowlbl}</div>`
@@ -748,7 +754,7 @@ function renderCompletenessBanner() {
 // LIVE ENGINE STATE for the grid — watchlist, which variant is armed, and today's named setups. Read
 // from CandleSpreadStatus rather than fetching /status again here: one fetch, one interpretation, and
 // the two pages cannot drift into disagreeing about what is armed.
-let engineState = { watch: new Set(), armed: new Set(), fav: new Map(), favw: new Map(), avo: new Map(), setups: [] };
+let engineState = { watch: new Set(), armed: new Set(), fav: new Map(), favw: new Map(), avo: new Map(), avow: new Map(), setups: [] };
 function ingestStatus(st) {
   if (!st) return;
   const lifts = (tier, side) => {
@@ -767,7 +773,15 @@ function ingestStatus(st) {
   engineState = {
     watch: new Set(st.watchlist || []), armed,
     fav: lifts('tested', 'favors'), favw: lifts('watch', 'favors'),
-    avo: new Map([...lifts('tested', 'avoid'), ...lifts('watch', 'avoid')]),
+    // AVOID RESPECTS `strength` NOW, exactly as FAVORS always did. These two lines used to be merged, so
+    // a WATCH-tier avoid — a pattern the analysis itself labels "not significant, logging live
+    // occurrences" — painted the same full-strength marker a tested one gets, while a watch-tier FAVOR
+    // was carefully muted to grey. On 2026-09-23 that put an avoid bar on v7-20 off a setup with n=30,
+    // firing on 4.3% of days, rotation p 0.1818/0.2472, predicting it would "lose the most". It closed
+    // +$6,595 — 2nd of 8 in its family and the best GOVERNED variant in it. An unproven pattern should
+    // not be drawing a warning on a chart.
+    avo: lifts('tested', 'avoid'),
+    avow: lifts('watch', 'avoid'),
     setups: (st.setups && st.setups.ok && st.setups.setups) || [],
   };
   // Re-draw so a setup appearing mid-session lights the grid without waiting for a reload. render()
