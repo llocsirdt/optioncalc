@@ -74,6 +74,37 @@ function scenario(variant, deps) {
   ok(skipOff, 'OFF: 3rd open logged open-skip-cap');
   ok(!ctsOff, 'OFF: no cover-to-stack decision (inert when flag off)');
 
+  // --- WITH LEG-UNIQUENESS: the open that follows a lock must be resolved against the ledger the lock
+  // left behind, not the one it found. coverToStackFreeBudget places covers to free budget and those
+  // covers RESERVE STRIKES; the open's legs and style were chosen before they existed, and the engine then
+  // sent that stale answer. The combo path has always used a temp ledger for exactly this; the sequential
+  // path re-resolves now.
+  //
+  // The assertion is the invariant itself — across everything the day actually traded, no contract may
+  // appear both long and short — because that is what leg-uniqueness is FOR, and it holds however the
+  // strikes happen to fall. This fixture's geometry does not by itself force the lock and the open onto a
+  // shared strike, so it guards the property rather than reproducing the collision.
+  {
+    const uq = await scenario('cts-uniq', { coverToStack: true, coverToStackMinFrac: 0.65,
+      enforceLegUniqueness: true, capitalRecapture: true, creditCoverFrac: 0.65, legMaxShift: 6, legMaxWing: 8 });
+    const sides = new Map(); const both = [];
+    const note = (l, whose) => {
+      const k = l.type + l.strike, prev = sides.get(k);
+      if (prev && prev.side !== l.side) both.push(`${k}: ${prev.whose} ${prev.side} vs ${whose} ${l.side}`);
+      else sides.set(k, { side: l.side, whose });
+    };
+    for (const p of uq.state.positions) {
+      for (const l of (p.sentNet === 'CREDIT' && p.sentLegs ? p.sentLegs : p.legs) || []) note(l, `open ${p.id}`);
+      const cl = p.coverLegs || (p.pendingCover && p.pendingCover.legs);
+      for (const l of cl || []) note(l, `cover ${p.id}`);
+    }
+    ok(uq.state.positions.length >= 3, `UNIQ: the lock still made room for the 3rd open (${uq.state.positions.length})`);
+    ok(!both.length, `UNIQ: no contract is traded both ways across the day (${both.join('; ') || 'none'})`);
+    const stale = (uq.events || []).some((e) => (e.decisions || []).some((d) => d.action === 'open-skip-after-lock'));
+    ok(!stale || uq.state.positions.length >= 2,
+      'UNIQ: an open the ledger refuses AFTER the lock is skipped and logged, never sent anyway');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);

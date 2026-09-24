@@ -1334,31 +1334,43 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       : buildOpen(openSide, underlying, cfg, deps.getLeg);
     // LEG-UNIQUENESS: resolve strikes + style BEFORE the caps/send so a shifted spread is capped
     // correctly. ideal → parity twin (same strikes) → shift → skip. legStyle drives the actual send.
-    let legStyle = null, legSkipped = false;
-    if (deps.enforceLegUniqueness && deps._ledger && !res.error && res.limit > 0) {
+    //
+    // A FUNCTION, because it has to run TWICE. The cover-to-stack path below places covers to free budget
+    // and those covers RESERVE STRIKES, so an open resolved up here was resolved against a ledger that no
+    // longer exists by the time it is sent — it can collide with the very cover that made room for it.
+    // The combo path has always guarded this with a temp ledger; the sequential path did not.
+    const resolveLegUniqueness = (plan) => {
+      if (!(deps.enforceLegUniqueness && deps._ledger) || plan.error || !(plan.limit > 0)) {
+        return { res: plan, legStyle: null, skipped: false };
+      }
       const wantCredit = creditPreferred(st, deps,
         deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1);
       // openNeverOtm: an initial order must not START fully out of the money. Adaptive placement already
       // guarantees it; without this the shift below rebuilt at the shifted strikes and could cross out.
       const allow = deps.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(openSide, lo, hi, underlying)) : undefined;
-      const rr = LL.resolveOpen(openSide, res.lower, res.upper, deps._ledger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCredit ? 'credit' : 'debit', allow });
-      if (rr.resolution === 'skip') { decisions.push({ action: 'open-skip-leg', side: openSide, lower: res.lower, upper: res.upper }); legSkipped = true; }
-      else {
-        if (rr.resolution === 'shift') {
-          // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
-          // legs as if the geometry had chosen them — which is why strikes landing off-placement went
-          // unnoticed. Record where it wanted to be, where it went, and what that cost.
-          const before = res;
-          res = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg);
-          decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
-            fromLower: before.lower, fromUpper: before.upper, toLower: rr.lo, toUpper: rr.hi,
-            shift: rr.shift, style: rr.style, underlying,
-            markBefore: before.mark != null ? before.mark : null,
-            markAfter: res && res.mark != null ? res.mark : null });
-        }
-        legStyle = rr.style;
+      const rr = LL.resolveOpen(openSide, plan.lower, plan.upper, deps._ledger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCredit ? 'credit' : 'debit', allow });
+      if (rr.resolution === 'skip') {
+        decisions.push({ action: 'open-skip-leg', side: openSide, lower: plan.lower, upper: plan.upper });
+        return { res: plan, legStyle: null, skipped: true };
       }
-    }
+      let out = plan;
+      if (rr.resolution === 'shift') {
+        // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
+        // legs as if the geometry had chosen them — which is why strikes landing off-placement went
+        // unnoticed. Record where it wanted to be, where it went, and what that cost.
+        out = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg);
+        decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
+          fromLower: plan.lower, fromUpper: plan.upper, toLower: rr.lo, toUpper: rr.hi,
+          shift: rr.shift, style: rr.style, underlying,
+          markBefore: plan.mark != null ? plan.mark : null,
+          markAfter: out && out.mark != null ? out.mark : null });
+      }
+      return { res: out, legStyle: rr.style, skipped: false };
+    };
+    const first = resolveLegUniqueness(res);
+    res = first.res;
+    let legStyle = first.legStyle;
+    const legSkipped = first.skipped;
     if (legSkipped) {
       // already logged; the leg constraint blocked every placement
     } else if (res.declined) {
@@ -1392,7 +1404,19 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
       if (!opened && deps.coverToStack) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
-        if (capState(st, res, openSide, cfg, deps).ok) { await openPosition(st, res, openSide, cfg, deps, decisions, legStyle); opened = true; }
+        if (capState(st, res, openSide, cfg, deps).ok) {
+          // RE-RESOLVE AGAINST THE LEDGER AS IT NOW STANDS. The covers just placed reserved their strikes,
+          // and this open's legs and style were decided before they existed. Sending the stale answer is
+          // how an open comes to trade a strike its own budget-freeing cover has just taken the other way.
+          const again = resolveLegUniqueness(res);
+          if (!again.skipped && !again.res.error && !again.res.declined && again.res.limit > 0) {
+            await openPosition(st, again.res, openSide, cfg, deps, decisions, again.legStyle);
+            opened = true;
+          } else {
+            decisions.push({ action: 'open-skip-after-lock', side: openSide,
+              reason: again.skipped ? 'leg-uniqueness after the lock' : (again.res.error || again.res.reason || 'unpriceable after the lock') });
+          }
+        }
       }
       if (!opened) capAllowsOpen(st, res, openSide, cfg, deps, decisions);   // logs 'open-skip-cap'
     } else {
