@@ -89,6 +89,21 @@ function buildOrderPayload(resolvedLegs, limit, quantity, net /* 'DEBIT'|'CREDIT
   };
 }
 
+// THE SHORT STRIKE AND WIDTH A PLAN ACTUALLY DESCRIBES.
+//
+// A cover plan is not always the tent. 'halfway' and 'underlying' geometry (v1, v2) put the cover's short
+// strike between the position's short and the money, and the greedy/joint selectors choose among candidate
+// long strikes — so the plan's short strike is a property of the PLAN, not of the position. Reading it off
+// pos.shortStrike is only correct for 'tent'. Measured in the archive: 569 of 12,944 covers on the halfway
+// and underlying variants sat at a short strike other than the position's.
+function coverPlanShape(legs) {
+  if (!legs || legs.length !== 2) return null;
+  const sh = legs.find((l) => l.side === 'short');
+  const lo = legs.find((l) => l.side === 'long');
+  if (!sh || !lo || sh.strike == null || lo.strike == null) return null;
+  return { shortStrike: sh.strike, width: Math.abs(lo.strike - sh.strike) };
+}
+
 // Resolve abstract legs ({side,type,strike}) to order legs with chain symbols + mids.
 // Returns { resolved, longMid, shortMid } or { error }.
 function resolveLegs(legs, getLeg) {
@@ -121,7 +136,36 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // (anchor cover: long wing out to a free strike) → skip (leave uncovered). The resting-fill BOOKING stays
   // debit-canonical (pendingCover.legs) so the floor + settlement P&L are right for the position's own
   // style; only the SENT order + the cash ledger differ. Wing-shift books/settles at the wider wing.
-  let style = 'debit', wing = W, shift = 0, anchor = pos.shortStrike;
+  // THE RESOLVER AND THE ORDER MUST BE TALKING ABOUT THE SAME SPREAD. Both the leg ledger and the credit
+  // twin were derived from pos.shortStrike while the order sent plan.legs, so on a 'halfway' or
+  // 'underlying' cover (v1, v2 — LIVE) three separate things came apart:
+  //   * the ledger reserved the TENT's strikes, which were never traded, and never recorded the geometry
+  //     strikes that were — so a later order could legally long a strike this cover had just shorted, the
+  //     one rule leg-uniqueness exists to enforce;
+  //   * `conflicts()` was asked about the wrong legs, so a genuine conflict on the real legs went unseen
+  //     while a phantom one on the tent pushed later covers onto the ITM-slide path;
+  //   * worst, on the credit style the SENT order was the twin of the TENT while pendingCover.legs was the
+  //     GEOMETRY spread — a different instrument — and resolveRestingCovers then decided the fill, booked
+  //     the settlement and credited realizedPnl off the one that was never sent.
+  // The plan's own short strike is the anchor. A parallel shift keeps the floor at W for any anchor the
+  // selectors can produce (both geometry clamps and coverCandidateLongs stay on the covered side), so the
+  // `W - openCost - minLock` lock arithmetic below is unchanged.
+  const shape = coverPlanShape(plan.legs);
+  if (!shape) {
+    decisions.push({ action: 'cover-not-sent', positionId: pos.id, reason: 'cover plan is not a 2-leg spread' });
+    return;
+  }
+  // A DIFFERENT-WIDTH PLAN IS NOT COVERABLE BY THIS CODE. Everything below rebuilds legs with
+  // coverLegsFor(..., W, ...) for the twin and for any slide, which silently substitutes a width-W
+  // instrument for the plan's own. resolveCover's own note says a different-width cover does not cover the
+  // original — it re-introduces untracked risk on the opposite side. No selector generates one today; if
+  // one ever does, refuse rather than send the wrong spread.
+  if (shape.width !== W) {
+    decisions.push({ action: 'cover-not-sent', positionId: pos.id,
+      reason: `cover plan width ${shape.width} != position width ${W}` });
+    return;
+  }
+  let style = 'debit', wing = W, shift = 0, anchor = shape.shortStrike;
   {
     const m = coverMarkNow(pos.legs, deps.getLeg);
     const legacy = deps.capitalRecapture === true
@@ -137,9 +181,9 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // the one that locked a guaranteed loss on 98 of 103 shifted covers.
   let ledgerLegs = null;
   if (deps.enforceLegUniqueness && deps._ledger) {
-    const rc = LL.resolveCover(pos.side, pos.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
+    const rc = LL.resolveCover(pos.side, shape.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
     if (rc.resolution === 'skip') { decisions.push({ action: 'cover-skip-leg', positionId: pos.id }); return; }   // can't place — stays uncovered
-    style = rc.style; wing = rc.wing; shift = rc.shift || 0; anchor = rc.anchor != null ? rc.anchor : pos.shortStrike;
+    style = rc.style; wing = rc.wing; shift = rc.shift || 0; anchor = rc.anchor != null ? rc.anchor : shape.shortStrike;
     ledgerLegs = rc.legs;
   }
   // BOOK debit-canonical at the resolved ANCHOR. The resolver now slides the whole spread at CONSTANT

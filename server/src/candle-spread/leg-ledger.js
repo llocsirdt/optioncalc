@@ -72,7 +72,10 @@ function resolveOpen(side, lo, hi, ledger, opts) {
   return { resolution: 'skip' };
 }
 
-// Resolve a COVER. The short leg stays at the position's shortStrike (that's the tent floor); we try the
+// Resolve a COVER at a GIVEN short strike. `shortStrike` is the COVER PLAN's short strike, which equals the
+// position's only for 'tent' geometry — 'halfway'/'underlying' and the greedy/joint selectors put it
+// elsewhere, and the caller must pass the one it is actually going to send (see coverPlanShape in
+// trader.js). Whatever the anchor, the parallel slide below keeps the pair's floor at the width. We try the
 // ideal tent-width wing in both styles (parity-neutral pair) first, then WING-SHIFT — move the long wing
 // out to a free strike (an "anchor cover", already in the strategy's geometry). Returns { legs, style,
 // wing, resolution: 'ideal'|'twin'|'wingShift' } or { resolution: 'skip' }. wing !== width means the P&L
