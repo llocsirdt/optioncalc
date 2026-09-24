@@ -1095,7 +1095,17 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 // (so you can watch it hit Schwab and stick without any execution risk), then the poller cancels
 // it after TEST_CANCEL_MS. TEST_FRAC = the debit fraction (0.1 => a $10.50 debit is sent at $1.05);
 // credit orders invert it (see order-manager.unfillablePrice).
-const TEST_FRAC = Number(process.env.CANDLE_SPREAD_TEST_FRAC) || 0.1;
+// RANGE-CHECKED. It MULTIPLIES a debit (must shrink it) and DIVIDES a credit (must grow it), so anything
+// at or above 1 sends at or through the real price while /status still reports "unfillable + auto-cancel".
+// unfillablePrice clamps too; this makes a bad value visible instead of silently corrected.
+const TEST_FRAC = (() => {
+  const raw = process.env.CANDLE_SPREAD_TEST_FRAC;
+  if (raw == null || raw === '') return 0.1;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0 && n < 1) return n;
+  console.error(`[candle-spread] CANDLE_SPREAD_TEST_FRAC=${raw} is outside (0,1) — test orders would be FILLABLE. Using 0.1.`);
+  return 0.1;
+})();
 const TEST_CANCEL_MS = Number(process.env.CANDLE_SPREAD_TEST_CANCEL_MS) || 60000;
 const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
 
@@ -1134,9 +1144,13 @@ function makeReplaceOrder(run, record) {
       return { status: `simulated:${why}`, orderId };
     }
     const isTest = mode === 'test';
-    const sendPayload = isTest
-      ? { ...payload, price: om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) }
-      : payload;
+    const testPx = isTest ? om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    if (isTest && testPx == null) {
+      store.appendEvent(record, { type: 'order_simulated', by: 'unfillable-impossible', meta, payload,
+        note: `TEST replace skipped: ${payload.orderType} at ${payload.price} cannot be made unfillable` });
+      return { status: 'simulated:unfillable-impossible', orderId };
+    }
+    const sendPayload = isTest ? { ...payload, price: testPx } : payload;
     try {
       const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
       const newId = (resp && resp.orderId) ? resp.orderId : orderId;
@@ -1171,9 +1185,17 @@ function makePlaceOrder(run, record) {
     }
     // Real send. In test mode, rewrite the price to something that can't fill.
     const isTest = mode === 'test';
-    const sendPayload = isTest
-      ? { ...payload, price: om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) }
-      : payload;
+    // TEST MODE MUST NOT SEND A FILLABLE ORDER. unfillablePrice returns null when it cannot guarantee one
+    // (a debit already at the tick floor, a credit already at width - tick), and the only safe response is
+    // not to send. A "test" order that can fill is the one thing this mode exists to prevent.
+    const testPx = isTest ? om.unfillablePrice(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    if (isTest && testPx == null) {
+      store.appendEvent(record, { type: 'order_simulated', by: 'unfillable-impossible', meta, payload,
+        note: `TEST send skipped: ${payload.orderType} at ${payload.price} cannot be made unfillable` });
+      console.warn(`[candle-spread] ${run.variant} TEST SEND SKIPPED — ${payload.orderType} ${payload.price} cannot be made unfillable`);
+      return { status: 'simulated:unfillable-impossible', filled: true };
+    }
+    const sendPayload = isTest ? { ...payload, price: testPx } : payload;
     try {
       const resp = await DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, sendPayload);
       const orderId = resp && resp.orderId ? resp.orderId : null;

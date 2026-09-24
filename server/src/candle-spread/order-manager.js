@@ -41,15 +41,40 @@ function mapStatus(schwabStatus) {
 //     far too much credit -> price / frac, capped just under the spread width (the theoretical max,
 //     already unfillable) so we never send an absurd number Schwab would reject.
 // Never returns below one tick.
+//
+// RETURNS null WHEN IT CANNOT GUARANTEE UNFILLABILITY, and the caller must then not send at all. This is
+// the single safety property protecting a funded account while the engine runs in 'test' mode, and it had
+// two holes at the boundaries — both verified against the real module:
+//
+//   NET_DEBIT  $0.05            -> $0.05   the Math.max(t, ...) floor returned the REAL price
+//   NET_CREDIT $19.95 on W=20   -> $19.95  the (spreadWidth - tick) cap returned the REAL price
+//
+// Neither was reachable in the 11,659 orders actually sent over 2026-09-18/21/22/23 (cheapest debit $0.50,
+// closest credit 94.5% of width). But a broken chain pricing a 40-wide fly at $0.05 is a documented
+// failure of this system, and that is precisely the input that lands on the debit floor. An order that
+// cannot be made unfillable must not be sent in test mode — silence is the safe answer, a fillable "test"
+// order is not.
+//
+// `frac` is clamped to (0,1): it MULTIPLIES a debit (must shrink it) and DIVIDES a credit (must grow it),
+// so a value of 1 or more sends at, or through, the real price. CANDLE_SPREAD_TEST_FRAC=1 did exactly
+// that while /status still reported "test (unfillable + auto-cancel)".
 function unfillablePrice(payload, frac, spreadWidth, tick) {
   const t = tick || 0.05;
+  const f = Number(frac);
+  const safeFrac = Number.isFinite(f) && f > 0 && f < 1 ? f : 0.1;
   const round = p => Math.round(Math.max(t, Math.round(p / t) * t) * 100) / 100; // tick-snap, 2dp clean
+  const real = Number(payload && payload.price);
+  if (!Number.isFinite(real) || real <= 0) return null;
   if (payload.orderType === 'NET_CREDIT') {
-    const demand = round(payload.price / frac);
+    const demand = round(real / safeFrac);
     const cap = spreadWidth != null ? round(spreadWidth - t) : demand;
-    return Math.min(demand, cap);
+    const sent = Math.min(demand, cap);
+    // We must DEMAND MORE credit than the market is offering. At or below the real ask it can fill.
+    return sent > real ? sent : null;
   }
-  return round(payload.price * frac);
+  const sent = round(real * safeFrac);
+  // We must OFFER LESS than the real price. At or above it, it can fill.
+  return sent < real ? sent : null;
 }
 
 // Record a freshly-sent real order so the poller can track it.
