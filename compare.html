@@ -58,9 +58,23 @@
      CONTENT, so it goes on the table as a margin. */
   .wrap { overflow:auto; padding:8px 14px 40px; }
   .wrap > table { margin-right:40px; }
-  table.grid { border-collapse:separate; border-spacing:6px; }
-  table.grid th { font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
-  table.grid th.rowh { text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
+  /* table-layout:fixed — EVERY COLUMN THE SAME WIDTH. `width:184px` on td.cell is only a PREFERENCE under
+     the automatic table algorithm: a column can never be narrower than its content's minimum, and several
+     things in a cell are deliberately unbreakable (the feature strip is flex-wrap:nowrap, the counts strip
+     and the .cmp baseline line are white-space:nowrap). A variant carrying more features than its
+     neighbours therefore widened its whole column, which is why some columns were visibly fatter and the
+     cells stopped lining up across rows. Fixed layout takes the widths from the header row below and lets
+     the cell's own overflow:hidden clip the tail — the same tradeoff the fixed HEIGHT already makes, and
+     for the same reason: a summary strip may lose its end, the grid may not lose its geometry.
+
+     width:min-content, not auto — with table-layout:fixed and an AUTO width Chrome still sizes the table by
+     content first and then hands the surplus back to whichever columns asked for it, so the columns stayed
+     uneven (measured: 188 / 206 / 204 / 188 / 204 against the 184 asked for). min-content resolves to the
+     sum of the declared column widths, which is exactly the grid we want, and the table still scrolls
+     horizontally inside .wrap when there are more columns than fit. */
+  table.grid { border-collapse:separate; border-spacing:6px; table-layout:fixed; width:min-content; }
+  table.grid th { width:184px; font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
+  table.grid th.rowh { width:62px; text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
   /* FIXED SIZE, not min-height. Every row of a cell is now reserved whether or not it has content (see
      the stateBar / lift / cmp placeholders), so the height is the same at every slider position and the
      grid stops resizing while scrubbing. box-sizing keeps the border and padding inside the number.
@@ -224,7 +238,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.7</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.9.8</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
