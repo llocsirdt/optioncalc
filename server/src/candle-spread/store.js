@@ -49,10 +49,45 @@ function runFilePath(runId) {
   return path.join(RUNS_DIR, `${runId}.json`);
 }
 
-function readRun(runId) {
+// A FILE THAT WILL NOT PARSE IS NOT AN ABSENT FILE. This returned null for both, and initRun reads null
+// as "no run today" and writes a brand-new empty record over the top — so a truncated write (disk full, or
+// the OOM kill this box has a history of) silently destroyed the only copy of a day's positions and
+// started the variant over from zero, mid-session, with real orders already at the broker.
+//
+// `missing` is the ordinary case. `corrupt` carries the parse error so the caller can decide, and the
+// caller must never overwrite it.
+function readRunStatus(runId) {
+  const file = runFilePath(runId);
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(runFilePath(runId), 'utf8'));
-  } catch (_) {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'corrupt', error: (e && e.message) || String(e) };   // exists but unreadable
+  }
+  try {
+    return { state: 'ok', record: JSON.parse(raw) };
+  } catch (e) {
+    return { state: 'corrupt', error: (e && e.message) || String(e), bytes: raw.length };
+  }
+}
+
+function readRun(runId) {
+  const r = readRunStatus(runId);
+  return r.state === 'ok' ? r.record : null;
+}
+
+// Move a file we cannot parse out of the way instead of overwriting it. Returns the quarantine path, or
+// null if even that failed — in which case the caller must not write, because the original is still there.
+function quarantineRun(runId, why) {
+  const file = runFilePath(runId);
+  const dest = path.join(RUNS_DIR, `_corrupt_${runId}_${Date.now()}.json`);
+  try {
+    fs.renameSync(file, dest);
+    console.error(`[candle-spread] CORRUPT RUN FILE ${runId} (${why}) — moved to ${path.basename(dest)}; it was NOT overwritten.`);
+    return dest;
+  } catch (e) {
+    console.error(`[candle-spread] CORRUPT RUN FILE ${runId} (${why}) and it could not be moved aside: ${e && e.message}`);
     return null;
   }
 }
@@ -101,8 +136,21 @@ function writeRun(record) {
 // machine and position list the engine maintains.
 function initRun(config, tradeDate) {
   const runId = makeRunId(config.symbol, config.expiration, tradeDate, config.variant);
-  const existing = readRun(runId);
-  if (existing) return existing;
+  const st = readRunStatus(runId);
+  if (st.state === 'ok') return st.record;
+  let recovered = null;
+  if (st.state === 'corrupt') {
+    // THE DAY'S BOOK IS GONE AND WE ARE MID-SESSION. Do not pretend it is a fresh morning: preserve the
+    // file, say so on the record, and say so in the log. What the engine SHOULD do from here — carry on
+    // blind, or stand down for this variant — is a policy call, not something to decide silently inside a
+    // file reader; the flag is here so whoever makes it can see the case actually happened.
+    recovered = { quarantined: quarantineRun(runId, st.error), error: st.error, bytes: st.bytes || null,
+      at: new Date().toISOString() };
+    if (!recovered.quarantined) {
+      // The bad file is still in place. Writing now would destroy it, which is the whole failure.
+      throw new Error(`candle-spread: run file ${runId} is corrupt and could not be quarantined — refusing to overwrite it`);
+    }
+  }
   const record = {
     runId,
     tradeDate,
@@ -118,6 +166,13 @@ function initRun(config, tradeDate) {
     },
     events: []
   };
+  if (recovered) {
+    record.recoveredFromCorrupt = recovered;
+    record.events.push({ time: new Date().toISOString(), type: 'run_file_corrupt',
+      note: `the previous record for ${runId} would not parse and was moved to ${path.basename(recovered.quarantined)}; `
+        + 'this record starts EMPTY and does not describe any orders placed before now',
+      error: recovered.error, bytes: recovered.bytes });
+  }
   return writeRun(record);
 }
 
@@ -159,6 +214,7 @@ function listRunsSummary() {
 }
 
 module.exports = {
+  readRunStatus, quarantineRun,
   RUNS_DIR,
   summarize,
   makeRunId,
