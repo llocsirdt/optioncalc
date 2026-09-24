@@ -414,6 +414,44 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     ok(deb.atOrThrough === 1 && deb.markLow === 8.00, 'a debit cover still counts against its own target');
   }
 
+  // ---- THE CAPITAL TRIGGER DECIDES DEBIT vs CREDIT ---------------------------------------------------
+  // Replaces two hand-set rules that were never measured: openAlternateEvery (alternate opens on a COUNT)
+  // and creditCoverFrac (cover goes credit when the POSITION is that deep). Neither fires on the thing
+  // they exist to control. A credit cover lands its short leg on the OPEN's short strike, so the pair
+  // collapses to a butterfly and the capital is released — measured live, net capital per position was
+  // -$798 credit-covered against +$953 debit-covered.
+  {
+    const cp = trader.creditPreferred;
+    const on = { capitalRecapture: true, creditCapitalTrigger: 500 };
+
+    // UNSET -> the legacy expression is returned untouched, in BOTH directions. This is what makes the
+    // flag inert for any variant that does not carry it.
+    ok(cp({ cashDeployed: 9999 }, { capitalRecapture: true }, false) === false, 'trigger unset returns legacy false');
+    ok(cp({ cashDeployed: 0 }, { capitalRecapture: true }, true) === true, 'trigger unset returns legacy true');
+    ok(cp({ cashDeployed: 9999 }, {}, true) === true, 'and does not require capitalRecapture to pass legacy through');
+
+    // SET -> the legacy expression is ignored entirely and only deployed capital decides.
+    ok(cp({ cashDeployed: 499 }, on, true) === false, 'below the trigger: DEBIT even when legacy said credit');
+    ok(cp({ cashDeployed: 500 }, on, false) === true, 'at the trigger: CREDIT even when legacy said debit');
+    ok(cp({ cashDeployed: 5000 }, on, false) === true, 'well above the trigger: CREDIT');
+    ok(cp({ cashDeployed: -2000 }, on, true) === false,
+      'a NET CREDIT book does not take more credit — the point is to reclaim, not to bias');
+
+    // capitalRecapture is still the master switch.
+    ok(cp({ cashDeployed: 9999 }, { capitalRecapture: false, creditCapitalTrigger: 500 }, true) === false,
+      'capitalRecapture off means never credit, whatever the capital');
+
+    // THE THERMOSTAT: credit switches on crossing up and off crossing back down, from the same state.
+    const st = { cashDeployed: 0 };
+    const seen = [];
+    for (const cash of [0, 300, 600, 900, 400, 100]) { st.cashDeployed = cash; seen.push(cp(st, on, false) ? 'C' : 'D'); }
+    ok(seen.join('') === 'DDCCDD', `it oscillates around the threshold (got ${seen.join('')})`);
+
+    // Missing/!absent state must not throw or silently read as credit.
+    ok(cp(null, on, false) === false, 'no state reads as zero deployed, not as credit');
+    ok(cp({}, on, false) === false, 'state with no ledger yet reads as zero deployed');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);

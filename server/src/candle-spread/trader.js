@@ -90,7 +90,7 @@ function resolveLegs(legs, getLeg) {
 // deep-ITM cover) — the live analog of resolveRestingCovers' mark<=target rule. Shared by the
 // reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
 // machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
-async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note, minLock) {
+async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note, minLock, st) {
   const W = cfg.spreadWidth, tick = cfg.tickIncrement;
   // minLock (price units, 0 unless the caller is CONTINUOUS COVERING): the resting target is the price
   // that still LOCKS A REAL PROFIT, not bare break-even. Resting at break-even (W − openCost) fills the
@@ -104,9 +104,11 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // debit-canonical (pendingCover.legs) so the floor + settlement P&L are right for the position's own
   // style; only the SENT order + the cash ledger differ. Wing-shift books/settles at the wider wing.
   let style = 'debit', wing = W, shift = 0, anchor = pos.shortStrike;
-  if (deps.capitalRecapture === true) {
+  {
     const m = coverMarkNow(pos.legs, deps.getLeg);
-    if (m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W) style = 'credit';
+    const legacy = deps.capitalRecapture === true
+      && m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W;
+    if (creditPreferred(st, deps, legacy)) style = 'credit';
   }
   if (deps.enforceLegUniqueness && deps._ledger) {
     const rc = LL.resolveCover(pos.side, pos.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
@@ -289,7 +291,7 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
     const plan = selectCoverFixedMark(p, cfg, deps.getLeg);
     if (plan.error) { tried.add(p.id); continue; }   // can't price its cover right now; don't retry it
     if (cfg.coverFillModel === 'resting') {
-      await placeRestingCover(p, plan, cfg, deps, candleTime, decisions, 'cover-to-stack');
+      await placeRestingCover(p, plan, cfg, deps, candleTime, decisions, 'cover-to-stack', undefined, st);
     } else {
       await deps.placeOrder(plan.payload, { kind: 'cover', of: p.id, legs: plan.legs, limit: plan.limit, mark: plan.mark, note: 'cover-to-stack' });
       p.covered = true; p.coverId = nextId('cov'); p.coverLimit = plan.limit; p.coverLegs = plan.legs;
@@ -336,7 +338,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   // 2) resolve the winner's cover (prefer CREDIT reclaim on a deep-ITM winner; twin → wing-shift → skip)
   const plan = selectCoverFixedMark(winner, cfg, deps.getLeg);
   if (plan.error) return false;
-  const wantCredit = cand.m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W;
+  const wantCredit = creditPreferred(st, deps, cand.m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W);
   const rc = LL.resolveCover(winner.side, winner.shortStrike, W, deps._ledger, { preferStyle: wantCredit ? 'credit' : 'debit', incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
   if (rc.resolution === 'skip') return false;
   const coverSentLegs = (rc.style === 'debit' && rc.wing === W) ? plan.legs : CL.coverLegsFor(winner.side, winner.shortStrike, rc.wing, rc.style);
@@ -352,7 +354,8 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   // against the lock. Nothing touches the REAL ledger until we commit below → a bail is a clean rollback.
   const tempLedger = LL.makeLegLedger({ ...(st.legLedger || {}) });
   tempLedger.record(rc.legs);
-  const wantCreditOpen = deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1;
+  const wantCreditOpen = creditPreferred(st, deps,
+    deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1);
   const rr = LL.resolveOpen(openSide, res.lower, res.upper, tempLedger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCreditOpen ? 'credit' : 'debit' });
   if (rr.resolution === 'skip') return false;                      // can't place open cleanly → sequential fallback (real ledger untouched)
   const openBook = rr.resolution === 'shift' ? buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg) : res;
@@ -462,7 +465,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   const altEvery = deps.openAlternateEvery || 3;
   // Send style: the leg-uniqueness resolver's choice when enforcing (it took the recapture preference but
   // may have flipped to the twin); otherwise the recapture alternation; otherwise debit.
-  const style = legStyle || ((deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
+  const style = legStyle || (creditPreferred(st, deps,
+    deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
   let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
   if (style === 'credit') {
     const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark);
@@ -1102,7 +1106,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         decisions.push({ action: 'cover-arm-opportunity', positionId: pos.id, cost, locked: round2(locked),
           ratio: round2(locked / cost), geometry: plan.geometry });
       }
-      await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock);
+      await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock, st);
     }
   }
 
@@ -1125,7 +1129,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       if (cfg.coverFillModel === 'resting') {
         // RESTING model: place a working cover at the ideal target (= width − openCost); don't book
         // the floor yet — resolveRestingCovers fills it when the real mark reaches target.
-        await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions);
+        await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, undefined, undefined, st);
       } else {
         // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
         const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
@@ -1161,7 +1165,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       const m = coverMarkNow(pos.legs, deps.getLeg);
       if (m != null && m >= deps.proactiveCoverFrac * cfg.spreadWidth) {
         const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);
-        if (!plan.error && cfg.coverFillModel === 'resting') await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'proactive-deep-itm');
+        if (!plan.error && cfg.coverFillModel === 'resting') await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'proactive-deep-itm', undefined, st);
       }
     }
   }
@@ -1187,7 +1191,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     // correctly. ideal → parity twin (same strikes) → shift → skip. legStyle drives the actual send.
     let legStyle = null, legSkipped = false;
     if (deps.enforceLegUniqueness && deps._ledger && !res.error && res.limit > 0) {
-      const wantCredit = deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1;
+      const wantCredit = creditPreferred(st, deps,
+        deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1);
       // openNeverOtm: an initial order must not START fully out of the money. Adaptive placement already
       // guarantees it; without this the shift below rebuilt at the shifted strikes and could cross out.
       const allow = deps.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(openSide, lo, hi, underlying)) : undefined;
@@ -1729,6 +1734,32 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
+// SHOULD THIS ORDER BE SENT AS CREDIT? One answer, called from all five decision sites, because this is
+// precisely the shape that has drifted here before: a rule implemented per-site ends up meaning five
+// slightly different things and nobody notices until the telemetry disagrees with itself.
+//
+// `creditCapitalTrigger` (dollars) replaces two hand-set rules that were never measured —
+// `openAlternateEvery` (alternate opens on a COUNT) and `creditCoverFrac` (cover goes credit when the
+// POSITION is that deep). Neither fires on the thing they exist to control. A CREDIT cover lands its short
+// leg on the OPEN's short strike, so the pair collapses to a butterfly and the capital is released; a
+// DEBIT cover shares no strike and stacks both debits. Measured live 2026-09-18/21/22: net capital per
+// position -$798 credit-covered against +$953 debit-covered.
+//
+// The trigger is a THERMOSTAT: pay debits until deployment reaches the threshold, then take credits until
+// it falls back. Deliberately NOT "always credit" — the user's rule, 2026-09-23: "negative capital is just
+// a number, going negative is no better than keeping near zero, so no reason to intentionally bias toward
+// credits beyond just recapturing the capital already laid out."
+//
+// Reads st.cashDeployed, which books at the FILL (see noteCash), so it is capital actually deployed rather
+// than capital merely ordered. `legacy` is the existing per-site expression and is returned UNCHANGED when
+// the trigger is unset, so every variant without it behaves exactly as before.
+function creditPreferred(st, deps, legacy) {
+  const trig = deps && deps.creditCapitalTrigger;
+  if (!(trig > 0)) return legacy;
+  if (deps.capitalRecapture !== true) return false;
+  return ((st && st.cashDeployed) || 0) >= trig;
+}
+
 // SIGNED CASH LEDGER — one entry point, so every order type books the same way and at the same moment.
 // +paid debit, -received credit. Does NOT touch P&L; it is the pure capital view behind /status
 // cashDeployed / peakCashDeployed.
@@ -2366,6 +2397,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   noteCash,
+  creditPreferred,
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested

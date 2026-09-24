@@ -602,6 +602,11 @@ function applyLadderCfg(v) {
 // tightening there shrinks P&L and drawdown proportionally — it buys a smaller worst DAY and nothing
 // risk-adjusted. Every W=40 arm still draws $20k-$90k at every rung. The day is bounded; the month is
 // not. Narrowing the spread is the lever at that width, not the cap.
+// CAPITAL TRIGGER, as a factor of width x 100. Env-overridable so it can be dialled or switched off
+// without a deploy; 0 disables it and restores openAlternateEvery + creditCoverFrac exactly.
+const CREDIT_TRIGGER_XW = process.env.CANDLE_SPREAD_CREDIT_TRIGGER_XW != null
+  ? Number(process.env.CANDLE_SPREAD_CREDIT_TRIGGER_XW) : 0.25;
+
 const TUNED_CAPS = new Map([
   // W=10
   ['v5-10', 1500],
@@ -666,6 +671,11 @@ function applyExperiments(v, { capPreset = true } = {}) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
     v.lossTarget = Math.round(0.7 * v.lossMax);
   }
+  // CAPITAL TRIGGER — dollars, scaled by width so one setting means the same thing at W=10/20/40 (the
+  // reasoning that made ladder stepDollars beat a fixed step count). Measured 12 variants x 400 days:
+  // peak capital $3,930 -> $1,631 (-58%) with P&L identical to the dollar and FEWER credit orders than
+  // today (51% vs 79%). Wins on all 12 individually. Set to 0/null to fall back to the old hand-set rules.
+  if (CREDIT_TRIGGER_XW > 0) v.creditCapitalTrigger = Math.round(CREDIT_TRIGGER_XW * v.spreadWidth * 100);
   // MEASURED CAP LAST, so it wins over both the width-derived generic and the CAPPRES preset — it is the
   // only one of the three backed by a 765-day measurement of this exact variant. It moves v7-10 off the
   // preset's $1,000 to its measured peak $1,500 (+19% P&L, ret/DD 809 -> 850) and v7-40 from $4,000 DOWN
@@ -1232,6 +1242,10 @@ function buildEngineDeps(run, live) {
       coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
       // CONTINUOUS COVERING (ported from the backtest 2026-09-04) — the covering POLICY, not a risk cap.
       continuousCover: run.continuousCover, continuousCoverMinLockFrac: run.continuousCoverMinLockFrac,
+      // CAPITAL TRIGGER — credit orders fire to RECLAIM deployed capital rather than on a counter
+      // (openAlternateEvery) or a depth (creditCoverFrac). Like every engine opt it MUST be listed here
+      // or the flag is a silent live no-op; the variant contract asserts exactly that.
+      creditCapitalTrigger: run.creditCapitalTrigger,
       // DAY-LOSS GOVERNOR — bounds the BOOK FLOOR (the day's true max loss), not at-risk debit.
       lossTarget: run.lossTarget, lossMax: run.lossMax,
       // FLOOR RATCHET — bounds the RETREAT FROM THE PEAK floor, which the governor structurally cannot
