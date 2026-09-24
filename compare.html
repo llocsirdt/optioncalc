@@ -79,8 +79,11 @@
   /* SIGN BORDER — the first question anyone asks of this grid is who is up and who is down, and that was
      only answerable by reading each cell's numbers. Border, not background, so it stacks with the
      watchlist lift and does not fight the setup strip. Armed keeps its amber border (declared later). */
-  td.cell.pos  { border-color:#7cc6ac; }
-  td.cell.neg  { border-color:#e79a97; }
+  /* 2px, so the sign reads at a glance across 50 cells instead of needing a second look. The cell is
+     border-box with a fixed height, so the extra pixel comes out of the content box and the grid geometry
+     does not move — a neutral cell keeps its 1px hairline and stays exactly the same size. */
+  td.cell.pos  { border-color:#7cc6ac; border-width:2px; }
+  td.cell.neg  { border-color:#e79a97; border-width:2px; }
   td.cell.armed{ border-color:#e2a33c; box-shadow:inset 0 0 0 1px #e2a33c; }
   td.cell .stateBar { height:3px; border-radius:2px; margin:-1px 0 2px; }
   td.cell .stateBar.fav  { background:#8bc34a; }
@@ -221,7 +224,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.6</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.9.7</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
