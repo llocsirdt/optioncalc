@@ -89,18 +89,55 @@ function dayIsComplete(day) {
 }
 // Today in ET, so a partial cache for a PAST date can be thrown away and rebuilt while today's stays
 // usable (rebuilding it every request would hammer Schwab for a day that is still moving anyway).
-function etToday() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+function etToday(nowMs) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(nowMs == null ? Date.now() : nowMs));
+}
+
+// The bar interval this dataset was built at, read off the data rather than assumed.
+function barStepMin(bars) {
+  if (!bars || bars.length < 2) return 5;
+  const t = (b) => (b && (b.dt != null ? b.dt : b.datetime));
+  const d = Math.round((t(bars[bars.length - 1]) - t(bars[bars.length - 2])) / 60000);
+  return Number.isFinite(d) && d > 0 && d <= 60 ? d : 5;
+}
+
+// IS THIS CACHED DAY AS COMPLETE AS IT COULD BE RIGHT NOW?
+//
+// The old test was `!dayIsComplete(j) && date < etToday()` — "keep any partial for TODAY, because today is
+// still moving and rebuilding every request would hammer Schwab". That reasoning holds only while the
+// session is genuinely still moving. It is wrong from 16:00 ET until midnight, and wrong ALL DAY in a
+// subtler way: a stump built at 09:55 was served unchanged at 15:00 with 62 bars missing.
+//
+// Observed on 2026-09-23 at 23:40 ET: the on-demand backtest returned FIVE bars (09:35 -> 09:55) and 3
+// positions for a session the live engine ran to 76 bars and 22 positions, because the cache entry written
+// at 09:55 that morning was still `date === etToday()` and so still "fresh".
+//
+// The honest question is whether the tape has moved past the last bar we hold. It has once the next bar
+// would have closed, and after the close the yardstick stops at 15:55 so an incomplete day is always stale.
+// `nowMs` is injectable so the rule can be tested at a chosen moment of the session rather than only at
+// whatever time the suite happens to run.
+function cachedDayIsStale(j, date, nowMs) {
+  if (dayIsComplete(j)) return false;          // a finished day never goes stale
+  const now = nowMs == null ? Date.now() : nowMs;
+  const today = etToday(now);
+  if (date !== today) return true;             // a past session that never completed, or a future date
+  const bars = j.bars || [];
+  const last = bars[bars.length - 1];
+  const lastT = last && (last.dt != null ? last.dt : last.datetime);
+  if (!Number.isFinite(lastT)) return true;
+  const lastMin = etMinuteOf(lastT);
+  const nowMin = Math.min(etMinuteOf(now), LAST_ACTION_MIN);
+  return nowMin >= lastMin + barStepMin(bars);
 }
 
 function readCachedDay(date) {
   try {
     const j = JSON.parse(fs.readFileSync(cacheFile(date), 'utf8'));
     if (!j || !Array.isArray(j.bars) || !j.bars.length) return null;
-    // A partial cache written during a session that has since ENDED is wrong and will stay wrong, so drop
-    // it and let the caller rebuild. Self-heals the entries already poisoned by the old behaviour without
-    // needing anyone to clear the cache directory by hand.
-    if (!dayIsComplete(j) && date < etToday()) {
+    // A partial cache the tape has moved past is wrong and will stay wrong, so drop it and let the caller
+    // rebuild. Self-heals entries already poisoned by the old behaviour without anyone clearing the cache
+    // directory by hand.
+    if (cachedDayIsStale(j, date)) {
       try { fs.unlinkSync(cacheFile(date)); } catch (e) { /* best effort */ }
       return null;
     }
@@ -280,5 +317,4 @@ function availableDates() {
   return [...new Set(out)].sort();
 }
 
-module.exports = {
-  dayIsComplete, runDayRecord, availableDates, iso };
+module.exports = { cachedDayIsStale, dayIsComplete, runDayRecord, availableDates, iso };
