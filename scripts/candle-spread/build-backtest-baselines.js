@@ -54,7 +54,14 @@ const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('
 // The mapping lives in server/src/candle-spread/backtest/opts-for.js so every consumer shares it —
 // see the note there on why hand-copied versions of this kept silently dropping capabilities.
 const { optsFor: buildOpts } = require('../../server/src/candle-spread/backtest/opts-for');
-const optsFor = (v) => buildOpts(v, { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS, where: 'build-backtest-baselines optsFor' });
+// The slip is folded in HERE, not at the call site. This wrapper took ONE argument, so a second argument
+// passed by a caller was silently discarded — a 5-arm, 50-minute sweep returned byte-identical tables for
+// slip 0 through 4 because every arm was really the control. Exactly the local-wrapper-swallows-the-option
+// failure this repo keeps meeting. One place to set it means no call site can forget it.
+// ORDER_SLIP is declared below; this body only runs when called, long after.
+const optsFor = (v) => buildOpts(v, { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS,
+  where: 'build-backtest-baselines optsFor',
+  ...(typeof ORDER_SLIP !== 'undefined' && ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : {}) });
 
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
 
@@ -140,8 +147,29 @@ if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
   process.exit(2);
 }
 
+// PROVE THE ARM IS ARMED BEFORE SPENDING TEN MINUTES ON IT. The sweep above produced five identical
+// tables and looked like a clean null result; it was a plumbing bug. An experiment that cannot show its
+// treatment reached the engine has not produced a null result, it has produced nothing.
+function assertSlipArmed() {
+  if (ORDER_SLIP == null) return;
+  const probe = optsFor(RUNS[0]);
+  if (probe.orderSlipTicks !== ORDER_SLIP) {
+    console.error(`\n  ✗ --orderSlipTicks ${ORDER_SLIP} did not reach optsFor (got ${probe.orderSlipTicks}).`);
+    console.error('    Every arm would be the control. Refusing to run. Exiting 2.\n');
+    process.exit(2);
+  }
+  const g = probe.geo && probe.geo.buildOpen && probe.geo.buildOpen('bull', 30000, 0.02, 0.18);
+  const base = buildOpts(RUNS[0], { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS, where: 'arm-check' });
+  const b = base.geo && base.geo.buildOpen && base.geo.buildOpen('bull', 30000, 0.02, 0.18);
+  console.log(`  ARM CHECK: ${RUNS[0].variant} open at S=30000 prices ${b && b.limit} -> ${g && g.limit} with ${ORDER_SLIP} tick(s)`);
+  if (ORDER_SLIP > 0 && g && b && g.limit <= b.limit) {
+    console.error(`\n  ✗ ${ORDER_SLIP} ticks of slip did not RAISE the open price. Refusing to run. Exiting 2.\n`);
+    process.exit(2);
+  }
+}
+
 function computeVariant(run) {
-  const fn = wrap(run), opts = optsFor(run, ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : undefined);
+  const fn = wrap(run), opts = optsFor(run);
   const results = days.map(d => runDay5m(d.bars, fn, opts));
   const daily = results.map(r => r.terminal);
   const s = stats(daily);
@@ -209,6 +237,7 @@ if (SLICE != null) {
   process.exit(0);
 }
 
+assertSlipArmed();
 console.log(`  pricing: ${HAS_PX ? 'cash NDX (px series) — signals off /NQ' : 'the signal series itself (single-instrument dataset)'}`);
 console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}`
   + `${ORDER_SLIP != null ? ` · ORDER SLIP ${ORDER_SLIP} tick(s) over the ceiled mark` : ' · order slip OFF (legacy rounding)'}\n`);
