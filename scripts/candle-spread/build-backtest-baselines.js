@@ -129,8 +129,19 @@ const SLICE_OF = si >= 0 ? Number(process.argv[si + 2]) : null;
 const soi = process.argv.indexOf('--_out');
 const SLICE_OUT = soi >= 0 ? process.argv[soi + 1] : null;
 
+// --orderSlipTicks N — pay N ticks over the CEILED mark on every open, fleet-wide, mirroring the live
+// engine's trader.buildOpenAtStrikes. Absent = this engine's historical rounding, so the committed
+// baselines still reproduce exactly. Set here rather than on the roster so one sweep can move all 80
+// variants without editing the variant contract.
+const osi = process.argv.indexOf('--orderSlipTicks');
+const ORDER_SLIP = osi >= 0 ? Number(process.argv[osi + 1]) : null;
+if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
+  console.error(`--orderSlipTicks ${process.argv[osi + 1]} is not a non-negative number`);
+  process.exit(2);
+}
+
 function computeVariant(run) {
-  const fn = wrap(run), opts = optsFor(run);
+  const fn = wrap(run), opts = optsFor(run, ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : undefined);
   const results = days.map(d => runDay5m(d.bars, fn, opts));
   const daily = results.map(r => r.terminal);
   const s = stats(daily);
@@ -199,7 +210,8 @@ if (SLICE != null) {
 }
 
 console.log(`  pricing: ${HAS_PX ? 'cash NDX (px series) — signals off /NQ' : 'the signal series itself (single-instrument dataset)'}`);
-console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}\n`);
+console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}`
+  + `${ORDER_SLIP != null ? ` · ORDER SLIP ${ORDER_SLIP} tick(s) over the ceiled mark` : ' · order slip OFF (legacy rounding)'}\n`);
 console.log('variant'.padEnd(16) + 'avg/day'.padEnd(11) + 'median'.padEnd(11) + 'stdev'.padEnd(11) + 'worstDay'.padEnd(12) + 'avgWorst'.padEnd(12) + 'neg/win');
 console.log('-'.repeat(78));
 
@@ -215,7 +227,9 @@ if (WORKERS > 1) {
   try {
     await Promise.all(Array.from({ length: WORKERS }, (_, k) => new Promise((resolve, reject) => {
       const outFile = path.join(tmp, `slice-${k}.json`);
-      const ch = spawn(process.execPath, [__filename, ...base, '--_slice', String(k), String(WORKERS), '--_out', outFile], { stdio: ['ignore', 'inherit', 'inherit'] });
+      const ch = spawn(process.execPath, [__filename, ...base,
+        ...(ORDER_SLIP != null ? ['--orderSlipTicks', String(ORDER_SLIP)] : []),
+        '--_slice', String(k), String(WORKERS), '--_out', outFile], { stdio: ['ignore', 'inherit', 'inherit'] });
       ch.on('error', reject);
       ch.on('close', (code) => {
         if (code !== 0) return reject(new Error(`worker ${k} exited ${code}`));

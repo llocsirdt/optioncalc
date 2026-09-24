@@ -111,9 +111,16 @@ function optsFor(v, env) {
   // numerically identical for that case; passing it explicitly keeps them from drifting apart again.
   // ADAPTIVE PLACEMENT is the shipped default: walk to the most ITM placement still inside the
   // ceiling instead of always taking one fixed offset. `-cATM` controls keep the fixed geometry.
+  // ORDER SLIP — mirrors trader.buildOpenAtStrikes: ceil the mark to the tick, then pay `orderSlipTicks`
+  // over it, bounded by the ceiling. `env.orderSlipTicks` lets a SWEEP set it for every variant at once
+  // without touching the roster; a per-variant value wins. Absent on both = this engine's historical
+  // rounding, so every committed baseline still reproduces exactly.
+  const slip = v.orderSlipTicks != null ? v.orderSlipTicks
+    : (env && env.orderSlipTicks != null) ? env.orderSlipTicks : null;
   o.geo = v.adaptiveGeo
-    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3 })
-    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined });
+    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip })
+    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip });
+  if (slip != null) o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
   // silently prices NDX options off NQ. Set from the data, so it cannot be forgotten per-dataset.

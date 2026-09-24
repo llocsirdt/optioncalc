@@ -30,7 +30,35 @@ const legsMark = eng.legsMark, round2 = eng.round2, roundTick = eng.roundTick, T
 // cap from binding on ITM spreads, which is unnecessary once the cap refuses instead of prices.
 // Grid note: legs land on the `incr` grid only when W/2 and shift are multiples of incr (e.g. $10 ATM
 // is off a 10-grid → use a shift or incr:5; $20/$40/$60 ATM are fine).
-function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
+// ── ORDER SLIP — the price paid to actually GET FILLED ──────────────────────────────────────────────
+//
+// The live engine books an open at `ceilToTick(mark) + orderSlipTicks * tick`, capped by the ceiling
+// (trader.buildOpenAtStrikes). This engine booked it at `roundTick(mark)`, so it differed from live on
+// TWO axes even with the slip at zero:
+//
+//   CEIL vs ROUND — rounding to the NEAREST tick puts the limit BELOW the mark for 40 of every 100
+//     one-cent marks (8.22 -> 8.20). Harmless while opens book on assumption; the moment they are
+//     price-tested that is a non-marketable order. Live ceils for exactly this reason, and its note says
+//     so: "we do not make money on opens; we make it on covers, and a cover needs an open that filled."
+//   SLIP — live can pay N ticks OVER the mark to cross. ORDER_SLIP_DEFAULT is 0 and no variant sets
+//     orderSlipTicks, so live pays none today either; the flag exists and is inert.
+//
+// `orderSlipTicks: null | undefined` keeps this engine's historical behaviour EXACTLY (round, no slip) so
+// every committed baseline still reproduces. A NUMBER switches to the live rule: ceil, plus that many
+// ticks. So slip 0 is "ceil only" and isolates the rounding axis from the paying-up axis.
+// `legacyRound` is the EXACT rounding each call site used before this existed, and it is a parameter
+// rather than a default because the two builders did NOT agree: makeGeo used round2 (no tick snap at all)
+// and makeAdaptiveGeo used roundTick. Collapsing both onto one of them moved the committed baseline by
+// $19,820 on v6-20 alone — caught by the graded-total check, which the engine anchor cannot see because
+// the anchor path takes no pricing flags. The legacy branch must reproduce each site byte-for-byte.
+const ceilTick = (p) => Math.round(Math.ceil((p / TICK) - 1e-9) * TICK * 100) / 100;
+function openLimitOf(mark, slipTicks, cap, legacyRound) {
+  if (slipTicks == null) return Math.max(TICK, legacyRound(mark));       // byte-identical to before
+  const px = round2(ceilTick(mark) + Math.max(0, slipTicks) * TICK);
+  return Math.max(TICK, cap != null ? Math.min(px, round2(cap)) : px);   // paying up never beats the ceiling
+}
+
+function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks = null }) {
   const cf = capFrac;
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
@@ -49,7 +77,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
     // we had rested a bid at the ceiling instead?" is a MEASURABLE question, and it cannot be answered
     // without knowing which spread was turned down. See measure-declined-opens.js.
     if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark), legs, shortStrike: side === 'bull' ? hi : lo, restLimit: round2(width * cf) };
-    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: Math.max(TICK, round2(mark)), fracOfWidth: mark / width };
+    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: openLimitOf(mark, orderSlipTicks, width * cf, round2), fracOfWidth: mark / width };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'
     ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
@@ -73,7 +101,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65 }) {
 // IMPORTANT: this prices at the REAL mark of the chosen placement — the ceiling changes WHICH STRIKES we
 // trade, which is what the user actually does. makeGeo now honours the same "never book sub-market" rule,
 // but being a FIXED geometry it can only decline; here we walk the placement toward the money first.
-function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1 }) {
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = null }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
   // the least-ITM placement available — still never OTM.
@@ -107,10 +135,10 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
               : [{ side: 'long', type: 'P', strike: hiJ }, { side: 'short', type: 'P', strike: loJ }];
             const markJ = legsMark(legsJ, S, tau, iv);
             if (!(markJ > 0) || markJ > (maxDebitFrac + capFlexFrac) * width) continue;
-            return { legs: legsJ, shortStrike: sJ, limit: Math.max(TICK, roundTick(markJ)), itmStrikes: -j, fracOfWidth: markJ / width, capFlexed: true };
+            return { legs: legsJ, shortStrike: sJ, limit: openLimitOf(markJ, orderSlipTicks, (maxDebitFrac + capFlexFrac) * width, roundTick), itmStrikes: -j, fracOfWidth: markJ / width, capFlexed: true };
           }
         }
-        return { legs, shortStrike, limit: Math.max(TICK, roundTick(mark)), itmStrikes: -k, fracOfWidth: mark / width };
+        return { legs, shortStrike, limit: openLimitOf(mark, orderSlipTicks, maxDebitFrac * width, roundTick), itmStrikes: -k, fracOfWidth: mark / width };
       }
     }
     // Every placement from deep-ITM through straddle is above the ceiling → decline rather than overpay.
