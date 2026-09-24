@@ -452,6 +452,31 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     ok(cp({}, on, false) === false, 'state with no ledger yet reads as zero deployed');
   }
 
+  // ---- THE COVER'S MONEY MATH -----------------------------------------------------------------------
+  {
+    const W = 20;
+    const payoff = (ls, S) => ls.reduce((a, l) => a + (l.side === 'long' ? 1 : -1)
+      * (l.type === 'C' ? Math.max(0, S - l.strike) : Math.max(0, l.strike - S)), 0);
+    // A tent's guaranteed value is min(openWidth, coverWidth) — demonstrated rather than asserted.
+    const tentMin = (K1, K2, K3) => {
+      const ls = [{ side: 'long', type: 'C', strike: K1 }, { side: 'short', type: 'C', strike: K2 },
+        { side: 'short', type: 'P', strike: K2 }, { side: 'long', type: 'P', strike: K3 }];
+      let m = Infinity; for (let S = K1 - 200; S <= K3 + 200; S += 1) m = Math.min(m, payoff(ls, S));
+      return m;
+    };
+    ok(tentMin(21980, 22000, 22030) === 20, 'a WIDER cover leaves the floor at the open width (20)');
+    ok(tentMin(21980, 22000, 22020) === 20, 'an equal-width cover likewise');
+    ok(tentMin(21970, 22000, 22010) === 10, 'a NARROWER cover drops it to the cover width (10)');
+    ok(Math.min(20, 30) === tentMin(21980, 22000, 22030), 'min(openW, coverW) is the rule, for the wider case');
+    ok(Math.min(30, 10) === tentMin(21970, 22000, 22010), 'and for the narrower case');
+
+    // A credit cover's CASH is the credit received, which is cw - fill, not the ask it went out at.
+    const cw = 20, ask = 12.95, fill = 6.80;      // booked debit-canonically at 6.80 => received 13.20
+    const got = Math.round((cw - fill) * 100) / 100;
+    ok(got === 13.20, `credit received is cw - fill (${got}), not the ask`);
+    ok(got > ask, 'and a cover can fill BETTER than it asked — which is why the two differ');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);

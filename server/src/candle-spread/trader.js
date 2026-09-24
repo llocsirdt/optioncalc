@@ -2424,12 +2424,38 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // instant cannot produce, which is exactly how you could tell the stamp was not the fill time.
     // Recorded separately so the table can say when, without moving what the chart plots.
     pos.coverFilledAt = deps && deps.nowMs != null ? deps.nowMs : null;
-    const floor = round2((cfg.spreadWidth - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
+    // THE GUARANTEED VALUE OF A TENT IS min(openWidth, coverWidth), not the configured width.
+    //
+    // Open long K1/K2 (width W1) plus cover long K2/K3 (width W2) is worth W2 below K1, W1+W2 at K2 and
+    // W1 above K3 — so the floor is min(W1, W2) minus what both cost. Using cfg.spreadWidth is right
+    // whenever the cover is the same width or WIDER (min is then W1 = cfg.spreadWidth) and OVERSTATES by
+    // (W1 - W2) x 100 when the cover is narrower.
+    //
+    // Checked against the whole archive before changing anything: 9,120 covers at the same width, 272
+    // WIDER, and ZERO narrower — so this has never been wrong, exactly as the resolver's constant-width
+    // slide intends. The review that raised it proposed using the COVER's width, which would have
+    // overstated those 272 by (W2 - W1) x 100 each. Written as the min so it stays correct by
+    // construction if the resolver ever slides at a different width.
+    const ck2 = (pc.legs || []).map((l) => l.strike);
+    const cw2 = ck2.length ? Math.max(...ck2) - Math.min(...ck2) : cfg.spreadWidth;
+    const floorW = Math.min(cfg.spreadWidth, cw2);
+    const floor = round2((floorW - pos.limit - fill) * 100 * (pos.quantity || cfg.quantity));
     st.realizedPnl = round2(st.realizedPnl + floor);
     // Signed cash ledger: a credit cover RECLAIMS ~width cash (-), a debit cover PAYS the fill (+). Does
     // not touch P&L — the floor above is booked from the debit-canonical target either way.
     const q = pos.quantity || cfg.quantity;
-    const cashDelta = pc.sentNet === 'CREDIT' ? -(pc.sentCredit || 0) * 100 * q : fill * 100 * q;
+    // CASH AT THE FILL, NOT THE ASK. sentCredit is what the order ASKED for; the credit actually RECEIVED
+    // is `cw - fill` by the same parity the fill was booked through, and a cover can fill better than its
+    // ask. book-value.js already values the cover from the fill (`cCost = -(cw - coverLimit)`), so the
+    // two disagreed by exactly that difference — measured across the archive's credit covers, up to $237
+    // each and $22,577 in total, always overstating the cash reclaimed.
+    //
+    // This matters more since c6e9c24: cashDeployed is what creditCapitalTrigger reads to decide whether
+    // the next order goes out as a debit or a credit, so an overstated reclaim makes the engine think it
+    // has freed capital it has not.
+    const creditGot = creditRest ? round2(cw2 - fill) : null;
+    const cashDelta = pc.sentNet === 'CREDIT' ? -(creditGot != null ? creditGot : (pc.sentCredit || 0)) * 100 * q
+      : fill * 100 * q;
     noteCash(st, cashDelta);
     pos.coverSentNet = pc.sentNet;
     // PERSIST THE CREDIT ACTUALLY ASKED. The cover books and tests entirely in DEBIT-canonical space,
