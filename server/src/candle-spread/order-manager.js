@@ -114,15 +114,60 @@ function trackOrder(record, o) {
   });
 }
 
-// Best-effort extraction of an average fill price from a Schwab orderById response.
-function extractFillPrice(resp) {
+// THE NET PRICE OF THE SPREAD, not the price of one of its legs.
+//
+// This used to return `executionLegs[0].price` — the execution price of whichever leg Schwab happened to
+// list first. Every order this engine sends is a NET order on 2, 3 or 4 legs, so leg 0's price is the
+// price of a single option (say $76.00 for a deep-ITM call) while the spread filled at $8.05. That number
+// was written to o.fillPrice and logged as "broker FILLED @ 76" — the one figure that says what a real
+// order actually cost, off by an order of magnitude and in a direction that flatters nothing
+// consistently. It is inert while sends are unfillable test orders; it is the record of record the moment
+// the account is funded.
+//
+// The net is Σ ±price × legQty over the execution legs, signed by each leg's INSTRUCTION (a buy pays, a
+// sell receives) and divided by the ORDER's quantity — per-leg quantity is not the order quantity when a
+// leg carries a ratio, which a butterfly's double body does. Instructions live on orderLegCollection and
+// join to executionLegs by legId.
+//
+// Returns { net, price, side } — `price` is the magnitude, to compare against the limit we sent, and
+// `side` says which direction it actually filled. Falls back to the ORDER's own net price (resp.price,
+// which for a NET_DEBIT/NET_CREDIT order is exactly this quantity) and only then gives up. It no longer
+// falls back to a leg price at all: a wrong number here is worse than none.
+function extractFillNet(resp) {
   if (!resp) return null;
-  const acts = resp.orderActivityCollection || [];
-  for (const a of acts) {
-    const legs = a.executionLegs || [];
-    if (legs.length && legs[0].price != null) return Number(legs[0].price);
+  const orderQty = Number(resp.quantity) > 0 ? Number(resp.quantity) : 1;
+  const sideOf = {};
+  for (const l of resp.orderLegCollection || []) {
+    if (l && l.legId != null) sideOf[String(l.legId)] = /^BUY/i.test(String(l.instruction || '')) ? 1 : -1;
   }
-  return resp.price != null ? Number(resp.price) : null;
+  let net = 0, seen = 0, unknown = 0;
+  for (const a of resp.orderActivityCollection || []) {
+    for (const l of a.executionLegs || []) {
+      if (!l || l.price == null) continue;
+      const sgn = sideOf[String(l.legId)];
+      if (sgn == null) { unknown++; continue; }          // cannot sign it -> cannot net it
+      const q = Number(l.quantity);
+      net += sgn * Number(l.price) * (Number.isFinite(q) && q > 0 ? q : orderQty);
+      seen++;
+    }
+  }
+  // Every executed leg must be signable, or the sum is a partial one dressed as a total.
+  if (seen && !unknown) {
+    const per = Math.round((net / orderQty) * 100) / 100;
+    return { net: per, price: Math.abs(per), side: per < 0 ? 'CREDIT' : 'DEBIT', from: 'executionLegs' };
+  }
+  if (resp.price != null && Number.isFinite(Number(resp.price))) {
+    const p = Math.abs(Number(resp.price));
+    const side = /CREDIT/i.test(String(resp.orderType || '')) ? 'CREDIT' : 'DEBIT';
+    return { net: side === 'CREDIT' ? -p : p, price: p, side, from: 'orderPrice' };
+  }
+  return null;
+}
+
+// Back-compat shim: the magnitude alone, which is what the record has always stored.
+function extractFillPrice(resp) {
+  const f = extractFillNet(resp);
+  return f ? f.price : null;
 }
 
 // Poll + reconcile every non-terminal real order on a run. deps: { tradingClient, accountHash }.
@@ -151,8 +196,17 @@ async function reconcile(record, deps, opts = {}) {
     const next = mapStatus(resp && resp.status);
     if (next === 'filled' && o.status !== 'filled') {
       o.status = 'filled';
-      o.fillPrice = extractFillPrice(resp);
-      store.appendEvent(record, { type: 'order_filled', orderId: o.orderId, kind: o.kind, positionId: o.positionId, fillPrice: o.fillPrice, note: `broker FILLED @ ${o.fillPrice}` });
+      const f = extractFillNet(resp);
+      o.fillPrice = f ? f.price : null;
+      o.fillSide = f ? f.side : null;                 // DEBIT/CREDIT as it really filled
+      o.fillFrom = f ? f.from : null;                 // netted from the legs, or the order's own price
+      // A FILL ON THE WRONG SIDE IS NOT A DETAIL. The limit we sent has a side; if the broker reports the
+      // other one, the position's cash sign is inverted and nothing downstream would notice.
+      const wrongSide = f && o.net && f.side !== String(o.net).replace(/^NET_/, '');
+      store.appendEvent(record, { type: 'order_filled', orderId: o.orderId, kind: o.kind, positionId: o.positionId,
+        fillPrice: o.fillPrice, fillSide: o.fillSide, fillFrom: o.fillFrom, requestedPrice: o.requestedPrice,
+        sentPrice: o.sentPrice, wrongSide: wrongSide || undefined,
+        note: `broker FILLED ${o.fillSide || ''} @ ${o.fillPrice}${wrongSide ? ` — SENT AS ${o.net}` : ''}` });
       continue;
     }
     if (DEAD.has(String(resp && resp.status).toUpperCase())) {
@@ -189,4 +243,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { unfillablePrice, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, TERMINAL, DEAD };
+module.exports = { unfillablePrice, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };

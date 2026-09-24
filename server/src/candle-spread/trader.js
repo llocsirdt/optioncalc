@@ -2286,6 +2286,19 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
         restedMs: now - ph.placedEpoch });
       pos.pendingHedge = null; pos.orderStatus = 'expired';
       pos.expired = true;                    // filtered out below rather than spliced, so the row survives
+      // THE LEDGER IS NOT RELEASED, and that is a deliberate call rather than an oversight. These legs were
+      // recorded when the hedge was PLACED — correctly, since a working order must hold its strikes or a
+      // later order could take them the other way — and makeLegLedger has no reverse (its backing is a
+      // key->side map, not a refcount, so deleting a key could free a strike another live order still
+      // holds). Releasing safely means either refcounting the ledger, which changes a shape that persists
+      // on run state and survives restarts, or rebuilding it from the surviving book, which frees a real
+      // strike the moment any one of its four reconstruction cases is wrong.
+      //
+      // Measured before deciding: FOUR hedge expiries across all 807 archived run files, all offsets, all
+      // on 2026-09-22. Each burns at most two strikes for the rest of that one variant-day. That does not
+      // buy the risk of a ledger that can free a leg we are holding. Recorded on the decision so the cost
+      // is visible if it ever stops being four.
+      decisions[decisions.length - 1].ledgerStillHeld = (pos.legs || []).map((l) => l.type + l.strike);
     }
   }
   // Drop expired orders from the working list once logged: they were never held, so leaving them would
