@@ -1534,9 +1534,39 @@ async function processGroup(runs, kind) {
 // corrupt AND could not be moved aside — because writing over it is the failure it exists to prevent. That
 // is correct, but three of the loops below call it once per variant, so an unthrowable throw would abort
 // the whole pass and skip every healthy variant with it. Catch per variant, log loudly, skip that one.
+// A record's config is FROZEN AT CREATION and is what the engine runs on for the rest of the day. That is
+// right once a session is under way — changing the governor half way through a day is worse than running
+// the old one consistently — but it is wrong for a record created before anything happened, which is how
+// the armed variant came to run six sessions on a stale lossMax.
+//
+// So: while a run is UNTOUCHED (no events, no positions) the roster is the truth and the record is
+// refreshed to match, with an event recording exactly which fields moved. Once the first candle lands the
+// config is sealed.
+function refreshUntouchedConfig(record, cfg, where) {
+  if (!record || !record.config) return record;
+  const st = record.state || {};
+  if ((record.events || []).length || (st.positions || []).length) return record;   // session under way: seal it
+  const changed = [];
+  for (const k of Object.keys(cfg)) {
+    if (typeof cfg[k] === 'function') continue;
+    const a = record.config[k], b = cfg[k];
+    if (a === b) continue;
+    if (a == null && b == null) continue;
+    if (typeof a === 'object' || typeof b === 'object') continue;   // compare scalars only
+    changed.push(`${k}: ${a} -> ${b}`);
+  }
+  if (!changed.length) return record;
+  record.config = { ...cfg };
+  store.appendEvent(record, { type: 'config_refreshed', where, changed,
+    note: 'the record was created before this session began and its config had gone stale against the roster; '
+      + 'refreshed while the run is still untouched. A config is sealed once the first candle lands.' });
+  console.warn(`[candle-spread] ${cfg.variant} config refreshed before the session (${where}): ${changed.join(', ')}`);
+  return record;
+}
+
 function initRunSafe(cfg, tradeDate, where) {
   try {
-    return store.initRun(cfg, tradeDate);
+    return refreshUntouchedConfig(store.initRun(cfg, tradeDate), cfg, where);
   } catch (e) {
     console.error(`[candle-spread] ${where}: cannot open the record for ${cfg.variant} — ${e && e.message}`);
     console.error('  this variant is SKIPPED this pass; the others continue. Fix the file, do not delete it.');
@@ -1752,9 +1782,21 @@ async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
+    // READ, NEVER CREATE. This called initRun, which CREATES the record when none exists — and the poller
+    // runs on a timer regardless of market hours, so it manufactured the armed variant's record at
+    // midnight, hours before the first tick. initRun freezes the variant's config onto the record at
+    // creation, so the whole session then ran against whatever build was live at 00:00 ET.
+    //
+    // Measured: v7-10 (the ARMED variant) was created at 04:00Z every trading day since 2026-09-07 and
+    // carried lossMax 1000 against the roster's 1500 for six sessions (09-16, 17, 18, 21, 22, 23). On
+    // 09-23 that blocked NINETEEN opens and left 22 positions where the same config backtests to 40. It
+    // also littered the archive with 0-event phantom records on non-trading days (09-15, 19, 20).
+    //
+    // The poller only ever reads state.liveOrders. No record means no live orders, which is exactly the
+    // "nothing to poll" case — so reading is not merely sufficient, it is the correct question.
     const cfg = { ...run, expiration: run.expiration || todayEST() };
-    const record = initRunSafe(cfg, todayEST(), 'order poller');
-    if (!record) continue;
+    const record = store.readRun(store.makeRunId(cfg.symbol, cfg.expiration, todayEST(), cfg.variant));
+    if (!record || !record.state) continue;
     const outstanding = (record.state.liveOrders || []).some(o => !om.isTerminal(o));
     if (!outstanding) continue;
     try {
