@@ -1336,12 +1336,23 @@ async function processGroup(runs, kind) {
   // PRICING underlying (strike centering). Single-instrument: A's own 5m close. Split (signal≠price):
   // the price instrument's just-closed 5m close.
   let underlying = A['5m'] && A['5m'].close;
+  // THE PRICING BAR, NOT JUST ITS CLOSE. We kept four numbers (OHLC) for the instrument we only take
+  // SIGNALS from, and exactly one for the instrument we price and settle against — which is backwards
+  // given /NQ signals, NDX pricing. The cost showed up on 2026-09-23: NDX opened 30706 and the first bar
+  // we record closed at 30637, so 69 points — 29% of the day's entire decline — happened inside a bar
+  // whose open we simply did not keep. Every "how much of the move did we capture" answer this week was
+  // silently anchored at the 09:35 close rather than the session open, and there was no way to tell.
+  //
+  // The 09:30-09:35 bar is NOT skipped: FIRST_ACTION_MIN is its CLOSE and the engine acts on it. Only the
+  // record was lossy. Purely additive — nothing reads priceBar yet, so no decision changes.
+  let priceBar = A['5m'] ? { open: A['5m'].open, high: A['5m'].high, low: A['5m'].low, close: A['5m'].close } : null;
   if (signalSymbol !== priceSymbol) {
     try {
       const pxAnalysis = await DEPS.analyzeCandles(priceSymbol, { timeframe: '5m' });
       const px = pickJustClosed(pxAnalysis?.candleData?.['5m']?.candles || [], STEP_MS);
       if (!px.candle) return { pending: 'price-candle-not-available' };
       underlying = px.candle.close;
+      priceBar = { open: px.candle.open, high: px.candle.high, low: px.candle.low, close: px.candle.close };
     } catch (e) { console.error('[candle-spread] price fetch failed:', e && e.message); return { pending: 'price-fetch-failed' }; }
   }
   if (!(underlying > 0)) return { pending: 'no-underlying' };
@@ -1420,7 +1431,7 @@ async function processGroup(runs, kind) {
       const placeOrder = makePlaceOrder(run, record);
       const replaceOrder = makeReplaceOrder(run, record);
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
-        getLeg, placeOrder, replaceOrder, A, priorA, isFifteen, underlying, signalSymbol, priceSymbol,
+        getLeg, placeOrder, replaceOrder, A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol,
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs

@@ -107,6 +107,36 @@ const ev = splitRec.events.find(e => e.type === 'candle_close');
 ok(ev && ev.underlying === 28673 && ev.candle.close === 28773 && ev.signalSymbol === '/NQ', 'split: event logs both NQ signal close and NDX underlying');
 
 console.log(`\norders placed (dry-run): ${orders.length}`);
+// ---- THE PRICING BAR'S OHLC IS RECORDED, NOT JUST ITS CLOSE ---------------------------------------
+// `underlying` is the pricing instrument's bar CLOSE and was the only pricing number kept, while the
+// SIGNAL instrument kept a full OHLC — backwards, given /NQ signals and NDX pricing. On 2026-09-23 NDX
+// opened 30706 and the first recorded bar closed 30637, so 69 points (29% of the day's whole decline)
+// sat inside a bar whose open the record did not hold, and every "how much of the move did we capture"
+// answer was silently anchored at 09:35 instead of the open.
+{
+  const rec = store.initRun({ ...cfg, variant: 'pb' }, '2026-08-30');
+  const bar = { open: 28700, high: 28712, low: 28640, close: 28660 };
+  await trader.processCandleClose(rec, { timeEST: '08/30 09:35', open: 1, high: 2, low: 0, close: 1,
+    indicators: { bollinger20_2: { upper: 28800, lower: 28500, middle: 28650 } } }, null,
+    { ...deps, underlying: 28660, priceBar: bar, signalSymbol: '/NQ', priceSymbol: 'NDX' });
+  const ev = (rec.events || []).filter(e => e.type === 'candle_close').pop();
+  ok(!!ev, 'a candle_close event was written');
+  ok(ev && ev.priceCandle && ev.priceCandle.open === 28700,
+    `the PRICING bar's open is recorded (got ${ev && ev.priceCandle && ev.priceCandle.open})`);
+  ok(ev && ev.priceCandle.high === 28712 && ev.priceCandle.low === 28640, 'and its high and low');
+  ok(ev && ev.priceCandle.close === ev.underlying,
+    'its close agrees with `underlying`, which is what that field always was');
+  ok(ev && ev.candle.open === 1, 'the SIGNAL bar is still recorded separately and unchanged');
+
+  // A run with no price bar (older feed, or a fetch that returned none) records null rather than guessing.
+  const rec2 = store.initRun({ ...cfg, variant: 'pb2' }, '2026-08-30');
+  await trader.processCandleClose(rec2, { timeEST: '08/30 09:35', open: 1, high: 2, low: 0, close: 1,
+    indicators: { bollinger20_2: { upper: 28800, lower: 28500, middle: 28650 } } }, null,
+    { ...deps, underlying: 28660, signalSymbol: '/NQ', priceSymbol: 'NDX' });
+  const ev2 = (rec2.events || []).filter(e => e.type === 'candle_close').pop();
+  ok(ev2 && ev2.priceCandle === null, 'absent price bar records null, never a fabricated one');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 // cleanup
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}

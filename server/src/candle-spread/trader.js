@@ -1311,6 +1311,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     // the strikes are placed around. They differ by the basis when signal != price symbol.
     candle: { time: candle.timeEST, open: candle.open, high: candle.high, low: candle.low, close: candle.close },
     underlying,
+    // THE PRICING BAR'S OWN OHLC. `underlying` is its CLOSE, which is all we used to keep — so the
+    // session open never entered the record and "how much of this move did we get" could only ever be
+    // answered from the 09:35 close. On 2026-09-23 that hid 69 of the day's 236-point decline inside the
+    // first bar. Null on older runs and whenever the price feed did not supply a bar.
+    priceCandle: deps.priceBar || null,
     signalSymbol: deps.signalSymbol || null,
     priceSymbol: deps.priceSymbol || null,
     bands,
