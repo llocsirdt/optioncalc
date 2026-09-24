@@ -99,15 +99,30 @@ async function bootstrapFromLastClose() {
     if (ndx == null || ndxTime == null) return null;
     const nqAt = await nqPriceAtClose(ndxTime);
     if (nqAt == null) return null;
-    const v = { basis: r2(nqAt - ndx), asOf: ndxTime, ndx: r2(ndx), nq: r2(nqAt) };
+    // `via` records HOW this was computed, and it is the whole point of this change: a bootstrap is a
+    // reconstruction from the last CLOSE, and getBasis used to hand it back labelled source:'live' as soon
+    // as regular hours started, because 'live' was decided by the clock rather than by the value.
+    const v = { basis: r2(nqAt - ndx), asOf: ndxTime, ndx: r2(ndx), nq: r2(nqAt), via: 'bootstrap' };
     persist(v);
     return v;
   } catch (e) { return null; }
 }
 
+// 'live' MUST DESCRIBE THE VALUE, NOT THE CLOCK. Two paths returned source:'live' for a basis that was
+// nothing of the kind: the TTL short-circuit and the post-failure return both handed back `held`, which
+// during regular hours can still be the OFF-HOURS BOOTSTRAP — a basis reconstructed from the previous
+// day's close — or a value from a recompute that threw. The client draws a `*` and says "held from last
+// regular-hours close" for anything not 'live', so it was being told the opposite of the truth.
+//
+// The label now comes from the value's own provenance: computed in regular hours (`via: 'rth'`) AND still
+// within one staleness window. Anything else is 'held'.
+const STALE_MS = 3 * TTL_MS;
+const label = (v, now) => (v && v.via === 'rth' && (now - (v.asOf || 0)) <= STALE_MS ? 'live' : 'held');
+
 /**
- * @returns {Promise<{basis:number, asOf:number, source:'live'|'held', ndx:number, nq:number}|null>}
- * source: 'live' = just computed during regular hours; 'held' = last good value carried off-hours.
+ * @returns {Promise<{basis:number, asOf:number, source:'live'|'held', via:string, ndx:number, nq:number}|null>}
+ * source: 'live' = computed from regular-hours quotes and still fresh; 'held' = carried, bootstrapped
+ * from a close, or older than one staleness window.
  */
 async function getBasis() {
   const now = Date.now();
@@ -121,7 +136,7 @@ async function getBasis() {
   }
 
   // Regular hours: NDX is live. Recompute (throttled) and persist.
-  if (now - lastComputeAt < TTL_MS) return held ? { ...held, source: 'live' } : null;
+  if (now - lastComputeAt < TTL_MS) return held ? { ...held, source: label(held, now) } : null;
   lastComputeAt = now;
   try {
     const q = await marketClient.quotes(['/NQ', '$NDX']);
@@ -129,13 +144,13 @@ async function getBasis() {
     const nq = num(nqQ && nqQ.mark) != null ? num(nqQ.mark) : num(nqQ && nqQ.lastPrice);
     const ndx = num(ndxQ && ndxQ.lastPrice) != null ? num(ndxQ.lastPrice) : num(ndxQ && ndxQ.closePrice);
     if (nq != null && ndx != null) {
-      held = { basis: r2(nq - ndx), asOf: now, ndx: r2(ndx), nq: r2(nq) };
+      held = { basis: r2(nq - ndx), asOf: now, ndx: r2(ndx), nq: r2(nq), via: 'rth' };
       persist(held);
     }
   } catch (e) {
     console.error('[nq-ndx-basis] getBasis failed:', e && e.message);
   }
-  return held ? { ...held, source: 'live' } : null;
+  return held ? { ...held, source: label(held, now) } : null;
 }
 
 module.exports = { getBasis, isNdxRTH };

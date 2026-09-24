@@ -357,7 +357,15 @@
     if (!els || !els.ndxBasisLabel) return;
     els.ndxBasisLabel.textContent = (ndxMode && serverBasis && typeof serverBasis.basis === 'number')
       ? ` −${Math.round(serverBasis.basis)}${serverBasis.source === 'live' ? '' : '*'}` : '';
-    els.ndxBasisLabel.title = serverBasis && serverBasis.source !== 'live' ? 'held from last regular-hours close' : 'live basis';
+    // SAY WHICH KIND OF NOT-LIVE. `source` is no longer decided by the clock (see nq-ndx-basis), so a
+    // starred basis can be any of three things and they are not equally trustworthy: carried off-hours,
+    // RECONSTRUCTED from a prior close (`via: 'bootstrap'`), or a regular-hours value that has gone stale
+    // because the recompute is failing. The second and third are the ones worth knowing about.
+    els.ndxBasisLabel.title = !serverBasis ? 'no basis'
+      : serverBasis.source === 'live' ? 'live basis, computed from regular-hours quotes'
+      : serverBasis.via === 'bootstrap' ? 'RECONSTRUCTED from the last NDX close — not a live basis'
+      : serverBasis.via === 'rth' ? 'regular-hours basis that has gone stale — the recompute is not succeeding'
+      : 'held from last regular-hours close';
   }
 
   function dims() {
