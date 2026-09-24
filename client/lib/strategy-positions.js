@@ -207,6 +207,17 @@
       for (let i = 0; i < legs.length; i++) allLegEpochs.push(i < openLegCount ? oEpoch : cEpoch);
       positions.push({
         id: pos.id, side: pos.side, covered: !!(pos.covered && coverByT), shortStrike: pos.shortStrike, unfilledCover,
+        // WHETHER THIS ORDER EVER BOOKED. Callers that pass includeUnfilled get working orders mixed in
+        // with real fills and, without this, no way at all to tell them apart — debug.html drew a resting
+        // open on the NQ tape and listed it in the order table exactly like a position that had filled.
+        // An unfilled position is an order at the broker, not a holding: `filled` says which, and
+        // orderStatus carries the broker's own word for it when there is one.
+        filled: !!pos.filled, orderStatus: pos.orderStatus || null,
+        // Hedges are positions too, and they are not spreads the cover logic applies to. Surfaced here so
+        // a consumer does not have to reach back into the raw record and re-derive what this module
+        // already had in hand.
+        hedge: !!(pos.hedge || pos.wing || pos.fly || pos.offset) || null,
+        hedgeKind: pos.wing ? 'WING' : pos.fly ? 'FLY' : (pos.hedge || pos.offset) ? 'OFFSET' : null,
         openTime: pos.openTime || etCandleFromEpoch(epochFromId(pos.id)), coverTime: pos.coverTime || null,   // human CANDLE times (log/tooltip)
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).

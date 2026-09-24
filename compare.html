@@ -69,18 +69,18 @@
 
      width:min-content, not auto — with table-layout:fixed and an AUTO width Chrome still sizes the table by
      content first and then hands the surplus back to whichever columns asked for it, so the columns stayed
-     uneven (measured: 188 / 206 / 204 / 188 / 204 against the 184 asked for). min-content resolves to the
+     uneven (measured: 188 / 206 / 204 / 188 / 204 against the 184 then asked for). min-content resolves to the
      sum of the declared column widths, which is exactly the grid we want, and the table still scrolls
      horizontally inside .wrap when there are more columns than fit. */
   table.grid { border-collapse:separate; border-spacing:6px; table-layout:fixed; width:min-content; }
-  table.grid th { width:184px; font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
+  table.grid th { width:200px; font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
   table.grid th.rowh { width:62px; text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
   /* FIXED SIZE, not min-height. Every row of a cell is now reserved whether or not it has content (see
      the stateBar / lift / cmp placeholders), so the height is the same at every slider position and the
      grid stops resizing while scrubbing. box-sizing keeps the border and padding inside the number.
      A variant whose feature strip wraps to two lines is the one thing that can still exceed this, so it
      clips rather than pushing the row — the strip is a summary and its tail is the least important part. */
-  td.cell { width:184px; height:172px; box-sizing:border-box; overflow:hidden;
+  td.cell { width:200px; height:172px; box-sizing:border-box; overflow:hidden;
     border:1px solid var(--grid); border-radius:6px; padding:3px 5px; vertical-align:top; background:#fcfcfc; }
   td.cell .stateBar.none { background:transparent; }
   td.cell .lift:empty::before { content:'\00a0'; }
@@ -143,9 +143,22 @@
   .cell .feat i { font-style:normal; cursor:pointer; white-space:nowrap; padding:5px 4px;
     border-radius:3px; display:inline-flex; align-items:center; gap:1px; }
   .cell .feat i:active { background:rgba(127,127,127,.18); }
+  /* A CROWDED STRIP BUYS ITS ROOM FROM THE PADDING, NOT FROM THE GRID. FEATURES has SEVEN entries
+     (ladder ⟳, give-up ⤓, floor offset ⛨, wing ✦, fly/condor ❈, cover-to-stack ⊞,
+     governor-blocked-open ⊘, governor-deferred-cover ⊗ — eight since flies were added), so eight glyphs
+     is the most this row can hold. At the full 4px
+     gutter that needs ~225px of content and the widest strip in the live fleet already needed 192 in a
+     170 box — the tail was clipped, which is exactly the information a crowded strip most needs to show.
+     Widening the cell to 200 alone does not close that; the horizontal gutter does, and it is the part of
+     the tap target that matters least (the 5px VERTICAL padding is what makes a glyph thumb-sized, and
+     the 3px flex gap still separates neighbouring hit areas). Only strips that actually need it pay. */
+  .cell .feat:has(i:nth-child(6)) i { padding-left:2px; padding-right:2px; }
+  .cell .feat:has(i:nth-child(7)) i { padding-left:1px; padding-right:1px; }
+  .cell .feat:has(i:nth-child(8)) i { padding-left:0; padding-right:0; }
   .cell .feat i.lad { color:#4a7fb5; } .cell .feat i.giv { color:#9a5bb8; }
   .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
   .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
+  .cell .feat i.fly { color:#7a56c4; }
   /* AFTER the colour rules and at equal specificity, so the untriggered grey wins without !important. */
   .cell .feat i:not(.on) { color:#7b858f; }
   /* The count always renders, 0 included. A bare glyph made "enabled but quiet" and "fired" look like
@@ -189,7 +202,7 @@
   .cell .cname .hmax i { font-style:normal; font-weight:700; }
   .cell .cname .hmax .p { color:var(--profit); } .cell .cname .hmax .l { color:var(--loss); }
   /* margin-top pushes the plot off the name row — it was sitting right under it. */
-  .cell .chartwrap { position:relative; width:174px; padding-bottom:17px; margin-top:10px; }
+  .cell .chartwrap { position:relative; width:186px; padding-bottom:17px; margin-top:10px; }
   .cell .nowlbl { position:absolute; bottom:0; transform:translateX(-50%); font:9.5px ui-monospace, monospace; text-align:center; line-height:1.1; color:#444; background:rgba(252,252,252,0.82); padding:0 1px; pointer-events:none; white-space:nowrap; }
   .cell .nowlbl i { display:block; font-weight:700; }
   .cell .cmp { font:9px ui-monospace, monospace; color:#666; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -238,7 +251,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.9.8</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -408,7 +421,9 @@ const cellDateLabel = (iso) => {
 };
 // And the DATE a cell refers to — the mirror image.
 const dateOfCell = (key) => (GRID_MODE === 'date' ? key : commonDate);
-const CW = 174, CH = 74;   // mini-chart px
+// CW tracks the cell's INNER width (200 - 10 padding - 4 border). It was 174 for a 184 cell; leaving
+// it there after the widening would have spent the new room on empty margin instead of on the curve.
+const CW = 186, CH = 74;   // mini-chart px, = td.cell width - padding - border
 
 const cells = {};   // variant -> { empty } | { err } | { legs, curve, worst, best, avg, lo, hi }
 const records = {}; // variant -> raw run record (kept so the time slider can rebuild the book at any epoch)
@@ -1017,6 +1032,11 @@ const FEATURES = [
   { k:'cover-giveup',        cfg:'coverGiveUp',  g:'⤓', c:'giv', label:'cover give-up' },
   { k:'floor-offset',        cfg:'floorOffset',  g:'⛨', c:'off', label:'floor offset' },
   { k:'wing',                cfg:'wingConvert',  g:'✦', c:'wng', label:'wing convert' },
+  // FLIES WERE MISSING FROM THIS LIST. flyConvert is on for roughly half the fleet and the engine logs a
+  // 'fly' decision for every one it buys, but with no entry here the strip said nothing — a variant could
+  // spend its whole $1,500 fly budget and read identically to one with the feature switched off. That is
+  // the same class of hole the strip exists to close.
+  { k:'fly',                 cfg:'flyConvert',   g:'❈', c:'fly', label:'fly / condor convert' },
   { k:'cover-to-stack',      cfg:'coverToStack', g:'⊞', c:'stk', label:'cover-to-stack' },
   { k:'open-skip-governor',  cfg:null,           g:'⊘', c:'gov', label:'governor blocked an open' },
   { k:'cover-defer-governor',cfg:null,           g:'⊗', c:'gov', label:'governor deferred a cover' },
@@ -1032,6 +1052,7 @@ function featDetail(a, d, t) {
   if (a === 'cover-giveup')  return `${t}  ${px(d.from)}→${px(d.to)}  through ${d.through != null ? d.through.toFixed(1) : '?'}pts`;
   if (a === 'floor-offset')  return `${t}  ${(d.legs || []).map((l) => l.side[0] + l.type + l.strike).join('/')}  cost ${m(d.cost)} lift ${m(d.lift)} (${d.ratio}:1)`;
   if (a === 'wing')          return `${t}  ${d.tag || ''}  cost ${m(d.cost)} (${d.ratio}:1)${d.naked ? '  naked' : ''}`;
+  if (a === 'fly')           return `${t}  ${d.tag || ''}${d.condor ? ' condor' : ''}  cost ${m(d.cost)}${d.ratio != null ? ` (${d.ratio}:1)` : ''}`;
   if (a === 'open-skip-governor') return `${t}  projected floor ${m(d.projectedFloor)} vs cap ${m(d.lossMax)}`;
   if (a === 'cover-defer-governor') return `${t}  floor would go ${m(d.floorNow)}→${m(d.floorIfBooked)} vs cap ${m(d.lossMax)}`;
   return `${t}  ${d.positionId || d.id || ''}`;

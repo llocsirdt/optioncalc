@@ -104,7 +104,11 @@
     // Number positions #1.. by open time (earliest = #1); covers inherit their open's number.
     const seq = new Map();
     evs.filter(e => e.type === 'open').sort((a, b) => a.epoch - b.epoch).forEach((e, i) => seq.set(e.id, i + 1));
-    evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1));
+    // ANTISYMMETRIC. This read `|| (a.type === 'open' ? -1 : 1)`, which ignores `b` entirely: two opens at
+    // the same stamp compared -1 and two covers compared 1, so the comparator contradicted itself on equal
+    // elements. V8's sort is free to do anything with that, and the rows it shuffles are the ones a person
+    // is trying to read in order. Difference of the two keys, the same form debug.html uses.
+    evs.sort((a, b) => a.epoch - b.epoch || (a.type === 'open' ? -1 : 1) - (b.type === 'open' ? -1 : 1));
     const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
     const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
     // ⬡ for a hedge: visually distinct from both the open triangles and the cover diamond.

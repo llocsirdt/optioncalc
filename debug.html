@@ -149,7 +149,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.9.2</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.9.3</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -466,6 +466,9 @@ function syncNQ() {
     ? window.strategyRunToOptionArray(record, { includeUnfilled: true }) : null;
   const trades = [];
   for (const p of (conv && conv.positions) || []) {
+    // A MARKER ON THE TAPE MEANS A TRADE HAPPENED. includeUnfilled brings working orders along, and this
+    // drew each of them as an open — a triangle on the NQ chart at a price where nothing was bought.
+    if (p.filled === false) continue;
     if (p.openEpoch) trades.push({ epoch: p.openEpoch, side: p.side, type: 'open' });
     if (p.covered && p.coverEpoch) trades.push({ epoch: p.coverEpoch, side: p.side, type: 'cover' });
   }
@@ -510,8 +513,15 @@ function orderEvents(rec, src) {
   // fiction the moment the two engines open a different number of positions.
   const evs = [];
   P.forEach((p) => {
+    // AN ORDER STILL AT THE BROKER IS NOT A HOLDING. This is called with includeUnfilled, so P contains
+    // working opens alongside booked ones, and the row carried nothing to tell them apart — a resting open
+    // rendered exactly like a fill, and syncNQ drew it on the tape as a trade. 4 of 1,654 positions were
+    // still unfilled at the close on 2026-09-22; mid-day, while an open is being worked, it is every one
+    // that has not yet filled. `filled` now comes off the producer, so the row can say so.
+    const oWorking = p.filled === false;
     evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0,
-      legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * (p.quantity || 1)), net: p.openNet || 'DEBIT' });
+      legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * (p.quantity || 1)), net: p.openNet || 'DEBIT',
+      ...(oWorking ? { unfilled: true, noFill: true, noFillKind: 'OPEN' } : {}) });
     if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0,
       legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * (p.quantity || 1)), net: p.coverNet || 'DEBIT' });
     else if (p.unfilledCover) evs.push({ id: p.id, type: 'cover', unfilled: true, side: p.side,
@@ -581,23 +591,36 @@ function orderEvents(rec, src) {
   // row for that decision put the same order in the table twice: once as OPEN** claiming it never filled,
   // and once as the position it became. On v7-40-unc 2026-09-22, 9 of the 10 OPEN** rows were this
   // phantom and exactly 1 was a genuine never-fill.
-  const everFilled = new Set((rec.state && rec.state.positions || []).filter(p => p.filled).map(p => p.id));
+  // EVERY position in state, not only the filled ones. This was `.filter(p => p.filled)`, which was right
+  // while an unfilled position had no row of its own; now that P emits one (labelled OPEN**), a
+  // never-filled open appeared TWICE — once from its position and once from this decision. The rule is
+  // simply: if a position exists, its own row is the record, and the decision log adds nothing.
+  const havePos = new Set((rec.state && rec.state.positions || []).map(p => p.id));
   for (const ev of (rec.events || [])) {
     const t = (ev.candle && ev.candle.time) || ev.time || null;
     for (const d of (ev.decisions || [])) {
       // An open whose fill test failed. It logs filled:false here and is cancelled at the next candle.
-      const isOpen = d.action === 'open' && d.filled === false && !everFilled.has(d.positionId);
+      const isOpen = d.action === 'open' && d.filled === false && !havePos.has(d.positionId);
       const kind = REFUSED[d.action];
       if (!isOpen && !kind) continue;
       // Format with the SAME producer the position rows use (exported from strategy-positions.js), so a
       // refused order's legs read identically to a filled one's instead of being a second spelling.
-      const legs = (window.fmtSpreadLegs && d.legs) ? window.fmtSpreadLegs(d.legs, 1) : '';
+      // QUANTITY FROM THE RECORD. Hardcoded 1 here, so on a multi-contract run a refused order's legs and
+      // its cost both read for a single spread while every other row scaled — the two kinds of row could
+      // not be compared, which is the whole point of putting them in one table.
+      const q = (rec.config && rec.config.quantity) || 1;
+      const legs = (window.fmtSpreadLegs && d.legs) ? window.fmtSpreadLegs(d.legs, q) : '';
       const px = d.limit != null ? d.limit : 0;
-      evs.push({ id: `nofill-${src}-${noFillSeq++}`, type: isOpen ? 'open' : 'cover', unfilled: true,
+      // A REFUSED HEDGE IS NOT A COVER. Everything here that was not an open was typed 'cover', so a
+      // refused offset/wing/fly counted in the "N covers (M unfilled)" tally and in nothing else — it
+      // inflated the cover count and the unfilled-cover rate while the hedge count missed it entirely.
+      // A hedge is an opening order: it establishes a structure, it is never matched to a position, and
+      // hedgeKind below already tells the renderer to draw it as one.
+      evs.push({ id: `nofill-${src}-${noFillSeq++}`, type: 'open', unfilled: true,
         noFill: true, noFillKind: isOpen ? 'OPEN' : kind, side: d.side || null, time: t,
         // `ev.candleEpoch` EXISTS NOWHERE in the repo, so this was always 0 and every refused row sorted
         // above the 09:35 open. The event's own ISO stamp is the real thing.
-        epoch: Date.parse(ev.time) || 0, legs, cost: Math.round(px * 100), net: d.sentNet || 'DEBIT',
+        epoch: Date.parse(ev.time) || 0, legs, cost: Math.round(px * 100 * q), net: d.sentNet || 'DEBIT',
         mark: d.mark != null ? d.mark : null, src, W, ML, raw: {}, sp: null, seq: null, isCovered: false,
         hedgeKind: isOpen ? null : kind });
     }
@@ -787,11 +810,13 @@ function renderOrders() {
   const tally = (s) => {
     const E = evs.filter((e) => e.src === s);
     const opens = E.filter((e) => e.type === 'open' && !e.hedgeKind).length;
+    const openUnf = E.filter((e) => e.type === 'open' && !e.hedgeKind && e.unfilled).length;
     const hedges = E.filter((e) => e.type === 'open' && e.hedgeKind).length;
+    const hedgeUnf = E.filter((e) => e.type === 'open' && e.hedgeKind && e.unfilled).length;
     const covers = E.filter((e) => e.type === 'cover').length;
     const unf = E.filter((e) => e.type === 'cover' && e.unfilled).length;
-    return E.length ? `${opens} opens · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`
-      + (hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : '') : '';
+    return E.length ? `${opens} opens${openUnf ? ` (${openUnf} unfilled)` : ''} · ${covers} covers${unf ? ` (${unf} unfilled)` : ''}`
+      + (hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}${hedgeUnf ? ` (${hedgeUnf} unfilled)` : ''}` : '') : '';
   };
   $('ordMeta').innerHTML = (showLive ? tally('live') : '')
     + (both ? ' &nbsp;·&nbsp; <span style="color:var(--bt)">BT ' + tally('bt') + '</span>'
