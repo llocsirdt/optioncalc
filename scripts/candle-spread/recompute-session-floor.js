@@ -40,10 +40,18 @@ function broken(p){
 }
 // What the engine INTENDED to pay: W - openCost - minLock. This is the price a sane quote would have
 // produced, so it is the fair counterfactual for "the order kept working and eventually filled".
+// THE REFERENCE BUG, INSIDE THE SCRIPT WRITTEN TO UNDO IT. `Math.max(0.05, ...)` was here: when the open
+// cost more than W - minLock*W the intended price is NEGATIVE, and clamping it to one tick reproduces
+// exactly the $5 cover this counterfactual exists to measure — so scenario B quietly said "the floor was
+// fine" using the same fabricated number as the booking it was correcting. There is no honest intended
+// price for those; they are counted and excluded, and the count is printed so B is read for what it is.
+let noIntended = 0;
 function intendedLimit(p,minLockFrac){
   const ks=(p.coverLegs||[]).map(l=>l.strike); const W=ks.length?Math.max(...ks)-Math.min(...ks):0;
   if(!W) return null;
-  return Math.max(0.05, r2(W-(p.limit||0)-(minLockFrac||0)*W));
+  const v = r2(W-(p.limit||0)-(minLockFrac||0)*W);
+  if(!(v>0)){ noIntended++; return null; }
+  return v;
 }
 const bookAt=(pos,t)=>(pos||[]).filter(p=>p.filled!==false&&(p.openEpoch||0)<=t)
   .map(p=>(p.covered&&p.coverEpoch!=null&&p.coverEpoch<=t)?p:{...p,covered:false,coverLegs:null,coverLimit:null});
@@ -63,14 +71,20 @@ for(const f of fs.readdirSync(DIR)){
   // A) the order never filled -> the position stays uncovered (pessimistic)
   const A=traj(pos.map(p=>broken(p)?{...p,covered:false,coverLegs:null,coverLimit:null}:p));
   // B) the order kept working and filled at its intended price (fair)
-  const B=traj(pos.map(p=>broken(p)?{...p,coverLimit:intendedLimit(p,cfg&&cfg.continuousCoverMinLockFrac)}:p));
+  // A cover with no honest intended price is treated as scenario A (never filled) rather than booked at a
+  // made-up tick — the conservative reading, and the only one the data supports.
+  const B=traj(pos.map(p=>{ if(!broken(p)) return p;
+    const il=intendedLimit(p,cfg&&cfg.continuousCoverMinLockFrac);
+    return il==null ? {...p,covered:false,coverLegs:null,coverLimit:null} : {...p,coverLimit:il}; }));
   if(!asBooked||!A||!B) continue;
   out.push({v:name,n:bad.length,booked:asBooked,A,B});
 }
 const $=x=>x==null?'--':(x<0?'-':'')+'$'+Math.abs(Math.round(x)).toLocaleString();
 const sum=(rows,sel,k)=>rows.reduce((a,r)=>a+sel(r)[k],0);
 const aff=out.filter(r=>r.n>0);
-console.log('RECOMPUTE — 2026-09-16, '+out.length+' variants, '+aff.length+' with broken covers ('+aff.reduce((a,r)=>a+r.n,0)+' covers)\n');
+console.log('RECOMPUTE — 2026-09-16, '+out.length+' variants, '+aff.length+' with broken covers ('+aff.reduce((a,r)=>a+r.n,0)+' covers)');
+if(noIntended) console.log('  ! '+noIntended+' broken cover(s) had NO honest intended price (W - openCost - minLock <= 0);');
+console.log(noIntended?'    they are counted as NEVER FILLED in scenario B, not booked at a clamped tick.\n':'');
 console.log('                                 AS BOOKED        A: never filled     B: filled at target');
 console.log('  fleet PEAK floor          '+$(sum(out,r=>r.booked,'peak')).padStart(14)+$(sum(out,r=>r.A,'peak')).padStart(20)+$(sum(out,r=>r.B,'peak')).padStart(22));
 console.log('  fleet floor at 15:00      '+$(sum(out,r=>r.booked,'at15')).padStart(14)+$(sum(out,r=>r.A,'at15')).padStart(20)+$(sum(out,r=>r.B,'at15')).padStart(22));

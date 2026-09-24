@@ -35,7 +35,15 @@ const AFTER = (() => { const v = arg('--after', null); if (!v) return 0; const [
 // committed baselines). A $20k bar means something different to a $10 variant than to a $40 one; this asks
 // "is this peak unusually good FOR THIS STRATEGY", which is the question that actually prevents early locks.
 const PEAK_VS_AVG = Number(arg('--peakVsAvg', 0));
-const BASE = (() => { try { return require(path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread', 'backtest-baselines.json')).variants; } catch (e) { return {}; } })();
+// A MISSING BASELINE TURNS --peakVsAvg OFF WITHOUT SAYING SO. `catch -> {}` here made avgBestCase 0 for
+// every variant, so peakMin became N x 0 = 0 and the peak gate — the entire adaptive threshold this flag
+// exists to apply — was disabled. The sweep then ran, printed a full table, and answered a different
+// question than the one asked. Checked at the point of use, because it only matters when --peakVsAvg is on.
+let BASE_ERR = null;
+const BASE = (() => {
+  try { return require(path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread', 'backtest-baselines.json')).variants; }
+  catch (e) { BASE_ERR = (e && e.message) || String(e); return {}; }
+})();
 const FLOOR = Number(arg('--floor', 0));
 const ONLY = arg('--variants', null);
 
@@ -45,6 +53,13 @@ const usd = (n) => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.rou
 
 function optsFor(v) {
   const avgPeak = (BASE[v.variant] && BASE[v.variant].avgBestCase) || 0;
+  if (PEAK_VS_AVG && !(avgPeak > 0)) {
+    console.error(`\n  ✗ --peakVsAvg ${PEAK_VS_AVG} needs each variant's avgBestCase, and ${v.variant} has none.`);
+    console.error(BASE_ERR ? `    backtest-baselines.json did not load: ${BASE_ERR}`
+      : '    the variant is missing from backtest-baselines.json (rebuild it with build-backtest-baselines.js).');
+    console.error('    Running on would silently set the peak threshold to 0 and lock every day. Exiting 2.\n');
+    process.exit(2);
+  }
   const peakMin = PEAK_VS_AVG ? PEAK_VS_AVG * avgPeak : PEAK;
   const o = { rthActionOnly: true, intradayIV: true, lockFloorAt: FLOOR, lockPeakMin: peakMin, lockAfterMin: AFTER };
   if (v.ivSkew) o.ivSkew = true;
