@@ -1213,8 +1213,15 @@ function makePlaceOrder(run, record) {
     } catch (e) {
       store.appendEvent(record, { type: 'order_error', meta, payload: sendPayload, testMode: isTest, note: `Schwab send failed: ${e && e.message}` });
       console.error(`[candle-spread] ${run.variant} ORDER SEND FAILED: ${e && e.message}`);
-      // Keep simulating the intended strategy (decoupled) despite the send failure.
-      return { status: 'error', filled: true, error: e && e.message };
+      // A REJECTED ORDER IS NOT A POSITION. This returned `filled: true` so the state machine would keep
+      // simulating the intended strategy through a send failure — correct while nothing was real, and
+      // exactly inverted once it is. Every caller treats the result as "the order exists": a rejected
+      // cover-rest became a resting cover and later a booked floor, a rejected combo booked two positions
+      // and a locked profit, a rejected hedge became a pending hedge holding budget. All of it off a 4xx.
+      //
+      // `filled: false` now, and the callers skip. The SIMULATED path above still returns true — there the
+      // order genuinely was not sent and continuing to model the strategy is the whole point.
+      return { status: 'error', filled: false, sent: false, error: e && e.message };
     }
   };
 }

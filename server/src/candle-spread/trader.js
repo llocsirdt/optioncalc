@@ -110,11 +110,19 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       && m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W;
     if (creditPreferred(st, deps, legacy)) style = 'credit';
   }
+  // RESOLVE now, COMMIT after the send. The resolver has to run here — its answer decides which legs we
+  // send — but recording them is a commitment, and it used to happen unconditionally, before the send and
+  // before the `if (!sentOk)` bail below. So `cover-not-sent` (unquotable sent legs, or a non-positive
+  // price, or now a Schwab rejection) permanently burned those strikes for the rest of the day. Nothing
+  // can un-record them: makeLegLedger exposes record/conflicts/sideOf and no reverse. Every later cover
+  // then resolved around strikes nobody traded, which is what pushes covers onto the ITM-slide path —
+  // the one that locked a guaranteed loss on 98 of 103 shifted covers.
+  let ledgerLegs = null;
   if (deps.enforceLegUniqueness && deps._ledger) {
     const rc = LL.resolveCover(pos.side, pos.shortStrike, W, deps._ledger, { preferStyle: style, incr: cfg.strikeIncrement, maxWingShift: deps.legMaxWing || 8 });
     if (rc.resolution === 'skip') { decisions.push({ action: 'cover-skip-leg', positionId: pos.id }); return; }   // can't place — stays uncovered
     style = rc.style; wing = rc.wing; shift = rc.shift || 0; anchor = rc.anchor != null ? rc.anchor : pos.shortStrike;
-    deps._ledger.record(rc.legs);
+    ledgerLegs = rc.legs;
   }
   // BOOK debit-canonical at the resolved ANCHOR. The resolver now slides the whole spread at CONSTANT
   // width rather than widening it, so `wing === W` always and the lock arithmetic below stays true.
@@ -204,7 +212,11 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       const payload = buildOrderPayload(srl.resolved, price, cfg.quantity, sentNet);
       const placed = await deps.placeOrder(payload, { kind: 'cover-rest', of: pos.id, legs: sendLegs, limit: price, net: sentNet, mark: plan.mark });
       restOrderId = (placed && placed.orderId) || null;
-      sentOk = true;
+      // THE SEND HAS TO HAVE SUCCEEDED. This was an unconditional `true`, so a Schwab rejection still
+      // attached a pendingCover and resolveRestingCovers later booked its floor into realizedPnl — a lock
+      // reported for an order the broker refused. The comment above already promised "attached only after
+      // a send is confirmed"; it only guarded unquotable legs and a non-positive price.
+      sentOk = !!placed && placed.filled !== false;
     }
   }
   // NOTHING WAS SENT -> NOTHING RESTS. Leave the position uncovered so it is visible as exposed and is
@@ -214,6 +226,8 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       reason: srl.error ? `sent legs unquotable (${srl.error})` : 'no valid price' });
     return;
   }
+  // The send succeeded, so the strikes are genuinely played now.
+  if (ledgerLegs && deps._ledger) deps._ledger.record(ledgerLegs);
   pos.pendingCover = pending;
   pos.coverStatus = 'resting';
   pos.pendingCover.orderId = restOrderId;
@@ -372,6 +386,14 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const price = L.roundToTick(cn.limit, tick);
   const payload = CO.buildComboPayload(resolvedMerged, price, qty, cn.side);
   const placed = await deps.placeOrder(payload, { kind: 'combo-lock-open', winner: winner.id, coverLegs: coverSentLegs, openLegs: openSentLegs, net: cn.side, limit: price, slip });
+  // NOTHING IS BOOKED OFF A REJECTED COMBO. This is the only path that credits realizedPnl straight from
+  // a send result, and it books BOTH spreads plus a locked floor plus a cash entry — so a single 4xx
+  // fabricated a tent, a position and a profit. The ledger commit below is on the same footing: a cover
+  // that was never sent must not burn its strikes for the rest of the day.
+  if (!placed || placed.filled === false) {
+    decisions.push({ action: 'combo-not-sent', winner: winner.id, reason: (placed && placed.error) || 'send failed' });
+    return false;
+  }
   deps._ledger.record(rc.legs);   // COMMIT the cover to the real ledger (resolved above vs a temp copy)
 
   // 5) book the COVER onto the winner (mirrors resolveRestingCovers) — floor from the debit-canonical legs
@@ -504,6 +526,15 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // refused on 2026-09-15. The order now works and is resolved by a LATER observation — the 30s sub-bar
   // pass, or the next candle — exactly the way a resting cover is. That is the only way "filled" carries
   // information. A spread we cannot even quote is not placed at all (resolveLegs already refused above).
+  // A REFUSED SEND IS NOT A WORKING ORDER. The open below rests and is resolved by a later observation,
+  // which is right — but only if the order is actually at the broker. On a Schwab rejection we would
+  // otherwise create a position, ladder its price, reserve its strikes in the leg ledger, and eventually
+  // book a fill, for an order that never existed.
+  if (!placed || placed.filled === false) {
+    decisions.push({ action: 'open-not-sent', side: openSide, legs: sentLegs, limit: sentLimit,
+      net: sentNet, reason: (placed && placed.error) || 'send failed' });
+    return;
+  }
   const openChk = markFill(res.legs, res.limit, deps.getLeg, cfg.tickIncrement);
   const pos = {
     id: nextId('pos'), side: openSide, legs: res.legs, quantity: cfg.quantity,   // debit-CANONICAL (drives all strategy logic)
@@ -1133,6 +1164,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       } else {
         // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
         const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
+        if (!placed || placed.filled === false) {
+          decisions.push({ action: 'cover-not-sent', positionId: pos.id, reason: (placed && placed.error) || 'send failed' });
+          continue;                       // a refused order is not a cover; the position stays exposed
+        }
         pos.covered = true;
         pos.coverId = nextId('cov');
         pos.coverLimit = plan.limit;
@@ -2398,6 +2433,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 module.exports = {
   noteCash,
   creditPreferred,
+  openPosition,   // exported for the failed-send contract test
+
   processCandleClose,
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
