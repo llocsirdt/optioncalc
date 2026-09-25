@@ -143,6 +143,13 @@
   .cell .feat i { font-style:normal; cursor:pointer; white-space:nowrap; padding:5px 4px;
     border-radius:3px; display:inline-flex; align-items:center; gap:1px; }
   .cell .feat i:active { background:rgba(127,127,127,.18); }
+  /* THE TAP TARGET IS NOT THE GLYPH BOX. A crowded strip shrinks its horizontal padding to fit (below),
+     and padding was doing double duty as both layout and hit area — so the fullest strips, the ones with
+     the most to say, ended up with the smallest targets. This overlay grows the touch area without
+     touching layout at all: 6px of extra height each side (a thumb-sized ~23px), and 1px each side
+     horizontally, which stays inside the 3px flex gap so neighbouring targets never overlap. */
+  .cell .feat i { position:relative; }
+  .cell .feat i::after { content:''; position:absolute; inset:-6px -1px; }
   /* A CROWDED STRIP BUYS ITS ROOM FROM THE PADDING, NOT FROM THE GRID. FEATURES has SEVEN entries
      (ladder ⟳, give-up ⤓, floor offset ⛨, wing ✦, fly/condor ❈, cover-to-stack ⊞,
      governor-blocked-open ⊘, governor-deferred-cover ⊗ — eight since flies were added), so eight glyphs
@@ -152,9 +159,12 @@
      Widening the cell to 200 alone does not close that; the horizontal gutter does, and it is the part of
      the tap target that matters least (the 5px VERTICAL padding is what makes a glyph thumb-sized, and
      the 3px flex gap still separates neighbouring hit areas). Only strips that actually need it pay. */
-  .cell .feat:has(i:nth-child(6)) i { padding-left:2px; padding-right:2px; }
-  .cell .feat:has(i:nth-child(7)) i { padding-left:1px; padding-right:1px; }
-  .cell .feat:has(i:nth-child(8)) i { padding-left:0; padding-right:0; }
+  .cell .feat:has(i:nth-child(6)) i { padding-left:3px; padding-right:3px; }
+  .cell .feat:has(i:nth-child(7)) i { padding-left:2px; padding-right:2px; }
+  /* At eight the count digits are shrunk instead of the padding — a narrower glyph still takes a tap,
+     a zero-padding one is a line. */
+  .cell .feat:has(i:nth-child(8)) i { padding-left:2px; padding-right:2px; }
+  .cell .feat:has(i:nth-child(8)) i b { font-size:9px; }
   .cell .feat i.lad { color:#4a7fb5; } .cell .feat i.giv { color:#9a5bb8; }
   .cell .feat i.off { color:#2f8f6f; } .cell .feat i.wng { color:#b5822a; }
   .cell .feat i.stk { color:#6f9b21; } .cell .feat i.gov { color:#c0564f; }
@@ -251,7 +261,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.1</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -1456,7 +1466,12 @@ document.getElementById('timeSlider').addEventListener('input', (e) => {
 // bound to svg[data-v], which a glyph is not inside.
 function closeFeatTip() { const t = document.querySelector('.feattip'); if (t) t.remove(); }
 document.addEventListener('click', (e) => {
-  const g = e.target.closest('.cname .feat i');
+  // `.feat i`, NOT `.cname .feat i`. v3.9.7 moved the feature strip out of `.cname` and below the chart;
+  // this selector still required it to be a DESCENDANT of the header, so it stopped matching entirely and
+  // every glyph went dead on touch — where the tap sheet is the only way to read the detail at all.
+  // A selector that encodes WHERE a thing sits breaks the moment it is moved; this one only needs what it
+  // IS. Desktop kept working throughout because `title` hover is independent of the handler.
+  const g = e.target.closest('.feat i');
   closeFeatTip();
   if (!g) return;
   e.stopPropagation();
