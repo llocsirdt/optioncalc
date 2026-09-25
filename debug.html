@@ -92,6 +92,8 @@
   .kv { font:11px ui-monospace,monospace; }
   .kv div { display:flex; justify-content:space-between; gap:14px; padding:1px 0; }
   .kv .k { color:var(--muted); }
+  .kv .muted { color:#aab; }
+  .kv .bad { color:var(--loss); font-weight:600; }
   table.ord { border-collapse:collapse; font:11px ui-monospace,monospace; width:100%; }
   table.ord th { text-align:right; padding:3px 6px; border-bottom:1px solid var(--grid); color:var(--muted);
     font-weight:600; white-space:nowrap; position:sticky; top:0; background:#fff; cursor:help;
@@ -149,7 +151,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.9.4</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.10.0</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -169,6 +171,14 @@
     <div class="panel">
       <h2>Day summary</h2>
       <div class="kv" id="summary"></div>
+    </div>
+    <!-- WHAT THE ENGINE ACTUALLY DID, mechanism by mechanism. The day summary next door says how the day
+         ENDED; this says how it got there — which levers fired, how hard, and what refused. Read together
+         they answer "why is the number what it is", which neither does alone. Every figure is counted from
+         the run's own decision log, so a mechanism that never fired shows 0 rather than being absent. -->
+    <div class="panel">
+      <h2>Mechanisms <span class="meta" id="mechMeta"></span></h2>
+      <div class="kv" id="mech"></div>
     </div>
     <div class="panel">
       <h2>Backtest expectation <span class="meta">(765d)</span></h2>
@@ -339,7 +349,7 @@ async function load() {
       : `${base}/api/v1/candle-spread/runs/NDX/${date}?date=${date}&variant=${variant}&cb=${Date.now()}`);
   } catch (e) {
     record = null; showErr(`no run for ${variant} on ${date} (${e.message})`);
-    $('meta').textContent = ''; $('orders').innerHTML = ''; $('summary').innerHTML = '';
+    $('meta').textContent = ''; $('orders').innerHTML = ''; $('summary').innerHTML = ''; $('mech').innerHTML = '';
     // curveMeta too: it carries the previous day's min/max and its backtest line, which reads as though
     // the failed day had those numbers.
     $('curve').innerHTML = ''; $('curveMeta').textContent = ''; $('ordMeta').textContent = '';
@@ -383,6 +393,47 @@ function render() {
   ];
   $('summary').innerHTML = rows.map(([k, v]) =>
     `<div><span class="k">${k}</span><span class="${k === 'TERMINAL' || k === 'naked drag' ? sgn(parseFloat(String(v).replace(/[^0-9.-]/g, ''))) : ''}">${v}</span></div>`).join('');
+
+  // ---- MECHANISMS: what fired, how often, and what it cost/bought.
+  // Counted from decisions rather than from state, because a mechanism that was REFUSED leaves no trace on
+  // state at all — and "the governor blocked 19 opens" is the single most explanatory number on a capped
+  // day. Costs come off the decisions that carry them so the spend is real, not inferred.
+  {
+    const d = [];
+    for (const e of (record.events || [])) for (const x of (e.decisions || [])) d.push(x);
+    const n = (...acts) => d.filter((x) => acts.includes(x.action)).length;
+    const sum = (act, f) => d.filter((x) => x.action === act).reduce((a, x) => a + (Number(x[f]) || 0), 0);
+    const st = record.state || {};
+    const hedgeSpend = sum('floor-offset', 'cost') + sum('wing', 'cost') + sum('fly', 'cost');
+    const lockedByStack = sum('cover-to-stack', 'locked');
+    const mrows = [
+      ['ladder reprices', n('cover-reprice') + n('open-reprice')
+        + (n('cover-reprice') || n('open-reprice') ? ` (${n('open-reprice')} open / ${n('cover-reprice')} cover)` : '')],
+      ['cover give-ups', n('cover-giveup')],
+      ['offsets / wings / flies', `${n('floor-offset')} / ${n('wing')} / ${n('fly')}`],
+      ['hedge spend', hedgeSpend ? usd(hedgeSpend) : '—'],
+      ['hedges expired unfilled', n('offset-expire', 'wing-expire', 'fly-expire')],
+      ['GOVERNOR blocked opens', n('open-skip-governor')],
+      ['governor deferred covers', n('cover-defer-governor')],
+      ['ratchet blocked opens', n('open-skip-ratchet')],
+      ['cap blocked opens', n('open-skip-cap')],
+      ['ceiling / leg-uniq refusals', `${n('open-skip-ceiling')} / ${n('open-skip-leg')}`],
+      ['leg-uniqueness shifts', n('open-shift')],
+      ['cover-to-stack locks', n('cover-to-stack') + (lockedByStack ? ` (${lockedByStack} winner${lockedByStack === 1 ? '' : 's'})` : '')],
+      ['combo 4-leg orders', n('combo-lock-open')],
+      ['orders NOT sent', n('open-not-sent', 'cover-not-sent', 'combo-not-sent')],
+      ['credit-sent opens', (st.positions || []).filter((p) => p.sentNet === 'CREDIT').length],
+      ['realized (locked) floor', usd(st.realizedPnl)],
+      ['peak capital deployed', st.peakCashDeployed != null ? usd(st.peakCashDeployed) : '—'],
+    ];
+    const hot = new Set(['GOVERNOR blocked opens', 'orders NOT sent', 'ratchet blocked opens', 'cap blocked opens']);
+    $('mech').innerHTML = mrows.map(([k, v]) => {
+      const zero = v === 0 || v === '0' || v === '0 / 0';
+      const cls = zero ? 'muted' : hot.has(k) ? 'bad' : '';
+      return `<div><span class="k">${k}</span><span class="${cls}">${v}</span></div>`;
+    }).join('');
+    $('mechMeta').textContent = `${d.length} decisions`;
+  }
 
   // ---- backtest expectation for THIS variant, so live and expected sit side by side
   const b = baselines && baselines[cfg.variant];
