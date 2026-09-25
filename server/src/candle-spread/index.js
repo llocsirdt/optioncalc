@@ -1070,7 +1070,16 @@ function classifyBoundary(date) {
   if (!RTH_WEEKDAYS.has(weekday)) return null;
   const t = hour * 60 + minute;
   if (t % 5 !== 0) return null;
-  if (t === EOD_MIN) return 'eod';
+  // A WINDOW, NOT ONE MINUTE. This fired settlement only when the wall clock read EXACTLY 16:00, and the
+  // scheduler classifies at the moment the timer actually fires — so a timer that ran a minute late, or a
+  // boundary the event loop was too busy to service, skipped the day's settlement entirely and left no
+  // trace anywhere. 2026-09-24 and 09-25 both ended with 77 candles and no eod_settlement while the
+  // process ran continuously, the disk was fine, and every per-variant computation was provably sound.
+  //
+  // Every boundary from 16:00 to 16:30 now attempts it. Settlement is IDEMPOTENT (a run already carrying
+  // an eod_settlement is skipped), so the extra attempts cost one cheap scan and the first one that gets
+  // through wins. A single missed timer can no longer cost a day's headline number.
+  if (t >= EOD_MIN && t <= EOD_MIN + 30) return 'eod';
   if (t === FIRST_ACTION_MIN) return 'first';
   if (t > FIRST_ACTION_MIN && t <= LAST_ACTION_MIN) return 'action';
   return null;
@@ -1822,20 +1831,34 @@ async function eodSettlementInner() {
     // Settle price = the OFFICIAL index 4:00 CLOSE (the $NDX quote lastPrice) — the actual 0DTE settlement
     // value. NOT the last 5m/15m candle mark (~9 pts off) and NOT `closePrice` (Schwab's prior-day close).
     let settle = null, settleSource = null;
-    try { settle = DEPS.getSettlementPrice ? await DEPS.getSettlementPrice(symbol) : null; if (settle != null) settleSource = 'index-close'; }
-    catch (e) { console.error('[candle-spread] EOD settlement quote failed:', e && e.message); }
+    // BOUNDED. An un-timed await on a network call can hang forever, and this one runs before anything is
+    // written — so a stalled quote produces exactly what was seen: no settlement, no error, no trace.
+    const withTimeout = (p, ms, what) => Promise.race([p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms}ms`)), ms))]);
+    try {
+      settle = DEPS.getSettlementPrice ? await withTimeout(DEPS.getSettlementPrice(symbol), 20000, 'settlement quote') : null;
+      if (settle != null) settleSource = 'index-close';
+    } catch (e) { console.error('[candle-spread] EOD settlement quote failed:', e && e.message); }
     if (settle == null) {   // fallback: newest 15m candle close
       try {
-        const analysis = await DEPS.analyzeCandles(symbol, { timeframe: '15m' });
+        const analysis = await withTimeout(DEPS.analyzeCandles(symbol, { timeframe: '15m' }), 20000, '15m candle fetch');
         const candles = analysis?.candleData?.['15m']?.candles || [];
         if (candles.length && candles[0].close != null) { settle = Number(candles[0].close); settleSource = '15m-candle-fallback'; }
       } catch (e) { console.error('[candle-spread] EOD candle fetch failed:', e && e.message); }
     }
 
     for (const run of runs) {
+     // ONE VARIANT MUST NOT BE ABLE TO COST THE OTHER 79 THEIR SETTLEMENT. This loop had no per-run guard,
+     // so a throw anywhere inside it — in computeTerminalPnl, in a write, in the summary — aborted the
+     // whole pass and left EVERY run unsettled. That is one of the two shapes that could have produced
+     // 2026-09-24/25 (the other was a missed timer, now covered by the window above); neither is
+     // distinguishable from the record, which is itself the problem this fixes.
+     try {
       const cfg = { ...run, expiration: run.expiration || todayEST() };
       const record = initRunSafe(cfg, todayEST(), 'EOD settlement');
       if (!record) continue;
+      // IDEMPOTENT, so the 16:00-16:30 window can retry freely and a manual backfill cannot double-book.
+      if ((record.events || []).some((e) => e.type === 'eod_settlement')) continue;
       let px = settle, pxSource = settleSource;
       if (px == null) {
         // SETTLE ON THE PRICING INSTRUMENT OR NOT AT ALL. The comment here has always said "NOT
@@ -1878,6 +1901,17 @@ async function eodSettlementInner() {
         store.appendEvent(record, { type: 'eod_summary', variant: run.variant, summary: daySummary });
         console.log('\n' + summary.renderText(daySummary) + '\n');
       } catch (e) { console.error('[candle-spread] EOD summary failed:', e && e.message); }
+     } catch (e) {
+      // SAY IT IN THE RECORD, not only in a log nobody can reach from a phone. A settlement that failed
+      // silently is indistinguishable from one that never ran, and that ambiguity cost two sessions.
+      console.error(`[candle-spread] EOD settlement FAILED for ${run.variant}:`, e && e.message);
+      try {
+        const rec = store.initRun({ ...run, expiration: run.expiration || todayEST() }, todayEST());
+        store.appendEvent(rec, { type: 'eod_settlement_error', variant: run.variant,
+          error: (e && e.message) || String(e),
+          note: 'this run did NOT settle; the others were unaffected. Retried on every boundary to 16:30.' });
+      } catch (e2) { /* the record itself is unreachable; the console line above is all there is */ }
+     }
     }
   }
 }
@@ -1896,6 +1930,61 @@ function scheduleNext() {
     }
     scheduleNext();
   }, delay);
+}
+
+
+// BACKFILL A SESSION THAT ENDED WITHOUT SETTLING. Runs once at startup.
+//
+// The 16:00-16:30 window fixes the FUTURE; it cannot reach a day already past, because the scheduler only
+// ever settles todayEST(). 2026-09-24 and 09-25 both closed with a full 77 candles and no eod_settlement,
+// and the only people who could have run a recovery script were nowhere near a terminal. So the engine
+// repairs its own history on boot.
+//
+// THE SETTLE PRICE IS THE HONEST ONE AVAILABLE, AND IT SAYS SO. The real 0DTE settlement is the official
+// $NDX 16:00 close, and that quote is long gone by the time we notice — asking for it now returns TODAY's
+// price, which would be a fabrication. The record's own lastUnderlying is the NDX level at 15:55: a few
+// points off the official close, genuinely measured, and tagged `backfill-run-underlying` so it can never
+// be mistaken for an index close in any later analysis. See feedback_use_real_numbers_not_derived.
+//
+// Bounded to the last 10 sessions so a long outage cannot turn a boot into a batch job.
+function backfillMissedSettlements() {
+  let done = 0, failed = 0;
+  try {
+    const today = todayEST();
+    const byVariant = new Map(RUNS.map((r) => [r.variant, r]));
+    const files = store.listRunFiles().slice(-10 * Math.max(1, RUNS.length));
+    for (const f of files) {
+      const runId = String(f).replace(/\.json$/, '');
+      const rec = store.readRun(runId);
+      if (!rec || !rec.state || !rec.tradeDate || rec.tradeDate >= today) continue;       // today is the scheduler's job
+      const ev = rec.events || [];
+      if (ev.some((e) => e.type === 'eod_settlement')) continue;                          // already settled
+      const cc = ev.filter((e) => e.type === 'candle_close');
+      const last = cc[cc.length - 1];
+      const hm = last && last.candle && /(\d\d):(\d\d)$/.exec(String(last.candle.time));
+      if (!hm || (+hm[1] * 60 + +hm[2]) < LAST_ACTION_MIN) continue;                      // never reached the close
+      const run = byVariant.get((rec.config || {}).variant);
+      if (!run) continue;                                                                 // not on the current roster
+      const px = rec.state.lastUnderlying != null ? Number(rec.state.lastUnderlying) : null;
+      if (!(px > 0)) continue;                                                            // nothing honest to settle on
+      try {
+        const cfg = { ...rec.config, expiration: (rec.config || {}).expiration || rec.tradeDate };
+        const term = trader.computeTerminalPnl(rec.state, cfg, px, rec.events);
+        store.appendEvent(rec, { type: 'eod_settlement', variant: run.variant, settle: px,
+          settleSource: 'backfill-run-underlying', backfilledAt: new Date().toISOString(),
+          terminalPnl: term.total, floorPnl: term.floor, positions: term.positions,
+          note: 'settled on BOOT because the 16:00 pass did not run for this session. The price is the '
+            + "run's own last NDX underlying (15:55), NOT the official index close — a few points off." });
+        try {
+          const ds = summary.buildDaySummary(rec);
+          store.appendEvent(rec, { type: 'eod_summary', variant: run.variant, summary: ds });
+        } catch (e) { /* the settlement is what matters; the summary is a convenience */ }
+        done++;
+      } catch (e) { failed++; console.error(`[candle-spread] backfill failed for ${runId}:`, e && e.message); }
+    }
+  } catch (e) { console.error('[candle-spread] backfill scan failed:', e && e.message); }
+  if (done || failed) console.log(`[candle-spread] BACKFILL: settled ${done} missed session-run(s)${failed ? `, ${failed} failed` : ''}.`);
+  return { done, failed };
 }
 
 function start(deps) {
@@ -1928,6 +2017,8 @@ function start(deps) {
   }
   started = true;
   scheduleNext();
+  // Repair any session that ended without settling before scheduling anything new (see the function).
+  try { backfillMissedSettlements(); } catch (e) { console.error('[candle-spread] backfill:', e && e.message); }
   // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).
   // Harmless when disarmed/dry-run: runOrderPoll early-returns and there are no liveOrders.
   orderPollTimer = setInterval(() => { runOrderPoll().catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);
