@@ -1940,15 +1940,24 @@ function scheduleNext() {
 // and the only people who could have run a recovery script were nowhere near a terminal. So the engine
 // repairs its own history on boot.
 //
-// THE SETTLE PRICE IS THE HONEST ONE AVAILABLE, AND IT SAYS SO. The real 0DTE settlement is the official
-// $NDX 16:00 close, and that quote is long gone by the time we notice — asking for it now returns TODAY's
-// price, which would be a fabrication. The record's own lastUnderlying is the NDX level at 15:55: a few
-// points off the official close, genuinely measured, and tagged `backfill-run-underlying` so it can never
-// be mistaken for an index close in any later analysis. See feedback_use_real_numbers_not_derived.
+// IT SETTLES ON THE REAL CLOSE. The first version reached straight for the record's own 15:55 underlying,
+// reasoning that the official close was unrecoverable once the day had passed: the LIVE quote answers
+// about today, so asking it tomorrow would be a fabrication. That was true of the QUOTE and false of the
+// INSTRUMENT — the DAILY price-history bar carries the same official close durably. Verified against
+// 2026-09-23, which settled live at 30470.2928 from `index-close`: the daily bar returns 30470.2928,
+// diff 0.0000.
+//
+// The distinction is worth real money. On the two days this was written to recover, the 15:55 underlying
+// was 15 and 23 points from the close, and a 1m bar's close is ~9 points off — on a 10-wide spread that is
+// a whole width, the difference between a position settling in the money and out of it.
+//
+// lastUnderlying stays the fallback for a date the daily series cannot reach (today's bar may not have
+// posted yet), tagged `backfill-run-underlying` so an approximation can never be mistaken for an index
+// close. See feedback_use_real_numbers_not_derived.
 //
 // Bounded to the last 10 sessions so a long outage cannot turn a boot into a batch job.
-function backfillMissedSettlements() {
-  let done = 0, failed = 0;
+async function backfillMissedSettlements() {
+  let done = 0, failed = 0, approx = 0;
   try {
     const today = todayEST();
     const byVariant = new Map(RUNS.map((r) => [r.variant, r]));
@@ -1958,23 +1967,47 @@ function backfillMissedSettlements() {
       const rec = store.readRun(runId);
       if (!rec || !rec.state || !rec.tradeDate || rec.tradeDate >= today) continue;       // today is the scheduler's job
       const ev = rec.events || [];
-      if (ev.some((e) => e.type === 'eod_settlement')) continue;                          // already settled
+      // A PROVISIONAL SETTLEMENT IS NOT A FINISHED ONE. A day recovered before its daily bar posted is
+      // priced on the 15:55 underlying, and plain idempotency would freeze that approximation forever —
+      // measured at $1,316 of terminal P&L on v7-10 for 2026-09-24 alone. So a settlement tagged
+      // `backfill-run-underlying` stays eligible for ONE upgrade, and only to the real close: readers take
+      // the LAST eod_settlement, so appending the corrected one supersedes it without rewriting history.
+      const prior = [...ev].reverse().find((e) => e.type === 'eod_settlement');
+      const provisional = !!(prior && prior.settleSource === 'backfill-run-underlying');
+      if (prior && !provisional) continue;                                                // properly settled already
       const cc = ev.filter((e) => e.type === 'candle_close');
       const last = cc[cc.length - 1];
       const hm = last && last.candle && /(\d\d):(\d\d)$/.exec(String(last.candle.time));
       if (!hm || (+hm[1] * 60 + +hm[2]) < LAST_ACTION_MIN) continue;                      // never reached the close
       const run = byVariant.get((rec.config || {}).variant);
       if (!run) continue;                                                                 // not on the current roster
-      const px = rec.state.lastUnderlying != null ? Number(rec.state.lastUnderlying) : null;
+      // THE OFFICIAL CLOSE FIRST; the run's own last underlying only if that cannot be had.
+      let px = null, pxSource = null;
+      try {
+        const real = DEPS.getSettlementPriceFor
+          ? await DEPS.getSettlementPriceFor((rec.config || {}).symbol || 'NDX', rec.tradeDate) : null;
+        if (real > 0) { px = real; pxSource = 'index-close-daily'; }
+      } catch (e) { /* fall through to the measured underlying */ }
+      // Re-settling a provisional record is worth it ONLY for the real close; re-writing the same
+      // approximation would add an event and change nothing.
+      if (provisional && pxSource !== 'index-close-daily') continue;
+      if (px == null && rec.state.lastUnderlying != null) {
+        px = Number(rec.state.lastUnderlying); pxSource = 'backfill-run-underlying'; approx++;
+      }
       if (!(px > 0)) continue;                                                            // nothing honest to settle on
       try {
         const cfg = { ...rec.config, expiration: (rec.config || {}).expiration || rec.tradeDate };
         const term = trader.computeTerminalPnl(rec.state, cfg, px, rec.events);
         store.appendEvent(rec, { type: 'eod_settlement', variant: run.variant, settle: px,
-          settleSource: 'backfill-run-underlying', backfilledAt: new Date().toISOString(),
+          settleSource: pxSource, backfilledAt: new Date().toISOString(),
           terminalPnl: term.total, floorPnl: term.floor, positions: term.positions,
-          note: 'settled on BOOT because the 16:00 pass did not run for this session. The price is the '
-            + "run's own last NDX underlying (15:55), NOT the official index close — a few points off." });
+          supersedes: provisional ? (prior.settle != null ? prior.settle : null) : undefined,
+          note: (provisional ? 'RE-settled on BOOT at the official close, replacing a provisional settlement '
+                  + 'priced off the 15:55 underlying. ' : 'settled on BOOT because the 16:00 pass did not run for this session. ')
+            + (pxSource === 'index-close-daily'
+              ? 'Priced at the OFFICIAL index close from the daily bar — the same number the live pass would have used.'
+              : "Priced at the run's own last NDX underlying (15:55) because the daily bar could not be "
+                + 'reached; that is a few points off the official close.') });
         try {
           const ds = summary.buildDaySummary(rec);
           store.appendEvent(rec, { type: 'eod_summary', variant: run.variant, summary: ds });
@@ -1983,8 +2016,10 @@ function backfillMissedSettlements() {
       } catch (e) { failed++; console.error(`[candle-spread] backfill failed for ${runId}:`, e && e.message); }
     }
   } catch (e) { console.error('[candle-spread] backfill scan failed:', e && e.message); }
-  if (done || failed) console.log(`[candle-spread] BACKFILL: settled ${done} missed session-run(s)${failed ? `, ${failed} failed` : ''}.`);
-  return { done, failed };
+  if (done || failed) console.log(`[candle-spread] BACKFILL: settled ${done} missed session-run(s)`
+    + `${approx ? `, ${approx} on the 15:55 underlying rather than the official close` : ''}`
+    + `${failed ? `, ${failed} failed` : ''}.`);
+  return { done, failed, approx };
 }
 
 function start(deps) {
@@ -2018,7 +2053,7 @@ function start(deps) {
   started = true;
   scheduleNext();
   // Repair any session that ended without settling before scheduling anything new (see the function).
-  try { backfillMissedSettlements(); } catch (e) { console.error('[candle-spread] backfill:', e && e.message); }
+  backfillMissedSettlements().catch((e) => console.error('[candle-spread] backfill:', e && e.message));
   // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).
   // Harmless when disarmed/dry-run: runOrderPoll early-returns and there are no liveOrders.
   orderPollTimer = setInterval(() => { runOrderPoll().catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);

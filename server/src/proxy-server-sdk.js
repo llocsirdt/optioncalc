@@ -1426,6 +1426,26 @@ async function startServer() {
           return (typeof v === 'number' && v > 0) ? v : null;
         } catch (e) { return null; }
       },
+      // THE OFFICIAL CLOSE FOR A PAST DATE. getSettlementPrice above reads the LIVE quote, which is the
+      // real settlement value only while it is still today — ask it tomorrow and it answers about
+      // tomorrow. The DAILY price-history bar carries the same official close durably: verified against
+      // 2026-09-23, whose settled record holds 30470.2928 from `index-close`, the daily bar returns
+      // 30470.2928 — diff 0.0000. (A 1m bar's close is NOT the same number: 30479.14 that day, ~9 points
+      // off, which is a whole width on a 10-wide spread.)
+      //
+      // Used by the boot backfill to settle a session whose 16:00 pass never ran, so a recovered day gets
+      // the real close rather than an approximation.
+      getSettlementPriceFor: async (symbol, dateISO) => {
+        try {
+          const IDX = ['NDX', 'SPX', 'RUT', 'DJX', 'OEX', 'VIX'];
+          const q = symbol.startsWith('$') ? symbol : (IDX.includes(symbol) ? '$' + symbol : symbol);
+          const d = await marketClient.priceHistory(q, { periodType: 'month', period: 1, frequencyType: 'daily', frequency: 1 });
+          const et = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(ms));
+          const bar = (d && d.candles || []).find((c) => et(c.datetime) === dateISO);
+          const v = bar && bar.close;
+          return (typeof v === 'number' && v > 0) ? v : null;
+        } catch (e) { return null; }
+      },
       tradingClient,
       accountHash: process.env.ACCOUNT_HASH,
       // Real order sending is prod-only; dev mode never sends (avoids duplicate orders
