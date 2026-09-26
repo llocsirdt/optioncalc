@@ -1847,6 +1847,33 @@ async function eodSettlementInner() {
       } catch (e) { console.error('[candle-spread] EOD candle fetch failed:', e && e.message); }
     }
 
+    // ── RECORD THE CLOSE BEFORE ANYTHING CAN FAIL ────────────────────────────────────────────────────
+    // RECORDING AND ACTING ARE DIFFERENT DECISIONS, and LAST_ACTION_MIN was making both. The engine stops
+    // TRADING at 15:55, which is right — but it also stopped WRITING there, so the record's last known
+    // price was the 15:55 sample and the 16:00 close entered the record only as a side-effect of the
+    // settlement job computing terminal P&L. When that job failed on 2026-09-24/25 the close went with
+    // it, and every consumer fell back to a price 12-19 points stale (worth $1,316 of terminal on one
+    // variant). The close is a FACT ABOUT THE SESSION; it should not be hostage to a computation.
+    //
+    // So it is written first, per run, in its own guard: a cheap append that cannot be taken down by
+    // anything the settlement loop does afterwards. state.sessionClose is what consumers read when there
+    // is no settlement event, in preference to lastUnderlying.
+    if (settle != null && settle > 0) {
+      for (const run of runs) {
+        try {
+          const cfg0 = { ...run, expiration: run.expiration || todayEST() };
+          const rec0 = initRunSafe(cfg0, todayEST(), 'session close');
+          if (!rec0 || rec0.state.sessionClose != null) continue;
+          rec0.state.sessionClose = settle;
+          rec0.state.sessionCloseSource = settleSource || 'index-close';
+          store.appendEvent(rec0, { type: 'session_close', variant: run.variant, close: settle,
+            source: settleSource || 'index-close',
+            note: 'the official close, recorded independently of settlement so a failed terminal '
+              + 'computation cannot cost the record its closing price' });
+        } catch (e) { console.error(`[candle-spread] session close write failed for ${run.variant}:`, e && e.message); }
+      }
+    }
+
     for (const run of runs) {
      // ONE VARIANT MUST NOT BE ABLE TO COST THE OTHER 79 THEIR SETTLEMENT. This loop had no per-run guard,
      // so a throw anywhere inside it — in computeTerminalPnl, in a write, in the summary — aborted the
@@ -1871,7 +1898,11 @@ async function eodSettlementInner() {
         // Every fallback below is an NDX price. `priceCandle` is the pricing instrument's own OHLC bar,
         // stamped on candle_close since 2026-09-23; older records simply do not have it, and then there is
         // nothing left to settle on — which is the honest answer, not a reason to reach for the NQ bar.
-        if (record.state && record.state.lastUnderlying != null) {
+        // A RECORDED CLOSE BEATS THE 15:55 SAMPLE. Written above, and by a previous pass on a retry.
+        if (record.state && record.state.sessionClose != null) {
+          px = Number(record.state.sessionClose); pxSource = record.state.sessionCloseSource || 'session-close';
+        }
+        if (px == null && record.state && record.state.lastUnderlying != null) {
           px = Number(record.state.lastUnderlying); pxSource = 'run-underlying';
         }
         if (px == null) {
@@ -1986,7 +2017,12 @@ async function backfillMissedSettlements() {
       try {
         const real = DEPS.getSettlementPriceFor
           ? await DEPS.getSettlementPriceFor((rec.config || {}).symbol || 'NDX', rec.tradeDate) : null;
-        if (real > 0) { px = real; pxSource = 'index-close-daily'; }
+        if (real > 0) {
+          px = real; pxSource = 'index-close-daily';
+          // The close is a fact about the session, so record it as one even here — a later reader gets it
+          // without having to trust or re-derive the settlement.
+          if (rec.state.sessionClose == null) { rec.state.sessionClose = real; rec.state.sessionCloseSource = 'index-close-daily'; }
+        }
       } catch (e) { /* fall through to the measured underlying */ }
       // Re-settling a provisional record is worth it ONLY for the real close; re-writing the same
       // approximation would add an event and change nothing.

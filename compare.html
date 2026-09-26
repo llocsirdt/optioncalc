@@ -261,7 +261,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.1</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.2</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -1198,7 +1198,14 @@ function applyTime(T) {
         const uNow = byMinute
           ? (di2 ? underAtMinute(di2, T) : null)
           : under;
-        const u = uNow != null ? uNow : (ownSettle != null ? ownSettle : (src[v].state && src[v].state.lastUnderlying));
+        // PRICE PREFERENCE, best first: the scrubber's own minute, then the settlement, then the
+        // SESSION CLOSE recorded independently of settlement, then the 15:55 sample. The third rung is new
+        // and is the one that matters when the settlement job fails: the close is a fact about the
+        // session, and falling straight through to lastUnderlying put every cell 12-19 points stale.
+        const sessClose = src[v].state && src[v].state.sessionClose;
+        const u = uNow != null ? uNow
+          : (ownSettle != null ? ownSettle
+          : (sessClose != null ? sessClose : (src[v].state && src[v].state.lastUnderlying)));
         const dom = domainOf ? domainOf(v) : null;
         dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined, dom) : { empty: true };
       } catch (e) { dest[v] = { err: 'calc' }; }
