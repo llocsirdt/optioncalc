@@ -1991,12 +1991,22 @@ async function backfillMissedSettlements() {
   let done = 0, failed = 0, approx = 0;
   try {
     const today = todayEST();
+    const nowET = etParts();
+    // Past the close plus the same grace the completeness check uses, so a boot at 16:02 does not race a
+    // settlement pass that is still legitimately in flight.
+    const pastClose = (nowET.hour * 60 + nowET.minute) >= EOD_MIN + 5;
     const byVariant = new Map(RUNS.map((r) => [r.variant, r]));
     const files = store.listRunFiles().slice(-10 * Math.max(1, RUNS.length));
     for (const f of files) {
       const runId = String(f).replace(/\.json$/, '');
       const rec = store.readRun(runId);
-      if (!rec || !rec.state || !rec.tradeDate || rec.tradeDate >= today) continue;       // today is the scheduler's job
+      if (!rec || !rec.state || !rec.tradeDate || rec.tradeDate > today) continue;        // a future date is not ours
+      // TODAY COUNTS TOO, once the session is over. This skipped today's date outright on the reasoning
+      // that the scheduler owns it — but the scheduler owns the 16:00-16:30 WINDOW, and a boot at 20:00
+      // is long past that. Skipping meant a session whose settlement pass had already failed stayed
+      // unsettled until some boot on a later day, for no reason: the market is shut and the close is a
+      // known number. Only a session that might STILL BE RUNNING is left alone.
+      if (rec.tradeDate === today && !pastClose) continue;
       const ev = rec.events || [];
       // A PROVISIONAL SETTLEMENT IS NOT A FINISHED ONE. A day recovered before its daily bar posted is
       // priced on the 15:55 underlying, and plain idempotency would freeze that approximation forever —
@@ -2015,18 +2025,29 @@ async function backfillMissedSettlements() {
       // THE OFFICIAL CLOSE FIRST; the run's own last underlying only if that cannot be had.
       let px = null, pxSource = null;
       try {
-        const real = DEPS.getSettlementPriceFor
-          ? await DEPS.getSettlementPriceFor((rec.config || {}).symbol || 'NDX', rec.tradeDate) : null;
+        const sym = (rec.config || {}).symbol || 'NDX';
+        // 1) THE DAILY BAR — durable and exact for any past date.
+        let real = DEPS.getSettlementPriceFor ? await DEPS.getSettlementPriceFor(sym, rec.tradeDate) : null;
+        let src = 'index-close-daily';
+        // 2) THE LIVE QUOTE — for the session that has not posted a daily bar yet, which is the one that
+        // just ended. With the market shut, $NDX lastPrice IS that session's official close: measured
+        // 30608.1343 for 2026-09-25 while its daily bar did not yet exist. There is no reason to record a
+        // provisional price when the accurate one is a quote away, and the index page was showing exactly
+        // this number while the engine was about to write the 15:55 sample instead.
+        if (!(real > 0) && rec.tradeDate === today && pastClose && DEPS.getSettlementPrice) {
+          real = await DEPS.getSettlementPrice(sym);
+          src = 'index-close-quote';
+        }
         if (real > 0) {
-          px = real; pxSource = 'index-close-daily';
+          px = real; pxSource = src;
           // The close is a fact about the session, so record it as one even here — a later reader gets it
           // without having to trust or re-derive the settlement.
-          if (rec.state.sessionClose == null) { rec.state.sessionClose = real; rec.state.sessionCloseSource = 'index-close-daily'; }
+          if (rec.state.sessionClose == null) { rec.state.sessionClose = real; rec.state.sessionCloseSource = src; }
         }
       } catch (e) { /* fall through to the measured underlying */ }
       // Re-settling a provisional record is worth it ONLY for the real close; re-writing the same
       // approximation would add an event and change nothing.
-      if (provisional && pxSource !== 'index-close-daily') continue;
+      if (provisional && !(pxSource === 'index-close-daily' || pxSource === 'index-close-quote')) continue;
       if (px == null && rec.state.lastUnderlying != null) {
         px = Number(rec.state.lastUnderlying); pxSource = 'backfill-run-underlying'; approx++;
       }
@@ -2040,8 +2061,9 @@ async function backfillMissedSettlements() {
           supersedes: provisional ? (prior.settle != null ? prior.settle : null) : undefined,
           note: (provisional ? 'RE-settled on BOOT at the official close, replacing a provisional settlement '
                   + 'priced off the 15:55 underlying. ' : 'settled on BOOT because the 16:00 pass did not run for this session. ')
-            + (pxSource === 'index-close-daily'
-              ? 'Priced at the OFFICIAL index close from the daily bar — the same number the live pass would have used.'
+            + (pxSource === 'index-close-daily' || pxSource === 'index-close-quote'
+              ? `Priced at the OFFICIAL index close (${pxSource === 'index-close-quote' ? 'live quote, market shut' : 'daily bar'}) `
+                + '— the same number the live pass would have used.'
               : "Priced at the run's own last NDX underlying (15:55) because the daily bar could not be "
                 + 'reached; that is a few points off the official close.') });
         try {
