@@ -102,11 +102,27 @@
       label = 'in progress';
       detail = `session is still open — settles at the ${closeLabel} close`
         + (lastCandle ? `; last candle ${lastCandle}` : '');
-    } else {
+    } else if (!lastCandle) {
       label = 'INCOMPLETE';
-      detail = lastCandle
-        ? `stopped at ${lastCandle} — never settled${shortfallMin ? `, missing the last ${shortfallMin} min to the ${closeLabel} close` : ''}`
-        : 'never settled and recorded no candles';
+      detail = 'never settled and recorded no candles';
+    } else if (shortfallMin) {
+      // GENUINELY SHORT OF THE CLOSE: candles are missing as well as the settlement.
+      label = 'INCOMPLETE';
+      detail = `stopped at ${lastCandle} — never settled, missing the last ${shortfallMin} min to the ${closeLabel} close`;
+    } else {
+      // THE DATA IS COMPLETE AND ONLY THE SETTLEMENT IS MISSING — a different problem, and it used to be
+      // described in the same words. `shortfallMin` is already 0 here, so the code knows every candle
+      // through the last action bar is present; the message still said "stopped at 15:55", which reads as
+      // truncation. On 2026-09-24/25 that sent the reader hunting for a missing candle for two days when
+      // the candles were all there and the 16:00 settlement job was what had failed.
+      //
+      // The distinction matters because the two have different fixes and different blast radii: missing
+      // candles mean the engine stopped trading, a missing settlement only means the day's terminal was
+      // never booked — the book itself is intact and the curve renders from it correctly.
+      label = 'NOT SETTLED';
+      detail = `every candle present through ${lastCandle} (the last action bar) — but the ${closeLabel} `
+        + 'SETTLEMENT never ran, so there is no official close and no terminal P&L. The curve is priced off '
+        + "the run's own 15:55 underlying instead, which is a few points from the close.";
     }
     return {
       complete, status, settled: priced,
