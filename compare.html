@@ -261,7 +261,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.2</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.3</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
   </div>
@@ -1194,18 +1194,28 @@ function applyTime(T) {
         // Settle is PER RECORD first; the global daySettle stays the fallback for a record with no
         // settlement event of its own (and is identical for every cell in variant mode anyway).
         const di2 = dayIndex[v];
-        const ownSettle = di2 && di2.settle != null ? di2.settle : daySettle;
         const uNow = byMinute
           ? (di2 ? underAtMinute(di2, T) : null)
           : under;
-        // PRICE PREFERENCE, best first: the scrubber's own minute, then the settlement, then the
-        // SESSION CLOSE recorded independently of settlement, then the 15:55 sample. The third rung is new
-        // and is the one that matters when the settlement job fails: the close is a fact about the
-        // session, and falling straight through to lastUnderlying put every cell 12-19 points stale.
+        // PRICE PREFERENCE, best first, and EVERY RUNG MUST BE ABOUT THIS CELL'S OWN SESSION:
+        //   the scrubber's minute -> this run's settlement -> this run's recorded session close
+        //   -> (variant mode only) the day's global settle -> this run's 15:55 sample.
+        //
+        // THE GLOBAL `daySettle` IS ONLY VALID WHEN EVERY CELL IS THE SAME DAY. In variant mode it is that
+        // day's official close and rightly beats a 15:55 sample. In DATE mode each cell is a different
+        // session, so borrowing it hands one day's close to another — and analyzeLegs expands the x-domain
+        // to contain the underlying, so a foreign price does not merely mislabel the cell, it STRETCHES
+        // ITS AXIS. Seen on 2026-09-24 and 09-25, the only two unsettled days: strikes 30260-30490 and
+        // 30430-30660 drawn against a close from a different session hundreds of points away, while every
+        // settled day beside them was correct. The per-record index already exists for exactly this
+        // reason; this was the last rung still reaching past it.
         const sessClose = src[v].state && src[v].state.sessionClose;
+        const sameSession = GRID_MODE !== 'date';
         const u = uNow != null ? uNow
-          : (ownSettle != null ? ownSettle
-          : (sessClose != null ? sessClose : (src[v].state && src[v].state.lastUnderlying)));
+          : (di2 && di2.settle != null ? di2.settle
+          : (sessClose != null ? sessClose
+          : (sameSession && daySettle != null ? daySettle
+          : (src[v].state && src[v].state.lastUnderlying))));
         const dom = domainOf ? domainOf(v) : null;
         dest[v] = res.legs.length ? analyzeLegs(res.legs, Number.isFinite(u) ? u : undefined, dom) : { empty: true };
       } catch (e) { dest[v] = { err: 'calc' }; }
