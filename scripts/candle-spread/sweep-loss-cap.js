@@ -31,7 +31,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { runDay5m, load5mDays } = require('./backtest-v6-5m');
-const { buildRuns } = require('../../server/src/candle-spread/index');
+const CS = require('../../server/src/candle-spread/index');
+const { buildRuns } = CS;
 const { optsFor } = require('../../server/src/candle-spread/backtest/opts-for');
 
 const argVal = (flag, dflt) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; };
@@ -64,11 +65,24 @@ for (const run of buildRuns().filter(r => r.lossMax != null)) {
   const cur = g.get(run.lossMax) || { n: 0, lossTarget: run.lossTarget };
   cur.n++; g.set(run.lossMax, cur);
 }
+// THE REFERENCE ARM SILENTLY BECAME THE TREATMENT. Reading "the most common cap at this width" off the
+// roster was a fair proxy for the pre-tightening default while only four variants carried an override.
+// Once TUNED_CAPS tightened all 50, the MODE IS THE TIGHTENED VALUE — so `generic` stopped being a
+// counterfactual and started being a second copy of `current`. Measured: 29 of 50 variants had no rung
+// looser than their own cap, which is precisely the question the sweep is asked when someone suspects the
+// caps are too tight. It answered by not testing.
+//
+// maxCapFor is now exported from index.js, so the counterfactual is the REAL documented default rather
+// than either a hand-copied formula (the drift this comment originally warned about) or an inference from
+// data the treatment has already moved. The roster mode is kept as a second arm where it differs: it is
+// still a meaningful "what the fleet mostly carries" reference.
 const genericFor = (W) => {
   const g = GENERIC.get(W);
-  let best = null;
-  for (const [lossMax, v] of g) if (!best || v.n > best.n || (v.n === best.n && lossMax > best.lossMax)) best = { lossMax, lossTarget: v.lossTarget, n: v.n };
-  return best;
+  let mode = null;
+  for (const [lossMax, v] of g) if (!mode || v.n > mode.n || (v.n === mode.n && lossMax > mode.lossMax)) mode = { lossMax, lossTarget: v.lossTarget, n: v.n };
+  const formula = CS.maxCapFor ? CS.maxCapFor(W) : null;
+  if (!(formula > 0)) return mode;
+  return { lossMax: formula, lossTarget: Math.round(0.7 * formula), n: mode ? mode.n : 0, mode };
 };
 
 // One JOB = one (variant, cap rung). `current` keeps the run's own lossMax/lossTarget untouched; `generic`

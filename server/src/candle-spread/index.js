@@ -2353,6 +2353,9 @@ function status() {
 }
 
 module.exports = {
+  // THE PRE-TIGHTENING FLEET DEFAULT. Exported so sweep-loss-cap can use the real formula as its
+  // counterfactual arm instead of inferring it from the roster — see the note on genericFor.
+  maxCapFor,
   start,
   listRuns,
   getRun,
