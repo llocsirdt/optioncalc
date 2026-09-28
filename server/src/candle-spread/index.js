@@ -7,6 +7,7 @@
 const store = require('./store');
 const trader = require('./trader');
 const om = require('./order-manager');
+const BR = require('./book-reconcile');   // does the strategy's book match the orders that really filled?
 const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
@@ -1132,6 +1133,27 @@ function markIsFifteen(mark) { return new Date(mark).getMinutes() % 15 === 0; }
 // not, by itself, start trading real money.
 const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 
+// ── WHO DECIDES A FILL ──────────────────────────────────────────────────────────────────────────────
+// 'mark'   — the engine's own read of the chain (markFill). Correct with no broker, and the only honest
+//            answer for the 79 simulated variants. Today's behaviour, everywhere.
+// 'broker' — the broker's reported fill, consumed from the order row by trader.applyBrokerFills.
+//
+// WHY THIS IS OPT-IN AND NOT SIMPLY "on when live": because it changes what the book MEANS, and the
+// measurement that motivated it (book-reconcile, 2026-09-25 v7-10: 16 opens and 13 covers believed, 0
+// filled at the broker, 29 of 29 positions phantom) has not yet been re-run against a FUNDED account.
+// Until it has, the flag exists and the code path is tested, and the default is unchanged.
+//
+// It applies ONLY to a run sending real fillable orders (dryRun === false). A 'test'-mode run sends real
+// orders priced never to fill, so under broker fills it would correctly book nothing at all — which is
+// true, and useless: it would silently turn the paper variant into a no-op instead of a comparison.
+const FILL_SOURCE = process.env.CANDLE_SPREAD_FILL_SOURCE === 'broker' ? 'broker' : 'mark';
+function fillSourceFor(run) {
+  if (FILL_SOURCE !== 'broker') return 'mark';
+  const real = run.dryRun === false && DEPS && DEPS.isProd === true && LIVE_ARMED
+    && DEPS.tradingClient && DEPS.accountHash;
+  return real ? 'broker' : 'mark';
+}
+
 // Test-mode knobs. In dryRun:'test' a REAL order is sent but at an intentionally unfillable price
 // (so you can watch it hit Schwab and stick without any execution risk), then the poller cancels
 // it after TEST_CANCEL_MS. TEST_FRAC = the debit fraction (0.1 => a $10.50 debit is sent at $1.05);
@@ -1383,6 +1405,9 @@ function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`;
 function buildEngineDeps(run, live) {
   return Object.assign({
       dryRun: run.dryRun,
+      // CLOSED-LOOP FILLS — see FILL_SOURCE. 'mark' for every simulated run; 'broker' only for a run whose
+      // orders can really fill, and only when explicitly switched on.
+      fillSource: fillSourceFor(run),
       // Needed by the chain-monotonicity gate in markFill to find each leg's neighbours. Listed in
       // NOT_ENGINE_OPTS as geo-consumed, so it is not contract-checked, but the gate reads it off deps.
       strikeIncrement: run.strikeIncrement,
@@ -1788,6 +1813,10 @@ async function runRestingWork() {
         placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record),
         cancelOrder: makeCancelOrder(run, record) });
       try {
+        // Consume broker fills here too, not only at the candle close: the poller runs on its own timer,
+        // and a fill should become a position within ~30s rather than waiting up to five minutes for the
+        // next bar. Idempotent (each order applies once), so both call sites is correct, not double.
+        trader.applyBrokerFills(st, cfg, deps, decisions);
         await trader.resolvePendingOpen(st, cfg, deps, decisions);
         trader.resolvePendingHedges(st, cfg, deps, decisions);
         if (cfg.coverFillModel === 'resting') {
@@ -1854,11 +1883,51 @@ async function runOrderPollInner() {
     const record = store.readRun(store.makeRunId(cfg.symbol, cfg.expiration, todayEST(), cfg.variant));
     if (!record || !record.state) continue;
     const outstanding = (record.state.liveOrders || []).some(o => !om.isTerminal(o));
-    if (!outstanding) continue;
+    if (outstanding) {
+      try {
+        await om.reconcile(record, deps, { testCancelAfterMs: TEST_CANCEL_MS });
+      } catch (e) {
+        console.error(`[candle-spread] order poll error (${run.variant}):`, e && e.message);
+      }
+    }
+    // ── THE LOOP CLOSES HERE ──────────────────────────────────────────────────────────────────────
+    // Polling tells each ORDER what the broker thinks of it. This asks the question one level up: does
+    // the BOOK the strategy is trading on match the orders that actually filled? Those are different
+    // questions, and the second one is the one nobody was asking — book-reconcile found every position of
+    // v7-10 on 2026-09-25 to be a phantom (16 opens, 13 covers believed; 0 of 33 orders filled), and it
+    // took a script run two days later to notice.
+    //
+    // Deliberately OUTSIDE the `outstanding` gate: a book whose orders are all terminal is exactly when
+    // divergence is final, and skipping it there is how the 09-25 case stayed quiet.
+    //
+    // Only on a CHANGE of signature, so a standing disagreement is recorded once instead of every 30s for
+    // six hours. The signature lives on the record, so it survives a restart with the day's book.
     try {
-      await om.reconcile(record, deps, { testCancelAfterMs: TEST_CANCEL_MS });
+      const rec = BR.reconcileBook(record);
+      const sig = `${rec.severity}:${Object.entries(rec.byKind).sort().map(([k, v]) => k + v).join(',')}`;
+      // The COMPARISON is always recorded on state, even in a mode where the two books are meant to
+      // differ, so /status can answer "does the engine's book match the broker's?" at any moment rather
+      // than only after something has gone wrong. Only the EVENT and the log line are conditional.
+      record.state.bookReconcile = { severity: rec.severity, mode: rec.mode, byKind: rec.byKind,
+        diffs: rec.diffs.length, at: new Date().toISOString(), engine: rec.engine, broker: rec.broker };
+      if (rec.severity !== 'expected' && sig !== record.state.bookReconcileSig) {
+        record.state.bookReconcileSig = sig;
+        store.appendEvent(record, { type: 'book_reconcile', severity: rec.severity, byKind: rec.byKind,
+          engineOpens: rec.engine.opensFilled, engineCovers: rec.engine.coversFilled,
+          brokerFilled: rec.broker.filled, brokerSent: rec.broker.sent,
+          note: rec.agree
+            ? 'engine book agrees with the broker'
+            : `${rec.diffs.length} position(s) the engine and the broker do not agree on: `
+              + Object.entries(rec.byKind).map(([k, v]) => `${v} ${k}`).join(', '),
+          positions: rec.diffs.slice(0, 20) });
+        if (rec.severity === 'DIVERGENT') {
+          console.error(`[candle-spread] BOOK DIVERGENCE (${run.variant}): ${rec.diffs.length} position(s) — `
+            + Object.entries(rec.byKind).map(([k, v]) => `${v} ${k}`).join(', ')
+            + `; engine ${rec.engine.opensFilled} opens/${rec.engine.coversFilled} covers vs broker ${rec.broker.filled} filled of ${rec.broker.sent} sent`);
+        }
+      }
     } catch (e) {
-      console.error(`[candle-spread] order poll error (${run.variant}):`, e && e.message);
+      console.error(`[candle-spread] book reconcile (${run.variant}):`, e && e.message);
     }
   }
 }
@@ -2305,7 +2374,10 @@ function status() {
     // nothing) is visible in /status instead of only in the startup log.
     armedSelection: ARMED_VARIANT,
     armedMode: ARMED_MODE === false ? 'live (real fillable orders)' : 'test (unfillable + auto-cancel)',
-    armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT)
+    armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT),
+    // WHO DECIDES A FILL. 'mark' means the book is the engine's own read of the chain — correct for a
+    // simulated run, and a phantom for one whose orders can really fill. See FILL_SOURCE.
+    fillSource: FILL_SOURCE
   };
   const liveV = RUNS.filter(r => r.dryRun === false).map(r => r.variant);
   const testV = RUNS.filter(r => r.dryRun === 'test').map(r => r.variant);
@@ -2384,6 +2456,11 @@ function status() {
         canceled: lo.filter(o => o.status === 'canceled').length,
         lastAt: lo.length ? lo[lo.length - 1].placedAtEST : null
       },
+      // DOES THE BOOK MATCH THE BROKER? Written by the poller (see book_reconcile) and surfaced here so a
+      // divergence is one HTTP call away instead of buried in EB logs — which is how 2026-09-25's fully
+      // phantom book went unnoticed for two days. null means nothing to compare yet, or a mode where the
+      // two are MEANT to differ (simulate / unfillable test orders).
+      bookReconcile: (st && st.bookReconcile) || null,
       lastCandle: st ? st.lastCandleTime : null,
       updatedAt: rec ? rec.updatedAt : null
     };

@@ -95,5 +95,20 @@ const rec = (dryRun, positions, liveOrders) => ({
   ok(r.agree === true && r.severity === 'clean', `agreement is reportable, not just disagreement (${r.severity})`);
 }
 
+// ── THE FIELD NAMES THE ENGINE'S EVENT LOG READS ────────────────────────────────────────────────────
+// index.js's book_reconcile event and its console warning read these off the report. I first wrote them as
+// engine.opens / engine.covers, which are not fields — the event logged `undefined` for both and a replay
+// over 967 archived records is what showed it. Naming them here means a rename breaks a test instead of
+// quietly emptying the one alert that says the book is not real.
+{
+  const rep = BR.reconcileBook({ tradeDate: '2026-09-25', config: { variant: 'v', dryRun: false },
+    state: { positions: [], liveOrders: [] } });
+  for (const k of ['opensFilled', 'opensWorking', 'coversFilled', 'coversResting', 'hedgesFilled'])
+    ok(typeof rep.engine[k] === 'number', `engine.${k} is a number the log can print`);
+  for (const k of ['sent', 'filled', 'working', 'dead', 'openFills', 'coverFills'])
+    ok(typeof rep.broker[k] === 'number', `broker.${k} is a number the log can print`);
+  ok(rep.severity === 'clean' && rep.mode === 'LIVE', 'an empty live book is clean, not divergent');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

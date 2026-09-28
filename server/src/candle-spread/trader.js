@@ -1104,6 +1104,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // LEG-UNIQUENESS (deps.enforceLegUniqueness): a per-day ledger of each leg's traded side, persisted on
   // run state (this run record IS one trade day) so a leg is never both bought- and sold-to-open.
   if (deps.enforceLegUniqueness) { if (!st.legLedger) st.legLedger = {}; deps._ledger = LL.makeLegLedger(st.legLedger); }
+  // BEFORE ANY SIGNAL READS THE BOOK. The poller has been writing fills onto the order rows between
+  // candles; this is where they become positions, cash and locked floors. Inert unless fillSource is
+  // 'broker' (see applyBrokerFills), so simulated variants and every backtest are untouched.
+  applyBrokerFills(st, cfg, deps, decisions);
 
   const firstOfDay = !priorCandle;
   const ported = typeof deps.signalFn === 'function';
@@ -1908,6 +1912,96 @@ function snapshotSpreads(getLeg, center, incr, windowStrikes) {
   return out;
 }
 
+
+// ── CLOSED-LOOP FILLS: BOOK WHAT THE BROKER DID, NOT WHAT THE MARK SUGGESTS ─────────────────────────
+//
+// The state machine has always decided `filled` for itself, from markFill against the chain. That is
+// right with no broker (dry-run) and right by construction in test mode (orders priced never to fill).
+// With REAL fillable orders it is a phantom book — see book-reconcile, which measured every position of
+// v7-10 on 2026-09-25 as a phantom: 16 opens and 13 covers believed, 0 filled at the broker.
+//
+// THE POLLER DOES NOT MUTATE STRATEGY STATE. It records what happened on the order row; this consumes it
+// on the next pass. Cash, the locked floor, and the debit-canonical parity invariant all live here, and
+// splitting them across two timers is how a book comes apart. Each order is applied exactly once
+// (`brokerApplied`), so a poll landing between ticks cannot double-book.
+//
+// ACTIVE ONLY UNDER deps.fillSource === 'broker'. Everything else keeps the mark path byte-identical,
+// which is what lets 78 simulated variants and every backtest comparison stay valid.
+//
+// THE PRICE IS THE BROKER'S, IN THE SPACE THE ORDER WAS SENT IN. A credit twin fills at a CREDIT while
+// the position records a debit-canonical limit, so the fill is translated back through parity rather than
+// written across — the same rule the cover twin and the open twin already follow.
+function applyBrokerFills(st, cfg, deps, decisions) {
+  if (!deps || deps.fillSource !== 'broker') return 0;
+  const los = (st && st.liveOrders) || [];
+  if (!los.length) return 0;
+  let applied = 0;
+  for (const o of los) {
+    if (!o || o.status !== 'filled' || o.brokerApplied) continue;
+    const px = Number(o.fillPrice);
+    if (!(px > 0)) {
+      // A fill we cannot price is not a fill we can book. Flag it rather than guess — guessing here is
+      // exactly the fabrication this whole change exists to remove.
+      o.brokerApplied = 'unpriced';
+      decisions.push({ action: 'broker-fill-unpriced', orderId: o.orderId, kind: o.kind, positionId: o.positionId || null });
+      continue;
+    }
+    const qty = cfg.quantity || 1;
+    const W = cfg.spreadWidth;
+    if (o.kind === 'open') {
+      const pos = st.positions.find((p) => p && p.orderId === o.orderId);
+      if (!pos) { o.brokerApplied = 'no-position'; continue; }
+      if (pos.filled) { o.brokerApplied = 'already'; continue; }
+      const credit = pos.sentNet === 'CREDIT';
+      if (credit) { pos.sentLimit = round2(px); pos.limit = round2(W - px); }
+      else { pos.limit = round2(px); }
+      pos.filled = true; pos.orderStatus = 'filled';
+      pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
+      noteCash(st, (credit ? -px : px) * 100 * qty);
+      o.brokerApplied = true; applied++;
+      decisions.push({ action: 'open-fill', source: 'broker', positionId: pos.id, side: pos.side,
+        limit: pos.limit, sentNet: pos.sentNet, brokerPrice: px, cashDeployed: st.cashDeployed });
+      continue;
+    }
+    if (/cover/.test(o.kind || '')) {
+      const pos = st.positions.find((p) => p && (p.id === o.positionId
+        || (p.pendingCover && p.pendingCover.orderId === o.orderId)));
+      if (!pos) { o.brokerApplied = 'no-position'; continue; }
+      if (pos.covered) { o.brokerApplied = 'already'; continue; }
+      const pc = pos.pendingCover;
+      if (!pc || !pc.legs) { o.brokerApplied = 'no-pending'; continue; }
+      const ck = pc.legs.map((l) => l.strike);
+      const cw = ck.length ? Math.max(...ck) - Math.min(...ck) : W;
+      // Translate a credit cover's received credit back to the debit-canonical booking, exactly as the
+      // mark path does: the record stays canonical so floor and settlement arithmetic is unchanged.
+      const credit = pc.sentNet === 'CREDIT';
+      const bookLimit = credit ? round2(cw - px) : round2(px);
+      pos.covered = true; pos.coverId = nextId('cov');
+      pos.coverLegs = pc.legs; pos.coverLimit = bookLimit;
+      pos.coverGeometry = pc.geometry; pos.coverStatus = 'filled';
+      pos.coverSentNet = pc.sentNet || 'DEBIT';
+      if (credit) pos.coverSentCredit = round2(px);
+      pos.coverTime = st.lastCandleTime || null; pos.coverEpoch = st.lastCandleEpoch || null;
+      pos.coverFilledAt = Date.now();
+      pos.brokerCoverFill = { price: px, side: o.fillSide || null, orderId: o.orderId };
+      pos.pendingCover = null;
+      // THE FLOOR IS min(openWidth, coverWidth) MINUS WHAT BOTH COST — the same rule the mark path uses,
+      // because a wider cover does not raise the guarantee.
+      const floorW = Math.min(W, cw);
+      const floor = round2((floorW - pos.limit - bookLimit) * 100 * qty);
+      st.realizedPnl = round2(st.realizedPnl + floor);
+      noteCash(st, (credit ? -px : px) * 100 * qty);
+      o.brokerApplied = true; applied++;
+      decisions.push({ action: 'cover-fill', source: 'broker', positionId: pos.id, coverId: pos.coverId,
+        fillPrice: bookLimit, brokerPrice: px, sentNet: pos.coverSentNet, lockedFloor: floor,
+        cashDeployed: st.cashDeployed });
+      continue;
+    }
+    o.brokerApplied = 'unhandled-kind';
+  }
+  return applied;
+}
+
 // --- EOD terminal-settlement P/L ------------------------------------------
 // The fair cross-variant metric: value every established position at the day's settle
 // price (0DTE => intrinsic). Covered pairs realize their true value INCLUDING the upside
@@ -2323,7 +2417,15 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     : markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement, deps);
   noteMarkLow(pos, chk, sentCredit ? pos.sentLimit : pos.limit, sentCredit ? 'CREDIT' : 'DEBIT');
   notePlaced(pos, chk, deps.underlying);
-  if (chk.fillable) {
+  // CLOSED LOOP: under a real broker the fill is the BROKER'S to report. Keep observing — markLow/looks
+  // above are the evidence of how close the market came — but book nothing here; applyBrokerFills does it
+  // from the order row. The ladder below still runs, because working an unfilled order is exactly what
+  // should happen while the broker has not filled it.
+  if (chk.fillable && deps.fillSource === 'broker') {
+    decisions.push({ action: 'open-mark-fillable', positionId: pos.id, mark: chk.mark,
+      note: 'the mark reached our price; waiting on the broker' });
+  }
+  if (chk.fillable && deps.fillSource !== 'broker') {
     pos.filled = true; pos.orderStatus = 'filled';
     // The price that actually traded: a credit open receives sentLimit, a debit one pays its limit.
     noteCash(st, (sentCredit ? -(pos.sentLimit || 0) : (pos.limit || 0)) * 100 * (pos.quantity || cfg.quantity));
@@ -2541,6 +2643,9 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT',
       pcCredit ? pcw : undefined);
     notePlaced(pc, quote, deps && deps.underlying);
+    // CLOSED LOOP: see the matching note in resolvePendingOpen. Everything below this line decides a fill
+    // from OUR read of the chain, which is right with no broker and a phantom with one.
+    if (deps && deps.fillSource === 'broker') continue;
     // TEST THE ORDER THAT IS ACTUALLY RESTING. `mark` and `pc.target` are DEBIT-CANONICAL, but when
     // capital recapture sent the credit twin the thing at the broker is a CREDIT at pc.sentCredit, and a
     // credit fills when the market comes UP to it. Those two tests coincide only while
@@ -2702,6 +2807,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   noteCash,
+  applyBrokerFills,   // CLOSED LOOP — book the broker's fills; inert unless deps.fillSource === 'broker'
   creditPreferred,
   openPosition,   // exported for the failed-send contract test
 
