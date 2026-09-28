@@ -110,5 +110,102 @@ const rec = (dryRun, positions, liveOrders) => ({
   ok(rep.severity === 'clean' && rep.mode === 'LIVE', 'an empty live book is clean, not divergent');
 }
 
+// ── THE POSITION LOOP: WHAT DO WE ACTUALLY HOLD? ────────────────────────────────────────────────────
+// The order loop cannot see a fill whose order id we lost, an assignment, or a position that outlived our
+// record (the store.js durability gap). All three look like "nothing there" from the order rows.
+{
+  // The symbol format is NOT an assumption: these come from the real chain cache, where NDX options trade
+  // under the root NDXP — so an engine-side symbol built from config.symbol ('NDX') would miss every leg
+  // and read the whole book as phantom. That is why the broker's symbol is PARSED, never ours constructed.
+  const o = BR.parseOccSymbol('NDXP  260430C24300000');
+  ok(o && o.root === 'NDXP' && o.type === 'C' && o.strike === 24300 && o.yymmdd === '260430',
+    `a real chain symbol parses (${JSON.stringify(o)})`);
+  ok(BR.occDate('2026-04-30') === '260430', 'and our expiration maps into the same space');
+  ok(BR.parseOccSymbol('NDX') === null && BR.parseOccSymbol('') === null,
+    'an equity/index symbol is not an option symbol');
+
+  const pos = (strikes, over = {}) => ({ id: 'p' + strikes[0], side: 'bull', filled: true, quantity: 2,
+    legs: [{ side: 'long', type: 'C', strike: strikes[0] }, { side: 'short', type: 'C', strike: strikes[1] }],
+    ...over });
+  const rec = (positions, dryRun = false) => ({ tradeDate: '2026-04-30',
+    config: { variant: 'v7-10', dryRun, symbol: 'NDX', expiration: '2026-04-30', quantity: 2 },
+    state: { positions, liveOrders: [] } });
+  const brk = (rows) => ({ securitiesAccount: { positions: rows } });
+  const row = (sym, long, short) => ({ instrument: { symbol: sym, assetType: 'OPTION' },
+    longQuantity: long || 0, shortQuantity: short || 0 });
+
+  // AGREEMENT. A 2-lot long C24300 / short C24310 is +2 and -2 at the broker.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([row('NDXP  260430C24300000', 2, 0), row('NDXP  260430C24310000', 0, 2)]));
+    ok(r.agree === true && r.severity === 'clean', `matching books agree (${r.severity} ${JSON.stringify(r.byKind)})`);
+    ok(r.brokerRoots.join() === 'NDXP', 'and the root actually seen is reported, not assumed');
+  }
+  // UNMANAGED — the broker holds something we have no record of. The dangerous one.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([row('NDXP  260430C24300000', 2, 0), row('NDXP  260430C24310000', 0, 2),
+           row('NDXP  260430P24000000', 5, 0)]));
+    const d = r.diffs.find((x) => x.leg === 'P24000');
+    ok(r.severity === 'DIVERGENT' && d && d.kind === 'unmanaged' && d.broker === 5 && d.engine === 0,
+      `a position we do not know about is flagged unmanaged (${JSON.stringify(d)})`);
+  }
+  // MISSING — we believe in legs the broker does not hold. Our book is fiction.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]), brk([]));
+    ok(r.byKind.missing === 2 && r.severity === 'DIVERGENT',
+      `both legs of a book the broker does not have are missing (${JSON.stringify(r.byKind)})`);
+  }
+  // QUANTITY — same leg, different size.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([row('NDXP  260430C24300000', 1, 0), row('NDXP  260430C24310000', 0, 2)]));
+    const d = r.diffs.find((x) => x.leg === 'C24300');
+    ok(d && d.kind === 'quantity' && d.engine === 2 && d.broker === 1, `size mismatch is its own kind (${JSON.stringify(d)})`);
+  }
+  // A COVERED VERTICAL IS FOUR OPEN LEGS. Covers are opened, not closed, so every leg is still held.
+  {
+    const p = pos([24300, 24310], { covered: true,
+      coverLegs: [{ side: 'short', type: 'P', strike: 24310 }, { side: 'long', type: 'P', strike: 24320 }] });
+    const r = BR.reconcilePositions(rec([p]),
+      brk([row('NDXP  260430C24300000', 2, 0), row('NDXP  260430C24310000', 0, 2),
+           row('NDXP  260430P24310000', 0, 2), row('NDXP  260430P24320000', 2, 0)]));
+    ok(r.agree === true && r.engineLegCount === 4, `a covered position expects all four legs (${r.engineLegCount})`);
+  }
+  // AN UNFILLED ORDER IS NOT A HOLDING.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310], { filled: false })]), brk([]));
+    ok(r.agree === true && r.engineLegCount === 0, 'an unfilled position expects nothing at the broker');
+  }
+  // ANOTHER EXPIRATION IS NOT OUR BOOK — counted and reported, never diffed against today.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([row('NDXP  260430C24300000', 2, 0), row('NDXP  260430C24310000', 0, 2),
+           row('NDXP  260501C24300000', 9, 0)]));
+    ok(r.agree === true && r.brokerOtherExpiry === 1,
+      `a different expiration is reported separately (${r.brokerOtherExpiry}), not called a divergence`);
+  }
+  // A SYMBOL WE CANNOT READ IS NOT A SYMBOL WE DO NOT HOLD — the false-clean shape this repo keeps hitting.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([row('NDXP  260430C24300000', 2, 0), row('NDXP  260430C24310000', 0, 2),
+           row('SOMETHING WEIRD', 3, 0)]));
+    ok(r.severity === 'UNREADABLE' && r.agree === false && r.unparsedSymbols.length === 1,
+      `an unparseable symbol refuses to report clean (${r.severity})`);
+  }
+  // A SIMULATED RUN HOLDS NOTHING, so a broker position under this expiration is someone else's.
+  {
+    const r = BR.reconcilePositions(rec([], true), brk([row('NDXP  260430C24300000', 2, 0)]));
+    ok(r.severity === 'expected', 'a simulated run does not get called divergent for positions it never sent');
+  }
+  // The `quantity` fallback, for a response that omits longQuantity/shortQuantity.
+  {
+    const r = BR.reconcilePositions(rec([pos([24300, 24310])]),
+      brk([{ instrument: { symbol: 'NDXP  260430C24300000', assetType: 'OPTION' }, quantity: 2 },
+           { instrument: { symbol: 'NDXP  260430C24310000', assetType: 'OPTION' }, quantity: -2 }]));
+    ok(r.agree === true, 'a signed `quantity` row is read when long/shortQuantity are absent');
+  }
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

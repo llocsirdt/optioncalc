@@ -165,4 +165,149 @@ function reconcileBook(record, opts) {
   };
 }
 
-module.exports = { reconcileBook, engineBook, brokerBook, positionDiffs };
+
+
+// ── THE SECOND LOOP: WHAT DO WE ACTUALLY HOLD? ──────────────────────────────────────────────────────
+//
+// The order loop above asks "did the orders we sent fill?". That question cannot see:
+//   - a fill whose order id we lost (a crash between send and record, a replace whose new id never landed)
+//   - an assignment or early exercise
+//   - a position that survived from a PRIOR session while our record did not — the local-disk durability
+//     gap in store.js, which is the one that turns catastrophic with real money
+// All three look identical from the order rows: nothing there at all. Only the broker's POSITION list has
+// them, so this compares the legs we believe we hold against the legs the broker says we hold.
+//
+// REPORT ONLY. It never mutates a book. A position-level disagreement can mean our record is wrong OR that
+// we are reading the wrong account, and repairing a book from a source you have not validated is worse
+// than knowing it disagrees.
+//
+// *** THE RESPONSE SHAPE HERE IS UNVALIDATED. *** Every order this system has ever sent was test-mode
+// unfillable against an unfunded account, so no real position has ever existed to read. The Schwab
+// position shape (securitiesAccount.positions[] with longQuantity/shortQuantity/instrument.symbol) is from
+// the documentation, not from a response this code has seen. Until a real position exists, treat a
+// disagreement reported here as "the reconciler or the account is wrong" first.
+//
+// SYMBOLS ARE PARSED, NEVER CONSTRUCTED. The engine stores legs as {side, type, strike} with no symbol,
+// and the obvious repair — build one from config.symbol — is wrong: NDX options trade under the root
+// `NDXP` ("NDXP  260430C24300000" in the chain cache), so every leg we built would have missed and the
+// whole book would have read as phantom. Parsing their symbol needs no assumption about our root.
+const OCC = /^([A-Z.$/]{1,6}) *(\d{6})([CP])(\d{8})$/;
+function parseOccSymbol(sym) {
+  // "NDXP  260430C24300000" — root, padding spaces, YYMMDD, C/P, strike x 1000 in 8 digits. The regex
+  // reads that directly; an earlier version re-padded the root first, which was machinery for nothing.
+  const m = OCC.exec(String(sym || ''));
+  if (!m) return null;
+  return { root: m[1].trim(), yymmdd: m[2], type: m[3], strike: Number(m[4]) / 1000 };
+}
+
+// yyyy-mm-dd -> the yymmdd an OCC symbol carries.
+function occDate(expiration) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(expiration || ''));
+  return m ? m[1].slice(2) + m[2] + m[3] : null;
+}
+
+// Net contracts per leg, signed: long positive, short negative. A covered vertical is FOUR open legs at
+// the broker (covers are opened, not closed), so every filled leg counts — including hedges.
+function engineLegs(record) {
+  const st = (record && record.state) || {};
+  const cfg = (record && record.config) || {};
+  const net = new Map();
+  const add = (leg, qty) => {
+    if (!leg || !leg.type || leg.strike == null) return;
+    const k = `${leg.type}${leg.strike}`;
+    net.set(k, (net.get(k) || 0) + (leg.side === 'short' ? -qty : qty));
+  };
+  for (const p of st.positions || []) {
+    if (!p || !p.filled) continue;                       // an unfilled order is not a holding
+    const q = p.quantity || cfg.quantity || 1;
+    for (const l of p.legs || []) add(l, q);
+    if (p.covered) for (const l of p.coverLegs || []) add(l, q);
+  }
+  return net;
+}
+
+// The broker's side, filtered to this run's expiration.
+function brokerLegs(details, expiration) {
+  const acct = (details && (details.securitiesAccount || details)) || {};
+  const rows = acct.positions || [];
+  const net = new Map();
+  const want = occDate(expiration);
+  const roots = new Set();
+  const unparsed = [];
+  let otherExpiry = 0;
+  for (const r of rows) {
+    const inst = (r && r.instrument) || {};
+    if (inst.assetType && inst.assetType !== 'OPTION') continue;
+    const o = parseOccSymbol(inst.symbol);
+    if (!o) { if (inst.symbol) unparsed.push(inst.symbol); continue; }
+    roots.add(o.root);
+    if (want && o.yymmdd !== want) { otherExpiry++; continue; }
+    // longQuantity/shortQuantity is the documented shape; `quantity` is the fallback, and a short row
+    // there may already be negative — hence the sign guard rather than a blind negate.
+    const lq = Number(r.longQuantity || 0), sq = Number(r.shortQuantity || 0);
+    let q = lq - sq;
+    if (!lq && !sq && r.quantity != null) q = Number(r.quantity);
+    if (!q) continue;
+    const k = `${o.type}${o.strike}`;
+    net.set(k, (net.get(k) || 0) + q);
+  }
+  return { net, roots: [...roots], unparsed, otherExpiry, rows: rows.length };
+}
+
+/**
+ * Per-leg disagreement between our book and the broker's positions.
+ *
+ * Kinds, in the order they should worry you:
+ *   unmanaged   the broker holds contracts we have no record of  -> real risk nothing is watching
+ *   missing     we believe we hold contracts the broker does not -> our book is fiction
+ *   quantity    both hold it, in different size
+ */
+function legDiffs(record, details) {
+  const cfg = (record && record.config) || {};
+  const mine = engineLegs(record);
+  const theirs = brokerLegs(details, cfg.expiration);
+  const out = [];
+  for (const k of new Set([...mine.keys(), ...theirs.net.keys()])) {
+    const a = mine.get(k) || 0, b = theirs.net.get(k) || 0;
+    if (a === b) continue;
+    const kind = a === 0 ? 'unmanaged' : b === 0 ? 'missing' : 'quantity';
+    out.push({ leg: k, engine: a, broker: b, kind });
+  }
+  out.sort((x, y) => (x.kind === y.kind ? x.leg.localeCompare(y.leg) : x.kind.localeCompare(y.kind)));
+  return { diffs: out, broker: theirs, engineLegCount: mine.size };
+}
+
+function reconcilePositions(record, details) {
+  const cfg = (record && record.config) || {};
+  const { diffs, broker, engineLegCount } = legDiffs(record, details);
+  const mode = cfg.dryRun;
+  // A run that sends nothing cannot hold anything, so any broker position under this expiration belongs to
+  // something else — worth SAYING, never worth calling this run's divergence.
+  const expectDivergence = mode === true || mode === 'test';
+  const byKind = {};
+  for (const d of diffs) byKind[d.kind] = (byKind[d.kind] || 0) + 1;
+  return {
+    variant: cfg.variant || null,
+    tradeDate: record && record.tradeDate,
+    expiration: cfg.expiration || null,
+    mode: mode === true ? 'simulate' : mode === 'test' ? 'test (unfillable by design)' : 'LIVE',
+    expectDivergence,
+    engineLegCount,
+    brokerRows: broker.rows,
+    brokerRoots: broker.roots,
+    brokerOtherExpiry: broker.otherExpiry,
+    // A SYMBOL WE COULD NOT PARSE IS NOT A SYMBOL WE DO NOT HOLD. Dropping it silently is how a
+    // reconciler reports clean on a book it never read.
+    unparsedSymbols: broker.unparsed,
+    diffs,
+    byKind,
+    agree: diffs.length === 0 && !broker.unparsed.length,
+    severity: broker.unparsed.length ? 'UNREADABLE'
+      : expectDivergence ? 'expected'
+      : diffs.length ? 'DIVERGENT' : 'clean',
+  };
+}
+
+module.exports = { reconcileBook, engineBook, brokerBook, positionDiffs,
+  // the POSITION loop (report-only; response shape unvalidated — see the note above)
+  reconcilePositions, legDiffs, engineLegs, brokerLegs, parseOccSymbol, occDate };

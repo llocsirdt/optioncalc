@@ -1863,8 +1863,32 @@ async function runOrderPoll() {
   }
 }
 
+// THE POSITION LOOP runs on its own, slower clock. The order poll is every ORDER_POLL_MS because an
+// unfilled order needs working; what we HOLD changes only when something fills, so checking it every poll
+// would spend API quota to re-read the same answer. Once every few minutes catches an orphan long before it
+// matters, and the account fetch is ONE call shared by every run rather than one per run.
+let _posCheckAt = 0;
+const POS_CHECK_MS = 3 * 60 * 1000;
+async function accountPositionsIfDue() {
+  // Only worth asking when some run can really hold something. For a simulated or test-mode run the
+  // comparison is 'expected' by construction, so the call would buy nothing.
+  const anyReal = RUNS.some((r) => r.dryRun === false);
+  if (!anyReal || !LIVE_ARMED || !(DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return null;
+  if (typeof DEPS.tradingClient.accountsDetails !== 'function') return null;
+  const now = Date.now();
+  if (now - _posCheckAt < POS_CHECK_MS) return null;
+  _posCheckAt = now;
+  try {
+    return await DEPS.tradingClient.accountsDetails(DEPS.accountHash);
+  } catch (e) {
+    console.error('[candle-spread] account positions fetch:', e && e.message);
+    return null;
+  }
+}
+
 async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
+  const acctDetails = await accountPositionsIfDue();
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
     // READ, NEVER CREATE. This called initRun, which CREATES the record when none exists — and the poller
@@ -1928,6 +1952,37 @@ async function runOrderPollInner() {
       }
     } catch (e) {
       console.error(`[candle-spread] book reconcile (${run.variant}):`, e && e.message);
+    }
+    // ── AND THE OTHER LOOP: DO WE HOLD WHAT WE THINK WE HOLD? ─────────────────────────────────────
+    // Orders answer "did what we sent fill?". This answers "what is in the account?" — the only question
+    // that can see a fill whose order id we lost, an assignment, or a position that outlived our record
+    // (the local-disk gap in store.js). REPORT ONLY: it never repairs a book, because a disagreement can
+    // equally mean the reconciler or the account is wrong, and its response shape has never been seen
+    // against a real position. See the note in book-reconcile.js.
+    if (acctDetails) {
+      try {
+        const pr = BR.reconcilePositions(record, acctDetails);
+        record.state.positionReconcile = { severity: pr.severity, byKind: pr.byKind, diffs: pr.diffs.length,
+          engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
+          unparsedSymbols: pr.unparsedSymbols, at: new Date().toISOString() };
+        const psig = `${pr.severity}:${pr.diffs.map((d) => d.kind + d.leg + d.engine + '/' + d.broker).sort().join(',')}`;
+        if (pr.severity !== 'expected' && pr.severity !== 'clean' && psig !== record.state.positionReconcileSig) {
+          record.state.positionReconcileSig = psig;
+          store.appendEvent(record, { type: 'position_reconcile', severity: pr.severity, byKind: pr.byKind,
+            engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
+            unparsedSymbols: pr.unparsedSymbols.length ? pr.unparsedSymbols : undefined,
+            legs: pr.diffs.slice(0, 40),
+            note: pr.severity === 'UNREADABLE'
+              ? `${pr.unparsedSymbols.length} broker symbol(s) could not be parsed — this comparison is NOT a clean bill`
+              : `${pr.diffs.length} leg(s) the account and the book disagree on: `
+                + Object.entries(pr.byKind).map(([k, v]) => `${v} ${k}`).join(', ') });
+          console.error(`[candle-spread] POSITION DIVERGENCE (${run.variant}) ${pr.severity}: `
+            + Object.entries(pr.byKind).map(([k, v]) => `${v} ${k}`).join(', ')
+            + `; ${pr.diffs.slice(0, 6).map((d) => `${d.leg} book ${d.engine} vs account ${d.broker}`).join('; ')}`);
+        }
+      } catch (e) {
+        console.error(`[candle-spread] position reconcile (${run.variant}):`, e && e.message);
+      }
     }
   }
 }
@@ -2461,6 +2516,9 @@ function status() {
       // phantom book went unnoticed for two days. null means nothing to compare yet, or a mode where the
       // two are MEANT to differ (simulate / unfillable test orders).
       bookReconcile: (st && st.bookReconcile) || null,
+      // And the position-level loop — what the ACCOUNT holds vs what the book believes. null until a run
+      // can really hold something (see accountPositionsIfDue).
+      positionReconcile: (st && st.positionReconcile) || null,
       lastCandle: st ? st.lastCandleTime : null,
       updatedAt: rec ? rec.updatedAt : null
     };
