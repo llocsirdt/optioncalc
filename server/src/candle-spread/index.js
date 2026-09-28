@@ -608,6 +608,38 @@ const CREDIT_TRIGGER_XW = process.env.CANDLE_SPREAD_CREDIT_TRIGGER_XW != null
   ? Number(process.env.CANDLE_SPREAD_CREDIT_TRIGGER_XW) : 0.25;
 
 const TUNED_CAPS = new Map([
+  // RAISED 2026-09-27 after the loss-cap sweep was re-run with a REAL control arm (see b50e432: the old
+  // control had degenerated into a copy of the treatment, so 29 of 50 variants had never been tested
+  // against anything looser than their own cap). These three are the cases where the tighter cap loses on
+  // BOTH axes — it costs P&L without buying risk-adjusted return, which is not the trade these caps were
+  // adopted to make. Everything else stayed put: for 33 variants looser earns more but costs more per
+  // unit of drawdown, and for 4 the tighter cap is outright better.
+  //   v6-20  $2,000 -> $4,500   at 7,000: $2.83M vs $1.49M and ret/DD 111.4 vs 95.6. 4,500 is the PEAK
+  //                             (ret/DD 140.7 at $2.46M), better risk-adjusted than either end.
+  //   v5-40  $7,000 -> $9,000   +$296k and ret/DD 52.6 vs 47.5, for $1.3k more drawdown.
+  //   v3-10  $1,000 -> $2,000   +$149k and ret/DD 270 vs 230, drawdown unchanged at -$3.4k.
+  ['v6-20', 4500],
+  ['v3-10', 2000],
+  // TUNED 2026-09-27 — these four had never been measured at all: their caps were still exactly the
+  // width-generic default ($7,000 at W=20, $9,000 at W=40), which is why they sat furthest from their
+  // risk-adjusted optimum. Same objective as the rest of TUNED_CAPS — the LOWEST cap that does not
+  // meaningfully cost total P&L — plus the user's $500 of headroom.
+  //   v0-20       $7,000 -> $4,500   $4,000 DOMINATES $7,000 on every axis: 100% of best total (vs 98.9%),
+  //                                  ret/DD 117.2 vs 115.2, maxDD -$12,712 vs -$12,795. Strictly better.
+  //   v7-20-cATM  $7,000 -> $6,500   $6,000 keeps 97.1% of total and cuts maxDD $51,366 <- $55,396.
+  //   v9-20-cATM  $7,000 -> $6,500   same curve as its v7 twin to within a rounding error.
+  //   v6-40       $9,000 -> $8,500   $8,000 keeps 90.1% and improves ret/DD 36.6 -> 39.5 while cutting
+  //                                  maxDD by $11,317; $8,500 splits that, and matches v6-40-cATM.
+  // NOT moved to their ret/DD peaks: for these the peak costs 25-55% of total P&L, which is the trade
+  // this fleet already declined. See the log entry for why ret/DD-optimal and cap-minimal disagree.
+  ['v0-20', 4500],
+  ['v7-20-cATM', 6500],
+  ['v9-20-cATM', 6500],
+  ['v6-40', 8500],
+  // LOWERED 2026-09-27 — the two places where tightening was nearly free on total and bought real
+  // risk-adjusted return:
+  //   v0-10  $3,000 -> $1,500   costs $30,068 (3.1% of total) for ret/DD 306.8 -> 379.9, maxDD -$2,473.
+  //   v8-40  $6,000 -> $4,000   costs  $3,601 (0.9%)          for ret/DD  10.1 ->  11.0, maxDD -$35,238.
   // W=10
   ['v5-10', 1500],
   ['v7-10', 1500],
@@ -617,7 +649,7 @@ const TUNED_CAPS = new Map([
   ['v6-10', 2000],
   ['v2-10', 2500],
   ['v9-10', 2500],
-  ['v0-10', 3000],
+  ['v0-10', 1500],
   // W=20
   ['v3-20', 2500],
   ['v8-20', 2500],
@@ -640,9 +672,9 @@ const TUNED_CAPS = new Map([
   ['v8-40-cATM', 5500],
   ['v1-40', 6000],
   ['v2-40-cATM', 6000],
-  ['v8-40', 6000],
+  ['v8-40', 4000],
   ['v4-40', 7000],
-  ['v5-40', 7000],
+  ['v5-40', 9000],
   ['v5-40-cATM', 7000],
   ['v7-40-cATM', 7000],
   ['v0-40-cATM', 7500],

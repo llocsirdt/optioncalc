@@ -40,6 +40,7 @@ const DIR = argVal('--dataDir', path.join(__dirname, '..', '..', 'tests', 'backt
 const OUTDIR = argVal('--out', process.cwd());
 const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1));
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const BUMP = Number(argVal('--bump', '0')) || 0;
 const RUNGS = (argVal('--rungs', '1,1.5,2,3,4')).split(',').map(Number).filter(Number.isFinite);
 const SLICE = process.argv.indexOf('--_slice') >= 0 ? Number(process.argv[process.argv.indexOf('--_slice') + 1]) : null;
 const SLICE_OF = SLICE != null ? Number(process.argv[process.argv.indexOf('--_slice') + 2]) : null;
@@ -101,6 +102,15 @@ for (const run of RUNS) {
   };
   add('current', run.lossMax, run.lossTarget);
   add('generic', gen.lossMax, gen.lossTarget);
+  // --bump N adds one arm at THIS VARIANT'S CURRENT CAP + N. The rung ladder is multiples of W x 100, so a
+  // flat dollar bump is not expressible on it — and "what does +$500 everywhere actually cost" is a
+  // question about the fleet as it stands, not about a width-relative grid. Never allowed past the
+  // original generic default: the point of the question is to land BETWEEN the tuned caps and the old
+  // ones, and a bump that sails past the old cap is answering a different question.
+  if (BUMP > 0 && run.lossMax != null) {
+    const bumped = Math.min(run.lossMax + BUMP, gen.lossMax);
+    if (bumped > run.lossMax) add(`+${BUMP}`, bumped, Math.round(0.7 * bumped));
+  }
   for (const k of RUNGS) {
     const lm = Math.round(k * W * 100);
     if (lm > gen.lossMax) continue;                     // never LOOSER than the fleet default
