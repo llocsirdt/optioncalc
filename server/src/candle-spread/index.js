@@ -1184,6 +1184,21 @@ function makeReplaceOrder(run, record) {
       store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `replace not sent (${why})` });
       return { status: `simulated:${why}`, orderId };
     }
+    // NEVER REPLACE AN ORDER THE BROKER HAS ALREADY FINISHED WITH. Schwab answers a replace on a dead
+    // order with `400 - Order in status REJECTED cannot be replaced`, and the ladder would keep asking
+    // every bar: 53 such calls across 19 positions on 2026-09-24 alone, one position six times over.
+    //
+    // The poller now clears the strategy's pending state when an order dies (order-manager
+    // clearDeadOrderState), which stops most of this at the source — but the two run on separate timers,
+    // so a reprice can still be built from state the poller has not caught up with yet. This is the belt
+    // to that braces, and it costs one array lookup.
+    const tracked = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+    if (tracked && om.isTerminal(tracked)) {
+      store.appendEvent(record, { type: 'order_replace_skipped', orderId, kind: meta && meta.kind,
+        status: tracked.status, meta,
+        note: `not replaced: the broker already reports this order ${tracked.status}` });
+      return { status: `skipped:${tracked.status}`, orderId, sent: false };
+    }
     const isTest = mode === 'test';
     // Same rule as the place path: a replace is an order too, and a walked price that cannot be proven
     // unfillable is still walked at the broker rather than dropped on the floor.

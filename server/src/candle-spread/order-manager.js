@@ -188,6 +188,47 @@ function extractFillPrice(resp) {
   return f ? f.price : null;
 }
 
+
+// A REJECTED ORDER IS NOT A RESTING ONE — TELL THE STRATEGY.
+//
+// The poller marked a dead order dead on its own liveOrders row and stopped there. Nothing reached the
+// POSITION, so the state machine went on believing it held a working cover (or a working open) that the
+// broker had refused, and the ladder kept calling replace on a dead id. Measured on prod 2026-09-24:
+// 28 orders rejected (16 opens, 12 cover-rests) producing 53 "Order in status REJECTED cannot be
+// replaced" 400s across 19 positions, one of them retried six times — and 4 positions were still
+// "resting" on a rejected cover at the close.
+//
+// The wasted API calls are the visible half. The dangerous half is the belief: resolveRestingCovers books
+// a fill from the MARK and has no idea the order behind it does not exist, so a rejected cover whose mark
+// reached target would have booked a lock that was never placed. It did not happen on those two days
+// (0 of 12), but it is the same shape as the unsent-cover bug that `cover-not-sent` was written to close.
+//
+// Clearing the pending state is what makes the position honest: it becomes visibly uncovered, the cap and
+// the governor count its risk again, and the next bar places a FRESH order instead of repricing a ghost.
+// Leg-ledger entries are deliberately NOT released — same reasoning as the hedge expiry: the backing map
+// has no refcount, so freeing a strike another live order still holds is the worse failure.
+function clearDeadOrderState(record, o) {
+  const st = (record && record.state) || {};
+  const pos = (st.positions || []).find((p) => p && p.id === o.positionId);
+  if (!pos) return null;
+  if (/cover/.test(o.kind || '')) {
+    const pc = pos.pendingCover;
+    if (!pc || pos.covered || (pc.orderId && pc.orderId !== o.orderId)) return null;
+    pos.pendingCover = null;
+    pos.coverStatus = 'rejected';
+    return 'cover';
+  }
+  if (o.kind === 'open') {
+    // An open that never filled and was refused is not a position we hold. Leave the record in place —
+    // it is evidence, and the day summary counts it — but stop it occupying the one-working-open slot.
+    if (pos.filled) return null;
+    pos.orderStatus = 'rejected';
+    if (st.pendingOpenId === pos.id) st.pendingOpenId = null;
+    return 'open';
+  }
+  return null;
+}
+
 // Poll + reconcile every non-terminal real order on a run. deps: { tradingClient, accountHash }.
 // opts: { testCancelAfterMs, staleOpenCancelMs, now }. Appends order_* events and persists.
 async function reconcile(record, deps, opts = {}) {
@@ -229,7 +270,12 @@ async function reconcile(record, deps, opts = {}) {
     }
     if (DEAD.has(String(resp && resp.status).toUpperCase())) {
       o.status = next === 'working' ? 'canceled' : next;
-      store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status, note: `broker ${resp && resp.status}` });
+      const cleared = clearDeadOrderState(record, o);
+      store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
+        positionId: o.positionId || undefined, cleared: cleared || undefined,
+        note: `broker ${resp && resp.status}`
+          + (cleared === 'cover' ? ' — pendingCover cleared, the position is uncovered again'
+            : cleared === 'open' ? ' — open slot released, it never filled' : '') });
       continue;
     }
     // 2) Still working — decide whether to cancel it.
@@ -261,4 +307,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { unfillablePrice, unfillableOrder, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
