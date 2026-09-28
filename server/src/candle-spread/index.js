@@ -1870,9 +1870,19 @@ async function runOrderPoll() {
 let _posCheckAt = 0;
 const POS_CHECK_MS = 3 * 60 * 1000;
 async function accountPositionsIfDue() {
-  // Only worth asking when some run can really hold something. For a simulated or test-mode run the
-  // comparison is 'expected' by construction, so the call would buy nothing.
-  const anyReal = RUNS.some((r) => r.dryRun === false);
+  // ANY RUN THAT REACHES THE BROKER AT ALL, test mode included — the same `wantsRealSend` condition the
+  // order senders use.
+  //
+  // The tighter gate (dryRun === false only) was wrong for the reason this whole week has been about. With
+  // ARMED_MODE defaulting to 'test', NO run has dryRun === false, so this fetch would never have executed
+  // once — and the FIRST time it ran would be the day a funded account went live, on response parsing that
+  // has never seen a real response. A reconciler whose code has never run is not a safety net.
+  //
+  // Running it in test mode costs one read-only account read every 3 minutes and exercises the whole path
+  // — fetch, symbol parse, netting, the roots actually returned — while nothing is at stake. A test run
+  // still reports severity 'expected', so it raises no false alarm; what it produces is evidence that the
+  // shape is right, visible at /status.runs[].positionReconcile.
+  const anyReal = RUNS.some((r) => r.dryRun === false || r.dryRun === 'test');
   if (!anyReal || !LIVE_ARMED || !(DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return null;
   if (typeof DEPS.tradingClient.accountsDetails !== 'function') return null;
   const now = Date.now();
