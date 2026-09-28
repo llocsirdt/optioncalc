@@ -1504,6 +1504,66 @@ function assertDeps(runs) {
   }
 }
 
+// ── MOVED TO MODULE SCOPE 2026-09-28 — THIS WAS THE SETTLEMENT BUG ──────────────────────────────────
+// Both helpers were introduced in 73454ff INSIDE processGroup, which put them out of reach of three of
+// their four callers. A `function` declaration hoists to its enclosing FUNCTION, not to the file, so the
+// only call site that worked was the one that also lives in processGroup (the candle close). The other
+// three — the 30s sub-bar worker, session close, and EOD settlement — threw `initRunSafe is not defined`
+// on every single invocation.
+//
+// It cost three sessions of settlement (09-24, 09-25, 09-28 — 560 eod_settlement_error events today alone,
+// 80 variants x 7 retries) and, quieter and worse, it killed the sub-bar worker on every pass since 09-23,
+// so resting covers were only resolved at 5m candle closes instead of roughly every 30s and the ladder
+// never repriced between bars.
+//
+// It hid because the per-variant try/catch added in the SAME commit caught the ReferenceError and filed it
+// as a settlement failure, and the boot backfill then quietly repaired the days behind it. An uncaught
+// crash would have been found in an hour; a caught error that something else papers over survived five
+// sessions. Keep these at module scope: every caller is in a different function.
+// ONE BAD RECORD MUST NOT STOP THE OTHER 79. store.initRun now THROWS in a single case — the run file is
+// corrupt AND could not be moved aside — because writing over it is the failure it exists to prevent. That
+// is correct, but three of the loops below call it once per variant, so an unthrowable throw would abort
+// the whole pass and skip every healthy variant with it. Catch per variant, log loudly, skip that one.
+// A record's config is FROZEN AT CREATION and is what the engine runs on for the rest of the day. That is
+// right once a session is under way — changing the governor half way through a day is worse than running
+// the old one consistently — but it is wrong for a record created before anything happened, which is how
+// the armed variant came to run six sessions on a stale lossMax.
+//
+// So: while a run is UNTOUCHED (no events, no positions) the roster is the truth and the record is
+// refreshed to match, with an event recording exactly which fields moved. Once the first candle lands the
+// config is sealed.
+function refreshUntouchedConfig(record, cfg, where) {
+  if (!record || !record.config) return record;
+  const st = record.state || {};
+  if ((record.events || []).length || (st.positions || []).length) return record;   // session under way: seal it
+  const changed = [];
+  for (const k of Object.keys(cfg)) {
+    if (typeof cfg[k] === 'function') continue;
+    const a = record.config[k], b = cfg[k];
+    if (a === b) continue;
+    if (a == null && b == null) continue;
+    if (typeof a === 'object' || typeof b === 'object') continue;   // compare scalars only
+    changed.push(`${k}: ${a} -> ${b}`);
+  }
+  if (!changed.length) return record;
+  record.config = { ...cfg };
+  store.appendEvent(record, { type: 'config_refreshed', where, changed,
+    note: 'the record was created before this session began and its config had gone stale against the roster; '
+      + 'refreshed while the run is still untouched. A config is sealed once the first candle lands.' });
+  console.warn(`[candle-spread] ${cfg.variant} config refreshed before the session (${where}): ${changed.join(', ')}`);
+  return record;
+}
+
+function initRunSafe(cfg, tradeDate, where) {
+  try {
+    return refreshUntouchedConfig(store.initRun(cfg, tradeDate), cfg, where);
+  } catch (e) {
+    console.error(`[candle-spread] ${where}: cannot open the record for ${cfg.variant} — ${e && e.message}`);
+    console.error('  this variant is SKIPPED this pass; the others continue. Fix the file, do not delete it.');
+    return null;
+  }
+}
+
 async function processGroup(runs, kind) {
   const sample = runs[0];
   const expiration = sample.expiration || todayEST(); // 0DTE default
@@ -1620,50 +1680,6 @@ async function processGroup(runs, kind) {
     const etm = (() => { const q = etParts(new Date(candle.datetime)); return q.hour * 60 + q.minute; })();
     harvestIv = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * IIV.ivMultAt(etm);
   } catch (e) { /* leave 0 → observer skips */ }
-
-  // ONE BAD RECORD MUST NOT STOP THE OTHER 79. store.initRun now THROWS in a single case — the run file is
-// corrupt AND could not be moved aside — because writing over it is the failure it exists to prevent. That
-// is correct, but three of the loops below call it once per variant, so an unthrowable throw would abort
-// the whole pass and skip every healthy variant with it. Catch per variant, log loudly, skip that one.
-// A record's config is FROZEN AT CREATION and is what the engine runs on for the rest of the day. That is
-// right once a session is under way — changing the governor half way through a day is worse than running
-// the old one consistently — but it is wrong for a record created before anything happened, which is how
-// the armed variant came to run six sessions on a stale lossMax.
-//
-// So: while a run is UNTOUCHED (no events, no positions) the roster is the truth and the record is
-// refreshed to match, with an event recording exactly which fields moved. Once the first candle lands the
-// config is sealed.
-function refreshUntouchedConfig(record, cfg, where) {
-  if (!record || !record.config) return record;
-  const st = record.state || {};
-  if ((record.events || []).length || (st.positions || []).length) return record;   // session under way: seal it
-  const changed = [];
-  for (const k of Object.keys(cfg)) {
-    if (typeof cfg[k] === 'function') continue;
-    const a = record.config[k], b = cfg[k];
-    if (a === b) continue;
-    if (a == null && b == null) continue;
-    if (typeof a === 'object' || typeof b === 'object') continue;   // compare scalars only
-    changed.push(`${k}: ${a} -> ${b}`);
-  }
-  if (!changed.length) return record;
-  record.config = { ...cfg };
-  store.appendEvent(record, { type: 'config_refreshed', where, changed,
-    note: 'the record was created before this session began and its config had gone stale against the roster; '
-      + 'refreshed while the run is still untouched. A config is sealed once the first candle lands.' });
-  console.warn(`[candle-spread] ${cfg.variant} config refreshed before the session (${where}): ${changed.join(', ')}`);
-  return record;
-}
-
-function initRunSafe(cfg, tradeDate, where) {
-  try {
-    return refreshUntouchedConfig(store.initRun(cfg, tradeDate), cfg, where);
-  } catch (e) {
-    console.error(`[candle-spread] ${where}: cannot open the record for ${cfg.variant} — ${e && e.message}`);
-    console.error('  this variant is SKIPPED this pass; the others continue. Fix the file, do not delete it.');
-    return null;
-  }
-}
 
 // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
@@ -1957,14 +1973,26 @@ async function runOrderPollInner() {
     // six hours. The signature lives on the record, so it survives a restart with the day's book.
     try {
       const rec = BR.reconcileBook(record);
-      const sig = `${rec.severity}:${Object.entries(rec.byKind).sort().map(([k, v]) => k + v).join(',')}`;
-      // The COMPARISON is always recorded on state, even in a mode where the two books are meant to
-      // differ, so /status can answer "does the engine's book match the broker's?" at any moment rather
-      // than only after something has gone wrong. Only the EVENT and the log line are conditional.
-      record.state.bookReconcile = { severity: rec.severity, mode: rec.mode, byKind: rec.byKind,
-        diffs: rec.diffs.length, at: new Date().toISOString(), engine: rec.engine, broker: rec.broker };
-      if (rec.severity !== 'expected' && sig !== record.state.bookReconcileSig) {
+      // THE SIGNATURE HAS TO INCLUDE THE COUNTS, not just the disagreement kinds. Keyed on severity alone a
+      // test-mode session never changes signature all day, so the summary would be written once, at zero.
+      const sig = `${rec.severity}:${Object.entries(rec.byKind).sort().map(([k, v]) => k + v).join(',')}`
+        + `:${rec.engine.opensFilled}/${rec.engine.coversFilled}:${rec.broker.filled}/${rec.broker.sent}`;
+      // PERSISTED, NOT JUST ASSIGNED. This set record.state.bookReconcile and then only ever WROTE the
+      // record inside the branch below — which is skipped whenever severity is 'expected', i.e. in simulate
+      // and test mode, i.e. every mode we are currently in. The poller re-reads the record from disk each
+      // pass, so the assignment was discarded every time and /status served null through a full session
+      // with 17 real orders sent. The observability was blind in exactly the mode it exists to be observed
+      // in, which also left the account response shape unconfirmed.
+      if (sig !== record.state.bookReconcileSig) {
         record.state.bookReconcileSig = sig;
+        record.state.bookReconcile = { severity: rec.severity, mode: rec.mode, byKind: rec.byKind,
+          diffs: rec.diffs.length, at: new Date().toISOString(), engine: rec.engine, broker: rec.broker };
+        // On CHANGE only — a handful of writes a session rather than every 30s for six hours. The
+        // noteworthy case appends an event (which writes); the expected case just writes.
+        if (rec.severity === 'expected') store.writeRun(record);
+      }
+      if (rec.severity !== 'expected' && sig !== record.state.bookReconcileEventSig) {
+        record.state.bookReconcileEventSig = sig;
         store.appendEvent(record, { type: 'book_reconcile', severity: rec.severity, byKind: rec.byKind,
           engineOpens: rec.engine.opensFilled, engineCovers: rec.engine.coversFilled,
           brokerFilled: rec.broker.filled, brokerSent: rec.broker.sent,
@@ -1992,12 +2020,20 @@ async function runOrderPollInner() {
     if (acctDetails) {
       try {
         const pr = BR.reconcilePositions(record, acctDetails);
-        record.state.positionReconcile = { severity: pr.severity, byKind: pr.byKind, diffs: pr.diffs.length,
-          engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
-          unparsedSymbols: pr.unparsedSymbols, at: new Date().toISOString() };
-        const psig = `${pr.severity}:${pr.diffs.map((d) => d.kind + d.leg + d.engine + '/' + d.broker).sort().join(',')}`;
-        if (pr.severity !== 'expected' && pr.severity !== 'clean' && psig !== record.state.positionReconcileSig) {
+        // Same persistence bug as the book loop above, same fix. This summary is what confirms the account
+        // response shape — brokerRoots should read NDXP, unparsedSymbols should be empty — and it never
+        // reached disk, because a test-mode run is always 'expected'.
+        const psig = `${pr.severity}:${pr.engineLegCount}:${pr.brokerRows}:${pr.brokerRoots.join('|')}`
+          + `:${pr.unparsedSymbols.length}:${pr.diffs.map((d) => d.kind + d.leg + d.engine + '/' + d.broker).sort().join(',')}`;
+        if (psig !== record.state.positionReconcileSig) {
           record.state.positionReconcileSig = psig;
+          record.state.positionReconcile = { severity: pr.severity, byKind: pr.byKind, diffs: pr.diffs.length,
+            engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
+            unparsedSymbols: pr.unparsedSymbols, at: new Date().toISOString() };
+          if (pr.severity === 'expected' || pr.severity === 'clean') store.writeRun(record);
+        }
+        if (pr.severity !== 'expected' && pr.severity !== 'clean' && psig !== record.state.positionReconcileEventSig) {
+          record.state.positionReconcileEventSig = psig;
           store.appendEvent(record, { type: 'position_reconcile', severity: pr.severity, byKind: pr.byKind,
             engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
             unparsedSymbols: pr.unparsedSymbols.length ? pr.unparsedSymbols : undefined,
