@@ -1138,17 +1138,27 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 //            answer for the 79 simulated variants. Today's behaviour, everywhere.
 // 'broker' — the broker's reported fill, consumed from the order row by trader.applyBrokerFills.
 //
-// WHY THIS IS OPT-IN AND NOT SIMPLY "on when live": because it changes what the book MEANS, and the
-// measurement that motivated it (book-reconcile, 2026-09-25 v7-10: 16 opens and 13 covers believed, 0
-// filled at the broker, 29 of 29 positions phantom) has not yet been re-run against a FUNDED account.
-// Until it has, the flag exists and the code path is tested, and the default is unchanged.
+// DERIVED, NOT CONFIGURED. A run whose orders can really fill is a run whose fills belong to the broker;
+// there is no version of that where our own mark is the authority.
 //
-// It applies ONLY to a run sending real fillable orders (dryRun === false). A 'test'-mode run sends real
-// orders priced never to fill, so under broker fills it would correctly book nothing at all — which is
-// true, and useless: it would silently turn the paper variant into a no-op instead of a comparison.
-const FILL_SOURCE = process.env.CANDLE_SPREAD_FILL_SOURCE === 'broker' ? 'broker' : 'mark';
+// This was briefly two independent env vars (CANDLE_SPREAD_ARMED_MODE=live plus
+// CANDLE_SPREAD_FILL_SOURCE=broker) so the new path could ship inert. That was a mistake: the combination
+// it left reachable — real fillable orders at the broker, book decided by our marks — IS the 2026-09-25
+// failure exactly (16 opens and 13 covers believed, 0 of 33 filled, 29 of 29 positions phantom). Arming
+// live and forgetting the second var would have reproduced it with real money. A flag whose wrong setting
+// recreates the bug it was written to fix is not a safety feature.
+//
+// There is deliberately NO override in the other direction either. If the broker loop misbehaves, the
+// correct response is to DISARM (CANDLE_SPREAD_ARMED_MODE back to test), which fails safe and is already
+// one variable. "Keep sending real orders but book them off our marks" is not a fallback, it is the defect.
+//
+// The gate is that orders genuinely REACH a broker — isProd, LIVE_ARMED, a client and an account hash.
+// Without those nothing is ever sent, so no order could ever report filled, and a derived 'broker' would
+// leave the engine holding nothing at all (which is what a local dev run of the armed variant would do).
+//
+// A 'test'-mode run stays on 'mark': its orders are priced never to fill, so broker fills would correctly
+// book nothing — true, and useless, since it would turn the paper variant into a no-op not a comparison.
 function fillSourceFor(run) {
-  if (FILL_SOURCE !== 'broker') return 'mark';
   const real = run.dryRun === false && DEPS && DEPS.isProd === true && LIVE_ARMED
     && DEPS.tradingClient && DEPS.accountHash;
   return real ? 'broker' : 'mark';
@@ -2283,6 +2293,20 @@ function start(deps) {
   // place anything, because the failure this catches is invisible at runtime: an unforwarded flag makes the
   // feature a no-op that still reports success. Three shipped that way before this existed.
   assertDeps(RUNS);
+  // WHO DECIDES A FILL, stated once at boot now that DEPS exists and the value is knowable. Derived, so
+  // there is nothing to set and nothing to forget — but it decides whether the book is the broker's record
+  // or our own reading of the chain, which is too important to be visible only via /status.
+  {
+    const src = fillSourceFor(RUNS.find((r) => r.variant === ARMED_VARIANT) || {});
+    const realRuns = RUNS.filter((r) => r.dryRun === false).map((r) => r.variant);
+    console.log(`[candle-spread] FILL SOURCE: ${src}`
+      + (src === 'broker'
+        ? ` — the BROKER's reported fills book the book (${realRuns.join(',') || 'none'}); our marks no longer decide`
+        : ' — our own chain marks decide fills, which is correct while no order can really fill')
+      + (realRuns.length && src !== 'broker'
+        ? ` !! ${realRuns.join(',')} can send fillable orders but is booking off MARKS — this is the 2026-09-25 phantom-book shape`
+        : ''));
+  }
   // REPAIR THE STORE BEFORE TRADING. A runaway loop once grew a single record to 32,411 positions (~62 MB),
   // and every read of the store then paid for it. The deploy hook cannot fix that: it runs as a user that
   // may create files in the 1777 store directory but cannot overwrite a record THIS PROCESS owns, which
@@ -2450,9 +2474,10 @@ function status() {
     armedSelection: ARMED_VARIANT,
     armedMode: ARMED_MODE === false ? 'live (real fillable orders)' : 'test (unfillable + auto-cancel)',
     armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT),
-    // WHO DECIDES A FILL. 'mark' means the book is the engine's own read of the chain — correct for a
-    // simulated run, and a phantom for one whose orders can really fill. See FILL_SOURCE.
-    fillSource: FILL_SOURCE
+    // WHO DECIDES A FILL, for the armed variant specifically — it is derived per run (see fillSourceFor),
+    // so there is no global value to report. 'mark' means the engine's own read of the chain, which is
+    // correct for a simulated or test run and a phantom for one whose orders can really fill.
+    fillSource: fillSourceFor(RUNS.find((r) => r.variant === ARMED_VARIANT) || {})
   };
   const liveV = RUNS.filter(r => r.dryRun === false).map(r => r.variant);
   const testV = RUNS.filter(r => r.dryRun === 'test').map(r => r.variant);
