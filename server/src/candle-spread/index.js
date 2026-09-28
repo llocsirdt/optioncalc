@@ -1898,7 +1898,16 @@ async function accountPositionsIfDue() {
 
 async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
-  const acctDetails = await accountPositionsIfDue();
+  // FETCHED ONLY IF SOMETHING WILL USE IT. Eagerly calling accountPositionsIfDue() here meant the account
+  // was read every 3 minutes whether or not any run had a record to compare against — all weekend, all
+  // night, ~480 reads a day answering a question nobody asked. Lazy + memoised per poll: the first run that
+  // actually has a book triggers the one fetch, every later run in the same pass reuses it, and on a day
+  // with no session it never happens at all.
+  let _acct;
+  const acctDetailsIfAny = async () => {
+    if (_acct === undefined) _acct = await accountPositionsIfDue();
+    return _acct;
+  };
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
     // READ, NEVER CREATE. This called initRun, which CREATES the record when none exists — and the poller
@@ -1969,6 +1978,7 @@ async function runOrderPollInner() {
     // (the local-disk gap in store.js). REPORT ONLY: it never repairs a book, because a disagreement can
     // equally mean the reconciler or the account is wrong, and its response shape has never been seen
     // against a real position. See the note in book-reconcile.js.
+    const acctDetails = await acctDetailsIfAny();
     if (acctDetails) {
       try {
         const pr = BR.reconcilePositions(record, acctDetails);
