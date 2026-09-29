@@ -1262,6 +1262,29 @@ function makeReplaceOrder(run, record) {
           net: sendPayload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
           testMode: isTest, legs: meta && meta.legs, placedAt: Date.now()
         });
+      } else {
+        // THE ROW MUST DESCRIBE THE ORDER THAT IS NOW RESTING, even when the id did not change. Schwab
+        // normally answers a replace with a NEW orderId (measured 09-28: 1008084814192 -> ...198), which
+        // takes the branch above and re-tracks with the new net. But a response carrying no orderId leaves
+        // newId === orderId and skipped this entirely, so the row kept its OLD net and price.
+        //
+        // That matters because concedeCover can replace a DEBIT cover with its CREDIT twin: the row would
+        // then say NET_DEBIT while a credit order rests at the broker. Every consumer of `net` would be
+        // wrong, and the wrong-side guard in applyBrokerFills would refuse a perfectly good fill on the
+        // strength of our own stale label. Update in place instead.
+        const row = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+        if (row) {
+          const wasNet = row.net;
+          row.net = sendPayload.orderType;
+          row.requestedPrice = payload.price;
+          row.sentPrice = sendPayload.price;
+          if (meta && meta.legs) row.legs = meta.legs;
+          if (wasNet !== row.net) {
+            store.appendEvent(record, { type: 'order_side_changed', orderId, from: wasNet, to: row.net,
+              note: 'a replace kept the same order id but changed the net side; the tracked row was updated '
+                + 'in place so it still describes the resting order' });
+          }
+        }
       }
       store.appendEvent(record, {
         type: 'order_replaced', meta, payload: sendPayload, orderId, newOrderId: newId, testMode: isTest,
