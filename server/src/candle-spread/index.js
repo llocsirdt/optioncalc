@@ -1294,6 +1294,20 @@ function makeCancelOrder(run, record) {
       store.appendEvent(record, { type: 'order_simulated', by: why, meta, orderId, note: `cancel not sent (${why})` });
       return { status: `simulated:${why}`, orderId };
     }
+    // DO NOT CANCEL WHAT IS ALREADY GONE. The poller and the strategy both act on the same order rows, and
+    // the poller's test-mode auto-cancel can retire an order before the strategy's own reversal-cancel
+    // reaches it. Schwab answers that with `400 — Order in state CANCELED cannot be canceled`, which this
+    // recorded as order_error: harmless in outcome, but indistinguishable in the log from a cancel that
+    // genuinely failed on an order we still believed was live. Seen once today (09-28, pos-1790606108508-228
+    // on a reversal). replaceOrder already refuses terminal orders; this is the same rule for the same
+    // reason. Recorded as a distinct event so the near-miss is still visible.
+    const tracked = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+    if (tracked && om.isTerminal(tracked)) {
+      store.appendEvent(record, { type: 'order_cancel_skipped', meta, orderId, status: tracked.status,
+        note: `not sent: the order is already ${tracked.status}`
+          + (tracked.canceledReason ? ` (${tracked.canceledReason})` : '') });
+      return { status: `already:${tracked.status}`, orderId };
+    }
     try {
       await DEPS.tradingClient.orderDelete(DEPS.accountHash, orderId);
       om.retireOrder(record, orderId, (meta && meta.kind) || 'strategy-cancel');
