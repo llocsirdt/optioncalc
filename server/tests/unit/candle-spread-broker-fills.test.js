@@ -117,6 +117,45 @@ const mkSt = (pos, los) => ({ positions: [pos], liveOrders: los, realizedPnl: 0,
     'and it is flagged rather than guessed');
 }
 
+// ── 6b. A FILL ON THE OTHER SIDE IS REFUSED, NOT BOOKED ─────────────────────────────────────────────
+// order-manager derives fillSide from the legs that actually executed, independently of what we asked for.
+// When it contradicts the order's own net, booking either reading is a guess — and the direction here comes
+// from sentNet, so a contradicted side moves cash the wrong way ($2,400 on a $12 fill of one contract) and
+// breaks the sentLimit + limit == W parity the floor, cashDeployed and the governor's bookFloor rest on.
+// order-manager already flagged this as `wrongSide`; nothing refused the fill, so the detector logged while
+// the book was written wrong anyway.
+{
+  const pos = mkPos({ sentNet: 'CREDIT', sentLimit: 12, limit: 8,
+    sentLegs: [{ side: 'short', type: 'C', strike: 100 }, { side: 'long', type: 'C', strike: 120 }] });
+  const lo = { orderId: 'ord-o', kind: 'open', status: 'filled', fillPrice: 12.4,
+    net: 'NET_CREDIT', fillSide: 'DEBIT' };          // sent CREDIT, broker says DEBIT
+  const st = mkSt(pos, [lo]);
+  const d = [];
+  const n = trader.applyBrokerFills(st, cfg, { fillSource: 'broker' }, d);
+  ok(n === 0, `a contradicted side books nothing (applied ${n})`);
+  ok(pos.filled === false && st.cashDeployed === 0, 'the position is untouched and no cash moves');
+  ok(lo.brokerApplied === 'wrong-side', "the order records why it was refused ('wrong-side')");
+  const dec = d.find((x) => x.action === 'broker-fill-wrong-side');
+  ok(dec && dec.sentNet === 'NET_CREDIT' && dec.fillSide === 'DEBIT',
+    'and the disagreement is logged with both sides, so it can be investigated');
+
+  // THE CONTROL: the same fill with the sides AGREEING must book normally — otherwise this proves nothing
+  // except that a guard exists.
+  const pos2 = mkPos({ sentNet: 'CREDIT', sentLimit: 12, limit: 8,
+    sentLegs: [{ side: 'short', type: 'C', strike: 100 }, { side: 'long', type: 'C', strike: 120 }] });
+  const st2 = mkSt(pos2, [{ orderId: 'ord-o', kind: 'open', status: 'filled', fillPrice: 12.4,
+    net: 'NET_CREDIT', fillSide: 'CREDIT' }]);
+  ok(trader.applyBrokerFills(st2, cfg, { fillSource: 'broker' }, []) === 1,
+    'control: sides agreeing, the same fill books');
+  ok(near(pos2.sentLimit + pos2.limit, cfg.spreadWidth), 'and parity holds on the booked one');
+
+  // An order with no `net` recorded cannot be contradicted — it must still book rather than stall forever.
+  const pos3 = mkPos({ limit: 8 });
+  const st3 = mkSt(pos3, [{ orderId: 'ord-o', kind: 'open', status: 'filled', fillPrice: 7.55 }]);
+  ok(trader.applyBrokerFills(st3, cfg, { fillSource: 'broker' }, []) === 1,
+    'an order carrying no sent side is not treated as contradicted');
+}
+
 // ── 7. NO DOUBLE BOOKING AGAINST A POSITION THE MARK PATH ALREADY FILLED ────────────────────────────
 {
   const pos = mkPos({ filled: true, limit: 8 });

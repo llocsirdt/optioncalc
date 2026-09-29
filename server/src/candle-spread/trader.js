@@ -1948,6 +1948,27 @@ function applyBrokerFills(st, cfg, deps, decisions) {
     }
     const qty = cfg.quantity || 1;
     const W = cfg.spreadWidth;
+    // A FILL ON THE OTHER SIDE IS NOT A FILL WE UNDERSTAND. order-manager derives o.fillSide from the legs
+    // that actually EXECUTED (signed by instruction), independently of what we asked for; o.net is what we
+    // sent. When they disagree, booking either interpretation is a guess: the direction below comes from
+    // sentNet, so a contradicted side would move cash the wrong way — $2,400 on a $12 fill of one contract
+    // — and break the sentLimit + limit == W parity that the locked floor, cashDeployed and the governor's
+    // bookFloor all rest on.
+    //
+    // order-manager already NOTICES this (`wrongSide` on the order_filled event) but nothing refused the
+    // fill, so the detector logged a line while the book was written wrong anyway. Stand down instead, the
+    // same way an unpriced fill does, and make it loud: a contradiction here means our model of the order
+    // and the broker's disagree, which is a thing to investigate, not to average over.
+    const sentSide = o.net ? String(o.net).replace(/^NET_/, '') : null;
+    if (sentSide && o.fillSide && o.fillSide !== sentSide) {
+      o.brokerApplied = 'wrong-side';
+      decisions.push({ action: 'broker-fill-wrong-side', orderId: o.orderId, kind: o.kind,
+        positionId: o.positionId || null, sentNet: o.net, fillSide: o.fillSide, fillPrice: px,
+        note: `the broker reports a ${o.fillSide} fill on an order sent as ${o.net} — NOT booked` });
+      console.error(`[candle-spread] WRONG-SIDE FILL #${o.orderId} (${o.kind}): sent ${o.net}, filled `
+        + `${o.fillSide} @ ${px} — refusing to book it; the engine's view of this order and the broker's disagree`);
+      continue;
+    }
     if (o.kind === 'open') {
       const pos = st.positions.find((p) => p && p.orderId === o.orderId);
       if (!pos) { o.brokerApplied = 'no-position'; continue; }
