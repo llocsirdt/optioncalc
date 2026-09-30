@@ -55,6 +55,13 @@ function bundleKey() {
 
 // STREAMED, not readFileSync. The bundle is ~81 MB and hashing it by slurping would put all of that in RSS
 // on a 1.9 GB instance with a history of OOM.
+// The one-shot marker. Keyed by the bundle's identity so a genuinely new bundle seeds again without anyone
+// remembering a flag, and it lives in S3 rather than on disk because disk is the thing that disappears.
+async function markerExists(A, tag) {
+  const m = await A.getRun(`_seed_${tag}`);
+  return !!(m && m.ok);
+}
+
 function sha256File(file) {
   const h = crypto.createHash('sha256');
   const fd = fs.openSync(file, 'r');
@@ -121,9 +128,24 @@ async function seedFromBundle(opts = {}) {
   // one in S3, which is how a large bundle gets here without an 82 MB browser upload to Elastic Beanstalk.
   let bundleFile = bundle;
   let downloaded = null;
+  let tag = null;
   if (!fs.existsSync(bundleFile)) {
     if (!A.enabled() || typeof A.getObjectToFile !== 'function') return res;   // nothing local, nowhere to look
     const key = `${A.PREFIX}/${bundleKey()}`;
+    // IDENTIFY BEFORE DOWNLOADING. The first version fetched all 81 MB and only then hashed it to look for the
+    // marker, so a bundle left in the bucket cost a full download on EVERY boot and deploy, forever, just to
+    // rediscover it had already been applied (observed: gets=2 on a boot that seeded nothing). ETag is the
+    // object's identity and HeadObject is one cheap request, so the already-seeded case now transfers nothing.
+    if (typeof A.headObject === 'function') {
+      const h = await A.headObject(key);
+      if (!h.ok) return res;                             // no bundle in the bucket: the normal case
+      tag = `e${String(h.etag || '').slice(0, 16)}`;
+      if (await markerExists(A, tag)) {
+        res.found = true; res.source = 's3'; res.tag = tag; res.alreadySeeded = true;
+        log(`[candle-spread] seed bundle ${tag} already applied (marker in S3) — not downloading it.`);
+        return res;
+      }
+    }
     const dlDir = path.join(path.dirname(path.resolve(runsDir)), '_seed-download');
     try { fs.mkdirSync(dlDir, { recursive: true }); } catch (_) { /* exists */ }
     const dest = path.join(dlDir, 'seed-runs.tgz');
@@ -138,20 +160,20 @@ async function seedFromBundle(opts = {}) {
   }
   res.found = true;
   res.bundle = bundleFile;
-  const tag = sha256File(bundleFile);
+  // A bundle that came from S3 is identified by its ETag (already known, no rehash); one shipped in the deploy
+  // is hashed, since it has no ETag to borrow.
+  if (!tag) tag = sha256File(bundleFile);
   res.tag = tag;
 
   // ONE SHOT PER BUNDLE. The marker lives in S3 rather than on local disk precisely because local disk is the
   // thing that disappears — a disk marker would be lost in the same event that makes a reseed look necessary,
   // and every replacement would re-upload the whole archive.
   const markerId = `_seed_${tag}`;
-  if (A.enabled()) {
-    const m = await A.getRun(markerId);
-    if (m.ok) {
-      res.alreadySeeded = true;
-      log(`[candle-spread] seed bundle ${tag} already applied (marker in S3) — skipping.`);
-      return res;
-    }
+  if (A.enabled() && await markerExists(A, tag)) {
+    res.alreadySeeded = true;
+    log(`[candle-spread] seed bundle ${tag} already applied (marker in S3) — skipping.`);
+    if (downloaded) { try { fs.rmSync(path.dirname(downloaded), { recursive: true, force: true }); } catch (_) { /* best effort */ } }
+    return res;
   }
 
   // *** NOT os.tmpdir(). *** On this platform /tmp is a RAM-BACKED tmpfs sized at about half the instance

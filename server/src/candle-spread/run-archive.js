@@ -261,6 +261,19 @@ async function getObjectToFile(key, destPath) {
   }
 }
 
+/**
+ * An object's identity WITHOUT downloading it. ETag is the MD5 for a single-part upload and changes whenever
+ * the object does, which is all the seed needs to decide "have I already applied this bundle?" — and deciding
+ * that after an 81 MB download, as the first version did, meant paying for the download on every single boot
+ * forever.
+ */
+async function headObject(key) {
+  const r = await cmd('HeadObjectCommand', { Bucket: BUCKET, Key: key });
+  if (!r.ok) return r;
+  const etag = String((r.out && r.out.ETag) || '').replace(/"/g, '');
+  return { ok: true, etag, size: r.out && r.out.ContentLength, out: r.out };
+}
+
 function health() {
   return {
     configured: !!BUCKET,
@@ -273,5 +286,5 @@ function health() {
   };
 }
 
-module.exports = { enabled, health, selfTest, putRun, getRun, getObjectToFile, listRuns, restoreDay, keyFor, tradeDateOf,
+module.exports = { enabled, health, selfTest, putRun, getRun, getObjectToFile, headObject, listRuns, restoreDay, keyFor, tradeDateOf,
   BUCKET, PREFIX, REGION, _stats: stats };

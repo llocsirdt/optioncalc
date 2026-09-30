@@ -48,8 +48,17 @@ execFileSync('tar', ['-czf', bundle, '-C', FIXT, '.'], { stdio: 'pipe' });
 function fakeArchive(objects) {
   const s3 = new Map();
   const blobs = objects || new Map();         // raw keys (the seed bundle), separate from run records
-  return { s3, blobs, PREFIX: 'runs', BUCKET: 'b', enabled: () => true,
+  const counts = { head: 0, download: 0 };
+  return { s3, blobs, counts, PREFIX: 'runs', BUCKET: 'b', enabled: () => true,
+    async headObject(key) {
+      counts.head++;
+      if (!blobs.has(key)) return { ok: false, error: 'NoSuchKey' };
+      // A stable identity for the bytes, standing in for the real ETag.
+      const b = blobs.get(key);
+      return { ok: true, etag: require('crypto').createHash('md5').update(b).digest('hex'), size: b.length };
+    },
     async getObjectToFile(key, dest) {
+      counts.download++;
       if (!blobs.has(key)) return { ok: false, error: 'NoSuchKey' };
       fs.writeFileSync(dest, blobs.get(key));
       return { ok: true, bytes: fs.statSync(dest).size, path: dest };
@@ -142,6 +151,20 @@ const log = () => {};
     ok(r.toDisk === 3 && r.toS3 === 3, `and seeds exactly as the deploy path does (${r.toDisk}/${r.toS3})`);
     ok(!fs.existsSync(path.join(path.dirname(path.resolve(STORE7)), '_seed-download')),
       'the downloaded bundle is cleaned up — 81 MB of scratch must not linger and be re-hashed every boot');
+    // ONCE SEEDED, A BUNDLE LEFT IN THE BUCKET MUST NOT BE DOWNLOADED AGAIN.
+    // The first version fetched all 81 MB and only then hashed it to look for the marker, so leaving the
+    // bundle in place cost a full download on every boot and deploy forever, purely to rediscover it had
+    // already been applied. ETag identifies it in one cheap HeadObject instead.
+    {
+      const downloadsAfterSeed = A2.counts.download;
+      const again = await SB.seedFromBundle({ runsDir: STORE7, archive: A2,
+        bundle: path.join(tmp, 'no-local-bundle.tgz'), log });
+      ok(again.alreadySeeded === true, 'a second boot sees the marker');
+      ok(A2.counts.download === downloadsAfterSeed,
+        `and transfers NOTHING — no re-download of the bundle (${A2.counts.download} vs ${downloadsAfterSeed})`);
+      ok(A2.counts.head > 0, 'it identified the object by HeadObject instead');
+    }
+
     // Absent from BOTH places is the normal case for every ordinary deploy.
     const r2 = await SB.seedFromBundle({ runsDir: STORE7, archive: fakeArchive(),
       bundle: path.join(tmp, 'no-local-bundle.tgz'), log });
