@@ -472,6 +472,33 @@ const ARMED_MODE = process.env.CANDLE_SPREAD_ARMED_MODE === 'live' ? false : 'te
 // ladder+minLock, v6-20 has the tight cap, v8-20 has give-up). Testing five features across 50 variants
 // cannot keep every arm single-factor. Read a fly result against its adjacent-family control at the same
 // width and geometry, and treat any variant carrying two flags as suggestive rather than attributable.
+// ── THE FLOOR UNDER EVERY LOSS CAP: 1.5 x ONE POSITION'S WIDTH ──────────────────────────────────────
+//
+// lossMax bounds RC.bookFloor — the day's worst case across all strikes. A cap BELOW what a single position
+// can lose is therefore incoherent: the governor must block almost any open that could go the full width, so
+// the variant stops trading rather than manages risk.
+//
+// v7-40 ran at $3,000 against a $4,000 max loss on a 40-wide. Measured on 2026-09-29: **5.13 governor blocks
+// per open** (41 blocks, 8 opens all day) — the worst cell in the family x width grid by a factor of three.
+// The sweep agrees it was a mistake: at $8,000 v7-40 returns $2.60M with ret/DD 50.8, at $3,000 it returns
+// $1.18M with ret/DD 48.4. Worse on BOTH axes, $1.42M forgone.
+//
+// It was adopted honestly — the comment at the TUNED_CAPS assignment says "ret/DD 41 -> 59" — but from the
+// sweep run whose control arm had degenerated into a copy of the treatment (b50e432), so 29 of 50 variants
+// were never tested against anything looser than their own cap. A tuning pass can be wrong; this floor is
+// the guard that keeps a wrong one from being incoherent.
+//
+// 1.5x, not 1.0x: at exactly one width the governor still blocks any SECOND position that could run to full
+// width, which is nearly as sterile. 1.5x leaves room to hold one position through a full loss and still
+// open. Fine-tune ABOVE this; never below.
+//
+// `-unc` variants are unaffected by construction — they carry lossMax null, meaning no governor at all, and
+// null is not "a small cap".
+const LOSS_MAX_FLOOR_X_WIDTH = 1.5;
+function lossMaxFloorFor(spreadWidth) {
+  return Math.round(LOSS_MAX_FLOOR_X_WIDTH * spreadWidth * 100);
+}
+
 const FLY_LIVE = new Set(
   (process.env.CANDLE_SPREAD_FLY != null ? process.env.CANDLE_SPREAD_FLY
     : 'v0-10,v0-20,v0-40,v0-20-cATM,v0-40-cATM,'
@@ -711,12 +738,32 @@ function applyExperiments(v, { capPreset = true } = {}) {
   if (CREDIT_TRIGGER_XW > 0) v.creditCapitalTrigger = Math.round(CREDIT_TRIGGER_XW * v.spreadWidth * 100);
   // MEASURED CAP LAST, so it wins over both the width-derived generic and the CAPPRES preset — it is the
   // only one of the three backed by a 765-day measurement of this exact variant. It moves v7-10 off the
-  // preset's $1,000 to its measured peak $1,500 (+19% P&L, ret/DD 809 -> 850) and v7-40 from $4,000 DOWN
-  // to $3,000, which is both tighter and better (ret/DD 41 -> 59).
+  // preset's $1,000 to its measured peak $1,500 (+19% P&L, ret/DD 809 -> 850).
+  //
+  // THE v7-40 CLAIM HERE WAS WRONG AND IS LEFT ON THE RECORD DELIBERATELY. It read: "and v7-40 from $4,000
+  // DOWN to $3,000, which is both tighter and better (ret/DD 41 -> 59)". The re-run sweep — the one with a
+  // real control arm (b50e432) — says $3,000 gives ret/DD 48.4 against 40.3 at $4,000 and **50.8 at $8,000**,
+  // where the total is $2.60M rather than $1.18M. Worse on both axes. The 41 -> 59 figures came from the
+  // broken-control run. The floor below now makes this class of error impossible to ship, but the cap itself
+  // is still looser-than-floor by measurement and wants a separate decision.
   const tuned = capPreset ? TUNED_CAPS.get(v.variant) : null;
   if (tuned != null) {
     v.lossMax = tuned;
     v.lossTarget = Math.round(0.7 * tuned);
+  }
+  // THE FLOOR, LAST AND UNCONDITIONAL. After the width-generic default, the CAPPRES preset and the measured
+  // TUNED_CAPS — whichever set the value, it cannot end up below one-and-a-half positions' width. Outside the
+  // `capPreset` branch on purpose: the builder that passes capPreset:false still needs the floor.
+  if (v.lossMax != null && v.spreadWidth) {
+    const floor = lossMaxFloorFor(v.spreadWidth);
+    if (v.lossMax < floor) {
+      console.warn(`[candle-spread] ${v.variant}: lossMax ${v.lossMax} is below the floor for a `
+        + `${v.spreadWidth}-wide (${floor} = ${LOSS_MAX_FLOOR_X_WIDTH}x one position) — raising it. `
+        + 'A cap under one position\'s width makes the governor block nearly every open.');
+      v.lossMax = floor;
+      v.lossTarget = Math.round(0.7 * floor);
+      v.lossMaxFloored = true;        // visible on the record, so a floored cap is never mistaken for a tuned one
+    }
   }
   if (LADDER_LIVE.has(v.variant)) applyLadderCfg(v);
   // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30% is a
@@ -2774,6 +2821,10 @@ function status() {
 }
 
 module.exports = {
+  // The floor under every cap (1.5x one position's width) — exported so the sweep and the tests can use the
+  // real rule rather than restating it. See LOSS_MAX_FLOOR_X_WIDTH.
+  lossMaxFloorFor,
+  LOSS_MAX_FLOOR_X_WIDTH,
   // THE PRE-TIGHTENING FLEET DEFAULT. Exported so sweep-loss-cap can use the real formula as its
   // counterfactual arm instead of inferring it from the roster — see the note on genericFor.
   maxCapFor,

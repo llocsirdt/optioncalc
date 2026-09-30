@@ -25,6 +25,12 @@ const NOT_ENGINE_OPTS = new Set([
   'strikeIncrement', 'tickIncrement', 'snapshotStrikes', 'captureChain', 'coverStyle', 'coverFillModel',
   'spreadWidth', 'spreadShift', 'capFrac', 'adaptiveGeo', 'maxItmStrikes',   // consumed by the geo builder
   'comboOrders', 'comboSlip',                       // live order shape, no backtest equivalent
+  // A MARKER, NOT A CAPABILITY. lossMaxFloored records that a cap was raised to the 1.5x-width floor, so a
+  // floored value is never mistaken on the record for a tuned one. The BEHAVIOUR it describes travels as
+  // lossMax/lossTarget, which every consumer already forwards, so there is nothing here for an engine to act
+  // on. Listed rather than forwarded because the audit is right to refuse an unexplained field — that refusal
+  // is what catches a real capability added to the roster and never wired through.
+  'lossMaxFloored',
 ]);
 
 /**
