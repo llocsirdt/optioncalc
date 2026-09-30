@@ -100,17 +100,27 @@ async function existingKeys(client) {
   // paginated list answers, and it is the difference between a seed that takes seconds and one that takes
   // minutes. It also tells you honestly how much is already there before anything is written.
   let present = new Set();
+  let listed = true;
   try {
     present = await existingKeys(client);
     console.log(`already in bucket: ${present.size} object(s)`);
   } catch (e) {
-    console.error(`cannot list the bucket: ${e && e.message}`);
-    console.error('check the bucket name, the region, and that your credentials allow s3:ListBucket.');
-    process.exit(1);
+    listed = false;
+    // A DRY RUN IS THE FIRST THING ANYONE TRIES, and it is worth something before the bucket or the IAM
+    // policy exists: it still answers "what would go up, and how much". So a list failure is fatal only for
+    // a real upload, where not knowing what is present would mean re-uploading 967 MB.
+    if (!DRY) {
+      console.error(`cannot list the bucket: ${e && e.message}`);
+      console.error('check the bucket name, the region, and that your credentials allow s3:ListBucket.');
+      process.exit(1);
+    }
+    console.log(`could not list the bucket (${e && e.message})`);
+    console.log('  --dry-run continues anyway; assuming nothing is present yet.');
   }
 
   const todo = rows.filter((r) => OVERWRITE || !present.has(`${PREFIX}/${r.runId}.json`));
-  console.log(`to upload: ${todo.length}${OVERWRITE ? ' (overwriting)' : ` (${rows.length - todo.length} skipped, already present)`}`);
+  console.log(`to upload: ${todo.length}${OVERWRITE ? ' (overwriting)' : ` (${rows.length - todo.length} skipped, already present)`}`
+    + (listed ? '' : ' [bucket not listed — count is the full selection]'));
   if (DRY) {
     for (const r of todo.slice(0, 20)) console.log(`  would put ${PREFIX}/${r.runId}.json`);
     if (todo.length > 20) console.log(`  … and ${todo.length - 20} more`);
