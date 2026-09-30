@@ -1086,6 +1086,26 @@ app.get('/api/v1/candle-spread/runs', (req, res) => {
 
 // Compact live status for the UI to poll (mode/gates + per-strategy activity today) — lets you
 // validate at a glance that the server is doing what's expected (esp. the prod test-mode session).
+// ── REMOTE STRATEGY CONTROL ─────────────────────────────────────────────────────────────────────────
+// GET is unauthenticated because it returns exactly what /candle-spread/status already exposes; POST is the
+// only authenticated route on this server (see candle-spread/index.handleControlWrite for why the bar is set
+// where it is). The token goes in x-control-token — a header, never a query string, because query strings land
+// in CloudFront logs, access logs and browser history.
+app.get('/api/v1/candle-spread/control', (req, res) => {
+  try { res.json({ success: true, control: candleSpread.controlState() }); }
+  catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
+});
+
+app.post('/api/v1/candle-spread/control', async (req, res) => {
+  try {
+    const out = await candleSpread.handleControlWrite(req);
+    res.status(out.status).json(out.body);
+  } catch (e) {
+    console.error('[candle-spread] control write error:', e && e.message);
+    res.status(500).json({ ok: false, error: 'control write failed' });
+  }
+});
+
 app.get('/api/v1/candle-spread/status', (req, res) => {
   try {
     res.json(candleSpread.status());

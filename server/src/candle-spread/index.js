@@ -2845,6 +2845,63 @@ function backtestBaselines() {
 
 // Compact live status for the UI to poll — confirms mode/gates and what each strategy is doing today,
 // so you can validate the server is behaving as expected (esp. the prod test-mode session).
+// ── THE CONTROL WRITE PATH, AND ITS AUTHENTICATION ──────────────────────────────────────────────────
+//
+// This is the FIRST authenticated surface on this server. Everything else is either public (status, runs) or
+// dev-only via requireDevMode, which BLOCKS in prod rather than authenticating. So the bar here is not "match
+// the existing pattern" — there isn't one — and the thing being guarded can change what trades with real money.
+//
+// THE TOKEN LIVES IN A HEADER, NEVER A URL. Query strings land in CloudFront logs, access logs, browser history
+// and Referer headers; a bearer credential in one is a credential published.
+//
+// NO TOKEN CONFIGURED MEANS THE ENDPOINT IS OFF, not open. There is deliberately no default and no fallback:
+// a default secret on a server that can place real orders is worse than no endpoint at all.
+//
+// COMPARISON IS CONSTANT-TIME. A byte-by-byte early return leaks the token's prefix to anyone who can measure
+// response latency, and this one guards real money.
+const CONTROL_TOKEN = process.env.CANDLE_SPREAD_CONTROL_TOKEN || null;
+
+function controlAuthOk(req) {
+  if (!CONTROL_TOKEN) return { ok: false, status: 503, error: 'control API is disabled (CANDLE_SPREAD_CONTROL_TOKEN is not set)' };
+  const given = req.get('x-control-token') || '';
+  const crypto = require('crypto');
+  const a = Buffer.from(String(given));
+  const b = Buffer.from(CONTROL_TOKEN);
+  // timingSafeEqual throws on a length mismatch, which would itself leak the length — so compare fixed-size
+  // digests instead of the raw bytes.
+  const ha = crypto.createHash('sha256').update(a).digest();
+  const hb = crypto.createHash('sha256').update(b).digest();
+  if (!crypto.timingSafeEqual(ha, hb)) return { ok: false, status: 401, error: 'bad or missing x-control-token' };
+  return { ok: true };
+}
+
+/**
+ * Handle a control write. Returns { status, body } for the route to send; does not touch res, so it stays
+ * testable without an HTTP server.
+ */
+async function handleControlWrite(req) {
+  const auth = controlAuthOk(req);
+  if (!auth.ok) {
+    // Log the attempt but never the token, and never echo what was sent back to the caller.
+    console.warn(`[candle-spread] control write REFUSED (${auth.error})`);
+    return { status: auth.status, body: { ok: false, error: auth.error } };
+  }
+  const patch = req.body || {};
+  const r = await SC.applyPatch(patch, {
+    knownVariants: RUNS.map((v) => v.variant),
+    liveAllowed: LIVE_ARMED,
+    log: (m) => console.log(m), warn: (m) => console.warn(m),
+  });
+  if (!r.ok) return { status: r.status || 400, body: { ok: false, error: r.error,
+    unknownVariants: r.unknownVariants, rejected: r.rejected } };
+  console.log(`[candle-spread] control WRITTEN by ${r.wrote.updatedBy}: `
+    + (Object.entries(r.wrote.variants).map(([k, v]) => `${k}=${v.mode}${v.restrict ? '/' + v.restrict : ''}`).join(' ') || '(all simulate)'));
+  return { status: 200, body: { ok: true, state: r.state } };
+}
+
+/** Read-only view, for symmetry with the write path. Same data /status already exposes. */
+function controlState() { return SC.health(); }
+
 function status() {
   const gates = {
     isProd: !!(DEPS && DEPS.isProd === true),
@@ -2982,6 +3039,8 @@ module.exports = {
   getRun,
   status,
   buildRuns,
+  handleControlWrite,
+  controlState,
   VARIANTS,
   listVariants,
   // exported for tests

@@ -258,11 +258,91 @@ function health() {
   };
 }
 
+/**
+ * Apply a change and write it back to S3. Validates against the roster BEFORE writing, so a typo is refused at
+ * the moment it is made rather than silently governing nothing until someone reads /health.
+ *
+ * Three shapes, all going through the same validation:
+ *   { variant, mode, restrict?, note?, until? }   set or replace one entry
+ *   { variant, remove: true }                     delete one entry (back to simulate)
+ *   { variants: {...} }                           replace the whole map
+ *
+ * READ-MODIFY-WRITE, LAST WRITE WINS. There is one operator, so a compare-and-swap would be machinery for a
+ * race that cannot happen; if that changes, the ETag returned by getObjectRaw is the hook for it.
+ */
+async function applyPatch(patch, deps = {}) {
+  const A = deps.archive || require('./run-archive');
+  const known = deps.knownVariants ? new Set(deps.knownVariants) : null;
+  if (!A.enabled() || typeof A.putObjectRaw !== 'function') {
+    return { ok: false, status: 503, error: 'the run archive is not configured, so control cannot be written' };
+  }
+  const key = controlKey(A.PREFIX);
+
+  // Start from what is actually in the bucket, not from our cache: the cache may be stale, and writing a stale
+  // view back would silently revert someone else's change.
+  let file = { variants: {} };
+  const cur = await A.getObjectRaw(key, { quietMissing: true });
+  if (cur.ok) {
+    try { file = JSON.parse(cur.body) || { variants: {} }; }
+    catch (e) {
+      // REFUSE rather than overwrite. A file we cannot parse may hold a halt somebody is relying on, and
+      // replacing it with our own view would silently drop it.
+      return { ok: false, status: 409,
+        error: `the existing control file is not valid JSON (${(e && e.message) || e}) — refusing to overwrite it. `
+          + 'Fix or delete the object in S3, then retry.' };
+    }
+  } else if (!cur.missing) {
+    return { ok: false, status: 502, error: `cannot read the current control file: ${cur.error || cur.reason}` };
+  }
+  if (!file.variants || typeof file.variants !== 'object') file.variants = {};
+
+  const next = { ...file, variants: { ...file.variants } };
+  if (patch && patch.variants && typeof patch.variants === 'object') {
+    next.variants = { ...patch.variants };
+  } else if (patch && patch.variant) {
+    if (known && !known.has(patch.variant)) {
+      return { ok: false, status: 400,
+        error: `${patch.variant} is not on the roster — refusing to write an entry that would govern nothing` };
+    }
+    if (patch.remove === true) delete next.variants[patch.variant];
+    else {
+      const entry = { mode: patch.mode || 'simulate' };
+      if (patch.restrict) entry.restrict = patch.restrict;
+      if (patch.note) entry.note = patch.note;
+      if (patch.until) entry.until = patch.until;
+      next.variants[patch.variant] = entry;
+    }
+  } else {
+    return { ok: false, status: 400, error: 'nothing to do: send { variant, mode } or { variants: {...} }' };
+  }
+
+  // VALIDATE THE RESULT, not the patch. liveAllowed:true here on purpose — we are storing an intent, and the
+  // downgrade to paper happens at READ time against the environment the engine is actually running in.
+  const check = normalise(next, deps.knownVariants, { liveAllowed: true });
+  if (check.unknown.length || check.rejected.length) {
+    return { ok: false, status: 400,
+      error: 'the resulting file would contain entries that do nothing',
+      unknownVariants: check.unknown, rejected: check.rejected };
+  }
+
+  next.updatedAt = new Date().toISOString();
+  next.updatedBy = (patch && (patch.by || patch.updatedBy)) || 'api';
+  const body = JSON.stringify(next, null, 2);
+  const w = await A.putObjectRaw(key, body);
+  if (!w.ok) return { ok: false, status: 502, error: `write failed: ${w.error || w.reason}` };
+
+  // Refresh immediately so the caller sees the state the engine will act on, including any live -> paper
+  // downgrade the environment imposes. Without this a caller could be told 'live' and get paper.
+  await refresh({ archive: A, knownVariants: deps.knownVariants, liveAllowed: !!deps.liveAllowed,
+    log: deps.log || (() => {}), warn: deps.warn || (() => {}) });
+  return { ok: true, status: 200, wrote: next, state: health() };
+}
+
 function _reset() {
   Object.assign(state, { loadedAt: null, checkedAt: null, etag: null, raw: null, variants: {},
     updatedAt: null, updatedBy: null, source: 'none', error: null, errorAt: null, unknownVariants: [],
     rejected: [], expired: [], downgraded: [], reads: 0, readFails: 0, changes: 0 });
 }
 
-module.exports = { refresh, forVariant, canOpen, canSendOrders, dryRunFor, health, normalise,
+module.exports = { refresh, applyPatch, forVariant, canOpen, canSendOrders, dryRunFor, health, normalise,
   controlKey, todayET, REQUIRED_MODES, RESTRICTS, _state: state, _reset };
