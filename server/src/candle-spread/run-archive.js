@@ -120,7 +120,15 @@ async function listRuns(tradeDate) {
       ContinuationToken: token, MaxKeys: 1000 });
     if (!r.ok) { if (!r.disabled) stats.listFails++; return { ok: false, error: r.error, reason: r.reason, ids }; }
     for (const o of r.out.Contents || []) {
-      const m = /([^/]+)\.json$/.exec(o.Key || '');
+      // DIRECTLY UNDER THE PREFIX, OR IT IS NOT A RUN. A nested key is something else's, and one nesting in
+      // particular is dangerous: store.js keeps summary sidecars in `_summaries/` INSIDE the runs directory,
+      // under the SAME runId filenames as the records they describe. Upload a runs directory wholesale (by
+      // hand, or from some future tool) and `_summaries/NDX_..._v7-10.json` would list as run
+      // `NDX_..._v7-10` — the same id as the real record, so a restore could write the tiny projection over
+      // the place the real book belongs, and which one won would depend on key order.
+      const rel = String(o.Key || '').slice(`${PREFIX}/`.length);
+      if (rel.includes('/')) continue;
+      const m = /^([^/]+)\.json$/.exec(rel);
       if (!m) continue;
       // A KEY UNDER THE PREFIX IS NOT AUTOMATICALLY A RUN. Anything whose name does not parse to a
       // SYMBOL_EXPIRATION_TRADEDATE id is not ours to hand back - the write probe at _probe/health.json is

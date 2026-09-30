@@ -245,6 +245,19 @@ function loadArchive(env) {
     ok([...fake.store.keys()].some((k) => k === 'runs/_probe/health.json'),
       `the probe lands outside the run namespace (${[...fake.store.keys()].join(',')})`);
 
+    // A SUMMARY SIDECAR MUST NEVER BE MISTAKEN FOR A RECORD. store.js keeps them in `_summaries/` inside the
+    // runs directory under the SAME runId filenames, so a wholesale upload of a runs directory would put
+    // `_summaries/NDX_..._v7-10.json` in the bucket. Listed as a run, that id collides with the real record
+    // and a restore could write the tiny projection where the real book belongs.
+    {
+      fake.store.set('runs/_summaries/NDX_2026-09-29_2026-09-29_v9-40.json', '{"runId":"summary-not-a-record"}');
+      const ls = await A.listRuns();
+      ok(!ls.ids.includes('NDX_2026-09-29_2026-09-29_v9-40'),
+        `a nested sidecar key is not listed as a run (${JSON.stringify(ls.ids)})`);
+      const dd = await A.restoreDay('2026-09-29', path.join(tmp, 'store-sidecar'));
+      ok(dd.restored === 0, 'and restoreDay does not write it as a record');
+    }
+
     // THE PROBE MUST NOT POLLUTE listRuns — its id cannot parse to a trade date, so it is filtered out.
     await A.putRun('NDX_2026-09-29_2026-09-29_v7-10', '{}');
     const l = await A.listRuns();
