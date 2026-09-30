@@ -733,6 +733,18 @@ const TUNED_CAPS = new Map([
   ['v3-20-cATM', 3500],
   ['v0-20-cATM', 7000],
   ['v5-20', 4000],
+  // NORMALISED 2026-09-30 to match its own -cATM twin. v1-20 was never tuned — it sat on the width-generic
+  // $7,000 — and its ret/DD curve is FLAT: 90.2 at $3,000, 89.5 at $4,000, 89.8 at $6,000, 91.1 at $7,000,
+  // with total between $1,301k and $1,394k. There is no information in that curve, so $7,000 was arbitrary
+  // rather than measured, and it produced the fleet's second-largest sATM/cATM skew (7000 vs 4500, ratio 0.64)
+  // for no reason anyone could point at. $4,500 costs ~$18k of total (1.3%) and buys a $2,500 smaller worst
+  // day plus a cap that matches its twin.
+  //
+  // The OTHER large skew, v8-20 at 2.33x, is deliberately left alone: those two curves genuinely disagree
+  // (v8-20 ret/DD peaks 101.6 at $2,500 and decays to 52.3 at $7,000; v8-20-cATM runs the other way, 17.4 at
+  // $3,000 rising to 30.8 at $7,000). Forcing a match there would cost real money to satisfy a symmetry the
+  // measurement does not support. Same for v6-20 vs v6-20-cATM.
+  ['v1-20', 4500],
   ['v1-20-cATM', 4500],
   ['v2-20', 4500],
   ['v2-20-cATM', 4500],
