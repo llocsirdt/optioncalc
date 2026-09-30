@@ -40,10 +40,40 @@ function bundlePath() {
   return process.env.CANDLE_SPREAD_SEED_BUNDLE || path.join(__dirname, '..', '..', 'seed-runs.tgz');
 }
 
+// STREAMED, not readFileSync. The bundle is ~81 MB and hashing it by slurping would put all of that in RSS
+// on a 1.9 GB instance with a history of OOM.
 function sha256File(file) {
   const h = crypto.createHash('sha256');
-  h.update(fs.readFileSync(file));
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(1 << 20);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (!n) break;
+      h.update(buf.subarray(0, n));
+    }
+  } finally { fs.closeSync(fd); }
   return h.digest('hex').slice(0, 16);
+}
+
+// A gzip member records its uncompressed size in the last four bytes (mod 2^32). Our archive is well under
+// 4 GB so this is exact, and it lets us refuse before filling a disk rather than after.
+function gzipUncompressedBytes(file) {
+  try {
+    const st = fs.statSync(file);
+    if (st.size < 18) return null;
+    const fd = fs.openSync(file, 'r');
+    try {
+      const b = Buffer.allocUnsafe(4);
+      fs.readSync(fd, b, 0, 4, st.size - 4);
+      return b.readUInt32LE(0);
+    } finally { fs.closeSync(fd); }
+  } catch (_) { return null; }
+}
+
+// Free bytes on the filesystem holding `dir`.
+function freeBytes(dir) {
+  try { const s = fs.statfsSync(dir); return s.bavail * s.bsize; } catch (_) { return null; }
 }
 
 // runId = SYMBOL_EXPIRATION_TRADEDATE[_VARIANT]; dates carry hyphens, never underscores.
@@ -83,15 +113,48 @@ async function seedFromBundle(opts = {}) {
     }
   }
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-seed-'));
+  // *** NOT os.tmpdir(). *** On this platform /tmp is a RAM-BACKED tmpfs sized at about half the instance
+  // memory (956 MB here), and .ebextensions/persistence.config records what writing app data there cost:
+  // it consumed RAM, competed with the app, and was the mechanism behind the recurring OOM and the
+  // 2026-08-28 deploy hang. The first version of this staged in os.tmpdir() anyway and failed on the very
+  // first real attempt (2026-09-30 02:03 UTC): the archive unpacks to 967 MB against a 956 MB tmpfs, so it
+  // died of ENOSPC by about 11 MB, the finally-block cleanup erased the evidence, and the only symptom was
+  // storeFiles and puts sitting at 0 for four minutes. Had the bundle been slightly smaller it would have
+  // "worked" while quietly eating a gigabyte of RAM, which is the worse outcome.
+  //
+  // Staging goes beside the run store, on the 8 GB root disk, which is also the same filesystem — so records
+  // MOVE into place by rename rather than being copied, halving peak disk and making each arrival atomic.
+  const stageRoot = path.join(path.dirname(path.resolve(runsDir)), '_seed-staging');
+  try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* first run */ }
+  let tmp;
+  try { fs.mkdirSync(stageRoot, { recursive: true }); tmp = fs.mkdtempSync(path.join(stageRoot, 'unpack-')); }
+  catch (e) {
+    res.error = `cannot create staging dir beside the store: ${(e && e.message) || e}`;
+    log(`[candle-spread] seed bundle: ${res.error}`);
+    return res;
+  }
+
+  // REFUSE BEFORE FILLING THE DISK, not after. Needs room for the staged copy; records then rename into the
+  // store, so the staged bytes are released as it goes rather than doubling at the end.
+  const need = gzipUncompressedBytes(bundle);
+  const free = freeBytes(stageRoot);
+  res.needBytes = need; res.freeBytes = free;
+  if (need != null && free != null && free < need * 1.15) {
+    res.error = `not enough room to unpack: needs ~${Math.round(need / 1e6)} MB, `
+      + `${Math.round(free / 1e6)} MB free on ${stageRoot}`;
+    log(`[candle-spread] seed bundle: ${res.error}`);
+    try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    return res;
+  }
+
   try {
-    // tar is present on the EB AL2 image and on macOS. Unpacking to a temp dir rather than straight over the
-    // store keeps "never overwrite" a decision this code makes, not a tar flag whose semantics differ
-    // between GNU and bsdtar.
+    // tar ships on the EB AL2 image and on macOS. Staging rather than extracting straight over the store
+    // keeps "never overwrite" a decision this code makes, not a tar flag whose semantics differ between
+    // GNU tar and bsdtar.
     execFileSync('tar', ['-xzf', bundle, '-C', tmp], { stdio: 'pipe' });
   } catch (e) {
-    res.error = `unpack failed: ${(e && e.message) || e}`;
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    res.error = `unpack failed: ${(e && e.stderr ? String(e.stderr).trim() : (e && e.message)) || e}`;
+    try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
     log(`[candle-spread] seed bundle: ${res.error}`);
     return res;
   }
@@ -120,16 +183,18 @@ async function seedFromBundle(opts = {}) {
       if (fs.existsSync(dest)) res.skippedDisk++;
       else {
         try {
-          body = fs.readFileSync(src, 'utf8');
-          const t = `${dest}.seeding`;
-          fs.writeFileSync(t, body, 'utf8');
-          fs.renameSync(t, dest);              // atomic, so a crash cannot leave a half-written record
+          body = fs.readFileSync(src, 'utf8');     // needed for the upload anyway
+          // RENAME, NOT COPY. Staging is on the same filesystem as the store, so this is free, it is atomic
+          // (no half-written record can ever be observed), and it releases the staged bytes as we go instead
+          // of holding a second full copy until the end.
+          fs.renameSync(src, dest);
           res.toDisk++;
         } catch (e) { res.failed++; continue; }
       }
       if (!A.enabled()) continue;
       if (inS3.has(runId)) { res.skippedS3++; continue; }
       try {
+        // An already-present record was not renamed, so its staged copy is still there to read for the upload.
         if (body == null) body = fs.readFileSync(src, 'utf8');
         const p = await A.putRun(runId, body);
         if (p.ok) res.toS3++; else res.failed++;
@@ -148,7 +213,7 @@ async function seedFromBundle(opts = {}) {
       + (res.failed ? ' NOT marked done — it will retry on the next boot.' : ''));
     return res;
   } finally {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   }
 }
 

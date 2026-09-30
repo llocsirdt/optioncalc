@@ -120,6 +120,53 @@ const log = () => {};
     ok(r7.found === true && /unpack failed/.test(r7.error || ''), `an unreadable bundle reports an error (${r7.error})`);
   }
 
+  // ── 8. IT MUST NOT STAGE IN os.tmpdir() ─────────────────────────────────────────────────────────
+  // THE REGRESSION. The first version unpacked into os.tmpdir(), which on the EB platform is a RAM-BACKED
+  // tmpfs sized at about half the instance memory (956 MB). The archive unpacks to 967 MB, so the real
+  // deploy died of ENOSPC by ~11 MB, the finally-block cleanup erased the evidence, and the only symptom was
+  // storeFiles and puts flat at 0 for four minutes. A slightly smaller bundle would have "worked" while
+  // eating a gigabyte of RAM on a box with a documented OOM history — the worse outcome.
+  //
+  // Every test above passed with that bug present, because a dev machine's /tmp has room. So assert the
+  // PLACE, not the outcome: staging belongs beside the run store, on the root disk.
+  {
+    const STORE5 = path.join(tmp, 'deep', 'runs');
+    fs.mkdirSync(STORE5, { recursive: true });
+    const seen = [];
+    const realMkdtemp = fs.mkdtempSync;
+    fs.mkdtempSync = (pfx) => { seen.push(pfx); return realMkdtemp(pfx); };
+    try {
+      await SB.seedFromBundle({ runsDir: STORE5, archive: fakeArchive(), bundle, log });
+    } finally { fs.mkdtempSync = realMkdtemp; }
+    ok(seen.length === 1, `staging was created exactly once (${seen.length})`);
+    const where = seen[0] || '';
+    // The discriminator is BESIDE THE STORE, not "avoids os.tmpdir()" — this test's own fixture lives under
+    // os.tmpdir(), so a lexical check on that would fail for the correct path too. With the bug, stageRoot
+    // was os.tmpdir() itself, which is not under the store's parent, so this is what catches it.
+    const beside = path.join(path.dirname(path.resolve(STORE5)), '_seed-staging');
+    ok(where.startsWith(beside + path.sep) || where.startsWith(beside),
+      `staging sits beside the run store, on the same filesystem, so records rename into place for free `
+      + `(wanted under ${beside}, got ${where})`);
+    ok(!fs.existsSync(path.join(path.dirname(path.resolve(STORE5)), '_seed-staging')),
+      'and the staging tree is removed afterwards');
+    ok(fs.readdirSync(STORE5).filter((f) => f.endsWith('.json')).length === 3,
+      'while the records still land where they belong');
+  }
+
+  // ── 9. REFUSE BEFORE FILLING A DISK ─────────────────────────────────────────────────────────────
+  {
+    const STORE6 = path.join(tmp, 'tight', 'runs');
+    fs.mkdirSync(STORE6, { recursive: true });
+    const realStatfs = fs.statfsSync;
+    fs.statfsSync = () => ({ bavail: 1, bsize: 1024 });        // ~1 KB free
+    let r;
+    try { r = await SB.seedFromBundle({ runsDir: STORE6, archive: fakeArchive(), bundle, log }); }
+    finally { fs.statfsSync = realStatfs; }
+    ok(/not enough room/.test(r.error || ''), `a full disk is refused up front (${r.error})`);
+    ok(r.toDisk === 0 && fs.readdirSync(STORE6).length === 0,
+      'nothing is written, so a half-filled disk is not the failure mode');
+  }
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
