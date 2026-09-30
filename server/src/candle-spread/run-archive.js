@@ -281,6 +281,38 @@ async function headObject(key) {
   return { ok: true, etag, size: r.out && r.out.ContentLength, out: r.out };
 }
 
+/**
+ * Read a small object by RAW KEY and return its body as a string. getRun keys off a runId and getObjectToFile
+ * streams to disk; the strategy-control file is neither a run nor large, so it needs this.
+ *
+ * quietMissing is the normal case here: an absent control file means "everything simulates", which is a valid
+ * state and must not sit on /health as a permanent error.
+ */
+async function getObjectRaw(key, opts) {
+  const r = await cmd('GetObjectCommand', { Bucket: BUCKET, Key: key }, opts);
+  if (!r.ok) {
+    if (!r.disabled && !(r.missing && opts && opts.quietMissing)) stats.getFails++;
+    return { ok: false, missing: !!r.missing, error: r.error, reason: r.reason };
+  }
+  try {
+    const body = await r.out.Body.transformToString();
+    stats.gets++;
+    return { ok: true, body, etag: String((r.out && r.out.ETag) || '').replace(/"/g, '') };
+  } catch (e) {
+    stats.getFails++; note(e, 'read-body');
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+}
+
+/** Write a small object by RAW KEY. Used by the control-file write API. */
+async function putObjectRaw(key, body, contentType) {
+  const r = await cmd('PutObjectCommand', { Bucket: BUCKET, Key: key, Body: body,
+    ContentType: contentType || 'application/json' });
+  if (r.ok) { stats.puts++; stats.lastPutAt = new Date().toISOString(); stats.lastPutRunId = key; }
+  else if (!r.disabled) stats.putFails++;
+  return r;
+}
+
 function health() {
   return {
     configured: !!BUCKET,
@@ -293,5 +325,5 @@ function health() {
   };
 }
 
-module.exports = { enabled, health, selfTest, putRun, getRun, getObjectToFile, headObject, listRuns, restoreDay, keyFor, tradeDateOf,
+module.exports = { enabled, health, selfTest, putRun, getRun, getObjectToFile, getObjectRaw, putObjectRaw, headObject, listRuns, restoreDay, keyFor, tradeDateOf,
   BUCKET, PREFIX, REGION, _stats: stats };
