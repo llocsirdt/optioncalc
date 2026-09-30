@@ -63,6 +63,18 @@ zip -r "$OUTPUT_ZIP" . \
   > /dev/null
 
 echo ""
+# AN 82 MB DEPLOY SHOULD NOT BE A SURPRISE. seed-runs.tgz rides along automatically when present (see
+# scripts/build-seed-bundle.sh), so say so loudly with the size, and say how to stop shipping it. Left in
+# place it is harmless — the seeder is one-shot per bundle — but every deploy would carry it for nothing.
+if [ -f "$SERVER_DIR/seed-runs.tgz" ]; then
+  SEED_MB=$(( $(wc -c < "$SERVER_DIR/seed-runs.tgz") / 1048576 ))
+  echo "*** THIS PACKAGE CARRIES A SEED BUNDLE: seed-runs.tgz, ${SEED_MB} MB ***"
+  echo "    On boot the instance unpacks it to the run store and uploads the records to S3 (one-shot,"
+  echo "    never overwrites). Deploy it ONCE, confirm via /health -> candleRunArchive, then:"
+  echo "      rm server/seed-runs.tgz && bash scripts/create-deployment-package.sh"
+  echo "    to go back to a small package."
+  echo ""
+fi
 echo "Done: $OUTPUT_ZIP"
 unzip -l "$OUTPUT_ZIP"
 

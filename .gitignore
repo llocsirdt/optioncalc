@@ -213,3 +213,6 @@ server/src/candle-spread/backtest-baselines-nowings.*
 # directory has now been wiped twice by instance replacement — S3 storage is the real fix and is on the
 # backlog). Megabytes of raw run records; keep them on disk, out of the repo.
 data/prod-run-snapshots/
+
+# One-shot seed bundle for restoring the run archive (build artifact, ~82 MB; see scripts/build-seed-bundle.sh)
+server/seed-runs.tgz

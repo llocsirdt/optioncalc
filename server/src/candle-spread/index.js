@@ -2276,6 +2276,13 @@ async function rehydrateRuns() {
     console.log(`[candle-spread] run archive OK — nothing to restore for ${today} `
       + `(${r.skippedPresent} record(s) already on disk, ${r.listed} in the bucket).`);
   }
+  // A SEED BUNDLE SHIPPED IN THE DEPLOY, if this artifact carries one. Behind the engine: it unpacks up to
+  // ~1 GB and uploads it, which has no business in front of the first tick. One-shot per bundle, never
+  // overwrites, and it is how the archive gets its history without anyone creating an AWS access key —
+  // the instance already has the write permission it needs. See seed-bundle.js.
+  require('./seed-bundle').seedFromBundle({ runsDir: dir, archive: A, log: (m) => console.log(m) })
+    .catch((e) => console.error('[candle-spread] seed bundle:', e && e.message));
+
   // HISTORY IS FOR THE UI AND MUST NEVER DELAY TRADING. Today's book is the correctness-critical part and is
   // awaited above; older days only populate the compare and debug pages, so they stream in behind the engine.
   const days = Number(process.env.CANDLE_SPREAD_S3_RESTORE_DAYS || 0);
