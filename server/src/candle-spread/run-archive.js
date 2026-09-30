@@ -68,9 +68,14 @@ function keyFor(runId) { return `${PREFIX}/${runId}.json`; }
 
 // runId -> the trade date embedded in it. Used to restore one day without listing the whole bucket.
 // SYMBOL_EXPIRATION_TRADEDATE[_VARIANT]; dates carry hyphens, never underscores.
+// IT MUST LOOK LIKE A DATE, not merely occupy the third slot. "third segment exists" accepted the seed
+// marker `_seed_<hash>` as trade date `<hash>`, so listRuns returned it as a run: harmless downstream only by
+// luck (store.listRunFiles skips `_`-prefixed names), but restoreHistory would spend one of its N day-slots
+// on a date that does not exist and could push a real day out of the window. Require the shape.
 function tradeDateOf(runId) {
   const p = String(runId || '').split('_');
-  return p.length >= 3 ? p[2] : null;
+  if (p.length < 3) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(p[2]) ? p[2] : null;
 }
 
 async function cmd(name, input) {

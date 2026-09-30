@@ -104,6 +104,20 @@ function loadArchive(env) {
     restore();
   }
 
+  // ── 1b. A TRADE DATE MUST LOOK LIKE A DATE ────────────────────────────────────────────────────────
+  // "the third underscore segment exists" accepted the seed marker `_seed_<hash>` as trade date `<hash>`, so
+  // listRuns handed it back as a run. Downstream it was harmless only by luck — store.listRunFiles skips
+  // `_`-prefixed names — but restoreHistory would spend one of its N day-slots on a date that does not exist,
+  // and with enough real days that pushes a real one out of the window.
+  {
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b' });
+    ok(A.tradeDateOf('NDX_2026-09-29_2026-09-29_v7-10') === '2026-09-29', 'a real runId yields its trade date');
+    ok(A.tradeDateOf('_seed_a1b2c3d4e5f6a7b8') === null, 'the seed marker is NOT a trade date');
+    ok(A.tradeDateOf('a_b_c') === null && A.tradeDateOf('x_y_2026-13') === null,
+      'and neither is anything else occupying the third slot');
+    restore();
+  }
+
   // ── 2. ROUND TRIP: PUT THEN RESTORE ───────────────────────────────────────────────────────────────
   {
     installFakeS3();
@@ -256,6 +270,15 @@ function loadArchive(env) {
         `a nested sidecar key is not listed as a run (${JSON.stringify(ls.ids)})`);
       const dd = await A.restoreDay('2026-09-29', path.join(tmp, 'store-sidecar'));
       ok(dd.restored === 0, 'and restoreDay does not write it as a record');
+    }
+
+    // THE ONE-SHOT SEED MARKER sits directly under the prefix (putRun writes it), so only the date check
+    // keeps it out of the run list.
+    {
+      await A.putRun('_seed_a1b2c3d4e5f6a7b8', '{"seeded":true}');
+      const lm = await A.listRuns();
+      ok(!lm.ids.some((x) => x.startsWith('_seed_')),
+        `the seed marker is not listed as a run (${JSON.stringify(lm.ids)})`);
     }
 
     // THE PROBE MUST NOT POLLUTE listRuns — its id cannot parse to a trade date, so it is filtered out.
