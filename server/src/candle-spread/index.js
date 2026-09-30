@@ -684,6 +684,19 @@ const TUNED_CAPS = new Map([
   //   v3-10  $1,000 -> $2,000   +$149k and ret/DD 270 vs 230, drawdown unchanged at -$3.4k.
   ['v6-20', 4500],
   ['v3-10', 2000],
+  // RAISED 2026-09-30 by the FULL sweep re-read. v7-40 (see the floor rule) proved the 09-27 pass had a gap,
+  // so every capped variant was re-tested against the both-axes-dominated criterion: only 7 of 50 failed it.
+  // Two of those want rungs BELOW the new 1.5x floor (v8-40-cATM $5,500, v8-20 $2,500) and are deliberately
+  // overridden by it — coherence beats a measured preference. v7-40 wants $8,000 and is held at the floor by
+  // the user's decision. These four are the remainder, all landing inside [floor, 7500]:
+  //   v0-20-cATM  $4,000 -> $7,000   $1,266k vs $1,180k AND ret/DD 87.3 vs 86.7 — better on both.
+  //   v6-20-cATM  $6,500 -> $7,000   $2,031k vs $1,971k AND ret/DD 65.6 vs 62.3.
+  //   v5-40-cATM  $7,000 -> $7,500   wants $8,000 ($2,094k / 42.4 vs $1,947k / 40.6); the ceiling holds it here.
+  //   v2-40-cATM  $6,000 -> $7,500   wants $8,000 ($1,389k / 38.5 vs $1,361k / 36.5); same.
+  // NOTE all four are -cATM, which is not a coincidence: the ATM-centered spreads consistently want LOOSER
+  // caps than their short-ATM twins, because a centered spread starts nearer mid-width so a tight cap blocks
+  // more of the trades it needs. That is a measured property, not a tuning artefact — and it is also why the
+  // cATM/sATM cap skew is worth a policy decision rather than a per-variant one.
   // TUNED 2026-09-27 — these four had never been measured at all: their caps were still exactly the
   // width-generic default ($7,000 at W=20, $9,000 at W=40), which is why they sat furthest from their
   // risk-adjusted optimum. Same objective as the rest of TUNED_CAPS — the LOWEST cap that does not
@@ -718,7 +731,7 @@ const TUNED_CAPS = new Map([
   ['v3-20', 2500],
   ['v8-20', 2500],
   ['v3-20-cATM', 3500],
-  ['v0-20-cATM', 4000],
+  ['v0-20-cATM', 7000],
   ['v5-20', 4000],
   ['v1-20-cATM', 4500],
   ['v2-20', 4500],
@@ -727,7 +740,7 @@ const TUNED_CAPS = new Map([
   ['v4-20-cATM', 4500],
   ['v5-20-cATM', 4500],
   ['v9-20', 4500],
-  ['v6-20-cATM', 6500],
+  ['v6-20-cATM', 7000],
   ['v7-20', 6500],
   // W=40
   ['v7-40', 3000],
@@ -735,11 +748,11 @@ const TUNED_CAPS = new Map([
   ['v2-40', 5500],
   ['v8-40-cATM', 5500],
   ['v1-40', 6000],
-  ['v2-40-cATM', 6000],
+  ['v2-40-cATM', 7500],
   ['v8-40', 4000],
   ['v4-40', 7000],
   ['v5-40', 9000],
-  ['v5-40-cATM', 7000],
+  ['v5-40-cATM', 7500],
   ['v7-40-cATM', 7000],
   ['v0-40-cATM', 7500],
   ['v3-40-cATM', 7500],
