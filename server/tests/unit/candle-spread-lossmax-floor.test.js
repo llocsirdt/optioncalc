@@ -75,5 +75,33 @@ ok(badTarget.length === 0,
     `v7-40 — the variant that ran at $3,000 against a $4,000 width — is at or above $6,000 (${v740 && v740.lossMax})`);
 }
 
+// ── AND A CEILING: $7,500 AT EVERY WIDTH ────────────────────────────────────────────────────────────
+// lossMax is what a single day may lose, and the stated tolerance is ~$5-10k/day, so $9,000 sat at the top of
+// the band. Flat across widths on purpose — the account does not care how wide the spread was.
+{
+  ok(I.LOSS_MAX_CEILING === 7500, `the ceiling is $7,500 (${I.LOSS_MAX_CEILING})`);
+  const over = capped.filter((r) => r.lossMax > I.LOSS_MAX_CEILING);
+  ok(over.length === 0,
+    `NO variant trades a cap above the ceiling — ${over.map((r) => `${r.variant}=${r.lossMax}`).join(', ') || 'none'}`);
+  const cappedDown = runs.filter((r) => r.lossMaxCapped);
+  ok(cappedDown.length > 0, `variants above it are marked lossMaxCapped (${cappedDown.length})`);
+  ok(cappedDown.every((r) => r.lossMax === I.LOSS_MAX_CEILING),
+    'each sits exactly at the ceiling');
+  ok(cappedDown.every((r) => r.lossTarget === Math.round(0.7 * r.lossMax)),
+    'with lossTarget recomputed');
+  // Every cap must now sit inside BOTH bounds — the whole point of having two.
+  const inBand = capped.every((r) => r.lossMax >= I.lossMaxFloorFor(r.spreadWidth) && r.lossMax <= I.LOSS_MAX_CEILING);
+  ok(inBand, 'every capped variant sits inside [floor, ceiling]');
+  // A floored variant and a capped one are different things and must not both be flagged on one variant.
+  const both = runs.filter((r) => r.lossMaxFloored && r.lossMaxCapped);
+  ok(both.length === 0, `no variant is both floored and capped (${both.map((r) => r.variant).join(', ') || 'none'})`);
+  // The bounds must not cross at any width we trade.
+  for (const w of [10, 20, 40]) ok(I.lossMaxFloorFor(w) <= I.LOSS_MAX_CEILING,
+    `W=${w}: floor ${I.lossMaxFloorFor(w)} fits under the ceiling`);
+  // And a width where they WOULD cross must throw rather than silently pick one.
+  ok(I.lossMaxFloorFor(60) > I.LOSS_MAX_CEILING,
+    'a 60-wide would need a floor above the ceiling — the case assertBoundsCoherent refuses');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

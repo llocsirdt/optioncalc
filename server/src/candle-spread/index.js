@@ -499,6 +499,42 @@ function lossMaxFloorFor(spreadWidth) {
   return Math.round(LOSS_MAX_FLOOR_X_WIDTH * spreadWidth * 100);
 }
 
+// ── AND A CEILING: $7,500, AT EVERY WIDTH ───────────────────────────────────────────────────────────
+//
+// lossMax is what a single day is permitted to lose. The user's stated tolerance is roughly $5-10k per day,
+// so a $9,000 cap sits at the top of that band and a $7,500 one sits inside it. That is the reason for this
+// number — a risk budget, not a backtest result — which is why it is flat across widths rather than scaled:
+// the account does not care how wide the spread was.
+//
+// IT IS NOT FREE, AND IT IS NOT MEANT TO BE. Six W=40 variants come down (9000/8500/8000 -> 7500), and against
+// the sweep the trade splits:
+//   v6-40      $9,000 -> ~7,500   total -$370k BUT ret/DD 36.6 -> 39.5 and maxDD -$69.3k -> -$58.0k
+//   v6-40-cATM $9,000 -> ~7,500   total -$340k BUT ret/DD 27.5 -> 31.1 and maxDD -$76.2k -> -$59.7k
+//   v5-40      $9,000 -> ~7,500   total -$250k, ret/DD 52.6 -> ~49      (costs on both)
+//   v3-40      $9,000 -> ~7,500   total -$130k, ret/DD 49.6 -> 41.6     (costs on both)
+//   v4-40-cATM $9,000 -> ~7,500   total -$100k, ret/DD 14 -> ~12.5      (costs on both)
+//   v1-40-cATM $8,000 -> ~7,500   total  -$65k, ret/DD 50.8 -> ~45      (costs on both)
+// So it buys a materially smaller worst day on the two largest earners and pays total return on four. That is
+// the trade the capital-building phase is supposed to make: risk reduction outranks total P&L while the
+// account is small. See feedback_success_metric_varies_by_feature.
+//
+// `-unc` arms are untouched — lossMax null means no governor, and a ceiling cannot bound something unbounded.
+const LOSS_MAX_CEILING = 7500;
+
+// The two bounds must not cross. They cannot at W=10/20/40 (floor tops out at 6000), but a wider spread would
+// make the floor exceed the ceiling and there is no sensible silent answer to that — coherence and the risk
+// budget would be in direct conflict, which is a decision, not a clamp.
+function assertBoundsCoherent(spreadWidth) {
+  const floor = lossMaxFloorFor(spreadWidth);
+  if (floor > LOSS_MAX_CEILING) {
+    throw new Error(`candle-spread: a ${spreadWidth}-wide needs a lossMax floor of ${floor} `
+      + `(${LOSS_MAX_FLOOR_X_WIDTH}x one position) which EXCEEDS the ${LOSS_MAX_CEILING} ceiling. `
+      + 'A cap cannot be both coherent and inside the risk budget at this width — raise the ceiling '
+      + 'deliberately or do not trade this width.');
+  }
+  return floor;
+}
+
 const FLY_LIVE = new Set(
   (process.env.CANDLE_SPREAD_FLY != null ? process.env.CANDLE_SPREAD_FLY
     : 'v0-10,v0-20,v0-40,v0-20-cATM,v0-40-cATM,'
@@ -755,7 +791,16 @@ function applyExperiments(v, { capPreset = true } = {}) {
   // TUNED_CAPS — whichever set the value, it cannot end up below one-and-a-half positions' width. Outside the
   // `capPreset` branch on purpose: the builder that passes capPreset:false still needs the floor.
   if (v.lossMax != null && v.spreadWidth) {
-    const floor = lossMaxFloorFor(v.spreadWidth);
+    const floor = assertBoundsCoherent(v.spreadWidth);
+    // CEILING FIRST, so a value above it is reported as capped rather than as floored, and so the floor has
+    // the last word if the two ever meet (they cannot today — assertBoundsCoherent refuses that case).
+    if (v.lossMax > LOSS_MAX_CEILING) {
+      console.warn(`[candle-spread] ${v.variant}: lossMax ${v.lossMax} is above the ${LOSS_MAX_CEILING} `
+        + `ceiling — lowering it. A single day may not be allowed to lose more than the risk budget.`);
+      v.lossMax = LOSS_MAX_CEILING;
+      v.lossTarget = Math.round(0.7 * LOSS_MAX_CEILING);
+      v.lossMaxCapped = true;
+    }
     if (v.lossMax < floor) {
       console.warn(`[candle-spread] ${v.variant}: lossMax ${v.lossMax} is below the floor for a `
         + `${v.spreadWidth}-wide (${floor} = ${LOSS_MAX_FLOOR_X_WIDTH}x one position) — raising it. `
@@ -2825,6 +2870,7 @@ module.exports = {
   // real rule rather than restating it. See LOSS_MAX_FLOOR_X_WIDTH.
   lossMaxFloorFor,
   LOSS_MAX_FLOOR_X_WIDTH,
+  LOSS_MAX_CEILING,
   // THE PRE-TIGHTENING FLEET DEFAULT. Exported so sweep-loss-cap can use the real formula as its
   // counterfactual arm instead of inferring it from the roster — see the note on genericFor.
   maxCapFor,

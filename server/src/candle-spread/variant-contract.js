@@ -30,7 +30,7 @@ const NOT_ENGINE_OPTS = new Set([
   // lossMax/lossTarget, which every consumer already forwards, so there is nothing here for an engine to act
   // on. Listed rather than forwarded because the audit is right to refuse an unexplained field — that refusal
   // is what catches a real capability added to the roster and never wired through.
-  'lossMaxFloored',
+  'lossMaxFloored', 'lossMaxCapped',
 ]);
 
 /**
