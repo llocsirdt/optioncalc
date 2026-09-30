@@ -45,9 +45,15 @@ const bundle = path.join(tmp, 'seed-runs.tgz');
 execFileSync('tar', ['-czf', bundle, '-C', FIXT, '.'], { stdio: 'pipe' });
 
 // A stand-in for run-archive, so this tests the SEEDER rather than the SDK.
-function fakeArchive() {
+function fakeArchive(objects) {
   const s3 = new Map();
-  return { s3, enabled: () => true,
+  const blobs = objects || new Map();         // raw keys (the seed bundle), separate from run records
+  return { s3, blobs, PREFIX: 'runs', BUCKET: 'b', enabled: () => true,
+    async getObjectToFile(key, dest) {
+      if (!blobs.has(key)) return { ok: false, error: 'NoSuchKey' };
+      fs.writeFileSync(dest, blobs.get(key));
+      return { ok: true, bytes: fs.statSync(dest).size, path: dest };
+    },
     async putRun(id, body) { s3.set(id, body); return { ok: true }; },
     async getRun(id) { return s3.has(id) ? { ok: true, body: s3.get(id) } : { ok: false, error: 'NoSuchKey' }; },
     async listRuns() { return { ok: true, ids: [...s3.keys()].filter((k) => k.split('_').length >= 3 && !k.startsWith('_')) }; } };
@@ -118,6 +124,28 @@ const log = () => {};
     fs.writeFileSync(junk, 'this is not a tarball');
     const r7 = await SB.seedFromBundle({ runsDir: path.join(tmp, 'runs4'), archive: fakeArchive(), bundle: junk, log });
     ok(r7.found === true && /unpack failed/.test(r7.error || ''), `an unreadable bundle reports an error (${r7.error})`);
+  }
+
+  // ── 7b. THE BUNDLE CAN COME FROM S3 INSTEAD OF THE DEPLOY ───────────────────────────────────────
+  // Shipping 81 MB inside the application version is legitimate but impractical: the EB console's browser
+  // upload fails at that size ("Failed to Fetch", 2026-09-30) and every later deploy would carry bytes it
+  // does not need. The S3 console handles one large file properly, so the bundle is uploaded there once and
+  // the instance streams it down.
+  {
+    const blobs = new Map([['runs/_seed/seed-runs.tgz', fs.readFileSync(bundle)]]);
+    const A2 = fakeArchive(blobs);
+    const STORE7 = path.join(tmp, 's3src', 'runs');
+    fs.mkdirSync(STORE7, { recursive: true });
+    const r = await SB.seedFromBundle({ runsDir: STORE7, archive: A2,
+      bundle: path.join(tmp, 'no-local-bundle.tgz'), log });
+    ok(r.found === true && r.source === 's3', `with no bundle in the deploy it fetches from S3 (${r.source})`);
+    ok(r.toDisk === 3 && r.toS3 === 3, `and seeds exactly as the deploy path does (${r.toDisk}/${r.toS3})`);
+    ok(!fs.existsSync(path.join(path.dirname(path.resolve(STORE7)), '_seed-download')),
+      'the downloaded bundle is cleaned up — 81 MB of scratch must not linger and be re-hashed every boot');
+    // Absent from BOTH places is the normal case for every ordinary deploy.
+    const r2 = await SB.seedFromBundle({ runsDir: STORE7, archive: fakeArchive(),
+      bundle: path.join(tmp, 'no-local-bundle.tgz'), log });
+    ok(r2.found === false && !r2.error, 'no bundle in the deploy and none in S3 -> a silent no-op');
   }
 
   // ── 8. IT MUST NOT STAGE IN os.tmpdir() ─────────────────────────────────────────────────────────

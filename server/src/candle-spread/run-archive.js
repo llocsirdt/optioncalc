@@ -222,6 +222,36 @@ async function selfTest() {
   return { ok: same, stage: same ? 'done' : 'compare', error: stats.writeTestError };
 }
 
+/**
+ * Stream an arbitrary object to a local file. Used for the seed bundle, which is ~81 MB and must NOT be
+ * buffered: getRun's transformToString would put the whole thing in RSS on a 1.9 GB instance, which is the
+ * same class of mistake as staging an unpack in the RAM-backed tmpfs.
+ *
+ * Raw key, not a runId — the bundle is not a run record and deliberately lives under a nested `_seed/` prefix
+ * where listRuns cannot mistake it for one.
+ */
+async function getObjectToFile(key, destPath) {
+  const r = await cmd('GetObjectCommand', { Bucket: BUCKET, Key: key });
+  if (!r.ok) { if (!r.disabled) stats.getFails++; return r; }
+  try {
+    const tmpDest = `${destPath}.downloading`;
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(tmpDest);
+      r.out.Body.on('error', reject);
+      out.on('error', reject);
+      out.on('finish', resolve);
+      r.out.Body.pipe(out);
+    });
+    fs.renameSync(tmpDest, destPath);          // atomic: a partial download is never seen as the bundle
+    stats.gets++;
+    return { ok: true, bytes: fs.statSync(destPath).size, path: destPath };
+  } catch (e) {
+    stats.getFails++; note(e, 'download');
+    try { fs.rmSync(`${destPath}.downloading`, { force: true }); } catch (_) { /* best effort */ }
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+}
+
 function health() {
   return {
     configured: !!BUCKET,
@@ -234,5 +264,5 @@ function health() {
   };
 }
 
-module.exports = { enabled, health, selfTest, putRun, getRun, listRuns, restoreDay, keyFor, tradeDateOf,
+module.exports = { enabled, health, selfTest, putRun, getRun, getObjectToFile, listRuns, restoreDay, keyFor, tradeDateOf,
   BUCKET, PREFIX, REGION, _stats: stats };

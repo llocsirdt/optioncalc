@@ -216,3 +216,4 @@ data/prod-run-snapshots/
 
 # One-shot seed bundle for restoring the run archive (build artifact, ~82 MB; see scripts/build-seed-bundle.sh)
 server/seed-runs.tgz
+seed-runs.tgz

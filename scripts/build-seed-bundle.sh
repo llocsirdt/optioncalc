@@ -10,15 +10,26 @@
 # The bundle is NOT committed — it is a build artifact, and 82 MB in git forever would be a poor trade.
 # create-deployment-package.sh includes it automatically when it exists, so:
 #
-#   bash scripts/build-seed-bundle.sh            # everything (29 dates, ~82 MB)
+#   bash scripts/build-seed-bundle.sh            # everything (29 dates, ~82 MB) -> ./seed-runs.tgz
 #   bash scripts/build-seed-bundle.sh --days 10  # just the recent history, much smaller
-#   bash scripts/create-deployment-package.sh    # -> zip now carries seed-runs.tgz
-#   ... deploy it once, confirm, then remove the bundle and repackage:
-#   rm server/seed-runs.tgz && bash scripts/create-deployment-package.sh
+#
+# Then upload it ONCE to S3 with the S3 console (drag and drop), to:
+#   s3://<bucket>/<CANDLE_SPREAD_S3_PREFIX>/_seed/seed-runs.tgz
+# and deploy the ordinary small package. On boot the instance streams it down, unpacks to the run store and
+# uploads each record, once per bundle. Delete the bundle object afterwards; the marker is what makes it
+# one-shot, not the file.
+#
+# --in-deploy embeds it in server/ instead, which the packager picks up. That works but makes an 82 MB
+# application version, and the EB console browser upload fails at that size.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCHIVE="candle-spread-archive"
-OUT="server/seed-runs.tgz"
+# DEFAULT IS THE REPO ROOT, NOT server/. Anything inside server/ rides in the deploy zip, and an 82 MB
+# application version is both unnecessary and unreliable — the EB console's browser upload fails on it
+# ("Failed to Fetch", 2026-09-30). The bundle is meant to be uploaded to S3 once instead, where the console
+# handles a single large file properly. Pass --in-deploy if you specifically want it embedded.
+OUT="seed-runs.tgz"
+for a in "$@"; do [ "$a" = "--in-deploy" ] && OUT="server/seed-runs.tgz"; done
 DAYS=""
 [ "${1:-}" = "--days" ] && DAYS="${2:-}"
 
@@ -50,4 +61,9 @@ echo "wrote $OUT — $COUNT record(s), ${SIZE} MB compressed"
 if [ "$SIZE" -gt 450 ]; then
   echo "WARNING: EB application versions are capped at 512 MB. Use --days to trim this down."
 fi
-echo "next: bash scripts/create-deployment-package.sh   (it will pick the bundle up automatically)"
+if [ "$OUT" = "server/seed-runs.tgz" ]; then
+  echo "next: bash scripts/create-deployment-package.sh   (it will embed the bundle)"
+else
+  echo "next: upload it to S3 with the console, then deploy the ordinary package:"
+  echo "  s3://<bucket>/optioncalc-runs/_seed/seed-runs.tgz"
+fi

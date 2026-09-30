@@ -40,6 +40,19 @@ function bundlePath() {
   return process.env.CANDLE_SPREAD_SEED_BUNDLE || path.join(__dirname, '..', '..', 'seed-runs.tgz');
 }
 
+// WHERE THE BUNDLE LIVES WHEN IT IS NOT IN THE DEPLOY.
+//
+// Shipping 81 MB inside the application version is legitimate but impractical: the EB console's browser
+// upload fails on an artifact that size ("Failed to Fetch", 2026-09-30), and every later deploy would carry
+// bytes it does not need. The S3 console handles a large single file properly, so the bundle is uploaded
+// there once and the instance streams it down on boot.
+//
+// Nested under `_seed/` on purpose: listRuns only accepts keys directly under the prefix, so the bundle can
+// never be mistaken for a run record.
+function bundleKey() {
+  return process.env.CANDLE_SPREAD_SEED_BUNDLE_KEY || '_seed/seed-runs.tgz';
+}
+
 // STREAMED, not readFileSync. The bundle is ~81 MB and hashing it by slurping would put all of that in RSS
 // on a 1.9 GB instance with a history of OOM.
 function sha256File(file) {
@@ -95,9 +108,28 @@ async function seedFromBundle(opts = {}) {
   const res = { bundle, found: false, alreadySeeded: false, files: 0, toDisk: 0, toS3: 0,
     skippedDisk: 0, skippedS3: 0, failed: 0, error: null };
 
-  if (!fs.existsSync(bundle)) return res;                 // the normal case: no bundle in this deploy
+  // EITHER SOURCE. A bundle in the deploy wins (it needs no network and no permissions); otherwise look for
+  // one in S3, which is how a large bundle gets here without an 82 MB browser upload to Elastic Beanstalk.
+  let bundleFile = bundle;
+  let downloaded = null;
+  if (!fs.existsSync(bundleFile)) {
+    if (!A.enabled() || typeof A.getObjectToFile !== 'function') return res;   // nothing local, nowhere to look
+    const key = `${A.PREFIX}/${bundleKey()}`;
+    const dlDir = path.join(path.dirname(path.resolve(runsDir)), '_seed-download');
+    try { fs.mkdirSync(dlDir, { recursive: true }); } catch (_) { /* exists */ }
+    const dest = path.join(dlDir, 'seed-runs.tgz');
+    // Streamed to the ROOT disk, never to the RAM-backed tmpfs, and never buffered in memory.
+    const g = await A.getObjectToFile(key, dest);
+    if (!g.ok) return res;                               // no bundle anywhere: the normal case for most deploys
+    log(`[candle-spread] seed bundle fetched from s3://${A.BUCKET}/${key} (${Math.round(g.bytes / 1e6)} MB)`);
+    bundleFile = dest; downloaded = dest;
+    res.source = 's3';
+  } else {
+    res.source = 'deploy';
+  }
   res.found = true;
-  const tag = sha256File(bundle);
+  res.bundle = bundleFile;
+  const tag = sha256File(bundleFile);
   res.tag = tag;
 
   // ONE SHOT PER BUNDLE. The marker lives in S3 rather than on local disk precisely because local disk is the
@@ -131,12 +163,13 @@ async function seedFromBundle(opts = {}) {
   catch (e) {
     res.error = `cannot create staging dir beside the store: ${(e && e.message) || e}`;
     log(`[candle-spread] seed bundle: ${res.error}`);
+    if (downloaded) { try { fs.rmSync(path.dirname(downloaded), { recursive: true, force: true }); } catch (_) { /* best effort */ } }
     return res;
   }
 
   // REFUSE BEFORE FILLING THE DISK, not after. Needs room for the staged copy; records then rename into the
   // store, so the staged bytes are released as it goes rather than doubling at the end.
-  const need = gzipUncompressedBytes(bundle);
+  const need = gzipUncompressedBytes(bundleFile);
   const free = freeBytes(stageRoot);
   res.needBytes = need; res.freeBytes = free;
   if (need != null && free != null && free < need * 1.15) {
@@ -144,6 +177,7 @@ async function seedFromBundle(opts = {}) {
       + `${Math.round(free / 1e6)} MB free on ${stageRoot}`;
     log(`[candle-spread] seed bundle: ${res.error}`);
     try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    if (downloaded) { try { fs.rmSync(path.dirname(downloaded), { recursive: true, force: true }); } catch (_) { /* best effort */ } }
     return res;
   }
 
@@ -151,7 +185,7 @@ async function seedFromBundle(opts = {}) {
     // tar ships on the EB AL2 image and on macOS. Staging rather than extracting straight over the store
     // keeps "never overwrite" a decision this code makes, not a tar flag whose semantics differ between
     // GNU tar and bsdtar.
-    execFileSync('tar', ['-xzf', bundle, '-C', tmp], { stdio: 'pipe' });
+    execFileSync('tar', ['-xzf', bundleFile, '-C', tmp], { stdio: 'pipe' });
   } catch (e) {
     res.error = `unpack failed: ${(e && e.stderr ? String(e.stderr).trim() : (e && e.message)) || e}`;
     try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
@@ -214,6 +248,9 @@ async function seedFromBundle(opts = {}) {
     return res;
   } finally {
     try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    // The downloaded bundle is scratch: 81 MB that would otherwise sit on the disk forever, re-hashed on
+    // every boot. The marker in S3 is what makes this a one-shot, not the presence of the file.
+    if (downloaded) { try { fs.rmSync(path.dirname(downloaded), { recursive: true, force: true }); } catch (_) { /* best effort */ } }
   }
 }
 
