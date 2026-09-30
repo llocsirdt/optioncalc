@@ -34,7 +34,10 @@ const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-e
 
 // Counters, so a silently-degraded archive is visible rather than merely absent from the logs.
 const stats = { puts: 0, putFails: 0, gets: 0, getFails: 0, lists: 0, listFails: 0,
-  lastPutAt: null, lastPutRunId: null, lastError: null, lastErrorAt: null, disabledReason: null };
+  lastPutAt: null, lastPutRunId: null, lastError: null, lastErrorAt: null, disabledReason: null,
+  // null until selfTest() has run. `writable: true` is the only value that means the archive really works;
+  // `enabled` merely means it is configured. Check this one.
+  writable: null, writeTestError: null, writeTestAt: null };
 
 function note(err, kind) {
   stats.lastError = `${kind}: ${(err && err.message) || String(err)}`;
@@ -119,7 +122,13 @@ async function listRuns(tradeDate) {
     for (const o of r.out.Contents || []) {
       const m = /([^/]+)\.json$/.exec(o.Key || '');
       if (!m) continue;
-      if (tradeDate && tradeDateOf(m[1]) !== tradeDate) continue;
+      // A KEY UNDER THE PREFIX IS NOT AUTOMATICALLY A RUN. Anything whose name does not parse to a
+      // SYMBOL_EXPIRATION_TRADEDATE id is not ours to hand back - the write probe at _probe/health.json is
+      // one such key, and a caller that asked for "the runs" and got `health` would then try to restore a
+      // record by that name. The trade date is the discriminator, so require one.
+      const d = tradeDateOf(m[1]);
+      if (!d) continue;
+      if (tradeDate && d !== tradeDate) continue;
       ids.push(m[1]);
     }
     token = r.out.IsTruncated ? r.out.NextContinuationToken : null;
@@ -162,6 +171,49 @@ async function restoreDay(tradeDate, runsDir, opts = {}) {
   return res;
 }
 
+/**
+ * PROVE THE ARCHIVE CAN ACTUALLY WRITE, AT BOOT, BEFORE ANYTHING DEPENDS ON IT.
+ *
+ * `enabled` only says a bucket name is set and the SDK loaded. The boot restore then exercises LIST and GET,
+ * so a read-permission problem surfaces at once — but PutObject is not touched until the first writeRun,
+ * which on a fresh deploy is the next trading session. A role that can read and not write (a real
+ * possibility on the EB-managed bucket, whose AWSElasticBeanstalkWebTier grant is about app versions and log
+ * bundles, not our data) would therefore look healthy all evening and start losing records silently in the
+ * morning — the precise "configured but failing" state that is worse than no archive at all.
+ *
+ * So: write a few bytes, read them back, compare. It answers the only question that matters — can this
+ * process put a record where a replacement instance will find it — and it answers it now.
+ *
+ * The probe lives outside the run namespace and is harmless to listRuns, whose ids must parse to a trade
+ * date and this cannot.
+ */
+async function selfTest() {
+  if (!enabled()) return { ok: false, disabled: true, reason: stats.disabledReason };
+  const key = `${PREFIX}/_probe/health.json`;
+  const body = JSON.stringify({ probe: true, at: new Date().toISOString(), pid: process.pid });
+  const put = await cmd('PutObjectCommand', { Bucket: BUCKET, Key: key, Body: body,
+    ContentType: 'application/json' });
+  if (!put.ok) {
+    stats.writable = false;
+    stats.writeTestError = put.error || put.reason || 'put failed';
+    return { ok: false, stage: 'put', error: stats.writeTestError };
+  }
+  const get = await cmd('GetObjectCommand', { Bucket: BUCKET, Key: key });
+  if (!get.ok) {
+    // Writable but not readable is still broken for our purpose: a record we cannot read back is a record a
+    // replacement instance cannot restore.
+    stats.writable = false;
+    stats.writeTestError = `wrote but could not read back: ${get.error || get.reason}`;
+    return { ok: false, stage: 'get', error: stats.writeTestError };
+  }
+  let same = false;
+  try { same = (await get.out.Body.transformToString()) === body; } catch (_) { same = false; }
+  stats.writable = same;
+  stats.writeTestError = same ? null : 'read back different bytes than were written';
+  stats.writeTestAt = new Date().toISOString();
+  return { ok: same, stage: same ? 'done' : 'compare', error: stats.writeTestError };
+}
+
 function health() {
   return {
     configured: !!BUCKET,
@@ -174,5 +226,5 @@ function health() {
   };
 }
 
-module.exports = { enabled, health, putRun, getRun, listRuns, restoreDay, keyFor, tradeDateOf,
+module.exports = { enabled, health, selfTest, putRun, getRun, listRuns, restoreDay, keyFor, tradeDateOf,
   BUCKET, PREFIX, REGION, _stats: stats };

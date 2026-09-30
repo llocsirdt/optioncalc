@@ -2251,6 +2251,18 @@ async function rehydrateRuns() {
       + 'an instance replacement WILL lose the day. Set CANDLE_SPREAD_S3_BUCKET to enable.');
     return { enabled: false, reason: A.health().disabledReason };
   }
+  // WRITE TEST FIRST. Reading proves nothing about the thing we depend on. If this fails the archive is
+  // decorative, and saying so loudly at boot is the difference between finding out now and finding out from
+  // a lost book.
+  const st = await A.selfTest();
+  if (st.ok) {
+    console.log(`[candle-spread] run archive WRITABLE — s3://${A.BUCKET}/${A.PREFIX} verified by write+read-back.`);
+  } else {
+    console.error(`[candle-spread] run archive NOT WRITABLE (${st.stage || 'disabled'}): ${st.error || st.reason}`);
+    console.error(`  the bucket is configured but this instance cannot store records in it. The day's book is`);
+    console.error(`  NOT protected. Check the instance profile allows s3:PutObject+GetObject on`);
+    console.error(`  arn:aws:s3:::${A.BUCKET}/${A.PREFIX}/* and s3:ListBucket on arn:aws:s3:::${A.BUCKET}.`);
+  }
   const today = todayEST();
   const r = await A.restoreDay(today, dir);
   if (r.error) {

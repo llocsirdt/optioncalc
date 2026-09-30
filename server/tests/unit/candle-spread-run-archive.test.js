@@ -230,6 +230,58 @@ function loadArchive(env) {
     delete require.cache[require.resolve('../../src/candle-spread/store')];
   }
 
+  // ── 6. THE WRITE SELF-TEST IS WHAT ACTUALLY PROVES THE ARCHIVE WORKS ──────────────────────────────
+  // `enabled` only means a bucket name is set and the SDK loaded. A role that can READ and not WRITE looks
+  // healthy at boot and starts losing records at the next session — the "configured but failing" state that
+  // is worse than no archive. selfTest answers the real question: can this process put a record somewhere a
+  // replacement instance will find it?
+  {
+    const fake = installFakeS3();
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b', CANDLE_SPREAD_S3_PREFIX: 'runs' });
+    ok(A.health().writable === null, 'writable starts unknown, not optimistically true');
+    const t = await A.selfTest();
+    ok(t.ok === true, `a working bucket passes the write+read-back test (${JSON.stringify(t)})`);
+    ok(A.health().writable === true, 'and health() records writable: true');
+    ok([...fake.store.keys()].some((k) => k === 'runs/_probe/health.json'),
+      `the probe lands outside the run namespace (${[...fake.store.keys()].join(',')})`);
+
+    // THE PROBE MUST NOT POLLUTE listRuns — its id cannot parse to a trade date, so it is filtered out.
+    await A.putRun('NDX_2026-09-29_2026-09-29_v7-10', '{}');
+    const l = await A.listRuns();
+    ok(l.ok && l.ids.length === 1 && l.ids[0] === 'NDX_2026-09-29_2026-09-29_v7-10',
+      `listRuns ignores the probe (${JSON.stringify(l.ids)})`);
+    const d = await A.restoreDay('2026-09-29', path.join(tmp, 'store5'));
+    ok(d.restored === 1, 'and restoreDay does not try to restore it as a record');
+    restore();
+  }
+  // READ-ONLY IS A FAILURE, and it must be reported as one rather than as health.
+  {
+    const fake = installFakeS3({ throwOn: 'put' });
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b' });
+    const t = await A.selfTest();
+    ok(t.ok === false && t.stage === 'put', `a bucket that refuses writes FAILS the test (${JSON.stringify(t)})`);
+    ok(A.health().writable === false, 'health() says writable: false');
+    ok(A.health().enabled === true, 'even though `enabled` is still true — which is exactly why enabled is not the check');
+    restore();
+  }
+  // WROTE BUT CANNOT READ BACK is also a failure: a record we cannot read is one a replacement cannot restore.
+  {
+    const fake = installFakeS3();
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b' });
+    fake.behaviour.throwOn = 'get';
+    const t = await A.selfTest();
+    ok(t.ok === false && t.stage === 'get', `write-only also fails, at the get stage (${JSON.stringify(t)})`);
+    ok(/could not read back/.test(A.health().writeTestError || ''), 'and says so specifically');
+    restore();
+  }
+  // Disabled stays disabled — the self-test must not be the thing that crashes an unconfigured server.
+  {
+    const { A, restore } = loadArchive({});
+    const t = await A.selfTest();
+    ok(t.ok === false && t.disabled === true, 'unconfigured -> selfTest resolves as disabled, no throw');
+    restore();
+  }
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* best effort */ }
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
