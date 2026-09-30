@@ -2221,9 +2221,82 @@ async function eodSettlementInner() {
   }
 }
 
+
+// ── REHYDRATE THE DAY'S BOOK FROM OFF-INSTANCE STORAGE ──────────────────────────────────────────────
+//
+// /var/optioncalc-data survives an in-place restart but NOT instance replacement: a fresh EBS volume means
+// ensureDir() creates an empty store and the day's book is gone. Seen 2026-09-01, and again 2026-09-29 at
+// 20:11 ET (store `files: 0` on a disk 37% full — a new volume, not a deletion). Harmless while everything
+// is simulated; with real money the engine would reboot blind while real positions sat at the broker.
+//
+// IT RUNS IN THE APP, NOT A DEPLOY HOOK. See the note in .ebextensions/persistence.config: a hook runs as a
+// user that may create files in the 1777 store directory but cannot overwrite a record the app owns, which
+// is exactly how the 2026-09-17 store repair failed EACCES. Here the identity is right by construction.
+//
+// IT NEVER OVERWRITES A LOCAL RECORD. If the instance still holds today's book, that copy is the live one
+// and S3 is behind it by at most one write. Only a genuinely absent file is filled in — the
+// instance-replacement case and nothing else.
+//
+// THE TICK WAITS FOR IT. store.js is synchronous and initRun creates an empty record when the file is
+// missing, so a tick landing mid-restore would manufacture exactly the blank book this exists to prevent.
+// start() cannot be made async without changing its contract, so the promise is published here and every
+// path that opens a record awaits it first. Awaiting a settled promise costs nothing, so this stays in place
+// for the life of the process rather than being a startup-only special case.
+let _rehydrated = null;
+async function rehydrateRuns() {
+  const A = require('./run-archive');
+  const dir = store.RUNS_DIR;
+  if (!A.enabled()) {
+    console.log(`[candle-spread] run archive OFF (${A.health().disabledReason}) — local disk only; `
+      + 'an instance replacement WILL lose the day. Set CANDLE_SPREAD_S3_BUCKET to enable.');
+    return { enabled: false, reason: A.health().disabledReason };
+  }
+  const today = todayEST();
+  const r = await A.restoreDay(today, dir);
+  if (r.error) {
+    console.error(`[candle-spread] run archive RESTORE FAILED for ${today}: ${r.error}`);
+    console.error('  continuing on local disk. If this instance was just replaced, the day starts EMPTY.');
+  } else if (r.restored) {
+    console.log(`[candle-spread] run archive RESTORED ${r.restored} record(s) for ${today} from `
+      + `s3://${A.BUCKET}/${A.PREFIX} (${Math.round(r.bytes / 1e5) / 10} MB; ${r.skippedPresent} already on disk, `
+      + `${r.failed} failed) — the day's book survived an instance change.`);
+  } else {
+    console.log(`[candle-spread] run archive OK — nothing to restore for ${today} `
+      + `(${r.skippedPresent} record(s) already on disk, ${r.listed} in the bucket).`);
+  }
+  // HISTORY IS FOR THE UI AND MUST NEVER DELAY TRADING. Today's book is the correctness-critical part and is
+  // awaited above; older days only populate the compare and debug pages, so they stream in behind the engine.
+  const days = Number(process.env.CANDLE_SPREAD_S3_RESTORE_DAYS || 0);
+  if (days > 0) restoreHistory(days, dir).catch((e) => console.error('[candle-spread] history restore:', e && e.message));
+  return r;
+}
+
+// Fill in the last N trade dates behind the engine, newest first, so the served history comes back without
+// any of it sitting in front of the first tick.
+async function restoreHistory(days, dir) {
+  const A = require('./run-archive');
+  const l = await A.listRuns();
+  if (!l.ok) { console.error(`[candle-spread] history restore: cannot list (${l.error || l.reason})`); return; }
+  const dates = [...new Set(l.ids.map((id) => A.tradeDateOf(id)).filter(Boolean))].sort().reverse().slice(0, days);
+  let total = 0;
+  for (const d of dates) {
+    if (d === todayEST()) continue;                     // already done, and awaited
+    const r = await A.restoreDay(d, dir);
+    total += r.restored;
+  }
+  if (total) console.log(`[candle-spread] run archive restored ${total} historical record(s) across ${dates.length} day(s).`);
+}
+
+// Every entry point that opens a record funnels through this.
+function archiveReady() { return _rehydrated || Promise.resolve(null); }
+
 function scheduleNext() {
   const delay = msToNextBoundary() + 5000; // fire 5s after the boundary
-  schedTimer = setTimeout(() => {
+  schedTimer = setTimeout(async () => {
+    // WAIT FOR THE BOOK. A tick that runs while the restore is in flight would call initRun on a missing
+    // file and write a brand-new empty record — manufacturing the blank book the restore exists to prevent,
+    // and sealing today's config against a record that describes nothing.
+    try { await archiveReady(); } catch (_) { /* rehydrateRuns already logged; local disk is the fallback */ }
     const now = new Date();
     // The boundary we just passed is ~now (minus the 5s). Classify by current ET minute.
     const kind = classifyBoundary(now);
@@ -2397,15 +2470,22 @@ function start(deps) {
     console.error('[candle-spread] store sweep failed (continuing):', e && e.message);
   }
   started = true;
+  // Kick the rehydrate off now and publish the promise; scheduleNext's handler awaits it, so the first tick
+  // cannot create an empty record over a book that is still on its way back from S3.
+  _rehydrated = rehydrateRuns().catch((e) => {
+    console.error('[candle-spread] run archive rehydrate failed (continuing on local disk):', e && e.message);
+    return { enabled: false, error: (e && e.message) || String(e) };
+  });
   scheduleNext();
   // Repair any session that ended without settling before scheduling anything new (see the function).
-  backfillMissedSettlements().catch((e) => console.error('[candle-spread] backfill:', e && e.message));
+  archiveReady().then(() => backfillMissedSettlements())
+    .catch((e) => console.error('[candle-spread] backfill:', e && e.message));
   // Poll outstanding real orders on a fixed interval (real fill tracking + test/stale cancels).
   // Harmless when disarmed/dry-run: runOrderPoll early-returns and there are no liveOrders.
-  orderPollTimer = setInterval(() => { runOrderPoll().catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);
+  orderPollTimer = setInterval(() => { archiveReady().then(() => runOrderPoll()).catch(e => console.error('[candle-spread] poll:', e && e.message)); }, ORDER_POLL_MS);
   if (orderPollTimer.unref) orderPollTimer.unref();
   // Sub-bar pass over resting opens and covers. Inert outside RTH and on any pass with nothing working.
-  workTimer = setInterval(() => { runRestingWork().catch(e => console.error('[candle-spread] resting work:', e && e.message)); }, WORK_MS);
+  workTimer = setInterval(() => { archiveReady().then(() => runRestingWork()).catch(e => console.error('[candle-spread] resting work:', e && e.message)); }, WORK_MS);
   if (workTimer.unref) workTimer.unref();
   // Live-send status. Real orders require prod + CANDLE_SPREAD_LIVE=true + a run with
   // dryRun:false (real) or dryRun:'test' (unfillable paper send).

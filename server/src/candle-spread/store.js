@@ -11,6 +11,15 @@ const path = require('path');
 // (store-internal reads/writes use this local binding, so a module-level override is
 // the only reliable way to redirect persistence).
 //
+// *** DURABLE POSITION RECORDING — ADDRESSED 2026-09-29, see run-archive.js ***
+// Every writeRun now also ships the record to S3 (write-through, fire-and-forget), and candle-spread
+// start() rehydrates the day's runs from S3 before the first tick when the local store is empty. That
+// closes the hole described below: a replacement instance recovers the day's open positions instead of
+// starting blind. It is OFF unless CANDLE_SPREAD_S3_BUCKET is set and the instance profile grants
+// s3:PutObject/GetObject/ListBucket, and /health reports whether it is actually working — an archive that
+// is configured but silently failing is the one state worse than no archive.
+//
+// The original note, kept because it records WHY:
 // *** CRITICAL TODO — DURABLE POSITION RECORDING ***
 // This is a LOCAL-DISK store. /var/optioncalc-data survives in-place restarts but NOT instance
 // replacement (an EB immutable deploy / ASG health swap gives a fresh EBS volume → empty store). On
@@ -124,11 +133,32 @@ function writeSummary(runId, record) {
   try { fs.writeFileSync(sumFilePath(runId), JSON.stringify(summarize(runId, record)), 'utf8'); } catch (_) { /* non-fatal */ }
 }
 
+// OFF-INSTANCE COPY, FIRE-AND-FORGET. The local write is the authority and must never wait on a network:
+// writeRun is called from inside the tick, and an S3 round trip on a slow link would delay the engine, while
+// a rejection would take down whatever called it. So the promise is deliberately dropped, with its own catch
+// — run-archive already resolves rather than rejects, and this is the belt to that braces.
+//
+// The BODY IS THE BYTES WE JUST WROTE, not a re-serialisation, so the object in S3 is identical to the file
+// on disk and a restore is a copy rather than a round trip through JSON that could differ.
+//
+// Losing the newest write to a crash is acceptable and bounded: the engine writes after every event, so S3
+// is at most one event behind, and restoreDay never overwrites a local file that exists — the local copy
+// always wins when both are present.
+function shipToArchive(runId, body) {
+  try {
+    const A = require('./run-archive');
+    if (!A.enabled()) return;
+    Promise.resolve(A.putRun(runId, body)).catch(() => { /* counted in run-archive stats */ });
+  } catch (_) { /* archive module unavailable: local disk is still the authority */ }
+}
+
 function writeRun(record) {
   ensureDir();
   record.updatedAt = new Date().toISOString();
-  fs.writeFileSync(runFilePath(record.runId), JSON.stringify(record, null, 2), 'utf8');
+  const body = JSON.stringify(record, null, 2);
+  fs.writeFileSync(runFilePath(record.runId), body, 'utf8');
   writeSummary(record.runId, record);
+  shipToArchive(record.runId, body);
   return record;
 }
 

@@ -225,6 +225,15 @@ function diskUsage() {
     bootedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     root: fsUsage('/'), tmp: fsUsage('/tmp'),
     candleRuns: dirStats(CANDLE_RUNS_DIR),         // the ACTIVE store dir (what the server reads/writes)
+    // OFF-INSTANCE ARCHIVE. `host` above changes on instance replacement and candleRuns.files goes to 0 —
+    // that pair is how the 2026-09-29 20:11 ET loss was identified. This says whether the thing that now
+    // recovers from it is actually working. An archive that is CONFIGURED BUT FAILING is the one state worse
+    // than no archive, because the store looks protected and is not: check `enabled`, then `putFails` and
+    // `lastError`, not merely that a bucket name is set.
+    candleRunArchive: (() => {
+      try { return require('./candle-spread/run-archive').health(); }
+      catch (e) { return { configured: false, enabled: false, disabledReason: (e && e.message) || String(e) }; }
+    })(),
     // LAST PRUNE RESULT. The deploy hook runs with `|| true` so a cleanup can never fail a deploy — which
     // also means its stdout goes nowhere. On 2026-09-17 the prune copied a 65 MB backup, failed to rewrite
     // the record, and the only symptom was the store getting BIGGER. Reading its own status file here
