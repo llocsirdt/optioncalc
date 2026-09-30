@@ -82,7 +82,7 @@ function tradeDateOf(runId) {
   return /^\d{4}-\d{2}-\d{2}$/.test(p[2]) ? p[2] : null;
 }
 
-async function cmd(name, input) {
+async function cmd(name, input, opts) {
   const c = client();
   if (!c) return { ok: false, disabled: true, reason: stats.disabledReason };
   try {
@@ -90,8 +90,13 @@ async function cmd(name, input) {
     const out = await c.send(new M[name](input));
     return { ok: true, out };
   } catch (e) {
-    note(e, name);
-    return { ok: false, error: (e && e.message) || String(e), code: e && (e.name || e.Code) };
+    const code = (e && (e.name || e.Code)) || '';
+    const missing = /NoSuchKey|NotFound|404/i.test(code) || (e && e.$metadata && e.$metadata.httpStatusCode === 404);
+    // "IT IS NOT THERE" IS AN ANSWER, NOT A FAULT, when the caller was asking whether it exists. Recording it
+    // as lastError left /health permanently showing an error for the benign case of a seed bundle that had
+    // been deliberately deleted — which corrodes the one field an operator is told to trust.
+    if (!(missing && opts && opts.quietMissing)) note(e, name);
+    return { ok: false, error: (e && e.message) || String(e), code, missing };
   }
 }
 
@@ -107,9 +112,10 @@ async function putRun(runId, body) {
   return r;
 }
 
-async function getRun(runId) {
-  const r = await cmd('GetObjectCommand', { Bucket: BUCKET, Key: keyFor(runId) });
-  if (!r.ok) { if (!r.disabled) stats.getFails++; return r; }
+async function getRun(runId, opts) {
+  const r = await cmd('GetObjectCommand', { Bucket: BUCKET, Key: keyFor(runId) }, opts);
+  // A deliberate existence check counts neither as a failure nor as a reported error.
+  if (!r.ok) { if (!r.disabled && !(r.missing && opts && opts.quietMissing)) stats.getFails++; return r; }
   try {
     const body = await r.out.Body.transformToString();
     stats.gets++;
@@ -268,7 +274,8 @@ async function getObjectToFile(key, destPath) {
  * forever.
  */
 async function headObject(key) {
-  const r = await cmd('HeadObjectCommand', { Bucket: BUCKET, Key: key });
+  // A HEAD is an EXISTENCE PROBE, so a 404 is the answer and not an error to report.
+  const r = await cmd('HeadObjectCommand', { Bucket: BUCKET, Key: key }, { quietMissing: true });
   if (!r.ok) return r;
   const etag = String((r.out && r.out.ETag) || '').replace(/"/g, '');
   return { ok: true, etag, size: r.out && r.out.ContentLength, out: r.out };

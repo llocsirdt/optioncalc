@@ -58,7 +58,7 @@ function bundleKey() {
 // The one-shot marker. Keyed by the bundle's identity so a genuinely new bundle seeds again without anyone
 // remembering a flag, and it lives in S3 rather than on disk because disk is the thing that disappears.
 async function markerExists(A, tag) {
-  const m = await A.getRun(`_seed_${tag}`);
+  const m = await A.getRun(`_seed_${tag}`, { quietMissing: true });
   return !!(m && m.ok);
 }
 
@@ -169,7 +169,10 @@ async function seedFromBundle(opts = {}) {
   // thing that disappears — a disk marker would be lost in the same event that makes a reseed look necessary,
   // and every replacement would re-upload the whole archive.
   const markerId = `_seed_${tag}`;
-  if (A.enabled() && await markerExists(A, tag)) {
+  // Only for a bundle that came from the DEPLOY. The S3 path already checked this marker before downloading
+  // (that is the whole point of identifying by ETag first), so re-checking it here was two pointless requests
+  // and made getFails read as though something had gone wrong.
+  if (A.enabled() && res.source !== 's3' && await markerExists(A, tag)) {
     res.alreadySeeded = true;
     log(`[candle-spread] seed bundle ${tag} already applied (marker in S3) — skipping.`);
     if (downloaded) { try { fs.rmSync(path.dirname(downloaded), { recursive: true, force: true }); } catch (_) { /* best effort */ } }

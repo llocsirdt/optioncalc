@@ -47,6 +47,13 @@ function installFakeS3(behaviour = {}) {
       async send(cmd) {
         if (behaviour.throwOn === cmd._kind) throw new Error(`boom-${cmd._kind}`);
         if (cmd._kind === 'put') { calls.put++; store.set(cmd.input.Key, String(cmd.input.Body)); return {}; }
+        if (cmd._kind === 'head') {
+          calls.head = (calls.head || 0) + 1;
+          if (!store.has(cmd.input.Key)) { const e = new Error('NotFound'); e.name = 'NotFound'; throw e; }
+          const b = store.get(cmd.input.Key);
+          return { ETag: `"${require('crypto').createHash('md5').update(b).digest('hex')}"`,
+            ContentLength: Buffer.byteLength(b) };
+        }
         if (cmd._kind === 'get') {
           calls.get++;
           if (!store.has(cmd.input.Key)) { const e = new Error('NoSuchKey'); e.name = 'NoSuchKey'; throw e; }
@@ -70,6 +77,7 @@ function installFakeS3(behaviour = {}) {
     PutObjectCommand: class { constructor(input) { this.input = input; this._kind = 'put'; } },
     GetObjectCommand: class { constructor(input) { this.input = input; this._kind = 'get'; } },
     ListObjectsV2Command: class { constructor(input) { this.input = input; this._kind = 'list'; } },
+    HeadObjectCommand: class { constructor(input) { this.input = input; this._kind = 'head'; } },
   };
   FAKE = mod;
   return { store, calls, mod, behaviour };
@@ -242,6 +250,26 @@ function loadArchive(env) {
     if (savedDir == null) delete process.env.CANDLE_SPREAD_RUNS_DIR; else process.env.CANDLE_SPREAD_RUNS_DIR = savedDir;
     if (savedBucket == null) delete process.env.CANDLE_SPREAD_S3_BUCKET; else process.env.CANDLE_SPREAD_S3_BUCKET = savedBucket;
     delete require.cache[require.resolve('../../src/candle-spread/store')];
+  }
+
+  // ── 5b. AN EXISTENCE PROBE THAT COMES BACK EMPTY IS NOT AN ERROR ──────────────────────────────────
+  // The seed bundle is deleted on purpose once it has been applied, so every later boot HEADs a key that is
+  // meant to be absent. Recording that as lastError left /health permanently showing an error for a healthy
+  // system — corroding the one field an operator is told to check.
+  {
+    installFakeS3();
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b' });
+    const h = await A.headObject('runs/_seed/seed-runs.tgz');
+    ok(h.ok === false, 'a missing object heads as not-ok');
+    ok(A.health().lastError === null, `and leaves lastError clean (${JSON.stringify(A.health().lastError)})`);
+    const m = await A.getRun('_seed_deadbeef', { quietMissing: true });
+    ok(m.ok === false && A.health().getFails === 0 && A.health().lastError === null,
+      'a quiet marker lookup counts no failure and reports nothing');
+    // A NON-probe miss must STILL be reported — this is a narrowing, not a blanket silence.
+    const g = await A.getRun('NDX_2026-09-29_2026-09-29_nope');
+    ok(g.ok === false && A.health().getFails === 1 && /GetObject/.test(A.health().lastError || ''),
+      'while an ordinary missing record is still counted and reported');
+    restore();
   }
 
   // ── 6. THE WRITE SELF-TEST IS WHAT ACTUALLY PROVES THE ARCHIVE WORKS ──────────────────────────────
