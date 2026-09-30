@@ -1350,7 +1350,16 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // real flip only happens after a cover (which sets direction to 'none'). Ported bidirectional
   // runs (v7 "be wrong") deliberately bypass this to open the opposite side while holding.
   const bidir = ported && deps.bidirectional === true;
-  if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
+  // REMOTE NO-OPEN (deps.blockNewOpens, set from the S3 control file — see index.buildEngineDeps). Refused HERE,
+  // at the decision, not at the send: the record should show that the signal fired and what stopped it, so a
+  // quiet afternoon under a restriction is distinguishable from a quiet afternoon with no setups. Everything
+  // else keeps running on purpose — covers, ladders, hedges and settlement — because a variant that stops
+  // acting while holding an uncovered 0DTE position is in the most dangerous state available.
+  if (openSide && deps.blockNewOpens) {
+    decisions.push({ action: 'open-skip-control', side: openSide,
+      restrict: deps.controlRestrict || 'no-open', mode: deps.controlMode || null,
+      note: 'strategy-control is blocking new opens; existing positions are still being worked' });
+  } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
     // adaptiveGeo (per-variant, default OFF -> byte-identical to the fixed placement) walks the strike

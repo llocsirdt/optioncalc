@@ -31,6 +31,10 @@ const NOT_ENGINE_OPTS = new Set([
   // on. Listed rather than forwarded because the audit is right to refuse an unexplained field — that refusal
   // is what catches a real capability added to the roster and never wired through.
   'lossMaxFloored', 'lossMaxCapped',
+  // REMOTE CONTROL PLUMBING, not strategy configuration. These are set per-tick from the S3 control file
+  // (index.buildEngineDeps), never from the roster, so no variant "carries" them and there is nothing for a
+  // backtest consumer to forward — a backtest has no control plane and must not pretend to.
+  'blockNewOpens', 'controlMode', 'controlRestrict',
 ]);
 
 /**

@@ -8,6 +8,7 @@ const store = require('./store');
 const trader = require('./trader');
 const om = require('./order-manager');
 const BR = require('./book-reconcile');   // does the strategy's book match the orders that really filled?
+const SC = require('./strategy-control');   // which variants trade, in what mode, right now (S3-backed)
 const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
@@ -1319,10 +1320,38 @@ const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
 // which cancel/replaces atomically — safer than cancel-then-place, which can leave the book naked in
 // between. Mirrors makePlaceOrder's gating exactly: the same dryRun / isProd / LIVE_ARMED conditions
 // decide whether anything actually reaches the broker, so a disarmed run still records its intent.
+// ── THE HALT, AT THE ONE BOUNDARY EVERY ORDER CROSSES ───────────────────────────────────────────────
+//
+// `restrict: 'halt'` has to mean NOTHING reaches the broker, so it is checked at the send itself rather than at
+// each decision that leads to one. There are three senders (place, replace, cancel) and a halt that covered two
+// of them would be worse than none — it would look effective while the ladder kept repricing.
+//
+// A CANCEL IS STILL ALLOWED. Halt means "stop putting risk on", not "abandon the orders already resting": if
+// something is wrong, pulling a working order is the helpful action, and blocking it would leave live orders at
+// the broker that the engine has decided to stop managing. That is the shape of the phantom book, inverted.
+//
+// Returns a REASON rather than a boolean so the refusal event says which restriction stopped it and who set it.
+function controlBlocks(run, kind) {
+  const c = SC.forVariant(run.variant);
+  if (c.restrict !== 'halt') return null;
+  if (kind === 'cancel') return null;
+  return { why: 'halted', note: c.note || null, mode: c.mode };
+}
+
 function makeReplaceOrder(run, record) {
   const mode = run.dryRun;
   const wantsRealSend = mode === false || mode === 'test';
   return async function replaceOrder(orderId, payload, meta) {
+    // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
+    // and sends nothing, exactly as a disarmed one does.
+    const blocked = controlBlocks(run, 'replace');
+    if (blocked) {
+      store.appendEvent(record, { type: 'order_control_blocked', kind: (meta && meta.kind) || 'replace',
+        restrict: blocked.why, controlNote: blocked.note, meta,
+        note: `not sent: ${run.variant} is ${blocked.why} by strategy-control`
+          + (blocked.note ? ` (${blocked.note})` : '') });
+      return { status: `blocked:${blocked.why}`, sent: false };
+    }
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash && orderId;
     if (!canSend) {
@@ -1426,6 +1455,16 @@ function makeCancelOrder(run, record) {
   const mode = run.dryRun;
   const wantsRealSend = mode === false || mode === 'test';
   return async function cancelOrder(orderId, meta) {
+    // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
+    // and sends nothing, exactly as a disarmed one does.
+    const blocked = controlBlocks(run, 'cancel');
+    if (blocked) {
+      store.appendEvent(record, { type: 'order_control_blocked', kind: (meta && meta.kind) || 'cancel',
+        restrict: blocked.why, controlNote: blocked.note, meta,
+        note: `not sent: ${run.variant} is ${blocked.why} by strategy-control`
+          + (blocked.note ? ` (${blocked.note})` : '') });
+      return { status: `blocked:${blocked.why}`, sent: false };
+    }
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash && orderId;
     if (!canSend) {
@@ -1470,6 +1509,16 @@ function makePlaceOrder(run, record) {
   const mode = run.dryRun;                        // true | 'test' | false
   const wantsRealSend = mode === false || mode === 'test';
   return async function placeOrder(payload, meta) {
+    // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
+    // and sends nothing, exactly as a disarmed one does.
+    const blocked = controlBlocks(run, 'place');
+    if (blocked) {
+      store.appendEvent(record, { type: 'order_control_blocked', kind: (meta && meta.kind) || 'place',
+        restrict: blocked.why, controlNote: blocked.note, meta,
+        note: `not sent: ${run.variant} is ${blocked.why} by strategy-control`
+          + (blocked.note ? ` (${blocked.note})` : '') });
+      return { status: `blocked:${blocked.why}`, sent: false };
+    }
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash;
     if (!canSend) {
@@ -1567,8 +1616,25 @@ function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`;
 // can replay it for every variant and assert that nothing in the config falls through — see assertDeps().
 // `live` carries the per-tick values (chain accessor, order fn, the analysis objects).
 function buildEngineDeps(run, live) {
+  // ── REMOTE CONTROL, APPLIED HERE SO ONE PLACE DECIDES ─────────────────────────────────────────────
+  // `mode` selects dryRun and `restrict: 'no-open'` blocks new opens. Both are resolved at deps-build time
+  // rather than inside the trader, because the trader should keep taking its orders from deps and knowing
+  // nothing about where they came from — the same reason signalFn is passed in rather than looked up.
+  //
+  // MODE OVERRIDES THE ROSTER'S dryRun, which is what makes the control file useful: the roster arms exactly
+  // one variant from the environment, and this is how a second one starts paper-trading without a deploy.
+  // strategy-control has ALREADY downgraded a 'live' request to paper unless CANDLE_SPREAD_LIVE permits it, so
+  // nothing here can arm real money that the environment has not already allowed.
+  const ctl = SC.forVariant(run.variant);
+  const ctlDryRun = ctl.listed ? SC.dryRunFor(run.variant) : undefined;
   return Object.assign({
-      dryRun: run.dryRun,
+      dryRun: ctlDryRun !== undefined ? ctlDryRun : run.dryRun,
+      // NO-OPEN: work what is already on the book, start nothing new. The safe reflex — a live variant holding
+      // an uncovered 0DTE position that stops acting entirely is in the most dangerous state available, so this
+      // deliberately leaves covers, ladders and hedges running.
+      blockNewOpens: ctl.restrict === 'no-open' || ctl.restrict === 'halt',
+      controlMode: ctl.listed ? ctl.mode : null,
+      controlRestrict: ctl.restrict || null,
       // CLOSED-LOOP FILLS — see FILL_SOURCE. 'mark' for every simulated run; 'broker' only for a run whose
       // orders can really fill, and only when explicitly switched on.
       fillSource: fillSourceFor(run),
@@ -2078,6 +2144,11 @@ async function accountPositionsIfDue() {
 
 async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
+  // REFRESH THE CONTROL PLANE. On the order-poll tick rather than a timer of its own: ~20s is the worst-case
+  // latency for a halt to take effect, which is well inside the 5m candle cadence the engine acts on, and it
+  // keeps one clock instead of two. Resolves always; a failure leaves the previous state in force.
+  await SC.refresh({ knownVariants: RUNS.map((r) => r.variant), liveAllowed: LIVE_ARMED })
+    .catch((e) => console.error('[candle-spread] strategy-control:', e && e.message));
   // FETCHED ONLY IF SOMETHING WILL USE IT. Eagerly calling accountPositionsIfDue() here meant the account
   // was read every 3 minutes whether or not any run had a record to compare against — all weekend, all
   // night, ~480 reads a day answering a question nobody asked. Lazy + memoised per poll: the first run that
@@ -2785,6 +2856,9 @@ function status() {
     armedSelection: ARMED_VARIANT,
     armedMode: ARMED_MODE === false ? 'live (real fillable orders)' : 'test (unfillable + auto-cancel)',
     armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT),
+    // REMOTE CONTROL. Shown under gates because it is one: the control file can restrict any variant, and a
+    // `halt` nobody remembers setting looks exactly like a broken engine unless it is visible here.
+    strategyControl: SC.health(),
     // WHO DECIDES A FILL, for the armed variant specifically — it is derived per run (see fillSourceFor),
     // so there is no global value to report. 'mark' means the engine's own read of the chain, which is
     // correct for a simulated or test run and a phantom for one whose orders can really fill.
@@ -2867,6 +2941,10 @@ function status() {
         canceled: lo.filter(o => o.status === 'canceled').length,
         lastAt: lo.length ? lo[lo.length - 1].placedAtEST : null
       },
+      // WHAT IS THIS VARIANT ALLOWED TO DO RIGHT NOW (remote control; unlisted = simulate).
+      control: (() => { const c = SC.forVariant(run.variant);
+        return c.listed ? { mode: c.mode, requestedMode: c.requestedMode, restrict: c.restrict,
+          note: c.note, until: c.until } : null; })(),
       // DOES THE BOOK MATCH THE BROKER? Written by the poller (see book_reconcile) and surfaced here so a
       // divergence is one HTTP call away instead of buried in EB logs — which is how 2026-09-25's fully
       // phantom book went unnoticed for two days. null means nothing to compare yet, or a mode where the
