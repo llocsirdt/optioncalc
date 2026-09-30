@@ -2276,6 +2276,28 @@ async function rehydrateRuns() {
     console.log(`[candle-spread] run archive OK — nothing to restore for ${today} `
       + `(${r.skippedPresent} record(s) already on disk, ${r.listed} in the bucket).`);
   }
+  // SWEEP AppleDouble JUNK. The 2026-09-30 seed bundle was built with macOS tar without COPYFILE_DISABLE, so
+  // it carried a `._<name>` sidecar for every record and 1,127 of them extracted into this store. They are
+  // inert now that listRunFiles matches the runId shape, but they are also 1,127 files nobody wants, and
+  // there is no ssh into this box — so the app removes its own litter, exactly as the store repair does.
+  //
+  // Deliberately narrow: ONLY the unambiguous `._` AppleDouble pattern. A general "delete anything that does
+  // not parse" sweep would be a loaded gun pointed at a real record the day a naming convention changes.
+  try {
+    // Required locally: this module does not import fs/path at the top level, and reaching for them as if it
+    // did would throw ReferenceError straight into the catch below — a sweep that silently never runs. Same
+    // shape as `initRunSafe is not defined`, which node --check also accepted.
+    const fs = require('fs');
+    const path = require('path');
+    const junk = fs.readdirSync(dir).filter((f) => /^\._/.test(f) && f.endsWith('.json'));
+    if (junk.length) {
+      let gone = 0;
+      for (const f of junk) { try { fs.rmSync(path.join(dir, f), { force: true }); gone++; } catch (_) { /* skip */ } }
+      console.log(`[candle-spread] removed ${gone} AppleDouble sidecar file(s) from the run store `
+        + '(macOS tar litter from the seed bundle; harmless but not ours)');
+    }
+  } catch (e) { console.error('[candle-spread] sidecar sweep:', e && e.message); }
+
   // A SEED BUNDLE SHIPPED IN THE DEPLOY, if this artifact carries one. Behind the engine: it unpacks up to
   // ~1 GB and uploads it, which has no business in front of the first tick. One-shot per bundle, never
   // overwrites, and it is how the archive gets its history without anyone creating an AWS access key —

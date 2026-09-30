@@ -90,9 +90,18 @@ function freeBytes(dir) {
 }
 
 // runId = SYMBOL_EXPIRATION_TRADEDATE[_VARIANT]; dates carry hyphens, never underscores.
+// A RUN FILE IS NAMED FOR ITS runId: SYMBOL_EXPIRATION_TRADEDATE[_VARIANT].json.
+//
+// The first version tested `!startsWith('_')` and "has three segments", which accepted macOS AppleDouble
+// sidecars: `._NDX_2026-08-18_2026-08-18_v0-10.json` begins with a DOT, so it passed the underscore filter,
+// and its third segment is a real date. 1,127 of them were written into the prod store on 2026-09-30 and
+// served as runs. Match the shape instead of excluding known-bad prefixes.
 function isRunFile(name) {
-  if (!name.endsWith('.json') || name.startsWith('_')) return false;
-  return String(name).replace(/\.json$/, '').split('_').length >= 3;
+  if (!name.endsWith('.json')) return false;
+  const parts = String(name).replace(/\.json$/, '').split('_');
+  if (parts.length < 3) return false;
+  if (!/^[A-Z][A-Z0-9.$]*$/.test(parts[0])) return false;        // a symbol, not '.' or ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(parts[2]);
 }
 
 /**

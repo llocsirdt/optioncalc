@@ -22,6 +22,12 @@
 # --in-deploy embeds it in server/ instead, which the packager picks up. That works but makes an 82 MB
 # application version, and the EB console browser upload fails at that size.
 set -euo pipefail
+# *** macOS tar WRITES AppleDouble SIDECARS. *** Without COPYFILE_DISABLE, `tar -czf` adds a `._<name>` entry
+# carrying extended attributes for every file. On 2026-09-30 that shipped 1,127 of them to prod, where they
+# extracted as `._NDX_2026-08-18_..._v0-10.json` — names that passed a `startsWith('_')` filter because they
+# begin with a DOT, and whose third underscore-segment is a valid-looking date. The store went to 2,254
+# entries and the compare page listed 1,127 unreadable "runs".
+export COPYFILE_DISABLE=1
 cd "$(dirname "$0")/.."
 ARCHIVE="candle-spread-archive"
 # DEFAULT IS THE REPO ROOT, NOT server/. Anything inside server/ rides in the deploy zip, and an 82 MB
@@ -55,6 +61,11 @@ else
   rm -f /tmp/.seedlist.$$
 fi
 
+# PROVE IT. A bundle carrying sidecars is not shippable, and this is cheap to check.
+if tar -tzf "$OUT" | grep -q '(^|/)\._'; then
+  echo "REFUSING: $OUT contains AppleDouble ._ sidecars. COPYFILE_DISABLE did not take effect."
+  rm -f "$OUT"; exit 1
+fi
 SIZE=$(( $(wc -c < "$OUT") / 1048576 ))
 echo ""
 echo "wrote $OUT — $COUNT record(s), ${SIZE} MB compressed"

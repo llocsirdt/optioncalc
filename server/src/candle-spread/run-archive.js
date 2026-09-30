@@ -75,6 +75,10 @@ function keyFor(runId) { return `${PREFIX}/${runId}.json`; }
 function tradeDateOf(runId) {
   const p = String(runId || '').split('_');
   if (p.length < 3) return null;
+  // THE FIRST SEGMENT IS A SYMBOL. Checking only the date let `._NDX_2026-08-18_...` through — a macOS
+  // AppleDouble sidecar, whose leading dot meant it dodged every `_`-prefix filter while its third segment
+  // parsed as a perfectly good date. 1,127 of them reached the prod store on 2026-09-30.
+  if (!/^[A-Z][A-Z0-9.$]*$/.test(p[0])) return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(p[2]) ? p[2] : null;
 }
 

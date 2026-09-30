@@ -54,6 +54,15 @@ function makeRunId(symbol, expiration, tradeDate, variant) {
   return variant ? `${base}_${variant}` : base;
 }
 
+// SYMBOL_EXPIRATION_TRADEDATE[_VARIANT].json — the only shape a run record's filename ever has.
+function isRunFileName(f) {
+  if (!f.endsWith('.json')) return false;
+  const p = f.replace(/\.json$/, '').split('_');
+  if (p.length < 3) return false;
+  if (!/^[A-Z][A-Z0-9.$]*$/.test(p[0])) return false;
+  return /^\d{4}-\d{2}-\d{2}$/.test(p[2]);
+}
+
 function runFilePath(runId) {
   return path.join(RUNS_DIR, `${runId}.json`);
 }
@@ -219,8 +228,12 @@ function listRunFiles() {
   // the prune's own _prune-last.json listed as a run on 2026-09-17 — a phantom entry with null variant
   // and zero positions, served to the compare page as if it were a session. Same convention as the
   // _summaries/ directory, which is excluded already by virtue of not being a file.
+  // A RUN FILE IS NAMED FOR ITS runId. The old test — ends in .json, does not start with `_` — accepted macOS
+  // AppleDouble sidecars: `._NDX_2026-08-18_..._v0-10.json` begins with a DOT, so 1,127 of them shipped in the
+  // 2026-09-30 seed bundle, landed here, and the compare page listed 2,254 runs of which half were unreadable.
+  // Match the shape instead of excluding prefixes one at a time.
   return fs.readdirSync(RUNS_DIR)
-    .filter(f => f.endsWith('.json') && !f.startsWith('_'))
+    .filter(isRunFileName)
     .map(f => f.replace(/\.json$/, ''));
 }
 
@@ -244,7 +257,7 @@ function listRunsSummary() {
 }
 
 module.exports = {
-  readRunStatus, quarantineRun,
+  readRunStatus, quarantineRun, isRunFileName,
   RUNS_DIR,
   summarize,
   makeRunId,

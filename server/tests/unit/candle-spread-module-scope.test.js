@@ -71,6 +71,36 @@ for (const f of FILES) {
   }
 }
 
+// ── A BUILT-IN USED WITHOUT BEING REQUIRED ──────────────────────────────────────────────────────────
+// Same family as the nested-declaration bug and equally invisible to `node --check`: reach for `fs.` in a
+// module that never required it and you get a ReferenceError. On 2026-09-30 a store-sweep block added to
+// index.js used fs and path, neither of which that module imports at the top level — it would have thrown
+// into its own catch and logged a sweep that silently never ran.
+//
+// MATCHED ON CALL PATTERNS, WITH NO COMMENT STRIPPING. The first version stripped comments by regex first and
+// destroyed real code doing it (`fs.readdirSync` vanished from the stripped text, so the check passed on the
+// very bug it was written for). Regex is a poor JavaScript parser; a short list of real call names is a
+// reliable one, and it is verified to produce no false positives on the current tree.
+{
+  const CALLS = {
+    fs: /\bfs\.(read|write|mkdir|exists|rm|stat|rename|open|close|createWrite|createRead|readdir)/,
+    path: /\bpath\.(join|resolve|dirname|basename|extname|sep)/,
+    os: /\bos\.(tmpdir|hostname|cpus|totalmem|freemem)/,
+    crypto: /\bcrypto\.(createHash|randomUUID|randomBytes)/,
+  };
+  for (const f of FILES.concat(['seed-bundle.js', 'run-archive.js'])) {
+    const p = path.join(__dirname, '..', '..', 'src', 'candle-spread', f);
+    if (!fs.existsSync(p)) continue;
+    const src = fs.readFileSync(p, 'utf8');
+    for (const [mod, re] of Object.entries(CALLS)) {
+      if (!re.test(src)) { pass++; continue; }
+      const required = new RegExp(`require\\(['"\`]${mod}['"\`]\\)`).test(src);
+      ok(required, `${f}: calls \`${mod}.*\` and must require '${mod}' somewhere `
+        + '(a module-level or in-block require both count; without one it is a runtime ReferenceError)');
+    }
+  }
+}
+
 // The four callers that actually broke, named explicitly. A generic rule can be weakened by accident; these
 // are the sites that cost real sessions, so they are pinned by name.
 {
