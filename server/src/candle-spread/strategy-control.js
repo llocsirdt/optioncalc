@@ -62,6 +62,15 @@ const state = {
   errorAt: null,
   unknownVariants: [],     // named in the file but not on the roster — a typo governs nothing, loudly
   reads: 0, readFails: 0, changes: 0,
+  // THE ROSTER'S OWN MODE PER VARIANT, from run.dryRun — what a variant does when the control file says
+  // nothing about it. Without this, "unlisted" was reported as `simulate`, which is wrong for any variant the
+  // ENVIRONMENT has armed: v7-10 runs paper via CANDLE_SPREAD_ARMED and the control file has no opinion on it.
+  //
+  // That was not merely a display problem. The `halt` and `wind-down` presets preserve the CURRENT mode, and
+  // they read it from here — so with the baseline missing, halting env-armed v7-10 would have written
+  // { mode: 'simulate', restrict: 'halt' } and DEMOTED it from paper, with `resume` then leaving it explicitly
+  // at simulate. A kill switch that quietly changes what a strategy IS is worse than no kill switch.
+  baseline: {},
 };
 
 function controlKey(prefix) {
@@ -131,6 +140,8 @@ function normalise(file, knownVariants, opts = {}) {
  */
 async function refresh(deps = {}) {
   const A = deps.archive || require('./run-archive');
+  // Accepted on every refresh so a roster change (a re-arm, a deploy) is picked up without a restart.
+  if (deps.baseline && typeof deps.baseline === 'object') state.baseline = deps.baseline;
   const log = deps.log || console.log;
   const warn = deps.warn || console.warn;
   state.checkedAt = new Date().toISOString();
@@ -233,12 +244,27 @@ async function refresh(deps = {}) {
   return state;
 }
 
-/** What may this variant do right now? Always answers; unlisted means simulate. */
+/**
+ * What may this variant do RIGHT NOW? Always answers.
+ *
+ * An unlisted variant falls back to the ROSTER's mode, not to 'simulate' — those differ whenever the
+ * environment has armed something (v7-10 runs paper via CANDLE_SPREAD_ARMED while the control file says nothing
+ * about it). `source` says which answered, so a display can tell "the env put it in paper" apart from "the
+ * control file asked for paper".
+ */
 function forVariant(variant) {
   const e = state.variants[variant];
-  if (!e) return { mode: 'simulate', restrict: null, listed: false };
+  if (!e) {
+    const base = state.baseline[variant] || 'simulate';
+    return { mode: base, restrict: null, listed: false, source: 'roster' };
+  }
   return { mode: e.mode, requestedMode: e.requestedMode, restrict: e.restrict, note: e.note,
-    until: e.until, listed: true };
+    until: e.until, listed: true, source: 'control' };
+}
+
+/** variant -> mode, from the engine's dryRun vocabulary. Exported so callers do not restate the mapping. */
+function modeFromDryRun(dryRun) {
+  return dryRun === false ? 'live' : dryRun === 'test' ? 'paper' : 'simulate';
 }
 
 const canOpen = (variant) => { const c = forVariant(variant); return !(c.restrict === 'halt' || c.restrict === 'no-open'); };
@@ -246,8 +272,24 @@ const canSendOrders = (variant) => forVariant(variant).restrict !== 'halt';
 // dryRun in the engine's vocabulary: true = simulate, 'test' = real unfillable orders, false = real fillable.
 const dryRunFor = (variant) => ({ simulate: true, paper: 'test', live: false })[forVariant(variant).mode];
 
+/** Set the roster baseline without a network read — used at startup and by any read that beats the first poll. */
+function seedBaseline(baseline) {
+  if (baseline && typeof baseline === 'object') state.baseline = baseline;
+  return state.baseline;
+}
+function hasBaseline() { return Object.keys(state.baseline).length > 0; }
+
 function health() {
   const listed = Object.entries(state.variants).map(([k, v]) => ({ variant: k, ...v }));
+  // ANYTHING NOT PLAIN SIMULATION, from EITHER source. The control file's entries alone are a half-answer:
+  // an env-armed variant is running paper and belongs in this list even though the file never mentions it.
+  const effective = [];
+  for (const [v, base] of Object.entries(state.baseline)) {
+    const c = forVariant(v);
+    if (c.mode === 'simulate' && !c.restrict) continue;
+    effective.push({ variant: v, mode: c.mode, restrict: c.restrict || null, source: c.source,
+      requestedMode: c.requestedMode, note: c.note || null, until: c.until || null, rosterMode: base });
+  }
   return {
     source: state.source,
     updatedAt: state.updatedAt, updatedBy: state.updatedBy,
@@ -255,7 +297,9 @@ function health() {
     ageSeconds: state.loadedAt ? Math.round((Date.now() - new Date(state.loadedAt)) / 1000) : null,
     reads: state.reads, readFails: state.readFails, changes: state.changes,
     error: state.error, errorAt: state.errorAt,
-    // Everything that is NOT plain simulation, which is the whole point of reading this at a glance.
+    // Everything that is NOT plain simulation, from the control file OR the roster — the question an operator
+    // is actually asking. `listed` is the file's own entries, kept separate so the two are distinguishable.
+    effective,
     listed,
     halted: listed.filter((v) => v.restrict === 'halt').map((v) => v.variant),
     noOpen: listed.filter((v) => v.restrict === 'no-open').map((v) => v.variant),
@@ -354,5 +398,5 @@ function _reset() {
     rejected: [], expired: [], downgraded: [], reads: 0, readFails: 0, changes: 0 });
 }
 
-module.exports = { refresh, applyPatch, forVariant, canOpen, canSendOrders, dryRunFor, health, normalise,
+module.exports = { refresh, applyPatch, forVariant, modeFromDryRun, seedBaseline, hasBaseline, canOpen, canSendOrders, dryRunFor, health, normalise,
   controlKey, todayET, REQUIRED_MODES, RESTRICTS, _state: state, _reset };

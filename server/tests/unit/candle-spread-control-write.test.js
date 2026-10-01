@@ -218,8 +218,26 @@ function fakeArchive(initial, behaviour = {}) {
 
     out = await I.handleControlPreset(req('live'));
     ok(out.body.effective === 'live', `live with the env master on (${out.body.effective})`);
+    // `off` FORCES simulate even over an env arming — that is what the name promises. `clear` is the separate
+    // action that drops the override and lets the environment decide; on an env-armed variant that means it
+    // keeps trading, which is why the two must not be the same button.
     out = await I.handleControlPreset(req('off'));
-    ok(out.body.effective === 'simulate', `off returns it to simulation (${out.body.effective})`);
+    ok(out.body.effective === 'simulate', `off forces simulation even over an env arming (${out.body.effective})`);
+    out = await I.handleControlPreset(req('clear'));
+    ok(out.body.effective === 'paper',
+      `clear drops the override, so the env's paper applies again (${out.body.effective})`);
+
+    // HALT MUST NOT DEMOTE AN ENV-ARMED VARIANT. With no control entry and the baseline seeded to paper, halt
+    // preserves paper; the bug wrote simulate/halt and resume then stranded it at simulate.
+    {
+      SC._reset();
+      SC.seedBaseline({ [armed]: 'paper' });
+      let h = await I.handleControlPreset(req('halt'));
+      ok(h.body.effective === 'paper/halt',
+        `halt on an env-armed (unlisted) variant keeps paper (${h.body.effective})`);
+      let r2 = await I.handleControlPreset(req('resume'));
+      ok(r2.body.effective === 'paper', `and resume leaves it at paper, not simulate (${r2.body.effective})`);
+    }
 
     out = await I.handleControlPreset(req('nonsense'));
     ok(out.status === 400 && Array.isArray(out.body.presets), 'an unknown preset is a 400 listing the valid ones');

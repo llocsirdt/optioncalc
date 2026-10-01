@@ -166,6 +166,35 @@ const quiet = { log: () => {}, warn: () => {} };
     ok(/not configured/.test(SC.health().error || ''), 'and it says why rather than looking healthy');
   }
 
+  // ── 9b. AN UNLISTED VARIANT REPORTS WHAT THE ROSTER GIVES IT, NOT 'simulate' ──────────────────────
+  // The control file is not the only thing that arms a variant: CANDLE_SPREAD_ARMED puts v7-10 in paper and the
+  // file says nothing about it. Reporting unlisted as `simulate` made the control page say "SIMULATE / nothing
+  // listed" while the engine was placing paper orders.
+  //
+  // AND IT WAS NOT ONLY A DISPLAY BUG. `halt` and `wind-down` preserve the CURRENT mode and read it from here,
+  // so without the baseline, halting env-armed v7-10 wrote { mode: 'simulate', restrict: 'halt' } — demoting it
+  // — and `resume` then left it explicitly at simulate. A kill switch that quietly changes what a strategy IS
+  // is worse than no kill switch.
+  {
+    SC._reset();
+    SC.seedBaseline({ 'v7-10': 'paper', 'v6-20': 'simulate', 'v9-20': 'simulate' });
+    await SC.refresh({ archive: fakeArchive({}), knownVariants: ROSTER, liveAllowed: true, ...quiet });
+    const c = SC.forVariant('v7-10');
+    ok(c.mode === 'paper', `an unlisted but env-armed variant reports paper (${c.mode})`);
+    ok(c.listed === false && c.source === 'roster', 'flagged as coming from the roster, not the file');
+    ok(SC.forVariant('v6-20').mode === 'simulate', 'a genuinely unarmed variant still reports simulate');
+    // health().effective is what the page reads; it must include the env-armed one.
+    const eff = SC.health().effective;
+    ok(eff.length === 1 && eff[0].variant === 'v7-10' && eff[0].mode === 'paper',
+      `health().effective includes it (${JSON.stringify(eff)})`);
+    ok(SC.health().listed.length === 0, 'while health().listed stays empty — the file really has no entry');
+    // The baseline must not override an explicit entry.
+    await SC.refresh({ archive: fakeArchive({ [KEY]: JSON.stringify({ variants: { 'v7-10': { mode: 'simulate' } } }) }),
+      knownVariants: ROSTER, liveAllowed: true, ...quiet });
+    ok(SC.forVariant('v7-10').mode === 'simulate' && SC.forVariant('v7-10').source === 'control',
+      'an explicit control entry overrides the roster baseline');
+  }
+
   // ── 10. THE KEY IS NESTED SO IT CANNOT BE MISTAKEN FOR A RUN RECORD ───────────────────────────────
   ok(SC.controlKey('optioncalc-runs') === 'optioncalc-runs/_control/strategy-control.json',
     `the control key is nested under _control/ (${SC.controlKey('optioncalc-runs')})`);

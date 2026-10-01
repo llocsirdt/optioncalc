@@ -2147,7 +2147,9 @@ async function runOrderPollInner() {
   // REFRESH THE CONTROL PLANE. On the order-poll tick rather than a timer of its own: ~20s is the worst-case
   // latency for a halt to take effect, which is well inside the 5m candle cadence the engine acts on, and it
   // keeps one clock instead of two. Resolves always; a failure leaves the previous state in force.
-  await SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED })
+  // THE ROSTER'S BASELINE GOES WITH IT, so an unlisted variant reports what it actually does rather than
+  // defaulting to 'simulate' — v7-10 runs paper from the environment and the control file never mentions it.
+  await SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED, baseline: rosterBaseline() })
     .catch((e) => console.error('[candle-spread] strategy-control:', e && e.message));
   // FETCHED ONLY IF SOMETHING WILL USE IT. Eagerly calling accountPositionsIfDue() here meant the account
   // was read every 3 minutes whether or not any run had a record to compare against — all weekend, all
@@ -2668,6 +2670,10 @@ function start(deps) {
   // place anything, because the failure this catches is invisible at runtime: an unforwarded flag makes the
   // feature a no-op that still reports success. Three shipped that way before this existed.
   assertDeps(RUNS);
+  // SEED THE CONTROL BASELINE IMMEDIATELY. The order poll refreshes it every 20s, but /status and /control can
+  // be read inside that first window, and an unseeded baseline reports an env-armed variant as simulating —
+  // which is the exact wrong answer on the page whose job is to say what the engine is doing.
+  SC.seedBaseline(rosterBaseline());
   // WHO DECIDES A FILL, stated once at boot now that DEPS exists and the value is knowable. Derived, so
   // there is nothing to set and nothing to forget — but it decides whether the book is the broker's record
   // or our own reading of the chain, which is too important to be visible only via /status.
@@ -2866,6 +2872,15 @@ const CONTROL_TOKEN = process.env.CANDLE_SPREAD_CONTROL_TOKEN || null;
 // because start() always has run, and which therefore meant the roster check was never actually exercised by a
 // test. The roster is deterministic, so building it on demand is the same answer; memoised because buildRuns
 // walks and logs the whole fleet.
+// variant -> the mode the ROSTER gives it (from run.dryRun), which is what applies when the control file is
+// silent. Rebuilt each call from RUNS so a re-arm is reflected without a restart; cheap, it is a map over 80.
+function rosterBaseline() {
+  const out = {};
+  const runs = (RUNS && RUNS.length) ? RUNS : buildRuns();
+  for (const r of runs) out[r.variant] = SC.modeFromDryRun(r.dryRun);
+  return out;
+}
+
 let _rosterFallback = null;
 function rosterVariants() {
   if (RUNS && RUNS.length) return RUNS.map((r) => r.variant);
@@ -2932,7 +2947,8 @@ async function handleControlWrite(req) {
 //   POST /api/v1/candle-spread/control/wind-down  finish the covers, open nothing new
 //   POST /api/v1/candle-spread/control/live       real fillable orders (needs CANDLE_SPREAD_LIVE too)
 //   POST /api/v1/candle-spread/control/paper      real orders at unfillable prices
-//   POST /api/v1/candle-spread/control/off        back to simulation (removes the entry)
+//   POST /api/v1/candle-spread/control/off        force simulation, overriding an env arming
+//   POST /api/v1/candle-spread/control/clear      drop the override; whatever the environment says applies
 //
 // URL plus one header, no body — which is what makes it one tap from an iOS Shortcut. POST, never GET: a GET
 // that mutates can be fired by a link preview, a prefetcher or a crawler, and this one can stop trading.
@@ -2943,11 +2959,17 @@ async function handleControlWrite(req) {
 // halt and wind-down PRESERVE THE CURRENT MODE rather than forcing one. Halting a paper variant should leave it
 // paper — if halt implied live, resuming would silently promote it, and the resume is exactly the moment nobody
 // is reading carefully.
+// `off` WRITES simulate; `clear` REMOVES the entry. They are not the same thing and conflating them made `off`
+// a lie on an env-armed variant: removing the control entry reverts to the ROSTER, so v7-10 would have gone
+// back to paper — still trading — under a button labelled off. The control file can override the roster
+// downward, so `off` does that explicitly and means what it says. `clear` is the separate, honest action for
+// "stop overriding, whatever the environment decides is fine".
 const CONTROL_PRESETS = {
   live:         { mode: 'live', restrict: null },
   paper:        { mode: 'paper', restrict: null },
-  simulate:     { remove: true },
-  off:          { remove: true },
+  simulate:     { mode: 'simulate', restrict: null },
+  off:          { mode: 'simulate', restrict: null },
+  clear:        { remove: true },
   'wind-down':  { restrict: 'no-open', keepMode: true },
   'no-open':    { restrict: 'no-open', keepMode: true },
   halt:         { restrict: 'halt', keepMode: true },
@@ -2971,6 +2993,10 @@ async function handleControlPreset(req) {
     return { status: 400, body: { ok: false, error: `${variant} is not on the roster` } };
   }
   // keepMode reads what is in force now, so halting does not change what the variant IS.
+  // Seed the baseline first: a preset can arrive before the first poll has run, and keepMode must not read a
+  // missing baseline as 'simulate' and demote an env-armed variant.
+  SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED, baseline: rosterBaseline(),
+    log: () => {}, warn: () => {} }).catch(() => { /* the baseline is set synchronously regardless */ });
   const cur = SC.forVariant(variant);
   const patch = preset.remove
     ? { variant, remove: true }
@@ -2994,8 +3020,16 @@ async function handleControlPreset(req) {
     state: r.state } };
 }
 
-/** Read-only view, for symmetry with the write path. Same data /status already exposes. */
-function controlState() { return SC.health(); }
+/**
+ * Read-only view, for symmetry with the write path. Same data /status already exposes.
+ *
+ * Seeds the baseline if it is somehow still empty, so this cannot answer "everything is simulating" merely
+ * because it was asked before the first refresh.
+ */
+function controlState() {
+  if (!SC.hasBaseline()) SC.seedBaseline(rosterBaseline());
+  return SC.health();
+}
 
 function status() {
   const gates = {

@@ -57,7 +57,8 @@
     <button class="b-live" data-p="live" data-confirm="1">LIVE</button>
   </div>
   <div class="row">
-    <button class="b-dim" data-p="off" data-confirm="1">OFF (simulate)</button>
+    <button class="b-dim" data-p="off" data-confirm="1">OFF (force simulate)</button>
+    <button class="b-dim" data-p="clear" data-confirm="1">CLEAR override</button>
   </div>
   <div class="msg" id="msg"></div>
 </div>
@@ -96,17 +97,27 @@
   }
 
   function render(c){
-    var listed = (c && c.listed) || [];
-    // The armed variant is whatever the control file names; if nothing is listed, everything simulates.
-    var v = listed[0];
-    if (!v) { $('state').textContent = 'SIMULATE'; $('detail').textContent = 'nothing listed — every variant is in simulation'; return; }
-    var txt = v.mode + (v.restrict ? ' / ' + v.restrict : '');
-    $('state').textContent = txt.toUpperCase();
+    // READ `effective`, NOT `listed`. `listed` is only the control FILE's entries, so a variant the
+    // ENVIRONMENT has armed — v7-10 runs paper via CANDLE_SPREAD_ARMED — is absent from it and the page used to
+    // report "SIMULATE / nothing listed" while the engine was placing paper orders. The question this page
+    // exists to answer is what the engine is doing, from whichever source decided it.
+    var eff = (c && c.effective) || [];
+    if (!eff.length) {
+      $('state').textContent = 'SIMULATE';
+      $('detail').textContent = 'every variant is simulating — nothing armed by the environment or the control file';
+      return;
+    }
+    var v = eff[0];
+    $('state').textContent = (v.mode + (v.restrict ? ' / ' + v.restrict : '')).toUpperCase();
     var bits = [v.variant];
+    // Say WHERE the state came from: an env arming behaves differently from a control-file entry, because only
+    // the latter can be changed from this page.
+    bits.push(v.source === 'control' ? 'set here' : 'from the environment');
     if (v.requestedMode && v.requestedMode !== v.mode) bits.push('requested ' + v.requestedMode + ', downgraded');
     if (v.note) bits.push(v.note);
     if (v.until) bits.push('until ' + v.until);
-    if (c.updatedBy) bits.push('by ' + c.updatedBy);
+    if (c.updatedBy && v.source === 'control') bits.push('by ' + c.updatedBy);
+    if (eff.length > 1) bits.push('+' + (eff.length - 1) + ' more');
     $('detail').textContent = bits.join(' · ');
   }
 
