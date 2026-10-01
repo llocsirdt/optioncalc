@@ -231,8 +231,13 @@ function diskUsage() {
     // than no archive, because the store looks protected and is not: check `enabled`, then `putFails` and
     // `lastError`, not merely that a bucket name is set.
     candleRunArchive: (() => {
-      try { return require('./candle-spread/run-archive').health(); }
-      catch (e) { return { configured: false, enabled: false, disabledReason: (e && e.message) || String(e) }; }
+      try {
+        const h = require('./candle-spread/run-archive').health();
+        // THE UPLOAD QUEUE, because a backed-up background copy is the shape that starved the instance on
+        // 2026-10-01. `queued` climbing and staying high means the archive cannot keep up with the engine.
+        try { h.shipQueue = require('./candle-spread/store').shipQueueStats(); } catch (_) { /* older build */ }
+        return h;
+      } catch (e) { return { configured: false, enabled: false, disabledReason: (e && e.message) || String(e) }; }
     })(),
     // LAST PRUNE RESULT. The deploy hook runs with `|| true` so a cleanup can never fail a deploy — which
     // also means its stdout goes nowhere. On 2026-09-17 the prune copied a 65 MB backup, failed to rewrite

@@ -154,7 +154,17 @@ async function refresh(deps = {}) {
       state.errorAt = state.checkedAt;
       return state;
     }
-    const r = await A.getObjectRaw(key, { quietMissing: true });
+    // BOUNDED. This runs on the 20s order poll, and an unbounded await on a network read there means a slow or
+    // hanging S3 can stall the poller indefinitely — settlement wraps its external calls in withTimeout for the
+    // same reason. A timeout is treated exactly like any other read failure: the last known state stays in
+    // force, so a slow bucket cannot release a halt.
+    const TIMEOUT_MS = Number(process.env.CANDLE_SPREAD_CONTROL_TIMEOUT_MS) || 8000;
+    let timer;
+    const r = await Promise.race([
+      A.getObjectRaw(key, { quietMissing: true }),
+      new Promise((resolve) => { timer = setTimeout(
+        () => resolve({ ok: false, error: `control read timed out after ${TIMEOUT_MS}ms` }), TIMEOUT_MS); }),
+    ]).finally(() => clearTimeout(timer));
     if (r && r.ok) body = r.body;
     else if (r && r.missing) {
       // No file at all: every variant simulates. Say it once, not every poll.

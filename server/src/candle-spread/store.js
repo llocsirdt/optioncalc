@@ -142,23 +142,71 @@ function writeSummary(runId, record) {
   try { fs.writeFileSync(sumFilePath(runId), JSON.stringify(summarize(runId, record)), 'utf8'); } catch (_) { /* non-fatal */ }
 }
 
-// OFF-INSTANCE COPY, FIRE-AND-FORGET. The local write is the authority and must never wait on a network:
-// writeRun is called from inside the tick, and an S3 round trip on a slow link would delay the engine, while
-// a rejection would take down whatever called it. So the promise is deliberately dropped, with its own catch
-// — run-archive already resolves rather than rejects, and this is the belt to that braces.
+// OFF-INSTANCE COPY, QUEUED AND BOUNDED. The local write is the authority and must never wait on a network:
+// writeRun is called from inside the tick, so an S3 round trip on a slow link would delay the engine and a
+// rejection would take down whatever called it.
 //
-// The BODY IS THE BYTES WE JUST WROTE, not a re-serialisation, so the object in S3 is identical to the file
-// on disk and a restore is a copy rather than a round trip through JSON that could differ.
+// *** WHY THIS IS A QUEUE AND NOT A BARE fire-and-forget PUT ***
+// The first version called putRun directly with the serialised body, once per writeRun, with no limit on how
+// many could be in flight. That is fine during the day and wrong at 16:00: eodSettlementInner rewrites ALL 80
+// variants in a tight loop, so eighty ~1 MB request bodies could be live at once, on top of the parse and
+// serialise churn, on a 1.9 GB instance.
 //
-// Losing the newest write to a crash is acceptable and bounded: the engine writes after every event, so S3
-// is at most one event behind, and restoreDay never overwrites a local file that exists — the local copy
-// always wins when both are present.
-function shipToArchive(runId, body) {
+// On 2026-10-01 the instance went from Ok to "No Data — none of the instances are sending data" within 60
+// seconds of the 16:00 settlement boundary, after seven healthy hours. That signature is resource starvation
+// severe enough that even the EB health agent stopped reporting, and this is the most plausible contributor:
+// not a new bug, but an unbounded background copy competing with the engine at the heaviest moment of the day.
+//
+// THE QUEUE HOLDS runIds, NOT BODIES, which is what makes it bounded rather than merely ordered:
+//   - memory is MAX_INFLIGHT bodies, not one per queued write
+//   - coalescing is free. A record written 300 times during the day queues ONE id; whatever is on disk when
+//     its turn comes is what ships, and that is by definition the newest content.
+//   - the local file is already the authority, so reading it back at send time cannot lose anything
+//
+// Losing the newest write to a crash is still acceptable and bounded: restoreDay never overwrites a local file
+// that exists, so the local copy always wins when both are present.
+const SHIP_MAX_INFLIGHT = Number(process.env.CANDLE_SPREAD_S3_MAX_INFLIGHT) || 3;
+const shipQueue = new Set();        // runIds awaiting upload (coalesced by construction)
+const shipActive = new Set();       // runIds currently uploading — never two at once for the same record
+let shipInFlight = 0;
+let shipDropped = 0;
+
+function shipToArchive(runId) {
   try {
     const A = require('./run-archive');
     if (!A.enabled()) return;
-    Promise.resolve(A.putRun(runId, body)).catch(() => { /* counted in run-archive stats */ });
+    shipQueue.add(runId);
+    pumpShipQueue();
   } catch (_) { /* archive module unavailable: local disk is still the authority */ }
+}
+
+function pumpShipQueue() {
+  let A;
+  try { A = require('./run-archive'); } catch (_) { return; }
+  if (!A.enabled()) { shipQueue.clear(); return; }
+  // ONE UPLOAD PER RECORD AT A TIME. Without shipActive, a record written in a burst starts a second and third
+  // upload of itself before the first completes — and every one but the last is superseded the moment it lands,
+  // so they are pure waste of exactly the resource this queue exists to protect. An id already in flight stays
+  // QUEUED instead, and the completion handler pumps again and ships it once, with the newest content.
+  for (const runId of Array.from(shipQueue)) {
+    if (shipInFlight >= SHIP_MAX_INFLIGHT) break;
+    if (shipActive.has(runId)) continue;                    // leave it queued for the next pass
+    shipQueue.delete(runId);
+    let body;
+    // Read at SEND time, not at queue time — one body in memory per in-flight upload, and always the latest.
+    try { body = fs.readFileSync(runFilePath(runId), 'utf8'); } catch (_) { shipDropped++; continue; }
+    shipActive.add(runId);
+    shipInFlight++;
+    Promise.resolve(A.putRun(runId, body))
+      .catch(() => { /* counted in run-archive stats */ })
+      .finally(() => { shipActive.delete(runId); shipInFlight--; pumpShipQueue(); });
+  }
+}
+
+/** Visible on /health, so a backed-up archive queue is diagnosable rather than invisible. */
+function shipQueueStats() {
+  return { queued: shipQueue.size, inFlight: shipInFlight, active: shipActive.size,
+    maxInFlight: SHIP_MAX_INFLIGHT, dropped: shipDropped };
 }
 
 function writeRun(record) {
@@ -167,7 +215,7 @@ function writeRun(record) {
   const body = JSON.stringify(record, null, 2);
   fs.writeFileSync(runFilePath(record.runId), body, 'utf8');
   writeSummary(record.runId, record);
-  shipToArchive(record.runId, body);
+  shipToArchive(record.runId);          // queued; the body is re-read from disk when its turn comes
   return record;
 }
 
@@ -257,7 +305,7 @@ function listRunsSummary() {
 }
 
 module.exports = {
-  readRunStatus, quarantineRun, isRunFileName,
+  readRunStatus, quarantineRun, isRunFileName, shipQueueStats,
   RUNS_DIR,
   summarize,
   makeRunId,
