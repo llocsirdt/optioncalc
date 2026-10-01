@@ -17,6 +17,21 @@ const { analyzeCandles, getRaw1m, streamingCandleSource } = require('./persisten
 const { getChartSeries } = require('./chart-series');
 const { getBasis } = require('./nq-ndx-basis');
 const candleSpread = require('./candle-spread');
+const { makeRequestCache, keyFromQuery } = require('./request-cache');
+
+// ── THE TWO HEAVY ENDPOINTS b929566 DID NOT COVER ───────────────────────────────────────────────────
+// /chartseries got a TTL cache + inflight coalescing in b929566 and has been fine since. /chains and
+// /candleanalysis never did, and on 2026-10-01 nginx logged them buffering large responses to temp files
+// continuously from 15:54 until the instance stopped responding at 16:02 — while /chartseries answered 304
+// throughout. Same mechanism, same fix, two endpoints later.
+//
+// TTLs AT OR BELOW THE CLIENT'S ~4s POLL (measured: requests every 1-4s in the access log). A lone user polling
+// every 4s against a 3s TTL misses the cache nearly every time and sees no added staleness; what the cache
+// collapses is CONCURRENT polls — extra tabs, extra devices, one page fanned across CloudFront edges.
+const CHAINS_TTL_MS = Number(process.env.CHAINS_CACHE_TTL_MS) || 3000;
+const ANALYSIS_TTL_MS = Number(process.env.ANALYSIS_CACHE_TTL_MS) || 4000;
+const chainsCache = makeRequestCache('chains', { maxEntries: 40 });
+const analysisCache = makeRequestCache('candleanalysis', { maxEntries: 20 });
 const { marketClient } = require('./persistence/market-client');
 
 const app = express();
@@ -230,6 +245,14 @@ function diskUsage() {
     // recovers from it is actually working. An archive that is CONFIGURED BUT FAILING is the one state worse
     // than no archive, because the store looks protected and is not: check `enabled`, then `putFails` and
     // `lastError`, not merely that a bucket name is set.
+    // THE CACHES THAT KEEP THE HEAVY ENDPOINTS FROM MULTIPLYING. `coalesced` is the number of requests that
+    // shared an in-flight fetch instead of starting their own — the figure that matters, since that is the
+    // allocation this prevents. If it stays near zero under load, the cache is not doing its job.
+    requestCaches: (() => {
+      try { return { chains: chainsCache.health(), candleanalysis: analysisCache.health(),
+        ttlMs: { chains: CHAINS_TTL_MS, candleanalysis: ANALYSIS_TTL_MS } }; }
+      catch (e) { return { error: (e && e.message) || String(e) }; }
+    })(),
     candleRunArchive: (() => {
       try {
         const h = require('./candle-spread/run-archive').health();
@@ -328,7 +351,10 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       result = await handleExpirationChainRequest(path, query, timestamp);
       
     } else if (path.startsWith('/chains')) {
-      result = await handleChainsRequest(path, query, timestamp, persistence, marketClient);
+      // Coalesced + briefly cached: this is the largest response the server serves and it was uncapped.
+      const fresh = /[?&]fresh=(1|true)\b/.test(query || '');
+      result = await chainsCache.run(keyFromQuery('chains', query), fresh ? 0 : CHAINS_TTL_MS,
+        () => handleChainsRequest(path, query, timestamp, persistence, marketClient));
       
     } else if (path.startsWith('/pricehistory')) {
       result = await handlePriceHistoryRequest(path, query, timestamp, marketClient);
@@ -353,7 +379,10 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       }
       
       console.log(`[${timestamp}] Analyzing candles for: ${symbol}${timeframe ? ` (${timeframe})` : ''}`);
-      result = await analyzeCandles(symbol, options);
+      // Keyed on symbol + timeframe, which is everything that changes the answer here.
+      const freshA = /[?&]fresh=(1|true)\b/.test(query || '');
+      result = await analysisCache.run(`candleanalysis|${symbol}|${timeframe || 'default'}`,
+        freshA ? 0 : ANALYSIS_TTL_MS, () => analyzeCandles(symbol, options));
 
     } else if (path.startsWith('/chartseries')) {
       // Deep, chart-ready OHLC + Bollinger(20,2) + 9EMA per timeframe, independent of the
