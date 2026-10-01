@@ -2147,7 +2147,7 @@ async function runOrderPollInner() {
   // REFRESH THE CONTROL PLANE. On the order-poll tick rather than a timer of its own: ~20s is the worst-case
   // latency for a halt to take effect, which is well inside the 5m candle cadence the engine acts on, and it
   // keeps one clock instead of two. Resolves always; a failure leaves the previous state in force.
-  await SC.refresh({ knownVariants: RUNS.map((r) => r.variant), liveAllowed: LIVE_ARMED })
+  await SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED })
     .catch((e) => console.error('[candle-spread] strategy-control:', e && e.message));
   // FETCHED ONLY IF SOMETHING WILL USE IT. Eagerly calling accountPositionsIfDue() here meant the account
   // was read every 3 minutes whether or not any run had a record to compare against — all weekend, all
@@ -2861,6 +2861,18 @@ function backtestBaselines() {
 // response latency, and this one guards real money.
 const CONTROL_TOKEN = process.env.CANDLE_SPREAD_CONTROL_TOKEN || null;
 
+// THE ROSTER, WHETHER OR NOT start() HAS RUN. RUNS is populated by start(), so a handler that validated against
+// it directly rejected every variant as "not on the roster" before startup — which in production is masked
+// because start() always has run, and which therefore meant the roster check was never actually exercised by a
+// test. The roster is deterministic, so building it on demand is the same answer; memoised because buildRuns
+// walks and logs the whole fleet.
+let _rosterFallback = null;
+function rosterVariants() {
+  if (RUNS && RUNS.length) return RUNS.map((r) => r.variant);
+  if (!_rosterFallback) _rosterFallback = buildRuns().map((r) => r.variant);
+  return _rosterFallback;
+}
+
 function controlAuthOk(req) {
   if (!CONTROL_TOKEN) return { ok: false, status: 503, error: 'control API is disabled (CANDLE_SPREAD_CONTROL_TOKEN is not set)' };
   const given = req.get('x-control-token') || '';
@@ -2888,7 +2900,7 @@ async function handleControlWrite(req) {
   }
   const patch = req.body || {};
   const r = await SC.applyPatch(patch, {
-    knownVariants: RUNS.map((v) => v.variant),
+    knownVariants: rosterVariants(),
     liveAllowed: LIVE_ARMED,
     log: (m) => console.log(m), warn: (m) => console.warn(m),
   });
@@ -2897,6 +2909,78 @@ async function handleControlWrite(req) {
   console.log(`[candle-spread] control WRITTEN by ${r.wrote.updatedBy}: `
     + (Object.entries(r.wrote.variants).map(([k, v]) => `${k}=${v.mode}${v.restrict ? '/' + v.restrict : ''}`).join(' ') || '(all simulate)'));
   return { status: 200, body: { ok: true, state: r.state } };
+}
+
+// ── ONE-WORD PRESETS, FOR WHEN YOU ARE NOT AT A COMPUTER ────────────────────────────────────────────
+//
+// The full API takes { variant, mode, restrict, note, until }, which is right for setting up a day and wrong
+// for stopping one. Stopping needs to be a single action from a phone, so these are named states applied to the
+// ARMED variant by default:
+//
+//   POST /api/v1/candle-spread/control/halt       stop sending anything (cancels still allowed)
+//   POST /api/v1/candle-spread/control/wind-down  finish the covers, open nothing new
+//   POST /api/v1/candle-spread/control/live       real fillable orders (needs CANDLE_SPREAD_LIVE too)
+//   POST /api/v1/candle-spread/control/paper      real orders at unfillable prices
+//   POST /api/v1/candle-spread/control/off        back to simulation (removes the entry)
+//
+// URL plus one header, no body — which is what makes it one tap from an iOS Shortcut. POST, never GET: a GET
+// that mutates can be fired by a link preview, a prefetcher or a crawler, and this one can stop trading.
+//
+// THIS DOES NOT SCALE PAST ONE OR TWO ARMED VARIANTS and is not meant to. `?variant=` names one explicitly;
+// beyond that, use the full API or edit the file.
+//
+// halt and wind-down PRESERVE THE CURRENT MODE rather than forcing one. Halting a paper variant should leave it
+// paper — if halt implied live, resuming would silently promote it, and the resume is exactly the moment nobody
+// is reading carefully.
+const CONTROL_PRESETS = {
+  live:         { mode: 'live', restrict: null },
+  paper:        { mode: 'paper', restrict: null },
+  simulate:     { remove: true },
+  off:          { remove: true },
+  'wind-down':  { restrict: 'no-open', keepMode: true },
+  'no-open':    { restrict: 'no-open', keepMode: true },
+  halt:         { restrict: 'halt', keepMode: true },
+  resume:       { restrict: null, keepMode: true },
+};
+
+async function handleControlPreset(req) {
+  const auth = controlAuthOk(req);
+  if (!auth.ok) {
+    console.warn(`[candle-spread] control preset REFUSED (${auth.error})`);
+    return { status: auth.status, body: { ok: false, error: auth.error } };
+  }
+  const name = String((req.params && req.params.preset) || (req.body && req.body.mode) || '').toLowerCase();
+  const preset = CONTROL_PRESETS[name];
+  if (!preset) {
+    return { status: 400, body: { ok: false, error: `unknown preset ${JSON.stringify(name)}`,
+      presets: Object.keys(CONTROL_PRESETS) } };
+  }
+  const variant = (req.query && req.query.variant) || (req.body && req.body.variant) || ARMED_VARIANT;
+  if (!rosterVariants().includes(variant)) {
+    return { status: 400, body: { ok: false, error: `${variant} is not on the roster` } };
+  }
+  // keepMode reads what is in force now, so halting does not change what the variant IS.
+  const cur = SC.forVariant(variant);
+  const patch = preset.remove
+    ? { variant, remove: true }
+    : { variant, mode: preset.keepMode ? (cur.requestedMode || cur.mode || 'simulate') : preset.mode,
+        restrict: preset.restrict || undefined,
+        note: (req.query && req.query.note) || (req.body && req.body.note) || `preset:${name}`,
+        until: (req.query && req.query.until) || (req.body && req.body.until) || undefined };
+  patch.by = (req.body && req.body.by) || (req.query && req.query.by) || 'preset-api';
+
+  const r = await SC.applyPatch(patch, { knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED,
+    log: (m) => console.log(m), warn: (m) => console.warn(m) });
+  if (!r.ok) return { status: r.status || 400, body: { ok: false, error: r.error } };
+  const now = SC.forVariant(variant);
+  console.log(`[candle-spread] control PRESET ${name} applied to ${variant} -> `
+    + `mode=${now.mode}${now.restrict ? ' restrict=' + now.restrict : ''}`);
+  // Echo the EFFECTIVE result in one line, because the caller is on a phone and will not read a JSON tree.
+  return { status: 200, body: { ok: true, variant, preset: name,
+    effective: `${now.mode}${now.restrict ? '/' + now.restrict : ''}`,
+    requested: now.requestedMode || now.mode,
+    downgraded: (r.state.downgraded || []).length > 0 || undefined,
+    state: r.state } };
 }
 
 /** Read-only view, for symmetry with the write path. Same data /status already exposes. */
@@ -3040,6 +3124,8 @@ module.exports = {
   status,
   buildRuns,
   handleControlWrite,
+  handleControlPreset,
+  CONTROL_PRESETS,
   controlState,
   VARIANTS,
   listVariants,

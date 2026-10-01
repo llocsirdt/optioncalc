@@ -1096,6 +1096,18 @@ app.get('/api/v1/candle-spread/control', (req, res) => {
   catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
 });
 
+// ONE-WORD PRESETS — URL plus one header, no body, so stopping is a single tap from a phone. POST only: a GET
+// that mutates can be fired by a link preview or a prefetcher, and this one can stop trading.
+app.post('/api/v1/candle-spread/control/:preset', async (req, res) => {
+  try {
+    const out = await candleSpread.handleControlPreset(req);
+    res.status(out.status).json(out.body);
+  } catch (e) {
+    console.error('[candle-spread] control preset error:', e && e.message);
+    res.status(500).json({ ok: false, error: 'control preset failed' });
+  }
+});
+
 app.post('/api/v1/candle-spread/control', async (req, res) => {
   try {
     const out = await candleSpread.handleControlWrite(req);

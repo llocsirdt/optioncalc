@@ -173,6 +173,79 @@ function fakeArchive(initial, behaviour = {}) {
     delete require.cache[require.resolve('../../src/candle-spread/index')];
   }
 
+  // ── 9. ONE-WORD PRESETS ───────────────────────────────────────────────────────────────────────────
+  // The full API is right for setting up a day and wrong for stopping one. These are the single-action form,
+  // and the properties that matter are that halt does not change what a variant IS, and that the response says
+  // what is EFFECTIVE rather than what was asked.
+  {
+    const saved = process.env.CANDLE_SPREAD_CONTROL_TOKEN;
+    const savedLive = process.env.CANDLE_SPREAD_LIVE;
+    process.env.CANDLE_SPREAD_CONTROL_TOKEN = 'tkn';
+    process.env.CANDLE_SPREAD_LIVE = 'true';
+    delete require.cache[require.resolve('../../src/candle-spread/index')];
+    const _l = console.log, _w = console.warn; console.log = () => {}; console.warn = () => {};
+    const I = require('../../src/candle-spread/index');
+    console.log = _l; console.warn = _w;
+
+    const A = fakeArchive(null);
+    // Point strategy-control at our fake bucket by injecting it through applyPatch's deps — the handler uses the
+    // real module, so stub the archive it reaches for.
+    const RA = require('../../src/candle-spread/run-archive');
+    const realEnabled = RA.enabled, realGet = RA.getObjectRaw, realPut = RA.putObjectRaw, realPrefix = RA.PREFIX;
+    RA.enabled = () => true;
+    RA.getObjectRaw = A.getObjectRaw.bind(A);
+    RA.putObjectRaw = A.putObjectRaw.bind(A);
+
+    const roster = I.buildRuns().map((r) => r.variant);
+    const armed = roster.includes('v7-10') ? 'v7-10' : roster[0];
+    const req = (preset, extra = {}) => ({ params: { preset }, query: {}, body: {},
+      get: (h) => (h.toLowerCase() === 'x-control-token' ? 'tkn' : undefined), ...extra });
+
+    SC._reset();
+    let out = await I.handleControlPreset(req('paper'));
+    ok(out.status === 200 && out.body.effective === 'paper', `preset paper -> ${out.body.effective}`);
+
+    // HALT MUST NOT CHANGE WHAT THE VARIANT IS. If halt implied live, resuming would silently promote it — and
+    // the resume is exactly when nobody is reading carefully.
+    out = await I.handleControlPreset(req('halt'));
+    ok(out.status === 200 && out.body.effective === 'paper/halt',
+      `halt preserves the mode (${out.body.effective})`);
+    out = await I.handleControlPreset(req('resume'));
+    ok(out.body.effective === 'paper', `resume clears the restriction and keeps the mode (${out.body.effective})`);
+
+    out = await I.handleControlPreset(req('wind-down'));
+    ok(out.body.effective === 'paper/no-open', `wind-down sets no-open (${out.body.effective})`);
+
+    out = await I.handleControlPreset(req('live'));
+    ok(out.body.effective === 'live', `live with the env master on (${out.body.effective})`);
+    out = await I.handleControlPreset(req('off'));
+    ok(out.body.effective === 'simulate', `off returns it to simulation (${out.body.effective})`);
+
+    out = await I.handleControlPreset(req('nonsense'));
+    ok(out.status === 400 && Array.isArray(out.body.presets), 'an unknown preset is a 400 listing the valid ones');
+    out = await I.handleControlPreset({ ...req('halt'), get: () => 'wrong' });
+    ok(out.status === 401, 'and a preset still needs the token');
+    out = await I.handleControlPreset({ ...req('halt'), query: { variant: 'v7-1O' } });
+    ok(out.status === 400, 'an off-roster ?variant= is refused');
+
+    // WITH THE ENV MASTER OFF, live must report what will ACTUALLY happen.
+    process.env.CANDLE_SPREAD_LIVE = '';
+    delete require.cache[require.resolve('../../src/candle-spread/index')];
+    console.log = () => {}; console.warn = () => {};
+    const I2 = require('../../src/candle-spread/index');
+    console.log = _l; console.warn = _w;
+    SC._reset();
+    out = await I2.handleControlPreset(req('live'));
+    ok(out.body.effective === 'paper' && out.body.requested === 'live',
+      `live without the env master reports paper, not live (effective ${out.body.effective}, requested ${out.body.requested})`);
+    ok(out.body.downgraded === true, 'and flags the downgrade so a phone reply cannot mislead');
+
+    RA.enabled = realEnabled; RA.getObjectRaw = realGet; RA.putObjectRaw = realPut;
+    if (saved == null) delete process.env.CANDLE_SPREAD_CONTROL_TOKEN; else process.env.CANDLE_SPREAD_CONTROL_TOKEN = saved;
+    if (savedLive == null) delete process.env.CANDLE_SPREAD_LIVE; else process.env.CANDLE_SPREAD_LIVE = savedLive;
+    delete require.cache[require.resolve('../../src/candle-spread/index')];
+  }
+
   SC._reset();
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
