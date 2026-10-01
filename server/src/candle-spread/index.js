@@ -2875,7 +2875,18 @@ function rosterVariants() {
 
 function controlAuthOk(req) {
   if (!CONTROL_TOKEN) return { ok: false, status: 503, error: 'control API is disabled (CANDLE_SPREAD_CONTROL_TOKEN is not set)' };
-  const given = req.get('x-control-token') || '';
+  // HEADER OR BODY, NEVER A QUERY STRING.
+  //
+  // The header is the better channel and is tried first. The body is the fallback because CloudFront forwards a
+  // POST body unconditionally while forwarding a CUSTOM HEADER is a separate setting that is off by default —
+  // so a header-only design can be unreachable through the CDN for a reason that has nothing to do with this
+  // code. Measured 2026-10-01: POST already passes through, header forwarding unverified.
+  //
+  // A body is NOT the same risk as a query string, which is the thing actually worth avoiding: query strings
+  // land in CloudFront access logs, origin access logs, browser history and Referer headers. A POST body
+  // appears in none of those, and this server's request logger prints only `${method} ${path}` — no bodies, no
+  // headers — which was checked rather than assumed.
+  const given = req.get('x-control-token') || (req.body && req.body.token) || '';
   const crypto = require('crypto');
   const a = Buffer.from(String(given));
   const b = Buffer.from(CONTROL_TOKEN);

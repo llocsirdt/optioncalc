@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Control">
+<meta name="robots" content="noindex,nofollow">
+<title>Strategy Control</title>
+<style>
+  :root{--bg:#11131a;--card:#1a1d27;--line:#2b2f3d;--txt:#e6e8ef;--dim:#8b90a3;
+        --ok:#2e7d4f;--warn:#9a6b1f;--stop:#8c2f2f;--live:#2f5d8c;--accent:#4a9eda}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
+  h1{font-size:17px;margin:0 0 10px;letter-spacing:.3px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .state{font-size:26px;font-weight:600;letter-spacing:.5px}
+  .sub{color:var(--dim);font-size:13px;margin-top:4px}
+  .row{display:flex;gap:10px;margin-top:10px}
+  button{flex:1;min-height:58px;font-size:17px;font-weight:600;color:#fff;border:0;border-radius:12px;
+         background:var(--line);cursor:pointer;touch-action:manipulation}
+  button:active{transform:scale(.98)}
+  button[disabled]{opacity:.45}
+  .b-stop{background:var(--stop)} .b-warn{background:var(--warn)}
+  .b-ok{background:var(--ok)} .b-live{background:var(--live)} .b-dim{background:#343a4a;font-size:15px}
+  input{width:100%;padding:12px;font-size:16px;background:#0d0f15;color:var(--txt);
+        border:1px solid var(--line);border-radius:10px}
+  .msg{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:14px;display:none;white-space:pre-wrap}
+  .msg.show{display:block}
+  .m-ok{background:#1d3a28;color:#b7e3c6} .m-err{background:#3a1d1d;color:#e8b9b9}
+  .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px}
+  a{color:var(--accent)}
+  .foot{color:var(--dim);font-size:11px;text-align:center;margin-top:14px;line-height:1.7}
+</style></head><body>
+
+<h1>Strategy Control</h1>
+
+<div class="card">
+  <div class="lbl">Current</div>
+  <div class="state" id="state">loading…</div>
+  <div class="sub" id="detail"></div>
+</div>
+
+<!-- STOPPING IS ONE TAP; STARTING ASKS. The asymmetry is deliberate: an accidental halt is recoverable in a
+     second, an accidental arming trades real money. -->
+<div class="card">
+  <div class="lbl">Stop &mdash; one tap</div>
+  <div class="row">
+    <button class="b-stop" data-p="halt">HALT</button>
+    <button class="b-warn" data-p="wind-down">WIND&nbsp;DOWN</button>
+  </div>
+  <div class="lbl" style="margin-top:16px">Run &mdash; confirms first</div>
+  <div class="row">
+    <button class="b-ok" data-p="resume">RESUME</button>
+    <button class="b-dim" data-p="paper" data-confirm="1">PAPER</button>
+    <button class="b-live" data-p="live" data-confirm="1">LIVE</button>
+  </div>
+  <div class="row">
+    <button class="b-dim" data-p="off" data-confirm="1">OFF (simulate)</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div class="card">
+  <div class="lbl">Token</div>
+  <input id="tok" type="password" inputmode="text" autocomplete="off"
+         autocapitalize="off" spellcheck="false" placeholder="x-control-token">
+  <div class="row"><button class="b-dim" id="save">Save to this device</button></div>
+  <div class="sub" id="tokstate"></div>
+</div>
+
+<div class="foot">
+  Served from the API origin, so no CORS.<br>
+  Token is kept in this browser's localStorage only.
+</div>
+
+<script>
+(function(){
+  // Same-origin by construction: this page is served BY the API, so fetch() needs no absolute URL, there is no
+  // CORS preflight, and no CloudFront header-forwarding question for the GET.
+  var API = '/api/v1/candle-spread/control';
+  var KEY = 'cs-control-token';
+  var $ = function(id){ return document.getElementById(id); };
+  var busy = false;
+
+  function show(text, bad){
+    var m = $('msg');
+    m.textContent = text;
+    m.className = 'msg show ' + (bad ? 'm-err' : 'm-ok');
+  }
+  function tokenState(){
+    var t = localStorage.getItem(KEY);
+    $('tokstate').textContent = t ? 'Saved on this device (' + t.length + ' chars).' : 'Not saved — actions will fail with 401.';
+    if (t) $('tok').value = '';
+  }
+
+  function render(c){
+    var listed = (c && c.listed) || [];
+    // The armed variant is whatever the control file names; if nothing is listed, everything simulates.
+    var v = listed[0];
+    if (!v) { $('state').textContent = 'SIMULATE'; $('detail').textContent = 'nothing listed — every variant is in simulation'; return; }
+    var txt = v.mode + (v.restrict ? ' / ' + v.restrict : '');
+    $('state').textContent = txt.toUpperCase();
+    var bits = [v.variant];
+    if (v.requestedMode && v.requestedMode !== v.mode) bits.push('requested ' + v.requestedMode + ', downgraded');
+    if (v.note) bits.push(v.note);
+    if (v.until) bits.push('until ' + v.until);
+    if (c.updatedBy) bits.push('by ' + c.updatedBy);
+    $('detail').textContent = bits.join(' · ');
+  }
+
+  function refresh(){
+    fetch(API, { cache:'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ render(j.control || {}); })
+      .catch(function(e){ $('state').textContent = 'UNREACHABLE'; $('detail').textContent = String(e); });
+  }
+
+  function send(preset){
+    var tok = localStorage.getItem(KEY) || '';
+    if (!tok) { show('No token saved on this device.', true); return; }
+    if (busy) return;
+    busy = true;
+    // TOKEN IN BOTH CHANNELS. The header is the better one; the body is the fallback, because CloudFront
+    // forwards a POST body unconditionally while forwarding a custom header is a separate setting that may not
+    // be on. The server accepts either. Never a query string — those are logged.
+    fetch(API + '/' + preset, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'content-type':'application/json', 'x-control-token': tok },
+      body: JSON.stringify({ token: tok, by: 'control-ui' })
+    })
+    .then(function(r){ return r.json().then(function(j){ return { s:r.status, j:j }; }); })
+    .then(function(o){
+      busy = false;
+      if (o.s === 200) {
+        // Report what is EFFECTIVE, not what was asked — a live request with the env master off runs as paper.
+        var eff = o.j.effective || '?';
+        show('Now: ' + eff.toUpperCase() + (o.j.downgraded ? '  (requested ' + o.j.requested + ', downgraded)' : ''));
+        refresh();
+      } else {
+        show('HTTP ' + o.s + ' — ' + (o.j && o.j.error ? o.j.error : 'failed'), true);
+      }
+    })
+    .catch(function(e){ busy = false; show('Request failed: ' + e, true); });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('button[data-p]'), function(b){
+    b.addEventListener('click', function(){
+      var p = b.getAttribute('data-p');
+      // Stopping is immediate. Starting or changing mode confirms — an accidental halt costs a second, an
+      // accidental arming trades real money.
+      if (b.getAttribute('data-confirm') && !confirm('Set ' + p.toUpperCase() + '?')) return;
+      send(p);
+    });
+  });
+  $('save').addEventListener('click', function(){
+    var v = $('tok').value.trim();
+    if (!v) { localStorage.removeItem(KEY); show('Token cleared from this device.'); }
+    else { localStorage.setItem(KEY, v); show('Token saved on this device.'); }
+    tokenState();
+  });
+
+  tokenState();
+  refresh();
+  setInterval(refresh, 20000);   // matches the engine's own control poll
+})();
+</script>
+</body></html>

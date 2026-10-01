@@ -1086,6 +1086,20 @@ app.get('/api/v1/candle-spread/runs', (req, res) => {
 
 // Compact live status for the UI to poll (mode/gates + per-strategy activity today) — lets you
 // validate at a glance that the server is doing what's expected (esp. the prod test-mode session).
+// ── THE CONTROL UI, SERVED FROM THIS ORIGIN ─────────────────────────────────────────────────────────
+// Deliberately served by the API rather than from GitHub Pages with the rest of the client. Same origin means
+// no CORS, no preflight, and no question about whether CloudFront forwards a custom request header on a
+// cross-origin POST — which is the one piece of CDN configuration most likely to be off by default.
+//
+// It is also kept OUT of the compare page on purpose: compare is a data view you scroll through on a phone, and
+// a HALT button living inside it is one mis-scroll away from stopping trading.
+//
+// noindex/nofollow in the page, and the page itself grants nothing — every action needs the token.
+app.get('/control', (req, res) => {
+  res.set('cache-control', 'no-store');
+  res.sendFile(require('path').join(__dirname, 'pages', 'control.html'));
+});
+
 // ── REMOTE STRATEGY CONTROL ─────────────────────────────────────────────────────────────────────────
 // GET is unauthenticated because it returns exactly what /candle-spread/status already exposes; POST is the
 // only authenticated route on this server (see candle-spread/index.handleControlWrite for why the bar is set
