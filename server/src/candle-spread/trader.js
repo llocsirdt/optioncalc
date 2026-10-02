@@ -397,6 +397,23 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
 // true if placed; false → caller falls back to the sequential coverToStackFreeBudget path. Marketable
 // haircut = deps.comboSlip per leg (default 0.05). See combo-order.js.
 async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime) {
+  // NEVER UNDER A BROKER, AND THE CHECK LIVES HERE. This function books its position
+  // `filled: !!placed.filled` and credits the lock's floor to realizedPnl, and placeOrder returns
+  // filled:true for any ACCEPTED send — so under fillSource 'broker' it would book on acceptance, which is
+  // the phantom the closed loop exists to remove. It was guarded at the single call site first; that is a
+  // convention, not an invariant — the function is exported (the combo unit test calls it directly) and a
+  // second call site would silently reopen the hole. `return false` is the existing "fall back to the
+  // sequential path" answer, so refusing here costs the open nothing: it just takes the gated route.
+  //
+  // Booking it properly is real work rather than a one-liner: ONE 4-leg order covers a lock AND an open, so
+  // the position's sentLimit is its SHARE of a single broker fill and applyBrokerFills would have to split
+  // that fill across two positions. Build that deliberately if comboOrders is ever wanted live.
+  if (deps && deps.fillSource === 'broker') {
+    decisions.push({ action: 'combo-skip-broker',
+      note: 'comboOrders books a fill on send acceptance, which is unsafe under broker fills — '
+        + 'falling back to the sequential open path' });
+    return false;
+  }
   if (!(deps.enforceLegUniqueness && deps._ledger)) return false;   // combo requires the leg-uniqueness ledger
   const W = cfg.spreadWidth, tick = cfg.tickIncrement, qty = cfg.quantity;
   const minFrac = deps.coverToStackMinFrac != null ? deps.coverToStackMinFrac : 0.65;
@@ -1460,17 +1477,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       let opened = false;
       // COMBO first (deps.comboOrders): lock 1 winner + open as ONE atomic 4-leg order. Falls back to the
       // sequential cover-to-stack path when a single lock isn't enough or the spreads can't combine cleanly.
-      // NOT UNDER A BROKER. tryComboLockAndOpen books its position `filled: !!placed.filled`, and
-      // placeOrder returns filled:true on any accepted send — so under fillSource 'broker' it would book on
-      // ACCEPTANCE, the phantom the closed loop exists to remove. Booking it properly is not a one-liner:
-      // one 4-leg order covers a lock AND an open, so the position's sentLimit is its SHARE of a single
-      // broker fill and applyBrokerFills would have to split it. No variant sets comboOrders today, so the
-      // honest move is to refuse loudly here and build the split deliberately if the flag is ever wanted.
-      if (deps.comboOrders && deps.fillSource === 'broker') {
-        decisions.push({ action: 'combo-skip-broker',
-          note: 'comboOrders books a fill on send acceptance, which is unsafe under broker fills — '
-            + 'falling back to the normal open path' });
-      } else if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
+      // The broker refusal lives INSIDE tryComboLockAndOpen (it returns false and we fall through to the
+      // sequential path), so there is one place that decides rather than a guard per call site.
+      if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
       if (!opened && deps.coverToStack) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
         if (capState(st, res, openSide, cfg, deps).ok) {
