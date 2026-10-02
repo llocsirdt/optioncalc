@@ -368,6 +368,10 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
     if (plan.error) { tried.add(p.id); continue; }   // can't price its cover right now; don't retry it
     if (cfg.coverFillModel === 'resting') {
       await placeRestingCover(p, plan, cfg, deps, candleTime, decisions, 'cover-to-stack', undefined, st);
+    } else if (deps.fillSource === 'broker') {
+      // Same refusal as the main assume-fill cover path above, for the same reason.
+      decisions.push({ action: 'cover-skip-broker', positionId: p.id, note: 'cover-to-stack assume-fill is unsafe under broker fills' });
+      tried.add(p.id); continue;
     } else {
       await deps.placeOrder(plan.payload, { kind: 'cover', of: p.id, legs: plan.legs, limit: plan.limit, mark: plan.mark, note: 'cover-to-stack' });
       p.covered = true; p.coverId = nextId('cov'); p.coverLimit = plan.limit; p.coverLegs = plan.legs;
@@ -863,11 +867,16 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     const placed = await deps.placeOrder(payload, { kind: 'floor-offset', legs: best.hp.legs, net: 'DEBIT', limit: limitPx });
     if (!placed || placed.filled === false) break;
     best.hp.id = nextId('off');
+    // THE ORDER ID IS THE ONLY LINK BACK. applyBrokerFills finds a position from the filled order row, so a
+    // hedge that does not record its orderId cannot be booked from a broker fill at all — it was dropped as
+    // 'unhandled-kind' and silently re-booked off our own mark instead.
+    best.hp.orderId = (placed && placed.orderId) || null;
     // WORKS rather than books. filled:false keeps it out of every floor/cover path (the `filled !== false`
     // guards) until a later observation says the market reached our price, which is the whole point: an
     // offset we do not own must not reshape a risk curve we are about to act on.
     best.hp.filled = false;
     best.hp.pendingHedge = { limit: limitPx, kind: 'offset', markAtPlace: chk.mark,
+      orderId: (placed && placed.orderId) || null,
       placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) };
     st.positions.push(best.hp);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.hp.legs);
@@ -970,7 +979,10 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     if (!placed || placed.filled === false) continue;
     const pos = { id: nextId('wing'), filled: false, side: 'wing', shortStrike: null, legs: w.legs, limit: limitPx,
       markAtPlace: chk.mark, limitSent: limitPx,
+      // See the note at the floor-offset site: without orderId a broker fill cannot be matched to this row.
+      orderId: (placed && placed.orderId) || null,
       pendingHedge: { limit: limitPx, kind: 'wing', markAtPlace: chk.mark, tag: w.tag,
+        orderId: (placed && placed.orderId) || null,
         placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true };
@@ -1067,7 +1079,10 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
     if (!placed || placed.filled === false) continue;
     const pos = { id: nextId('fly'), filled: false, side: 'fly', shortStrike: null, legs: f.legs, limit: limitPx,
       markAtPlace: chk.mark, limitSent: limitPx,
+      // See the note at the floor-offset site: without orderId a broker fill cannot be matched to this row.
+      orderId: (placed && placed.orderId) || null,
       pendingHedge: { limit: limitPx, kind: 'fly', markAtPlace: chk.mark, tag: f.tag,
+        orderId: (placed && placed.orderId) || null,
         placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
       quantity: cfg.quantity, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, fly: true };
@@ -1297,6 +1312,15 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         // RESTING model: place a working cover at the ideal target (= width − openCost); don't book
         // the floor yet — resolveRestingCovers fills it when the real mark reaches target.
         await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, undefined, undefined, st);
+      } else if (deps.fillSource === 'broker') {
+        // NOT UNDER A BROKER. The assume-fill model books `covered = true` AND credits plan.floor to
+        // realizedPnl the moment the send is accepted — a locked profit claimed for a cover that may never
+        // fill, on the one path where that money is real. All 80 variants are coverFillModel 'resting'
+        // today, so this is unreachable; it is guarded because the day someone sets it, the failure is
+        // silent and shaped exactly like the 2026-09-25 phantom book.
+        decisions.push({ action: 'cover-skip-broker', positionId: pos.id,
+          note: "coverFillModel 'assume-fill' books a locked floor on send acceptance, which is unsafe "
+            + "under broker fills — the position stays uncovered rather than claim a fill it may not have" });
       } else {
         // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
         const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
@@ -1436,7 +1460,17 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       let opened = false;
       // COMBO first (deps.comboOrders): lock 1 winner + open as ONE atomic 4-leg order. Falls back to the
       // sequential cover-to-stack path when a single lock isn't enough or the spreads can't combine cleanly.
-      if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
+      // NOT UNDER A BROKER. tryComboLockAndOpen books its position `filled: !!placed.filled`, and
+      // placeOrder returns filled:true on any accepted send — so under fillSource 'broker' it would book on
+      // ACCEPTANCE, the phantom the closed loop exists to remove. Booking it properly is not a one-liner:
+      // one 4-leg order covers a lock AND an open, so the position's sentLimit is its SHARE of a single
+      // broker fill and applyBrokerFills would have to split it. No variant sets comboOrders today, so the
+      // honest move is to refuse loudly here and build the split deliberately if the flag is ever wanted.
+      if (deps.comboOrders && deps.fillSource === 'broker') {
+        decisions.push({ action: 'combo-skip-broker',
+          note: 'comboOrders books a fill on send acceptance, which is unsafe under broker fills — '
+            + 'falling back to the normal open path' });
+      } else if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
       if (!opened && deps.coverToStack) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
         if (capState(st, res, openSide, cfg, deps).ok) {
@@ -2027,7 +2061,44 @@ function applyBrokerFills(st, cfg, deps, decisions) {
         cashDeployed: st.cashDeployed });
       continue;
     }
+    // HEDGES: floor-offset, wing, fly. Previously these fell through to 'unhandled-kind', so the broker's
+    // real fill was discarded while resolvePendingHedges booked the position off our own mark instead.
+    // The accounting below mirrors that mark path exactly — same counters, same cash sign, same decision
+    // action (`offset-fill` / `wing-fill` / `fly-fill`, which downstream analysis keys on) — differing only
+    // in that the price is the broker's and `source: 'broker'` says so.
+    if (o.kind === 'floor-offset' || o.kind === 'wing' || o.kind === 'fly') {
+      // BOTH ENDS, like the cover branch: a hedge row carries orderId on the position and on pendingHedge,
+      // and matching only one of them is how the first version of the cover lookup missed every open.
+      const pos = st.positions.find((p) => p && (p.orderId === o.orderId
+        || (p.pendingHedge && p.pendingHedge.orderId === o.orderId)));
+      if (!pos) { o.brokerApplied = 'no-position'; continue; }
+      if (pos.filled) { o.brokerApplied = 'already'; continue; }
+      const ph = pos.pendingHedge;
+      if (!ph) { o.brokerApplied = 'no-pending-hedge'; continue; }
+      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = round2(px); pos.pendingHedge = null;
+      pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
+      // A HEDGE IS ALWAYS A DEBIT — it pays, and the ledger must see it. Spend is counted at the FILL, not
+      // at placement, so the budget is consumed by hedges we actually own.
+      const spent = px * 100 * qty;
+      noteCash(st, spent);
+      if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
+      else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
+      else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
+      o.brokerApplied = true; applied++;
+      decisions.push({ action: `${ph.kind}-fill`, source: 'broker', id: pos.id, legs: pos.legs,
+        limit: ph.limit, fillPrice: round2(px), brokerPrice: px, cost: Math.round(spent),
+        cashDeployed: st.cashDeployed });
+      continue;
+    }
+    // AN UNHANDLED KIND MUST NOT BE SILENT. This flag used to be set and nothing else: no decision, no
+    // event, no status field — one grep hit in the whole codebase. A fill the engine cannot book is
+    // exactly the divergence between our book and the account that the closed loop exists to surface.
     o.brokerApplied = 'unhandled-kind';
+    decisions.push({ action: 'broker-fill-unhandled', orderId: o.orderId, kind: o.kind || null,
+      positionId: o.positionId || null, brokerPrice: px,
+      note: `the broker filled a ${o.kind || 'kind-less'} order the engine has no booking path for` });
+    console.error(`[candle-spread] UNHANDLED BROKER FILL #${o.orderId} (${o.kind}) @ ${px} — `
+      + 'the account holds something the book does not');
   }
   return applied;
 }
@@ -2388,6 +2459,18 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement, deps);
     noteMarkLow(pos, chk, ph.limit, 'DEBIT');
     notePlaced(pos, chk, deps.underlying);
+    // CLOSED LOOP — the same rule resolvePendingOpen and resolveRestingCovers already follow, and the one
+    // this resolver was missing. Under a real broker the fill is the BROKER'S to report; booking it from
+    // our own mark here put a hedge in the book that we might not own, spent budget on it, and reshaped the
+    // risk curve the governor and the cover selectors act on. Opens and covers were gated when the closed
+    // loop shipped; hedges were not, and applyBrokerFills dropped their real fills as 'unhandled-kind' —
+    // so this was the one surviving path that could still book a phantom under fillSource: 'broker'.
+    // Keep OBSERVING (markLow/looks above are the evidence of how close the market came) and book nothing.
+    if (chk.fillable && deps && deps.fillSource === 'broker') {
+      decisions.push({ action: `${ph.kind}-mark-fillable`, id: pos.id, mark: chk.mark, limit: ph.limit,
+        note: 'the mark reached our price; waiting on the broker' });
+      continue;
+    }
     if (chk.fillable) {
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
