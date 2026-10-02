@@ -2859,8 +2859,14 @@ function getRun(symbol, expiration, date, variant) {
 // Count today's decisions on a run record (for the status endpoint).
 function tallyRun(rec) {
   const t = { opens: 0, covers: 0, coverFills: 0, cancels: 0 };
+  // EVERY EVENT THAT CARRIES DECISIONS, not just candle_close. A RESTING COVER USUALLY FILLS BETWEEN BARS:
+  // on prod v7-10 2026-10-01, 20 of 31 cover-fills landed in `resting_work` and only 11 at a candle close,
+  // so this reported coverFills: 11 against covered: 31 and looked like a 66% cover failure. It was a
+  // counting bug — the filter predates the sub-bar worker emitting decisions, and the worker was dead from
+  // 2026-09-23 until the initRunSafe fix, so nothing contradicted it.
+  //
+  // Filter on the DECISION, never on the event that happens to carry it; a sub-bar fill is the same fill.
   for (const ev of (rec.events || [])) {
-    if (ev.type !== 'candle_close') continue;
     for (const d of (ev.decisions || [])) {
       if (d.action === 'open') t.opens++;
       else if (d.action === 'cover' || d.action === 'cover-rest') t.covers++;
@@ -3227,6 +3233,7 @@ module.exports = {
   effectiveDryRun,
   _setDeps: (d) => { DEPS = d; },
   _liveArmed: () => LIVE_ARMED,
+  tallyRun,
   classifyBoundary,
   msToNextBoundary,
   pickJustClosed,
