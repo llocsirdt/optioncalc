@@ -19,7 +19,11 @@
 const store = require('./store');
 
 // Schwab order statuses. Terminal = no longer working; DEAD = terminal-but-not-filled.
-const DEAD = new Set(['CANCELED', 'REJECTED', 'EXPIRED', 'REPLACED', 'PENDING_CANCEL']);
+// PENDING_CANCEL IS NOT DEAD. It means the broker ACCEPTED a cancel request, not that the order stopped
+// working — the exchange can still fill it. Treating it as terminal stopped polling the row, so a fill that
+// beat the cancel was never seen (and a cover's pendingCover was cleared, inviting a second cover). It now
+// maps to 'working' and keeps being polled until CANCELED or FILLED actually arrives.
+const DEAD = new Set(['CANCELED', 'REJECTED', 'EXPIRED', 'REPLACED']);
 const TERMINAL = new Set(['FILLED', ...DEAD]);
 
 function isTerminal(o) { return o && (o.status === 'filled' || o.status === 'canceled' || o.status === 'rejected' || o.status === 'expired'); }
@@ -225,9 +229,25 @@ function wirePrice(payload) {
 // 'combo-lock-open' is deliberately NOT here — it is a 4-leg cover+open with its own booking.
 const OPEN_KINDS = new Set(['open', 'open-reprice']);
 const isOpenKind = (kind) => OPEN_KINDS.has(kind);
+const HEDGE_KINDS = new Set(['floor-offset', 'wing', 'fly']);
 
 function clearDeadOrderState(record, o) {
   const st = (record && record.state) || {};
+  if (HEDGE_KINDS.has(o.kind)) {
+    // A HEDGE THE BROKER REFUSED OR CANCELLED IS NOT A HEDGE WE HOLD. This had no branch at all: hedge rows
+    // carry no positionId, so the positionId lookup found nothing and pendingHedge stayed set. Under the broker a
+    // hedge's mark usually reads fillable, which skips its expiry, so a refused hedge held its budget slot
+    // all day — and an unfilled floor-offset blocks every later one (`pend.n > 0 -> break`).
+    // Flagged expired rather than spliced so resolvePendingHedges drops it on its next pass, exactly as it
+    // drops one it expired itself. Leg-ledger strikes stay held, the same deliberate call as expiry.
+    const hp = (st.positions || []).find((p) => p && (p.orderId === o.orderId
+      || (p.pendingHedge && p.pendingHedge.orderId === o.orderId)));
+    if (!hp || hp.filled || !hp.pendingHedge) return null;
+    hp.pendingHedge = null;
+    hp.orderStatus = o.status || 'canceled';
+    hp.expired = true;
+    return 'hedge';
+  }
   // An OPEN row carries no positionId (the order is sent before the position exists); its only link is
   // pos.orderId. Without this a canceled open never retired, which matters now that a reversal keeps the
   // position until the broker answers (trader.js, cancel-open).
@@ -313,12 +333,22 @@ async function reconcile(record, deps, opts = {}) {
     // strategy cancel, or a replace whose new id was lost. The horizon is long enough not to contradict a
     // strategy that is still actively working the order. Test orders are untouched: those must be pulled
     // quickly and nothing else is watching them.
-    const wantCancel = (o.testMode && age >= testCancelAfterMs)          // test order: pull it so nothing lingers
-      || (!o.testMode && isOpenKind(o.kind) && age >= staleOpenCancelMs);  // orphan backstop, not a schedule
+    const wantCancel = !o.cancelRequestedAt && ((o.testMode && age >= testCancelAfterMs)  // test order: pull it so nothing lingers
+      || (!o.testMode && isOpenKind(o.kind) && age >= staleOpenCancelMs));  // orphan backstop, not a schedule
     if (wantCancel) {
       try {
         await deps.tradingClient.orderDelete(deps.accountHash, o.orderId);
-        o.status = 'canceled';
+        if (o.testMode) {
+          // Test orders keep the old shortcut: nothing real can fill at an unfillable price, and the
+          // strategy is simulating these positions, so clearing their pending state would break the run.
+          o.status = 'canceled';
+        } else {
+          // A REAL ORDER IS CANCELLED WHEN THE BROKER SAYS SO. Marking it 'canceled' here stopped the
+          // polling, so clearDeadOrderState never ran — the open slot stayed taken by a dead order and every
+          // same-side signal logged open-skip-pending until a reversal — and a fill that beat the cancel was
+          // never seen. Keep polling; the DEAD branch above retires it and frees the slot.
+          o.cancelRequestedAt = now;
+        }
         o.canceledReason = o.testMode ? 'test-auto-cancel' : 'stale-open';
         store.appendEvent(record, { type: 'order_canceled', orderId: o.orderId, kind: o.kind, reason: o.canceledReason, note: `canceled after ${Math.round(age / 1000)}s` });
       } catch (e) {
@@ -330,4 +360,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { wirePrice, isOpenKind, OPEN_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { wirePrice, isOpenKind, OPEN_KINDS, HEDGE_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };

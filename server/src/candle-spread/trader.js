@@ -2493,9 +2493,29 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     // loop shipped; hedges were not, and applyBrokerFills dropped their real fills as 'unhandled-kind' —
     // so this was the one surviving path that could still book a phantom under fillSource: 'broker'.
     // Keep OBSERVING (markLow/looks above are the evidence of how close the market came) and book nothing.
-    if (chk.fillable && deps && deps.fillSource === 'broker') {
-      decisions.push({ action: `${ph.kind}-mark-fillable`, id: pos.id, mark: chk.mark, limit: ph.limit,
-        note: 'the mark reached our price; waiting on the broker' });
+    if (deps && deps.fillSource === 'broker') {
+      if (chk.fillable) {
+        decisions.push({ action: `${ph.kind}-mark-fillable`, id: pos.id, mark: chk.mark, limit: ph.limit,
+          note: 'the mark reached our price; waiting on the broker' });
+      }
+      // EXPIRY UNDER A REAL BROKER IS A CANCEL REQUEST, NOT A DELETE. The mark path below drops the
+      // position after the TTL; doing that here left the DAY order working at Schwab with nothing tracking
+      // it, freed its budget so the planner placed ANOTHER one, and dropped its later fill as 'no-position'.
+      // So: ask the broker to cancel, keep the hedge pending (it still holds its budget slot, so nothing is
+      // re-placed), and let the broker's answer decide — FILLED books it through applyBrokerFills, CANCELED
+      // retires it through order-manager.clearDeadOrderState. The TTL runs whether or not the mark reads
+      // fillable: a hedge the market crosses but the broker never fills must not hold its slot all day.
+      if (ph.placedEpoch != null && (now - ph.placedEpoch) > ttl && !ph.cancelRequestedAt) {
+        ph.cancelRequestedAt = now;
+        const cancelSent = !!(deps.cancelOrder && ph.orderId);
+        if (cancelSent) {
+          Promise.resolve(deps.cancelOrder(ph.orderId, { kind: `cancel-${ph.kind}`, of: pos.id, reason: 'hedge-ttl' }))
+            .catch(() => { /* the sender logs it; never let a cancel break the pass */ });
+        }
+        decisions.push({ action: `${ph.kind}-expire-cancel`, id: pos.id, legs: pos.legs, limit: ph.limit,
+          orderId: ph.orderId || null, cancelSent, mark: chk.mark, restedMs: now - ph.placedEpoch,
+          note: 'TTL reached — cancel requested; kept pending until the broker answers' });
+      }
       continue;
     }
     if (chk.fillable) {
@@ -2582,6 +2602,15 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // premium to decay toward a fixed target; an open chases a price that runs AWAY as the underlying moves
   // against the entry. Sharing one flag meant open-laddering could never be isolated — it went live on 74
   // variants at once, bundled into a flag whose evidence came from something else.
+  // A BRAKE FREEZES THE WORKING OPEN. no-open / wind-down / halt set blockNewOpens, which was read only
+  // where a NEW open is placed — so an open already resting kept being walked up toward the market every
+  // pass, and could fill after "open nothing new". The order is left where it is (not cancelled: that is a
+  // larger behaviour change, and a resting order at its placed price is what the brake-setter last saw).
+  if (deps.blockNewOpens) {
+    decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
+      mark: chk.mark, cap: pos.cap, reason: 'brake: no new opens — ladder frozen' });
+    return 0;
+  }
   const openLadderOn = deps.openLadder != null ? deps.openLadder === true : deps.coverLadder === true;
   if (!openLadderOn || chk.mark == null) return 0;
   // SAME LADDER AS THE COVERS, same direction: an open is a BUY, so walking toward the market means

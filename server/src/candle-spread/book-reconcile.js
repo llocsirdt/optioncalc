@@ -221,8 +221,16 @@ function engineLegs(record) {
   for (const p of st.positions || []) {
     if (!p || !p.filled) continue;                       // an unfilled order is not a holding
     const q = p.quantity || cfg.quantity || 1;
-    for (const l of p.legs || []) add(l, q);
-    if (p.covered) for (const l of p.coverLegs || []) add(l, q);
+    // THE LEGS THE ACCOUNT ACTUALLY HOLDS. p.legs / p.coverLegs are debit-CANONICAL; when capital recapture
+    // sent the credit twin, the account holds the other option type at the same strikes. Comparing the
+    // canonical legs reported every healthy credit open and cover as 'missing' + 'unmanaged', so the one
+    // check that can see an untracked real position sat permanently DIVERGENT. Same rule as book-value.js.
+    const oCredit = p.sentNet === 'CREDIT' && p.sentLegs && p.sentLegs.length;
+    for (const l of (oCredit ? p.sentLegs : p.legs) || []) add(l, q);
+    if (p.covered) {
+      const flip = p.coverSentNet === 'CREDIT';
+      for (const l of p.coverLegs || []) add(flip ? { ...l, type: l.type === 'C' ? 'P' : 'C' } : l, q);
+    }
   }
   return net;
 }

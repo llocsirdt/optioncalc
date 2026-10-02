@@ -1396,6 +1396,11 @@ function makeReplaceOrder(run, record) {
     // so a reprice can still be built from state the poller has not caught up with yet. This is the belt
     // to that braces, and it costs one array lookup.
     const tracked = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+    if (tracked && tracked.cancelRequestedAt && !om.isTerminal(tracked)) {
+      store.appendEvent(record, { type: 'order_replace_skipped', meta, orderId, status: 'cancel-requested',
+        note: 'not sent: a cancel is pending on this order' });
+      return { status: 'skipped:cancel-requested', orderId };
+    }
     if (tracked && om.isTerminal(tracked)) {
       store.appendEvent(record, { type: 'order_replace_skipped', orderId, kind: meta && meta.kind,
         status: tracked.status, meta,
@@ -1518,7 +1523,14 @@ function makeCancelOrder(run, record) {
     }
     try {
       await DEPS.tradingClient.orderDelete(DEPS.accountHash, orderId);
-      om.retireOrder(record, orderId, (meta && meta.kind) || 'strategy-cancel');
+      // ACCEPTED IS NOT CANCELLED. This retired the row as soon as Schwab accepted the DELETE, so the poller
+      // never saw the outcome: a fill that beat the cancel was invisible, and a reversed open kept "until
+      // the broker answers" never got its answer. Keep the row and let the poller resolve it — CANCELED
+      // retires it through clearDeadOrderState, FILLED books it through applyBrokerFills.
+      if (tracked) {
+        tracked.cancelRequestedAt = Date.now();
+        tracked.canceledReason = (meta && meta.reason) || (meta && meta.kind) || 'strategy-cancel';
+      }
       store.appendEvent(record, { type: 'order_cancelled', meta, orderId,
         note: `cancelled #${orderId}${meta && meta.reason ? ` (${meta.reason})` : ''}` });
       console.log(`[candle-spread] ${run.variant} CANCEL #${orderId}${meta && meta.reason ? ` — ${meta.reason}` : ''}`);
@@ -1546,7 +1558,11 @@ function makePlaceOrder(run, record) {
         restrict: blocked.why, controlNote: blocked.note, meta,
         note: `not sent: ${run.variant} is ${blocked.why} by strategy-control`
           + (blocked.note ? ` (${blocked.note})` : '') });
-      return { status: `blocked:${blocked.why}`, sent: false };
+      // filled:false IS THE CONTRACT every caller tests (`placed.filled === false` = nothing at the broker).
+      // Without it a halted send read as a success: placeRestingCover attached a pendingCover with no order
+      // behind it and every hedge planner booked a pending hedge, so after `resume` those positions were
+      // never covered again — every cover path skips a position that already has a pendingCover.
+      return { status: `blocked:${blocked.why}`, sent: false, filled: false, error: blocked.why };
     }
     // Resolve the mode HERE, on every order, so lowering v7-10 to paper mid-session actually reaches the wire.
     const mode = modeNow();
@@ -2417,6 +2433,19 @@ async function eodSettlementInner() {
         store.appendEvent(record, { type: 'eod_settlement', variant: run.variant,
           note: 'no settle price available on the PRICING instrument — refusing to settle on the signal instrument' });
         continue;
+      }
+      // BOOK THE BROKER'S LAST FILLS FIRST. The sub-bar worker stops at 15:55 and no tick runs after it, so a
+      // cover (or open, or hedge) that Schwab filled between 15:55 and 16:00 sat on its order row unbooked
+      // and the day settled as if it had not happened — the terminal P&L of a real position, wrong. The
+      // poller keeps reading fills through the close; this consumes them, once, before the book is valued.
+      if (fillSourceFor(run) === 'broker') {
+        const lastFills = [];
+        try { trader.applyBrokerFills(record.state, cfg, { fillSource: 'broker' }, lastFills); }
+        catch (e) { console.error(`[candle-spread] eod broker fills (${run.variant}):`, e && e.message); }
+        if (lastFills.length) {
+          store.appendEvent(record, { type: 'eod_broker_fills', decisions: lastFills,
+            note: `${lastFills.length} broker fill decision(s) booked at the close, before settlement` });
+        }
       }
       const term = trader.computeTerminalPnl(record.state, cfg, px, record.events);
       store.appendEvent(record, {
