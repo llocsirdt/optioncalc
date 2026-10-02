@@ -629,10 +629,16 @@ const MINLOCK_FLEET = (() => {
 // variant shape. Anything a list names that cannot be honoured is REPORTED (see validateSelectors), never
 // silently dropped.
 function applyLadderCfg(v) {
-  v.coverLadder = true; v.ladderStepSeconds = 300; v.ladderLossCapFrac = 0;
-  // Step scales with width: $0.25 works the cover meaningfully on a $10/$20 tent, and on a $40 it would
-  // walk the price too far per step, so $40 steps at $0.10.
-  v.ladderStepDollars = (v.spreadWidth >= 40) ? 0.10 : 0.25;
+  v.coverLadder = true; v.ladderLossCapFrac = 0;
+  // ONE PACE FOR EVERY WIDTH, OPENS AND COVERS ALIKE (user, 2026-10-02). Was $0.25 / 300s on 10- and
+  // 20-wide and $0.10 / 300s on 40-wide, with a step also earned every 5 NDX points: "NDX can move 20pts
+  // within 5 min pretty regularly so to give up .25 on normal fluctuation seems aggressive." Now a $0.05
+  // step every 120s OR every 10 NDX points since placement, whichever is further along — $0.125 per five
+  // minutes on every width, and a tenth as sensitive to movement. The open ladder reads the same three
+  // fields (openLadderStepDollars falls back to ladderStepDollars), so the rule is shared by construction.
+  v.ladderStepSeconds = 120;
+  v.ladderStepPoints = 10;
+  v.ladderStepDollars = 0.05;
 }
 // `capPreset:false` for the `-unc` twins ONLY. An uncapped twin exists to show the model with the
 // governor removed; putting a cap back on it would not be "the same experiment on another variant", it
