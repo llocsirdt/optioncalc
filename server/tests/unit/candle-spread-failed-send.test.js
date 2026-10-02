@@ -106,6 +106,48 @@ const ACCEPT = async () => ({ status: 'sent', filled: true, orderId: 'ok-1' });
     ok(!rec3.state.positions.some((p) => p.id === 'p1'), 'a failed cancel still removes the position locally');
   }
 
+  // ---- UNDER A REAL BROKER, A CANCEL IS A REQUEST: KEEP THE POSITION UNTIL THE BROKER ANSWERS ----------
+  // 2026-10-02, v7-10: the 09:45 open had already filled when the 10:15 reversal cancelled it. The cancel
+  // was a no-op at Schwab, the position was deleted here, and a real spread sat in the account unrecorded.
+  {
+    const OM = require('../../src/candle-spread/order-manager');
+    const bands = { bollinger20_2: { upper: 22400, lower: 22100, middle: 22250 } };
+    const runB = async () => {
+      const rec = store.initRun({ ...cfg, variant: 'kb' + Math.random().toString(36).slice(2, 7) }, '2026-09-24');
+      rec.state.positions = [{ id: 'p1', side: 'bull', legs, quantity: 1, limit: 8.0, filled: false,
+        orderStatus: 'working', covered: false, pendingCover: null, orderId: 'brk-9', openTime: '09/24 10:00' }];
+      rec.state.pendingOpenId = 'p1';
+      rec.state.liveOrders = [{ orderId: 'brk-9', kind: 'open', positionId: null, net: 'NET_DEBIT', status: 'working' }];
+      await trader.processCandleClose(rec, { timeEST: '09/24 10:05', open: 1, high: 2, low: 0, close: 1, indicators: bands },
+        { timeEST: '09/24 10:00', open: 2, high: 2, low: 1, close: 1, indicators: bands },
+        { getLeg, placeOrder: ACCEPT, dryRun: true, underlying: 22000, fillSource: 'broker',
+          cancelOrder: async (id) => ({ status: 'cancelled', orderId: id }),
+          signalFn: () => ({ openSide: 'bear' }) });
+      return rec;
+    };
+
+    const rec = await runB();
+    const d = (rec.events || []).flatMap((e) => e.decisions || []);
+    const co = d.find((x) => x.action === 'cancel-open');
+    const p1 = rec.state.positions.find((p) => p.id === 'p1');
+    ok(co && co.cancelSent && co.kept, 'broker mode: the reversal still sends the cancel, and says the position is kept');
+    ok(p1 && p1.filled === false && p1.cancelRequestedAt, 'the position stays, unfilled, marked cancel-requested');
+    ok(rec.state.pendingOpenId !== 'p1', 'and the one-working-open slot is freed for the other side');
+
+    // The broker answers FILLED (the order beat the cancel) -> it books, exactly as any open fill does.
+    rec.state.liveOrders[0] = { ...rec.state.liveOrders[0], status: 'filled', fillPrice: 7.9, fillSide: 'DEBIT' };
+    const d2 = [];
+    trader.applyBrokerFills(rec.state, { ...cfg, ...rec.config }, { fillSource: 'broker' }, d2);
+    ok(p1.filled === true && p1.limit === 7.9, `a fill after the cancel request books the kept position (${p1.limit})`);
+
+    // The broker answers CANCELED -> the kept position retires, found through its order id.
+    const recC = await runB();
+    const pc = recC.state.positions.find((p) => p.id === 'p1');
+    recC.state.liveOrders[0].status = 'canceled';
+    ok(OM.clearDeadOrderState(recC, recC.state.liveOrders[0]) === 'open' && pc.filled === false
+      && pc.orderStatus === 'rejected', 'a confirmed cancel retires it — matched by order id, not positionId');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   process.exit(fail ? 1 : 0);

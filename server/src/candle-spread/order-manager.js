@@ -217,7 +217,11 @@ const isOpenKind = (kind) => OPEN_KINDS.has(kind);
 
 function clearDeadOrderState(record, o) {
   const st = (record && record.state) || {};
-  const pos = (st.positions || []).find((p) => p && p.id === o.positionId);
+  // An OPEN row carries no positionId (the order is sent before the position exists); its only link is
+  // pos.orderId. Without this a canceled open never retired, which matters now that a reversal keeps the
+  // position until the broker answers (trader.js, cancel-open).
+  const pos = (st.positions || []).find((p) => p && p.id === o.positionId)
+    || (isOpenKind(o.kind) ? (st.positions || []).find((p) => p && p.orderId === o.orderId) : null);
   if (!pos) return null;
   if (/cover/.test(o.kind || '')) {
     const pc = pos.pendingCover;

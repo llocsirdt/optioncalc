@@ -1212,10 +1212,20 @@ async function processCandleClose(record, candle, priorCandle, deps) {
           Promise.resolve(deps.cancelOrder(pos.orderId, { kind: 'cancel-open', of: pos.id, reason: 'reversal' }))
             .catch(() => { /* the sender logs it; never let a cancel break the tick */ });
         }
+        // UNDER A REAL BROKER THE CANCEL IS A REQUEST, NOT AN OUTCOME. The order may already have filled —
+        // on 2026-10-02 v7-10's 09:45 open had filled 30 minutes earlier (booking it was the open-reprice
+        // bug), the cancel was a no-op at Schwab, and deleting the position here left a real spread in the
+        // account with no record behind it. So keep the position, unfilled and out of every floor/cover/
+        // settlement path (the `filled` guards), until the broker answers: a fill books it through
+        // applyBrokerFills, a cancel retires it through order-manager.clearDeadOrderState. The slot is
+        // freed either way — the engine's view has moved on, and the other side may open now.
+        const keep = deps.fillSource === 'broker' && !!pos.orderId;
         decisions.push({ action: 'cancel-open', positionId: pos.id, side: pos.side, limit: pos.limit,
           orderId: pos.orderId || null, cancelSent: !!(deps.cancelOrder && pos.orderId),
+          ...(keep ? { kept: 'awaiting broker confirmation' } : {}),
           reason: openSide && openSide !== pos.side ? `reversal → ${openSide}` : `cover signal on ${pos.side}` });
-        st.positions = st.positions.filter(p => p.id !== pos.id);
+        if (keep) pos.cancelRequestedAt = Date.now();
+        else st.positions = st.positions.filter(p => p.id !== pos.id);
         st.pendingOpenId = null;
       } else {
         await resolvePendingOpen(st, cfg, deps, decisions);   // still our view — try to fill it, else work it

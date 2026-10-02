@@ -2167,7 +2167,10 @@ async function accountPositionsIfDue() {
   if (now - _posCheckAt < POS_CHECK_MS) return null;
   _posCheckAt = now;
   try {
-    return await DEPS.tradingClient.accountsDetails(DEPS.accountHash);
+    // 'positions' IS REQUIRED. Schwab omits the positions array unless fields=positions is asked for, so
+    // without it every read came back with zero rows — brokerRows 0 / brokerRoots [] on 2026-10-02 while
+    // the account held two real NDXP spreads. The reconciler could never have seen anything.
+    return await DEPS.tradingClient.accountsDetails(DEPS.accountHash, 'positions');
   } catch (e) {
     console.error('[candle-spread] account positions fetch:', e && e.message);
     return null;
