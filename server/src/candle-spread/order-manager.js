@@ -207,6 +207,14 @@ function extractFillPrice(resp) {
 // the governor count its risk again, and the next bar places a FRESH order instead of repricing a ghost.
 // Leg-ledger entries are deliberately NOT released — same reasoning as the hedge expiry: the backing map
 // has no refcount, so freeing a strike another live order still holds is the worse failure.
+// EVERY KIND AN OPEN'S ORDER ROW CAN CARRY. The open ladder replaces the resting order, and the
+// replacement row is tagged 'open-reprice' — so an open that fills after being worked fills under THAT
+// kind. Matching 'open' alone is how the first live fill (v7-10, 2026-10-02, #1008147955066 @ 6.00) went
+// unbooked: the broker owned the spread and the engine still thought the order was working.
+// 'combo-lock-open' is deliberately NOT here — it is a 4-leg cover+open with its own booking.
+const OPEN_KINDS = new Set(['open', 'open-reprice']);
+const isOpenKind = (kind) => OPEN_KINDS.has(kind);
+
 function clearDeadOrderState(record, o) {
   const st = (record && record.state) || {};
   const pos = (st.positions || []).find((p) => p && p.id === o.positionId);
@@ -218,7 +226,7 @@ function clearDeadOrderState(record, o) {
     pos.coverStatus = 'rejected';
     return 'cover';
   }
-  if (o.kind === 'open') {
+  if (isOpenKind(o.kind)) {
     // An open that never filled and was refused is not a position we hold. Leave the record in place —
     // it is evidence, and the day summary counts it — but stop it occupying the one-working-open slot.
     if (pos.filled) return null;
@@ -291,7 +299,7 @@ async function reconcile(record, deps, opts = {}) {
     // strategy that is still actively working the order. Test orders are untouched: those must be pulled
     // quickly and nothing else is watching them.
     const wantCancel = (o.testMode && age >= testCancelAfterMs)          // test order: pull it so nothing lingers
-      || (!o.testMode && o.kind === 'open' && age >= staleOpenCancelMs);  // orphan backstop, not a schedule
+      || (!o.testMode && isOpenKind(o.kind) && age >= staleOpenCancelMs);  // orphan backstop, not a schedule
     if (wantCancel) {
       try {
         await deps.tradingClient.orderDelete(deps.accountHash, o.orderId);
@@ -307,4 +315,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { isOpenKind, OPEN_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };

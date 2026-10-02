@@ -28,6 +28,7 @@ const SQ = require('./spread-quote');
 const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
+const OM = require('./order-manager');   // isOpenKind — which order rows are an open's
 
 let nextPositionSeq = 1;
 function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`; }
@@ -1989,7 +1990,9 @@ function applyBrokerFills(st, cfg, deps, decisions) {
   if (!los.length) return 0;
   let applied = 0;
   for (const o of los) {
-    if (!o || o.status !== 'filled' || o.brokerApplied) continue;
+    // 'unhandled-kind' is RETRYABLE: it means no booking path existed when the fill arrived, and a deploy
+    // that adds one must pick the row up rather than leave the account holding what the book never will.
+    if (!o || o.status !== 'filled' || (o.brokerApplied && o.brokerApplied !== 'unhandled-kind')) continue;
     const px = Number(o.fillPrice);
     if (!(px > 0)) {
       // A fill we cannot price is not a fill we can book. Flag it rather than guess — guessing here is
@@ -2021,8 +2024,11 @@ function applyBrokerFills(st, cfg, deps, decisions) {
         + `${o.fillSide} @ ${px} — refusing to book it; the engine's view of this order and the broker's disagree`);
       continue;
     }
-    if (o.kind === 'open') {
-      const pos = st.positions.find((p) => p && p.orderId === o.orderId);
+    if (OM.isOpenKind(o.kind)) {
+      // By order id first (the ladder moves pos.orderId to each replacement), then by the position the
+      // row was placed for — a replace whose new id never came back leaves only that link.
+      const pos = st.positions.find((p) => p && p.orderId === o.orderId)
+        || (o.positionId ? st.positions.find((p) => p && p.id === o.positionId) : null);
       if (!pos) { o.brokerApplied = 'no-position'; continue; }
       if (pos.filled) { o.brokerApplied = 'already'; continue; }
       const credit = pos.sentNet === 'CREDIT';
@@ -2102,7 +2108,9 @@ function applyBrokerFills(st, cfg, deps, decisions) {
     // AN UNHANDLED KIND MUST NOT BE SILENT. This flag used to be set and nothing else: no decision, no
     // event, no status field — one grep hit in the whole codebase. A fill the engine cannot book is
     // exactly the divergence between our book and the account that the closed loop exists to surface.
+    const already = o.brokerApplied === 'unhandled-kind';   // retried every pass: report it once
     o.brokerApplied = 'unhandled-kind';
+    if (already) continue;
     decisions.push({ action: 'broker-fill-unhandled', orderId: o.orderId, kind: o.kind || null,
       positionId: o.positionId || null, brokerPrice: px,
       note: `the broker filled a ${o.kind || 'kind-less'} order the engine has no booking path for` });

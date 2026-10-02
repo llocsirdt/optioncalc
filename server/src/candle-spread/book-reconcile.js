@@ -23,6 +23,7 @@
  * Pure: takes a run record, returns a report. Writes nothing.
  */
 
+const OM = require('./order-manager');   // isOpenKind — an open fills under 'open' or 'open-reprice'
 const TERMINAL_DEAD = new Set(['canceled', 'rejected', 'expired']);
 
 // What the STRATEGY believes, from its own positions.
@@ -47,7 +48,7 @@ function brokerBook(record) {
     filled: of((o) => o.status === 'filled'),
     working: of((o) => o.status === 'working'),
     dead: of((o) => TERMINAL_DEAD.has(o.status)),
-    openFills: of((o) => o.status === 'filled' && o.kind === 'open'),
+    openFills: of((o) => o.status === 'filled' && OM.isOpenKind(o.kind)),
     coverFills: of((o) => o.status === 'filled' && /cover/.test(o.kind || '')),
   };
 }
