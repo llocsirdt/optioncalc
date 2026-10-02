@@ -29,19 +29,9 @@ const cfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1 };
   const st = { positions: [bear(), b1(), b2(), b3()] };
   const asBooked = RC.bookFloor(st.positions, null, 10);
   ok(Math.round(asBooked) === -1278, `as booked (cover not yet filled) the floor reads -1,278 (${asBooked})`);
-  const g = trader.govFloor(st, broker, null);
-  ok(Math.round(g) === -1748, `under the broker the governor sees -1,748 — the floor once the resting cover fills (${g})`);
-  ok(trader.govFloor(st, { fillSource: 'mark', lossMax: 1500 }, null) === asBooked,
-    'the mark path is unchanged: plain bookFloor');
-}
-// The open gate: the THIRD bull would have been refused.
-{
-  const st = { positions: [bear(), b1(), b2()] };
-  const third = { filled: true, legs: b3().legs, limit: 5.7, quantity: 1, covered: false };
-  const old = RC.bookFloor(st.positions, third, 10);
-  const now = trader.govFloor(st, broker, third);
-  ok(-old <= 1500, `the old gate admitted the third bull (projected ${Math.round(old)}) — the bug`);
-  ok(-now > 1500, `the broker gate refuses it (projected ${Math.round(now)})`);
+  ok(trader.govFloor(st, broker, null) === asBooked,
+    'design B: a working COVER is not assumed filled — the governor can refuse it, so the floor is the booked one');
+  ok(trader.govFloor(st, { fillSource: 'mark', lossMax: 1500 }, null) === asBooked, 'and the mark path agrees');
 }
 // A resting cover whose fill would breach is PULLED; one that would not, is left alone.
 {
@@ -82,6 +72,34 @@ const cfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1 };
   ok(g < without, `a reversed open kept until the broker answers counts against the floor (${Math.round(g)} vs ${Math.round(without)})`);
 }
 
+// Before the third bull goes out, the bear cover is pulled — and the open waits for the cancel to be accepted.
+const beforeOpen = (async () => {
+  const st = { positions: [bear(), b1(), b2()] };
+  const third = { legs: b3().legs, limit: 5.7 };
+  const projected = trader.govFloor(st, broker, { filled: true, legs: third.legs, limit: 5.7, quantity: 1, covered: false });
+  ok(-projected <= 1500, `the open gate admits the third bull on the booked floor (${Math.round(projected)})`);
+  const order = [];
+  const deps = { ...broker, cancelOrder: async (id) => { await new Promise((r) => setTimeout(r, 5)); order.push('cancel:' + id); return {}; } };
+  const d = [];
+  const n = await trader.pullCoversForOpen(st, third, cfg, deps, d);
+  order.push('open');
+  ok(n === 1 && order[0] === 'cancel:cov-bear' && order[1] === 'open', 'the bear cover is cancelled and ACCEPTED before the open is sent');
+  ok(d.some((x) => x.action === 'cover-defer-governor' && x.source === 'broker-before-open'), 'logged as pulled before the open');
+  const st2 = { positions: [bear(), b1()] };
+  ok(await trader.pullCoversForOpen(st2, { legs: b2().legs, limit: 5.8 }, cfg, deps, []) === 0,
+    'with room left under lossMax nothing is pulled');
+})();
+// On the mark path the open in the slot counts too (it can still fill); a reversed one does not.
+{
+  const pend = { ...b3(), filled: false, orderStatus: 'working' };
+  const st = { positions: [b1(), b2(), pend] };
+  ok(trader.govFloor(st, { fillSource: 'mark', lossMax: 1500 }, null) < RC.bookFloor(st.positions, null, 10),
+    'mark path: a working open counts as filled');
+  pend.orderStatus = 'cancelled';
+  ok(trader.govFloor(st, { fillSource: 'mark', lossMax: 1500 }, null) === RC.bookFloor(st.positions, null, 10),
+    'mark path: a reversed (cancelled) open is gone');
+}
+
 // ── #8 THE REPLACE RACE ────────────────────────────────────────────────────────────────────────────
 function client(status) {
   const del = [];
@@ -96,6 +114,7 @@ const pair = () => [
   { orderId: 'new', kind: 'cover-reprice', positionId: 'pc1', net: 'NET_DEBIT', status: 'working', replaces: 'old', placedAt: Date.now() }];
 
 (async () => {
+  await beforeOpen;
   // The OLD order fills while the replace is pending.
   {
     const pos = coverPos(), rec = { state: { positions: [pos], liveOrders: pair() }, events: [] };

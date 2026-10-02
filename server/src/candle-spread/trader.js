@@ -628,6 +628,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     }
     st.pendingOpenId = null;
   }
+  // Pull the covers this open would turn into breaches BEFORE it goes out (see pullCoversForOpen).
+  await pullCoversForOpen(st, res, cfg, deps, decisions);
   const altEvery = deps.openAlternateEvery || 3;
   // Send style: the leg-uniqueness resolver's choice when enforcing (it took the recapture preference but
   // may have flipped to the twin); otherwise the recapture alternation; otherwise debit.
@@ -747,61 +749,79 @@ function bookFloorNow(st, extra) {
   return RC.bookFloor(st.positions.filter(p => p.filled !== false), extra || null, 10);
 }
 
-// THE GOVERNOR UNDER A REAL BROKER — judge the book as it may be once the orders WORKING at Schwab fill.
+// THE GOVERNOR'S FLOOR — what we cannot take back counts; what we can refuse does not.
 //
-// The mark path enforces gate (b) above at fill time: resolveRestingCovers declines to book a cover that
-// would push the floor through lossMax. Under fillSource 'broker' that check never runs — the broker fills
-// the resting order and applyBrokerFills books it — so the cover deferral did not exist live. It happened
-// on 2026-10-02: v7-10's bear cover filled at 10:50 while three naked bulls were on, the floor went
-// -1,278 -> -1,748 (lossMax 1,500), and the day settled exactly there. The three bulls had been admitted
-// against a bear that was about to stop hedging them.
+// The design above is airtight on two legs: (a) gate opens on the book's floor, (b) refuse any COVER whose
+// fill would push that floor through lossMax. Given (b), a working cover never needs to be assumed filled —
+// one that would breach simply never books. Live, (b) did not exist under the broker: the resting order
+// filled and applyBrokerFills booked it. On 2026-10-02 v7-10's bear cover filled at 10:50 with three naked
+// bulls on and the floor went -1,278 -> -1,748 (lossMax 1,500); the day settled exactly there.
 //
-// So, under the broker only, a floor is the WORST of several outcomes the working orders allow: as booked
-// now; with each resting cover filled on its own; with all of them filled; and each of those again with
-// every live working open filled (a reversed open kept until the broker answers can still fill). It is a
-// conservative envelope rather than every subset, which on a book of a few positions is the same answer.
-// The mark path is untouched (it books covers itself and already defers them), so simulated variants and
-// every backtest are byte-identical.
-function workingOpen(p) {
-  return p && p.filled === false && !p.pendingHedge && !p.expired && p.orderId
-    && p.orderStatus !== 'rejected' && p.orderStatus !== 'expired';
+// So under the broker (b) is restored where the engine can still act: a cover that would breach is not
+// placed (placeRestingCover), one already resting is pulled every pass (governRestingCovers), and before
+// any open is sent the covers that THAT open would turn into breaches are pulled first (pullCoversForOpen),
+// so a cover cannot fill in the moment between the open and the next pass.
+//
+// The one thing that cannot be refused is an OPEN that is already working: once it fills it is ours. So
+// the floor counts every live working open as filled — the slot's resting open, and a reversed open kept
+// until the broker answers whether its cancel won. That applies on every fill source; on the mark path the
+// slot is normally empty when the gate runs, so simulated variants and backtests are unaffected in practice.
+//
+// (A stricter rule — also assuming every working cover fills — was built first and rejected by the user:
+// it refuses opens the design above admits safely. See project_adversarial_sweep_backlog, 2026-10-02.)
+function workingOpen(p, broker) {
+  if (!p || p.filled !== false || p.pendingHedge || p.expired) return false;
+  if (p.orderStatus === 'rejected' || p.orderStatus === 'expired') return false;
+  // Under the broker a cancel is only a request, so a reversed ('cancelled') open with a live order still
+  // counts. Without a broker a reversed open is gone the moment it is cancelled.
+  return broker ? !!p.orderId : p.orderStatus !== 'cancelled';
 }
 function restingCover(p) {
   return p && p.filled !== false && !p.covered && p.pendingCover && p.pendingCover.legs
     && p.pendingCover.target != null && p.pendingCover.orderId;
 }
-function govFloor(st, deps, extra, opts) {
-  const ps = (st && st.positions) || [];
-  const base = ps.filter(p => p.filled !== false);
-  if (!deps || deps.fillSource !== 'broker') return RC.bookFloor(base, extra || null, 10);
-  const skip = (opts && opts.without) || null;              // a cover to leave out (its own before/after test)
-  const asCovered = (p) => ({ ...p, covered: true, coverLegs: p.pendingCover.legs, coverLimit: p.pendingCover.target });
-  const asFilled = (p) => ({ ...p, filled: true });
-  const covers = base.filter(p => restingCover(p) && p !== skip);
-  const opens = ps.filter(workingOpen).map(asFilled);
-  const books = [];
-  for (const withOpens of [false, true]) {
-    const b = withOpens ? base.concat(opens) : base;
-    if (withOpens && !opens.length) continue;
-    books.push(b);
-    for (const c of covers) books.push(b.map(p => (p === c ? asCovered(p) : p)));
-    if (covers.length > 1) books.push(b.map(p => (covers.includes(p) ? asCovered(p) : p)));
-  }
-  let worst = Infinity;
-  for (const b of books) worst = Math.min(worst, RC.bookFloor(b, extra || null, 10));
-  return worst;
+function govFloor(st, deps, extra, swap) {
+  // `swap` = [position, hypothetical copy]: evaluate the book with one position replaced, without ever
+  // writing to the real record (only the booking paths may set covered — see broker-authority test).
+  const ps = ((st && st.positions) || []).map(p => (swap && p === swap[0] ? swap[1] : p));
+  const broker = !!deps && deps.fillSource === 'broker';
+  const book = ps.filter(p => p.filled !== false)
+    .concat(ps.filter(p => workingOpen(p, broker)).map(p => ({ ...p, filled: true })));
+  return RC.bookFloor(book, extra || null, 10);
 }
-// Would THIS cover filling push the projected floor down AND through lossMax? The same rule the mark path
-// applies at fill time (`f1 < f0 && -f1 > lossMax`), asked before the order is placed and again while it
-// rests. Covers that hold or improve the floor are never refused, so this cannot trap the book.
-function coverBreachesGovernor(st, deps, pos, legs, target) {
+// Would THIS cover filling push the floor down AND through lossMax? The same rule the mark path applies at
+// fill time (`f1 < f0 && -f1 > lossMax`), asked before the order is placed, while it rests, and against a
+// prospective open. Covers that hold or improve the floor are never refused, so this cannot trap the book.
+function coverBreachesGovernor(st, deps, pos, legs, target, extra) {
   if (!govOn(deps) || !deps || deps.fillSource !== 'broker' || !st) return null;
-  const f0 = govFloor(st, deps, null, { without: pos });
-  const saved = pos.pendingCover;
-  pos.pendingCover = { ...(saved || {}), legs, target, orderId: (saved && saved.orderId) || 'projected' };
-  let f1;
-  try { f1 = govFloor(st, deps, null); } finally { pos.pendingCover = saved; }
+  const f0 = govFloor(st, deps, extra || null);
+  const f1 = govFloor(st, deps, extra || null, [pos, { ...pos, covered: true, coverLegs: legs, coverLimit: target }]);
   return (f1 < f0 && -f1 > deps.lossMax) ? { floorIfFilled: round2(f1), floorNow: round2(f0) } : null;
+}
+function pullCover(pos, deps, decisions, gov, source) {
+  const pc = pos.pendingCover;
+  pc.cancelRequestedAt = deps.nowMs != null ? deps.nowMs : Date.now();
+  const cancelSent = !!(deps.cancelOrder && pc.orderId);
+  decisions.push({ action: 'cover-defer-governor', positionId: pos.id, source,
+    floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax,
+    target: pc.target, orderId: pc.orderId, cancelSent });
+  return cancelSent
+    ? Promise.resolve(deps.cancelOrder(pc.orderId, { kind: 'cancel-cover', of: pos.id, reason: 'governor' })).catch(() => {})
+    : Promise.resolve();
+}
+// BEFORE AN OPEN IS SENT: pull every resting cover that this open would turn into a breach, and wait for
+// the broker to ACCEPT each cancel, so none can fill in the gap between the open and the next pass.
+async function pullCoversForOpen(st, res, cfg, deps, decisions) {
+  if (!govOn(deps) || !deps || deps.fillSource !== 'broker') return 0;
+  const extra = { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false };
+  const waits = [];
+  for (const pos of st.positions || []) {
+    if (!restingCover(pos) || pos.pendingCover.cancelRequestedAt) continue;
+    const gov = coverBreachesGovernor(st, deps, pos, pos.pendingCover.legs, pos.pendingCover.target, extra);
+    if (gov) waits.push(pullCover(pos, deps, decisions, gov, 'broker-before-open'));
+  }
+  await Promise.all(waits);
+  return waits.length;
 }
 
 // FLOOR RATCHET (deps.floorRatchet) — protect a floor once we actually have one.
@@ -2846,15 +2866,7 @@ function governRestingCovers(st, cfg, deps, decisions) {
     const pc = pos.pendingCover;
     const gov = coverBreachesGovernor(st, deps, pos, pc.legs, pc.target);
     if (!gov) continue;
-    pc.cancelRequestedAt = deps.nowMs != null ? deps.nowMs : Date.now();
-    const cancelSent = !!(deps.cancelOrder && pc.orderId);
-    if (cancelSent) {
-      Promise.resolve(deps.cancelOrder(pc.orderId, { kind: 'cancel-cover', of: pos.id, reason: 'governor' }))
-        .catch(() => { /* the sender logs it; never let a cancel break the pass */ });
-    }
-    decisions.push({ action: 'cover-defer-governor', positionId: pos.id, source: 'broker-resting',
-      floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax,
-      target: pc.target, orderId: pc.orderId, cancelSent });
+    pullCover(pos, deps, decisions, gov, 'broker-resting');   // fire-and-forget: never stall the pass
     pulled++;
   }
   return pulled;
@@ -3120,7 +3132,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   noteCash,
-  govFloor,              // the governor's floor under the broker: the worst the WORKING orders allow
+  govFloor,              // the governor's floor: the booked book + every open that can still fill
+  pullCoversForOpen,     // broker: pull covers a prospective open would turn into lossMax breaches, before sending it
   governRestingCovers,   // broker-side governor cover deferral (pulls a resting cover whose fill breaches lossMax)
   applyBrokerFills,   // CLOSED LOOP — book the broker's fills; inert unless deps.fillSource === 'broker'
   creditPreferred,
