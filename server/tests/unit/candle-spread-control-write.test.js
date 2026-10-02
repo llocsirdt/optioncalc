@@ -216,8 +216,30 @@ function fakeArchive(initial, behaviour = {}) {
     out = await I.handleControlPreset(req('wind-down'));
     ok(out.body.effective === 'paper/no-open', `wind-down sets no-open (${out.body.effective})`);
 
+    // LIVE IS CLAMPED TO THE ROSTER. With the roster at paper, asking for live yields paper — the senders read
+    // the roster, so honouring it would display LIVE while nothing fillable was ever sent.
     out = await I.handleControlPreset(req('live'));
-    ok(out.body.effective === 'live', `live with the env master on (${out.body.effective})`);
+    ok(out.body.effective === 'paper',
+      `live against a paper roster clamps to paper (${out.body.effective})`);
+    ok(out.body.requested === 'live', 'while recording that live was requested');
+    // Only an env-armed roster lets it through, and CANDLE_SPREAD_ARMED_MODE=live is the real switch. Seeding
+    // the baseline by hand cannot fake it: the handler rebuilds the baseline from the live roster on every
+    // call, which is itself the behaviour worth having. So set the env and reload.
+    {
+      const savedMode = process.env.CANDLE_SPREAD_ARMED_MODE;
+      process.env.CANDLE_SPREAD_ARMED_MODE = 'live';
+      delete require.cache[require.resolve('../../src/candle-spread/index')];
+      const _l2 = console.log, _w2 = console.warn; console.log = () => {}; console.warn = () => {};
+      const I3 = require('../../src/candle-spread/index');
+      console.log = _l2; console.warn = _w2;
+      SC._reset();
+      const o = await I3.handleControlPreset(req('live'));
+      ok(o.body.effective === 'live',
+        `with CANDLE_SPREAD_ARMED_MODE=live the roster allows it and live is honoured (${o.body.effective})`);
+      if (savedMode == null) delete process.env.CANDLE_SPREAD_ARMED_MODE;
+      else process.env.CANDLE_SPREAD_ARMED_MODE = savedMode;
+      delete require.cache[require.resolve('../../src/candle-spread/index')];
+    }
     // `off` FORCES simulate even over an env arming — that is what the name promises. `clear` is the separate
     // action that drops the override and lets the environment decide; on an env-armed variant that means it
     // keeps trading, which is why the two must not be the same button.

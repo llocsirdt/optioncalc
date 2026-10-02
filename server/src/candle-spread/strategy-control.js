@@ -46,6 +46,31 @@
  * mistyped file, or anyone who can write to the bucket, can arm real money in one edit.
  */
 const REQUIRED_MODES = ['simulate', 'paper', 'live'];
+// Ordered least to most capable. The control file may move a variant DOWN this list, never up — see clampMode.
+const MODE_RANK = { simulate: 0, paper: 1, live: 2 };
+
+/**
+ * THE CONTROL PLANE CAN ONLY SUBTRACT.
+ *
+ * A variant's ceiling is the ROSTER's mode, set from the environment (CANDLE_SPREAD_ARMED_MODE). The file can
+ * ask for less and never for more.
+ *
+ * WHY, CONCRETELY. The three order senders and fillSourceFor all read `run.dryRun` — the ROSTER value — not the
+ * effective mode. So a file entry of 'live' against a roster of 'test' produced a split engine: the trader
+ * believed dryRun === false while the senders still rewrote every price to something unfillable and fillSource
+ * stayed 'mark'. Harmless in outcome but a lie in the display, which is the same failure as reporting
+ * "SIMULATE" for an env-armed paper variant, mirrored.
+ *
+ * The alternative — making the file authoritative for the senders — would move ARMING into the fast remote
+ * channel. Stopping should be one tap from a phone; starting real-money trading should stay a deliberate env
+ * change plus a deploy. So the file lowers, the environment raises.
+ */
+function clampMode(requested, rosterMode) {
+  const ceiling = MODE_RANK[rosterMode] != null ? MODE_RANK[rosterMode] : 0;
+  const want = MODE_RANK[requested] != null ? MODE_RANK[requested] : 0;
+  if (want <= ceiling) return { mode: requested, clamped: false };
+  return { mode: rosterMode || 'simulate', clamped: true };
+}
 const RESTRICTS = ['no-open', 'halt'];
 
 // Cache + provenance. `sticky` is the point: a read failure must never change behaviour in either direction.
@@ -118,12 +143,27 @@ function normalise(file, knownVariants, opts = {}) {
       continue;
     }
     if (until && until < today) { out.expired.push({ variant: name, until, mode }); continue; }
-    // LIVE IS A REQUEST, NOT A GRANT. The environment holds the master switch; see the header note.
+    // A MODE IS A REQUEST, NOT A GRANT — in two separate ways.
     let effective = mode;
     if (mode === 'live' && !opts.liveAllowed) {
       effective = 'paper';
       out.downgraded.push({ variant: name, from: 'live', to: 'paper',
         why: 'CANDLE_SPREAD_LIVE is not set in the environment — the control file cannot arm real money on its own' });
+    }
+    // And it can never exceed what the ROSTER gives this variant, because the order senders read the roster.
+    //
+    // ONLY CLAMP WHEN THE ROSTER MODE IS ACTUALLY KNOWN. An absent baseline entry means nobody has told us this
+    // variant's ceiling — not that its ceiling is 'simulate'. Defaulting to simulate there would silently
+    // neuter the whole control file for anyone who read it before the baseline was seeded, which is a far worse
+    // trap than the one this clamp exists to close.
+    const base = opts.baseline ? opts.baseline[name] : undefined;
+    const c = base ? clampMode(effective, base) : { mode: effective, clamped: false };
+    if (c.clamped) {
+      out.downgraded.push({ variant: name, from: effective, to: c.mode,
+        why: `the roster has ${name} at '${base}' (CANDLE_SPREAD_ARMED_MODE), and the control file can only `
+          + 'lower a mode, never raise it — the order senders read the roster, so a higher request here would '
+          + 'be reported but not acted on' });
+      effective = c.mode;
     }
     out.variants[name] = { mode: effective, requestedMode: mode, restrict, note: entry.note || null, until };
   }
@@ -210,7 +250,7 @@ async function refresh(deps = {}) {
     return state;
   }
 
-  const n = normalise(file, deps.knownVariants, { liveAllowed: !!deps.liveAllowed });
+  const n = normalise(file, deps.knownVariants, { liveAllowed: !!deps.liveAllowed, baseline: state.baseline });
   const before = JSON.stringify(state.variants);
   const after = JSON.stringify(n.variants);
   state.reads++;
@@ -372,7 +412,9 @@ async function applyPatch(patch, deps = {}) {
 
   // VALIDATE THE RESULT, not the patch. liveAllowed:true here on purpose — we are storing an intent, and the
   // downgrade to paper happens at READ time against the environment the engine is actually running in.
-  const check = normalise(next, deps.knownVariants, { liveAllowed: true });
+  // liveAllowed true here on purpose — we store an INTENT; the clamp against the roster and the environment
+  // both happen at read time, against the environment the engine is actually running in.
+  const check = normalise(next, deps.knownVariants, { liveAllowed: true, baseline: state.baseline });
   if (check.unknown.length || check.rejected.length) {
     return { ok: false, status: 400,
       error: 'the resulting file would contain entries that do nothing',
@@ -398,5 +440,5 @@ function _reset() {
     rejected: [], expired: [], downgraded: [], reads: 0, readFails: 0, changes: 0 });
 }
 
-module.exports = { refresh, applyPatch, forVariant, modeFromDryRun, seedBaseline, hasBaseline, canOpen, canSendOrders, dryRunFor, health, normalise,
+module.exports = { refresh, applyPatch, forVariant, modeFromDryRun, seedBaseline, hasBaseline, clampMode, canOpen, canSendOrders, dryRunFor, health, normalise,
   controlKey, todayET, REQUIRED_MODES, RESTRICTS, _state: state, _reset };

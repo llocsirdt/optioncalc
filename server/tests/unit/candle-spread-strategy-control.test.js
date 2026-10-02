@@ -195,6 +195,45 @@ const quiet = { log: () => {}, warn: () => {} };
       'an explicit control entry overrides the roster baseline');
   }
 
+  // ── 9c. THE CONTROL FILE CAN ONLY SUBTRACT ────────────────────────────────────────────────────────
+  // A variant's ceiling is the ROSTER's mode, set from the environment. The file may ask for less, never more.
+  //
+  // WHY THIS IS CORRECTNESS AND NOT POLICY: the three order senders and fillSourceFor all read `run.dryRun` —
+  // the ROSTER value — not the effective mode. So a file entry of 'live' against a roster of 'test' produced a
+  // SPLIT engine: the trader believed dryRun === false while the senders still rewrote every price to something
+  // unfillable and fillSource stayed 'mark'. Harmless in outcome, but the UI would have displayed LIVE while
+  // nothing fillable was ever sent — the same failure as reporting SIMULATE for an env-armed paper variant,
+  // mirrored. Making the file authoritative instead would move ARMING into the fast remote channel, which is
+  // the opposite of the intended asymmetry.
+  {
+    SC._reset();
+    SC.seedBaseline({ 'v7-10': 'paper', 'v6-20': 'simulate', 'v9-20': 'live' });
+    const file = JSON.stringify({ variants: {
+      'v7-10': { mode: 'live' },        // asks ABOVE a paper roster
+      'v6-20': { mode: 'paper' },       // asks ABOVE a simulate roster
+      'v9-20': { mode: 'paper' } } });  // asks BELOW a live roster — allowed
+    await SC.refresh({ archive: fakeArchive({ [KEY]: file }), knownVariants: ROSTER, liveAllowed: true, ...quiet });
+    ok(SC.forVariant('v7-10').mode === 'paper',
+      `live is clamped to the roster's paper (${SC.forVariant('v7-10').mode})`);
+    ok(SC.forVariant('v7-10').requestedMode === 'live', 'while recording that live was asked for');
+    ok(SC.forVariant('v6-20').mode === 'simulate',
+      `paper is clamped to the roster's simulate (${SC.forVariant('v6-20').mode})`);
+    ok(SC.forVariant('v9-20').mode === 'paper',
+      `but LOWERING a live roster to paper is honoured (${SC.forVariant('v9-20').mode})`);
+    const d = SC.health().downgraded;
+    ok(d.length === 2, `both raises are reported as downgrades (${d.length})`);
+    ok(d.every((x) => /can only lower/.test(x.why)), 'each with the reason');
+    ok(SC.health().live.length === 0, 'and nothing is reported live that the roster has not armed');
+    // THE CLAMP MUST NOT BLOCK A LEGITIMATE LIVE. With the roster armed live, live is honoured.
+    SC._reset();
+    SC.seedBaseline({ 'v7-10': 'live' });
+    await SC.refresh({ archive: fakeArchive({ [KEY]: JSON.stringify({ variants: { 'v7-10': { mode: 'live' } } }) }),
+      knownVariants: ROSTER, liveAllowed: true, ...quiet });
+    ok(SC.forVariant('v7-10').mode === 'live' && SC.dryRunFor('v7-10') === false,
+      'control arm: with the roster armed live, a live request IS honoured');
+    ok((SC.health().downgraded || []).length === 0, 'with no spurious downgrade');
+  }
+
   // ── 10. THE KEY IS NESTED SO IT CANNOT BE MISTAKEN FOR A RUN RECORD ───────────────────────────────
   ok(SC.controlKey('optioncalc-runs') === 'optioncalc-runs/_control/strategy-control.json',
     `the control key is nested under _control/ (${SC.controlKey('optioncalc-runs')})`);
