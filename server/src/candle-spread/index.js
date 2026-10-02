@@ -1416,7 +1416,7 @@ function makeReplaceOrder(run, record) {
         orderType: payload.orderType, realPrice: payload.price, sentPrice: testOrd.price, why: testOrd.why,
         note: 'TEST replace SENT at the least fillable price this structure admits' });
     }
-    const sendPayload = isTest ? { ...payload, price: testOrd.price } : payload;
+    const sendPayload = om.wirePrice(isTest ? { ...payload, price: testOrd.price } : payload);
     try {
       const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
       const newId = (resp && resp.orderId) ? resp.orderId : orderId;
@@ -1584,7 +1584,7 @@ function makePlaceOrder(run, record) {
         note: 'TEST order SENT at the least fillable price this structure admits — not provably unfillable' });
       console.warn(`[candle-spread] ${run.variant} TEST order not provably unfillable: ${testOrd.why}`);
     }
-    const sendPayload = isTest ? { ...payload, price: testOrd.price } : payload;
+    const sendPayload = om.wirePrice(isTest ? { ...payload, price: testOrd.price } : payload);
     try {
       const resp = await DEPS.tradingClient.placeOrderByAcct(DEPS.accountHash, sendPayload);
       const orderId = resp && resp.orderId ? resp.orderId : null;

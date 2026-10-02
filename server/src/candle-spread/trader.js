@@ -250,9 +250,9 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       const markLegs = style === 'credit' ? CL.coverLegsFor(pos.side, anchor, W, 'debit') : sendLegs;
       const mrl = style === 'credit' ? resolveLegs(markLegs, deps.getLeg) : srl;
       const m = mrl.error ? null : saneMark(markLegs, round2(mrl.longMid - mrl.shortMid));
-      if (m != null) debitPrice = L.roundToTick(Math.max(tick, round2(m + slip)), tick);
+      if (m != null) debitPrice = round2(L.roundToTick(Math.max(tick, round2(m + slip)), tick));
     } else {
-      debitPrice = L.roundToTick(round2(W - pos.limit - ML), tick);
+      debitPrice = round2(L.roundToTick(round2(W - pos.limit - ML), tick));   // round2 AFTER, as the credit path does
     }
     if (style === 'credit') {
       // Receive exactly what the debit twin would have paid away: credit = W - debit. The credit twin

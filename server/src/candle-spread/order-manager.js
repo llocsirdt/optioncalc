@@ -207,6 +207,17 @@ function extractFillPrice(resp) {
 // the governor count its risk again, and the next bar places a FRESH order instead of repricing a ghost.
 // Leg-ledger entries are deliberately NOT released — same reasoning as the hedge expiry: the backing map
 // has no refcount, so freeing a strike another live order still holds is the worse failure.
+// EVERY PRICE LEAVES AS CENTS. `roundToTick` is Math.round(x/tick)*tick, which is not exact in binary:
+// 66 ticks of 0.05 is 3.3000000000000003. Schwab rejects that as an invalid price — on 2026-10-02 v7-10's
+// cover for pos-...-122 was refused nine times in a row (14:40-15:20), leaving a real position uncovered
+// while the engine retried the same unsendable number every bar. Callers round in some paths and not
+// others; this is the one place every place and replace passes through, so it is fixed here for all.
+function wirePrice(payload) {
+  if (!payload || typeof payload.price !== 'number' || !Number.isFinite(payload.price)) return payload;
+  const cents = Math.round(payload.price * 100) / 100;
+  return cents === payload.price ? payload : { ...payload, price: cents };
+}
+
 // EVERY KIND AN OPEN'S ORDER ROW CAN CARRY. The open ladder replaces the resting order, and the
 // replacement row is tagged 'open-reprice' — so an open that fills after being worked fills under THAT
 // kind. Matching 'open' alone is how the first live fill (v7-10, 2026-10-02, #1008147955066 @ 6.00) went
@@ -319,4 +330,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { isOpenKind, OPEN_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { wirePrice, isOpenKind, OPEN_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
