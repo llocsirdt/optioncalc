@@ -689,6 +689,10 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     // live at Schwab. A resting cover has carried its orderId since placeRestingCover; an open did not.
     orderId: (placed && placed.orderId) || null,
     openedAt: new Date().toISOString(),
+    // THE LADDER'S CLOCK AND ORIGIN. Steps are earned from the FIRST placement (a replace does not restart
+    // them) and the walk is measured from the price it was first placed at — the same shape as a cover.
+    placedEpoch: deps.nowMs != null ? deps.nowMs : Date.now(),
+    ladderBase: res.limit,
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
     sentNet, sentLimit, sentLegs: sentNet === 'CREDIT' ? sentLegs : undefined   // what actually hit the broker
@@ -2637,14 +2641,39 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // W - limit, which is how placeRestingCover keeps the two economically identical by construction.
   const ladderMark = sentCredit ? spreadQuote(pos.legs, deps.getLeg).mark : chk.mark;
   if (ladderMark == null) return 0;
-  const next = round2(Math.min(pos.limit + step, ceiling, ladderMark));
-  if (next > pos.limit) {
+  // PACED LIKE THE COVER LADDER (user, 2026-10-02: "match the covers, 300s/5pts"). This stepped +step on
+  // EVERY call, which was once per candle when it was written; the 30s sub-bar worker made it up to ten
+  // steps a bar — live on 10-02 it repriced 1.2s after placement. A step is now EARNED by elapsed time
+  // since the first placement OR underlying movement since then, whichever is further along, through the
+  // same cover-ladder.stepsEarned the covers use. The limit is absolute — base + earned x step — so a
+  // missed pass catches up instead of drifting, and it never moves down.
+  const tick = cfg.tickIncrement || 0.05;
+  const nowMs = deps.nowMs != null ? deps.nowMs : Date.now();
+  if (pos.placedEpoch == null) {
+    const t = Date.parse(pos.openedAt || '');
+    pos.placedEpoch = Number.isFinite(t) ? t : nowMs;          // an open placed before this field existed
+  }
+  if (pos.ladderBase == null) pos.ladderBase = pos.limit;
+  const earned = LAD.stepsEarned(nowMs - pos.placedEpoch,
+    (pos.placedUnder != null && deps.underlying != null) ? (deps.underlying - pos.placedUnder) : 0,
+    { stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints, steps: 1000 });
+  // Snapped DOWN to the tick: the cover ladder snaps its limit, and an off-nickel mark must neither reach
+  // the broker nor be paid through.
+  const raw = Math.min(pos.ladderBase + earned * step, ceiling, ladderMark);
+  const next = round2(Math.floor(raw / tick + 1e-9) * tick);
+  // Same reprice gate as the covers: a new step always goes; a limit pinned to a drifting mark only moves
+  // by a meaningful amount (cover-ladder.shouldReprice), so a pinned open is not replaced every 30s.
+  const stepChanged = pos.openLadderStep == null || earned !== pos.openLadderStep;
+  if (next > pos.limit && LAD.shouldReprice(pos.limit, next, tick,
+    { stepChanged, spreadWidth: cfg.spreadWidth, minMoveFrac: deps.ladderMinMoveFrac })) {
+    pos.openLadderStep = earned;
     const ks = (pos.legs || []).map((l) => l.strike);
     const w = ks.length ? Math.max(...ks) - Math.min(...ks) : cfg.spreadWidth;
     decisions.push({ action: 'open-reprice', positionId: pos.id, side: pos.side,
       from: pos.limit, to: next, mark: ladderMark, cap: pos.cap,
       ...(sentCredit ? { sentFrom: pos.sentLimit, sentTo: round2(w - next) } : {}) });
     const sentTo = sentCredit ? round2(w - next) : next;
+    const sentFrom = sentCredit ? pos.sentLimit : pos.limit;   // captured BEFORE the walk, for the audit trail
     if (sentCredit) pos.sentLimit = sentTo;
     pos.limit = next;
     // AND TELL THE BROKER. This walked pos.limit purely in memory: markFill then booked an open-fill at
@@ -2658,7 +2687,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
         const payload = buildOrderPayload(srl.resolved, sentTo, pos.quantity || cfg.quantity,
           sentCredit ? 'CREDIT' : 'DEBIT');
         const r = await deps.replaceOrder(pos.orderId, payload,
-          { kind: 'open-reprice', of: pos.id, fromLimit: sentCredit ? pos.sentLimit : pos.limit, legs: sendLegs,
+          { kind: 'open-reprice', of: pos.id, fromLimit: sentFrom, legs: sendLegs,
             net: sentCredit ? 'CREDIT' : 'DEBIT' });
         if (r && r.orderId) pos.orderId = r.orderId;
       }
@@ -2666,7 +2695,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     return 1;
   }
   decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
-    mark: chk.mark, cap: pos.cap, reason: next >= ceiling ? 'at ceiling' : 'no room' });
+    mark: chk.mark, cap: pos.cap, step: earned,
+    reason: pos.limit >= ceiling ? 'at ceiling' : next <= pos.limit && raw >= ladderMark ? 'at the mark' : 'waiting for the next step' });
   return 0;
 }
 

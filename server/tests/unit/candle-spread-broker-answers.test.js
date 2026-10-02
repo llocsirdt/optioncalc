@@ -122,14 +122,14 @@ const rec = (st = {}) => ({ runId: 'r', config: { variant: 'v7-10' }, state: { l
   {
     const getLeg = (type, strike) => ({ mid: strike === 100 ? 9 : 2.5, bid: 0, ask: 20, symbol: `S${type}${strike}` });
     const mk = () => ({ id: 'p9', side: 'bull', legs: [{ side: 'long', type: 'C', strike: 100 }, { side: 'short', type: 'C', strike: 110 }],
-      filled: false, limit: 6.0, cap: 7.0, orderId: 'z', quantity: 1 });
+      filled: false, limit: 6.0, cap: 7.0, orderId: 'z', quantity: 1, placedEpoch: 0 });
     const cfg = { tickIncrement: 0.05, spreadWidth: 10, quantity: 1 };
     const a = mk(), sa = { positions: [a], pendingOpenId: 'p9' };
-    await trader.resolvePendingOpen(sa, cfg, { fillSource: 'broker', getLeg, coverLadder: true, strikeIncrement: 10 }, []);
+    await trader.resolvePendingOpen(sa, cfg, { fillSource: 'broker', getLeg, coverLadder: true, strikeIncrement: 10, nowMs: 300000 }, []);
     ok(a.limit > 6.0, `control: with no brake the ladder walks (${a.limit})`);
     const b = mk(), sb = { positions: [b], pendingOpenId: 'p9' };
     const db = [];
-    await trader.resolvePendingOpen(sb, cfg, { fillSource: 'broker', getLeg, coverLadder: true, strikeIncrement: 10, blockNewOpens: true }, db);
+    await trader.resolvePendingOpen(sb, cfg, { fillSource: 'broker', getLeg, coverLadder: true, strikeIncrement: 10, nowMs: 300000, blockNewOpens: true }, db);
     ok(b.limit === 6.0 && db.some((x) => /ladder frozen/.test(x.reason || '')), 'under a brake the working open is NOT walked');
   }
 

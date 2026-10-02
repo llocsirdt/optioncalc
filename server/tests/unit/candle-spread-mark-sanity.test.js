@@ -406,14 +406,14 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     const chain = (ty, k) => ({ mid: ty === 'C' ? (k === 29390 ? 20 : 13.5) : (k === 29390 ? 6 : 9.5),
       bid: 0, ask: 40, symbol: `NDX_${ty}${k}` });
     const mk = (credit) => ({ id: 'p1', side: 'bull', filled: false, quantity: 1, limit: 6.0, cap: 7.0,
-      openTime: '09/18 10:00',
+      openTime: '09/18 10:00', placedEpoch: 0,   // one 300s step earned at nowMs 300000 below
       legs: [{ side: 'long', type: 'C', strike: 29390 }, { side: 'short', type: 'C', strike: 29400 }],
       ...(credit ? { sentNet: 'CREDIT', sentLimit: 4.5,
         sentLegs: [{ side: 'short', type: 'P', strike: 29400 }, { side: 'long', type: 'P', strike: 29390 }] } : {}) });
     const run = (credit) => {
       const pos = mk(credit), d = [];
       trader.resolvePendingOpen({ positions: [pos], pendingOpenId: 'p1' }, cfg,
-        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395,
+        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395, nowMs: 300000,
           replaceOrder: async () => ({}) }, d);
       return { pos, reprice: d.find((x) => x.action === 'open-reprice') };
     };
@@ -428,7 +428,7 @@ const callCredit = (lo, hi) => [{ side: 'short', type: 'C', strike: lo }, { side
     const capped = (() => {
       const pos = mk(true); pos.cap = 6.10; const d = [];
       trader.resolvePendingOpen({ positions: [pos], pendingOpenId: 'p1' }, cfg,
-        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395,
+        { getLeg: chain, coverLadder: true, ladderStepDollars: 0.25, underlying: 29395, nowMs: 300000,
           replaceOrder: async () => ({}) }, d);
       return pos;
     })();

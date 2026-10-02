@@ -35,8 +35,10 @@ const legAt = (m) => (type, strike) => {
 const legs = [{ side: 'long', type: 'C', strike: 21990 }, { side: 'short', type: 'C', strike: 22010 }];
 function restingOpen(limit) {
   const st = { positions: [], pendingOpenId: 'p1', lastUnderlying: 22000 };
+  // placedEpoch 0: the open ladder is paced like the covers (one step per 300s since placement), so each
+  // test says how long the order has rested by passing nowMs = k x 300000.
   st.positions.push({ id: 'p1', side: 'bull', legs, quantity: 1, limit, cap: 13, filled: false,
-    orderStatus: 'working', openTime: '08/30 10:00', covered: false, pendingCover: null });
+    orderStatus: 'working', openTime: '08/30 10:00', covered: false, pendingCover: null, placedEpoch: 0 });
   return st;
 }
 
@@ -60,12 +62,13 @@ function restingOpen(limit) {
 // 3) With the ladder on, the limit walks toward the market — never past it, never past the ceiling.
 {
   const st = restingOpen(10.20), d = [];
-  const deps = { getLeg: legAt(10.60), coverLadder: true, ladderStepDollars: 0.25 };
+  const deps = { getLeg: legAt(10.60), coverLadder: true, ladderStepDollars: 0.25, nowMs: 300000 };
   trader.resolvePendingOpen(st, cfg, deps, d);
   ok(st.positions[0].limit === 10.45, `ladder steps 10.20 -> 10.45 (got ${st.positions[0].limit})`);
   ok(d.some(x => x.action === 'open-reprice' && x.to === 10.45), 'logs open-reprice');
-  // a second pass reaches the mark and stops there rather than paying through it
+  // a second step (five minutes later) reaches the mark and stops there rather than paying through it
   const d2 = [];
+  deps.nowMs = 600000;
   trader.resolvePendingOpen(st, cfg, deps, d2);
   ok(st.positions[0].limit === 10.6, `second step stops AT the mark 10.60 (got ${st.positions[0].limit})`);
   const d3 = [];
@@ -168,7 +171,7 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
 // into a flag whose evidence (+5 to +16 fill points over 765 days) came entirely from COVERS. Separate
 // flag, same default, so it can be isolated and measured without changing anything today.
 {
-  const base = { getLeg: legAt(10.60), ladderStepDollars: 0.25 };
+  const base = { getLeg: legAt(10.60), ladderStepDollars: 0.25, nowMs: 300000 };
   const stepTo = (deps) => { const st = restingOpen(10.20), d = [];
     trader.resolvePendingOpen(st, cfg, deps, d); return st.positions[0].limit; };
   ok(stepTo({ ...base, coverLadder: true }) === 10.45, 'unset openLadder follows coverLadder (today unchanged)');
@@ -487,11 +490,11 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
       const st = { positions: [], pendingOpenId: 'p1', lastUnderlying: 22000 };
       st.positions.push({ id: 'p1', side: 'bull', legs, quantity: 1, limit: 10.20, cap: 13, filled: false,
         orderStatus: 'working', openTime: '08/30 10:00', covered: false, pendingCover: null,
-        orderId: 'brk-1', ...over });
+        orderId: 'brk-1', placedEpoch: 0, ...over });
       return st;
     };
     const sent = [];
-    const deps = { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25,
+    const deps = { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25, nowMs: 300000,
       replaceOrder: async (id, payload, meta) => { sent.push({ id, price: payload.price, meta }); return { orderId: 'brk-2' }; } };
 
     const st = mk();
@@ -521,8 +524,41 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
     await trader.resolvePendingOpen(noId, cfg, deps, []);
     ok(noId.positions[0].limit === 10.45 && sent.length === 0, 'no orderId: still ladders, sends nothing');
     const dry = mk(); sent.length = 0;
-    await trader.resolvePendingOpen(dry, cfg, { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25 }, []);
+    await trader.resolvePendingOpen(dry, cfg, { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25, nowMs: 300000 }, []);
     ok(dry.positions[0].limit === 10.45, 'dry run with no replaceOrder still ladders and does not throw');
+  }
+
+  // ---- OPEN LADDER PACING = THE COVER LADDER'S (user, 2026-10-02: "match the covers, 300s/5pts") -----
+  // Live on 10-02 the 30s worker repriced an open 1.2s after placement: the ladder stepped on every call.
+  {
+    const st = restingOpen(10.20);
+    st.positions[0].placedUnder = 22000;
+    const at = (nowMs, underlying) => { const d = [];
+      trader.resolvePendingOpen(st, cfg, { getLeg: legAt(13.0), coverLadder: true, ladderStepDollars: 0.25,
+        nowMs, underlying }, d); return d; };
+    let d = at(1200, 22000);
+    ok(st.positions[0].limit === 10.20 && d.some(x => x.reason === 'waiting for the next step'),
+      'NO step 1.2s after placement — the bug');
+    for (const t of [30000, 60000, 299000]) at(t, 22000);
+    ok(st.positions[0].limit === 10.20, 'nor on any 30s pass inside the first five minutes');
+    at(300000, 22000);
+    ok(st.positions[0].limit === 10.45, `one step at 300s (${st.positions[0].limit})`);
+    at(330000, 22000);
+    ok(st.positions[0].limit === 10.45, 'and only one: the next pass 30s later does not step again');
+    at(340000, 22011);
+    ok(st.positions[0].limit === 10.70, `an 11-point move earns 2 steps by movement, whichever is further (${st.positions[0].limit})`);
+    at(345000, 21989);
+    ok(st.positions[0].limit === 10.70, 'movement is measured from PLACEMENT, either direction — 11 points down is still 2');
+    at(1500000, 22000);
+    ok(st.positions[0].limit === 11.45, `25 minutes = 5 steps from the PLACED price, absolute not cumulative (${st.positions[0].limit})`);
+  }
+  // Off-nickel marks are snapped DOWN to the tick: never sent off-tick, never paid through.
+  {
+    const st = restingOpen(10.20);
+    const offTick = (type, strike) => { const q = legAt(10.33)(type, strike); return q; };
+    trader.resolvePendingOpen(st, cfg, { getLeg: offTick, coverLadder: true, ladderStepDollars: 0.25, nowMs: 600000 }, []);
+    const lim = st.positions[0].limit;
+    ok(lim === 10.3, `capped at a 10.33 mark the limit is the tick below, 10.30 (${lim})`);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
