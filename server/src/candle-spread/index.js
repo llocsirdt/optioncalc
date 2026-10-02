@@ -3082,8 +3082,12 @@ function status() {
     // correct for a simulated or test run and a phantom for one whose orders can really fill.
     fillSource: fillSourceFor(RUNS.find((r) => r.variant === ARMED_VARIANT) || {})
   };
-  const liveV = RUNS.filter(r => r.dryRun === false).map(r => r.variant);
-  const testV = RUNS.filter(r => r.dryRun === 'test').map(r => r.variant);
+  // EFFECTIVE, NOT ROSTER. This headline is the first thing an operator reads, so it has to say what the
+  // engine will actually DO. Pre-ebdde67 it reported the roster, which is how prod came to display
+  // "LIVE-ARMED (real orders: v7-10)" while the control file held v7-10 at paper — the same roster-vs-file
+  // confusion as the sender bug, and in the one field most likely to be trusted at a glance.
+  const liveV = RUNS.filter(r => effectiveDryRun(r) === false).map(r => r.variant);
+  const testV = RUNS.filter(r => effectiveDryRun(r) === 'test').map(r => r.variant);
   const mode = !gates.isProd ? 'DEV (never sends)'
     : !gates.liveArmed ? 'DISARMED (CANDLE_SPREAD_LIVE not set)'
     : liveV.length ? `LIVE-ARMED (real orders: ${liveV.join(',')})`
@@ -3126,7 +3130,11 @@ function status() {
     const base = backtestBaselines().variants[run.variant] || null;
     return {
       variant: run.variant, symbol: run.symbol, signalSymbol: run.signalSymbol || run.symbol,
-      mode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
+      // The mode that APPLIES, after any control-file lowering; rosterMode is what the environment granted.
+      // Both, because "paper because I pressed the brake" and "paper because that is all it was armed for"
+      // are different situations and the operator needs to tell them apart.
+      mode: SC.modeFromDryRun(effectiveDryRun(run)) === 'paper' ? 'test' : SC.modeFromDryRun(effectiveDryRun(run)),
+      rosterMode: run.dryRun === false ? 'live' : run.dryRun === 'test' ? 'test' : 'simulate',
       width: run.spreadWidth || 20, shift: run.spreadShift || 0,
       // WHICH ARM THIS VARIANT IS IN. The overlay tints cells by arm, and without these it could not tell
       // a 0.10 cell from a 0.20 one from a control — nothing else in this payload carries the covering
