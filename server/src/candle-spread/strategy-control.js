@@ -150,7 +150,9 @@ function normalise(file, knownVariants, opts = {}) {
       out.downgraded.push({ variant: name, from: 'live', to: 'paper',
         why: 'CANDLE_SPREAD_LIVE is not set in the environment — the control file cannot arm real money on its own' });
     }
-    // And it can never exceed what the ROSTER gives this variant, because the order senders read the roster.
+    // And it can never exceed what the ROSTER gives this variant. Lowering is honoured all the way to the wire
+    // (index.js effectiveDryRun); raising is refused here, because arming real money is the environment's
+    // decision — a file in a bucket must not be able to make that call on its own.
     //
     // ONLY CLAMP WHEN THE ROSTER MODE IS ACTUALLY KNOWN. An absent baseline entry means nobody has told us this
     // variant's ceiling — not that its ceiling is 'simulate'. Defaulting to simulate there would silently
@@ -161,8 +163,7 @@ function normalise(file, knownVariants, opts = {}) {
     if (c.clamped) {
       out.downgraded.push({ variant: name, from: effective, to: c.mode,
         why: `the roster has ${name} at '${base}' (CANDLE_SPREAD_ARMED_MODE), and the control file can only `
-          + 'lower a mode, never raise it — the order senders read the roster, so a higher request here would '
-          + 'be reported but not acted on' });
+          + 'lower a mode, never raise it — raise the ceiling with CANDLE_SPREAD_ARMED_MODE instead' });
       effective = c.mode;
     }
     out.variants[name] = { mode: effective, requestedMode: mode, restrict, note: entry.note || null, until };

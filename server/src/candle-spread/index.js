@@ -1276,8 +1276,29 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 //
 // A 'test'-mode run stays on 'mark': its orders are priced never to fill, so broker fills would correctly
 // book nothing — true, and useless, since it would turn the paper variant into a no-op not a comparison.
+// ── THE MODE THE ORDER SENDERS MUST USE ─────────────────────────────────────────────────────────────
+//
+// The roster sets the CEILING (CANDLE_SPREAD_ARMED_MODE); the control file may lower it. This returns what
+// actually applies, and every sender plus fillSourceFor now reads it instead of run.dryRun.
+//
+// WHY THIS EXISTS. All three senders captured `const mode = run.dryRun` at closure-creation time and decided
+// unfillable pricing from it (`const isTest = mode === 'test'`). So with the roster armed live, a control entry
+// of 'paper' was ignored by the senders: the trader believed paper while REAL FILLABLE orders went out, and
+// fillSource read the roster too and said 'broker'. I had recommended exactly that as a safe "brake" before
+// going live — it would have sent real orders. Caught 2026-10-01 before the next open, with nothing traded.
+//
+// The clamp in strategy-control stops the file raising ABOVE the roster; this makes lowering actually work.
+// Together they are the rule stated from the start: the environment raises, the file lowers.
+function effectiveDryRun(run) {
+  const c = SC.forVariant(run.variant);
+  const fromControl = c.listed ? SC.dryRunFor(run.variant) : undefined;
+  return fromControl !== undefined ? fromControl : run.dryRun;
+}
+
 function fillSourceFor(run) {
-  const real = run.dryRun === false && DEPS && DEPS.isProd === true && LIVE_ARMED
+  // EFFECTIVE, not roster: holding a live-armed variant at paper must also keep the engine booking from marks,
+  // or it would treat the broker as authoritative for fills that were never fillable.
+  const real = effectiveDryRun(run) === false && DEPS && DEPS.isProd === true && LIVE_ARMED
     && DEPS.tradingClient && DEPS.accountHash;
   return real ? 'broker' : 'mark';
 }
@@ -1339,8 +1360,9 @@ function controlBlocks(run, kind) {
 }
 
 function makeReplaceOrder(run, record) {
-  const mode = run.dryRun;
-  const wantsRealSend = mode === false || mode === 'test';
+  // RESOLVED PER CALL, not captured: the control file can lower the mode between one order and the next, and a
+  // value captured when the closure was built would ignore that for the life of the process.
+  const modeNow = () => effectiveDryRun(run);
   return async function replaceOrder(orderId, payload, meta) {
     // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
     // and sends nothing, exactly as a disarmed one does.
@@ -1352,6 +1374,9 @@ function makeReplaceOrder(run, record) {
           + (blocked.note ? ` (${blocked.note})` : '') });
       return { status: `blocked:${blocked.why}`, sent: false };
     }
+    // Resolve the mode HERE, on every order, so lowering v7-10 to paper mid-session actually reaches the wire.
+    const mode = modeNow();
+    const wantsRealSend = mode === false || mode === 'test';
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash && orderId;
     if (!canSend) {
@@ -1452,8 +1477,9 @@ function makeReplaceOrder(run, record) {
 // nothing the STRATEGY decided ever reached it. A reversal cancelled the position in memory and left the
 // order live; the only thing that eventually pulled it was om's stale-open sweep, up to 15 minutes later.
 function makeCancelOrder(run, record) {
-  const mode = run.dryRun;
-  const wantsRealSend = mode === false || mode === 'test';
+  // RESOLVED PER CALL, not captured: the control file can lower the mode between one order and the next, and a
+  // value captured when the closure was built would ignore that for the life of the process.
+  const modeNow = () => effectiveDryRun(run);
   return async function cancelOrder(orderId, meta) {
     // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
     // and sends nothing, exactly as a disarmed one does.
@@ -1465,6 +1491,9 @@ function makeCancelOrder(run, record) {
           + (blocked.note ? ` (${blocked.note})` : '') });
       return { status: `blocked:${blocked.why}`, sent: false };
     }
+    // Resolve the mode HERE, on every order, so lowering v7-10 to paper mid-session actually reaches the wire.
+    const mode = modeNow();
+    const wantsRealSend = mode === false || mode === 'test';
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash && orderId;
     if (!canSend) {
@@ -1506,8 +1535,8 @@ function makeCancelOrder(run, record) {
 }
 
 function makePlaceOrder(run, record) {
-  const mode = run.dryRun;                        // true | 'test' | false
-  const wantsRealSend = mode === false || mode === 'test';
+  const modeNow = () => effectiveDryRun(run);      // true | 'test' | false, control-aware
+
   return async function placeOrder(payload, meta) {
     // REMOTE HALT — see controlBlocks. Checked before the gates below so a halted variant records its intent
     // and sends nothing, exactly as a disarmed one does.
@@ -1519,6 +1548,9 @@ function makePlaceOrder(run, record) {
           + (blocked.note ? ` (${blocked.note})` : '') });
       return { status: `blocked:${blocked.why}`, sent: false };
     }
+    // Resolve the mode HERE, on every order, so lowering v7-10 to paper mid-session actually reaches the wire.
+    const mode = modeNow();
+    const wantsRealSend = mode === false || mode === 'test';
     const canSend = DEPS && DEPS.isProd === true && wantsRealSend && LIVE_ARMED
       && DEPS.tradingClient && DEPS.accountHash;
     if (!canSend) {
@@ -3175,6 +3207,18 @@ module.exports = {
   VARIANTS,
   listVariants,
   // exported for tests
+  //
+  // The senders and fillSourceFor are exported so a test can prove the EFFECTIVE mode reaches the wire. That
+  // cannot be shown through start(): it needs a real tradingClient and the live gates. See the control-mode
+  // enforcement test — the bug it pins (senders reading the roster, ignoring a control-file lowering) was
+  // invisible to every test that went through the trader, because the trader reads deps.dryRun and was right.
+  makePlaceOrder,
+  makeReplaceOrder,
+  makeCancelOrder,
+  fillSourceFor,
+  effectiveDryRun,
+  _setDeps: (d) => { DEPS = d; },
+  _liveArmed: () => LIVE_ARMED,
   classifyBoundary,
   msToNextBoundary,
   pickJustClosed,
