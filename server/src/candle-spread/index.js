@@ -1437,12 +1437,29 @@ function makeReplaceOrder(run, record) {
       // terminal, so the record claimed a dead order and missed a live one. In test mode that is the worse
       // half: the replaced order rests at Schwab past TEST_CANCEL_MS with nothing to pull it.
       if (newId && newId !== orderId) {
-        om.retireOrder(record, orderId, 'replaced');
+        // ACCEPTED IS NOT REPLACED. Retiring the old row here stopped polling it the moment Schwab accepted
+        // the PUT — but the ladder replaces exactly when the market is nearest our price, which is when the
+        // OLD order is likeliest to fill while the replace is still pending. Its fill was then invisible,
+        // the replacement died, and the engine re-covered (a double cover) or never booked a real open.
+        // Live orders now keep the old row polling until the broker confirms REPLACED, and link the pair so
+        // order-manager.reconcile can settle the race either way. Test orders keep the old shortcut: an
+        // unfillable price cannot race anything.
+        const oldRow = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+        if (isTest || !oldRow) {
+          om.retireOrder(record, orderId, 'replaced');
+        } else {
+          oldRow.replacedBy = newId;
+          oldRow.replacedAt = Date.now();
+          // An OPEN's first row carries no positionId (it is sent before the position exists); give it the
+          // link now, or a fill on it could not find its position.
+          if (!oldRow.positionId && meta && (meta.of || meta.positionId)) oldRow.positionId = meta.of || meta.positionId;
+        }
         om.trackOrder(record, {
           orderId: newId, kind: (meta && meta.kind) || 'replace',
           positionId: (meta && (meta.of || meta.positionId)) || null,
           net: sendPayload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
-          testMode: isTest, legs: meta && meta.legs, placedAt: Date.now()
+          testMode: isTest, legs: meta && meta.legs, placedAt: Date.now(),
+          replaces: (!isTest && oldRow) ? orderId : undefined
         });
       } else {
         // THE ROW MUST DESCRIBE THE ORDER THAT IS NOW RESTING, even when the id did not change. Schwab
@@ -1455,6 +1472,12 @@ function makeReplaceOrder(run, record) {
         // wrong, and the wrong-side guard in applyBrokerFills would refuse a perfectly good fill on the
         // strength of our own stale label. Update in place instead.
         const row = ((record.state && record.state.liveOrders) || []).find((x) => x && x.orderId === orderId);
+        // NO NEW ID CAME BACK, but Schwab always issues one: this id will poll REPLACED while the real
+        // replacement rests untracked. Flag it so reconcile does NOT read that REPLACED as "the order died"
+        // (which would clear the pending state and invite a second order) and says so loudly instead.
+        if (row && !isTest) row.replaceIdUnknown = true;
+        if (!isTest) console.error(`[candle-spread] ${run.variant} REPLACE #${orderId} returned NO new order id — `
+          + 'the replacement is live at Schwab and untracked; the position check will show it');
         if (row) {
           const wasNet = row.net;
           row.net = sendPayload.orderType;
@@ -2125,6 +2148,7 @@ async function runRestingWork() {
           // and books the fill. Calling the first alone — which is what this did on 2026-09-15 — meant the
           // worker repriced 126 times and filled nothing, so every fill still waited for a candle close
           // and the whole reason for a sub-bar pass was missing.
+          trader.governRestingCovers(st, cfg, deps, decisions);
           await trader.workRestingCovers(st, cfg, decisions, deps, st.lastUnderlying);
           trader.resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
         }

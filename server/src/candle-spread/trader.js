@@ -212,6 +212,16 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   const target = markMode
     ? (bookMark != null ? round2(Math.max(tick, bookMark)) : lockTarget)
     : lockTarget;
+  // GOVERNOR COVER DEFERRAL, BROKER SIDE — see govFloor. Under a real broker an order we place is an order
+  // that can fill, so a cover whose fill would push the projected floor down through lossMax is not placed.
+  // The position stays visibly uncovered and is re-evaluated next bar, exactly as the mark path leaves its
+  // deferred cover working and re-checks it. Same decision action, so analysis reads both alike.
+  const gov = coverBreachesGovernor(st, deps, pos, bookLegs, target);
+  if (gov) {
+    decisions.push({ action: 'cover-defer-governor', positionId: pos.id, source: 'broker-place',
+      floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax, target, note });
+    return;
+  }
   // placedEpoch / placedUnder are what the ladder walks on: how long this has rested and how far the
   // underlying has travelled since. Without them a resting order has no way to know it has gone stale.
   // BUILT, NOT YET ATTACHED. This used to be assigned to pos.pendingCover here, before the send below —
@@ -735,6 +745,63 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
 const govOn = (deps) => deps && deps.lossMax != null;
 function bookFloorNow(st, extra) {
   return RC.bookFloor(st.positions.filter(p => p.filled !== false), extra || null, 10);
+}
+
+// THE GOVERNOR UNDER A REAL BROKER — judge the book as it may be once the orders WORKING at Schwab fill.
+//
+// The mark path enforces gate (b) above at fill time: resolveRestingCovers declines to book a cover that
+// would push the floor through lossMax. Under fillSource 'broker' that check never runs — the broker fills
+// the resting order and applyBrokerFills books it — so the cover deferral did not exist live. It happened
+// on 2026-10-02: v7-10's bear cover filled at 10:50 while three naked bulls were on, the floor went
+// -1,278 -> -1,748 (lossMax 1,500), and the day settled exactly there. The three bulls had been admitted
+// against a bear that was about to stop hedging them.
+//
+// So, under the broker only, a floor is the WORST of several outcomes the working orders allow: as booked
+// now; with each resting cover filled on its own; with all of them filled; and each of those again with
+// every live working open filled (a reversed open kept until the broker answers can still fill). It is a
+// conservative envelope rather than every subset, which on a book of a few positions is the same answer.
+// The mark path is untouched (it books covers itself and already defers them), so simulated variants and
+// every backtest are byte-identical.
+function workingOpen(p) {
+  return p && p.filled === false && !p.pendingHedge && !p.expired && p.orderId
+    && p.orderStatus !== 'rejected' && p.orderStatus !== 'expired';
+}
+function restingCover(p) {
+  return p && p.filled !== false && !p.covered && p.pendingCover && p.pendingCover.legs
+    && p.pendingCover.target != null && p.pendingCover.orderId;
+}
+function govFloor(st, deps, extra, opts) {
+  const ps = (st && st.positions) || [];
+  const base = ps.filter(p => p.filled !== false);
+  if (!deps || deps.fillSource !== 'broker') return RC.bookFloor(base, extra || null, 10);
+  const skip = (opts && opts.without) || null;              // a cover to leave out (its own before/after test)
+  const asCovered = (p) => ({ ...p, covered: true, coverLegs: p.pendingCover.legs, coverLimit: p.pendingCover.target });
+  const asFilled = (p) => ({ ...p, filled: true });
+  const covers = base.filter(p => restingCover(p) && p !== skip);
+  const opens = ps.filter(workingOpen).map(asFilled);
+  const books = [];
+  for (const withOpens of [false, true]) {
+    const b = withOpens ? base.concat(opens) : base;
+    if (withOpens && !opens.length) continue;
+    books.push(b);
+    for (const c of covers) books.push(b.map(p => (p === c ? asCovered(p) : p)));
+    if (covers.length > 1) books.push(b.map(p => (covers.includes(p) ? asCovered(p) : p)));
+  }
+  let worst = Infinity;
+  for (const b of books) worst = Math.min(worst, RC.bookFloor(b, extra || null, 10));
+  return worst;
+}
+// Would THIS cover filling push the projected floor down AND through lossMax? The same rule the mark path
+// applies at fill time (`f1 < f0 && -f1 > lossMax`), asked before the order is placed and again while it
+// rests. Covers that hold or improve the floor are never refused, so this cannot trap the book.
+function coverBreachesGovernor(st, deps, pos, legs, target) {
+  if (!govOn(deps) || !deps || deps.fillSource !== 'broker' || !st) return null;
+  const f0 = govFloor(st, deps, null, { without: pos });
+  const saved = pos.pendingCover;
+  pos.pendingCover = { ...(saved || {}), legs, target, orderId: (saved && saved.orderId) || 'projected' };
+  let f1;
+  try { f1 = govFloor(st, deps, null); } finally { pos.pendingCover = saved; }
+  return (f1 < f0 && -f1 > deps.lossMax) ? { floorIfFilled: round2(f1), floorNow: round2(f0) } : null;
 }
 
 // FLOOR RATCHET (deps.floorRatchet) — protect a floor once we actually have one.
@@ -1470,10 +1537,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       decisions.push({ action: 'open-skip', side: openSide, error: res.error });
     } else if (!(res.limit > 0)) {
       decisions.push({ action: 'open-skip', side: openSide, error: `non-positive limit (${res.limit}) — bad quotes`, mark: res.mark });
-    } else if (govOn(deps) && -bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) > deps.lossMax) {
+    } else if (govOn(deps) && -govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) > deps.lossMax) {
       // GOVERNOR OPEN GATE — this open would push the day's worst terminal outcome through the ceiling.
       // Evaluated on the FINAL res, after any leg-uniqueness shift, so we gate what we would actually send.
-      const projected = round2(bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
+      // govFloor: under the broker, against the book as it may be once its working orders fill.
+      const projected = round2(govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
     } else if (ratchetLimit(st, deps, etMinutesOf(candleTime)) != null
         && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps, etMinutesOf(candleTime))) {
@@ -1531,6 +1599,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // cross-fill immediately if it's already cheap. Books locked floor at the actual fill price.
   // Work the orders BEFORE testing for fills: a repriced limit should be eligible to fill on this very
   // candle, not the next one.
+  if (cfg.coverFillModel === 'resting') governRestingCovers(st, cfg, deps, decisions);
   if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
@@ -1998,6 +2067,21 @@ function snapshotSpreads(getLeg, center, incr, windowStrikes) {
 // THE PRICE IS THE BROKER'S, IN THE SPACE THE ORDER WAS SENT IN. A credit twin fills at a CREDIT while
 // the position records a debit-canonical limit, so the fill is translated back through parity rather than
 // written across — the same rule the cover twin and the open twin already follow.
+// A BROKER FILL THE ENGINE DID NOT BOOK MUST SAY SO. These outcomes were set on the order row and nothing
+// else — no decision, no log line — so the 2026-10-02 orphan (a real filled spread the book did not hold)
+// sat as `brokerApplied: 'no-position'` where nobody would look. Each is a real fill in the account that
+// the book does not reflect: a position we lost track of, a SECOND fill for something already filled or
+// covered (a double cover, a race both orders won), or a cover/hedge whose pending state was gone.
+// Reported once per row (the row is not re-tried), as a decision and a console error.
+function unbookedFill(o, why, pos, decisions) {
+  o.brokerApplied = why;
+  decisions.push({ action: 'broker-fill-unbooked', why, orderId: o.orderId, kind: o.kind || null,
+    positionId: o.positionId || (pos && pos.id) || null, brokerPrice: o.fillPrice != null ? Number(o.fillPrice) : null,
+    note: `the broker FILLED this order but it was not booked (${why}) — the account holds something the book does not` });
+  console.error(`[candle-spread] UNBOOKED BROKER FILL #${o.orderId} (${o.kind}) @ ${o.fillPrice}: ${why}`
+    + `${pos ? ` (position ${pos.id})` : ''} — the account and the book disagree`);
+}
+
 function applyBrokerFills(st, cfg, deps, decisions) {
   if (!deps || deps.fillSource !== 'broker') return 0;
   const los = (st && st.liveOrders) || [];
@@ -2043,8 +2127,8 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       // row was placed for — a replace whose new id never came back leaves only that link.
       const pos = st.positions.find((p) => p && p.orderId === o.orderId)
         || (o.positionId ? st.positions.find((p) => p && p.id === o.positionId) : null);
-      if (!pos) { o.brokerApplied = 'no-position'; continue; }
-      if (pos.filled) { o.brokerApplied = 'already'; continue; }
+      if (!pos) { unbookedFill(o, 'no-position', null, decisions); continue; }
+      if (pos.filled) { unbookedFill(o, 'already', pos, decisions); continue; }
       const credit = pos.sentNet === 'CREDIT';
       if (credit) { pos.sentLimit = round2(px); pos.limit = round2(W - px); }
       else { pos.limit = round2(px); }
@@ -2059,10 +2143,10 @@ function applyBrokerFills(st, cfg, deps, decisions) {
     if (/cover/.test(o.kind || '')) {
       const pos = st.positions.find((p) => p && (p.id === o.positionId
         || (p.pendingCover && p.pendingCover.orderId === o.orderId)));
-      if (!pos) { o.brokerApplied = 'no-position'; continue; }
-      if (pos.covered) { o.brokerApplied = 'already'; continue; }
+      if (!pos) { unbookedFill(o, 'no-position', null, decisions); continue; }
+      if (pos.covered) { unbookedFill(o, 'already', pos, decisions); continue; }
       const pc = pos.pendingCover;
-      if (!pc || !pc.legs) { o.brokerApplied = 'no-pending'; continue; }
+      if (!pc || !pc.legs) { unbookedFill(o, 'no-pending', pos, decisions); continue; }
       const ck = pc.legs.map((l) => l.strike);
       const cw = ck.length ? Math.max(...ck) - Math.min(...ck) : W;
       // Translate a credit cover's received credit back to the debit-canonical booking, exactly as the
@@ -2100,10 +2184,10 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       // and matching only one of them is how the first version of the cover lookup missed every open.
       const pos = st.positions.find((p) => p && (p.orderId === o.orderId
         || (p.pendingHedge && p.pendingHedge.orderId === o.orderId)));
-      if (!pos) { o.brokerApplied = 'no-position'; continue; }
-      if (pos.filled) { o.brokerApplied = 'already'; continue; }
+      if (!pos) { unbookedFill(o, 'no-position', null, decisions); continue; }
+      if (pos.filled) { unbookedFill(o, 'already', pos, decisions); continue; }
       const ph = pos.pendingHedge;
-      if (!ph) { o.brokerApplied = 'no-pending-hedge'; continue; }
+      if (!ph) { unbookedFill(o, 'no-pending-hedge', pos, decisions); continue; }
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = round2(px); pos.pendingHedge = null;
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
       // A HEDGE IS ALWAYS A DEBIT — it pays, and the ledger must see it. Spend is counted at the FILL, not
@@ -2748,6 +2832,34 @@ async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra
     ...(credit ? { sentFrom, sentTo } : {}), ...(extra || {}) });
 }
 
+// A COVER ALREADY RESTING AT THE BROKER IS RE-JUDGED EVERY PASS. The book moves after placement — today's
+// three bulls were opened after the bear's cover was already working — so a cover that was safe to place
+// can become one whose fill breaches lossMax. Under the broker the only way to decline that fill is to pull
+// the order: ask for the cancel and keep the pending cover until the broker answers (a fill that beats the
+// cancel is booked; a confirmed cancel clears it through order-manager.clearDeadOrderState, and the next
+// bar's placement check re-evaluates). Inert unless govOn + fillSource 'broker'.
+function governRestingCovers(st, cfg, deps, decisions) {
+  if (!govOn(deps) || !deps || deps.fillSource !== 'broker') return 0;
+  let pulled = 0;
+  for (const pos of st.positions || []) {
+    if (!restingCover(pos) || pos.pendingCover.cancelRequestedAt) continue;
+    const pc = pos.pendingCover;
+    const gov = coverBreachesGovernor(st, deps, pos, pc.legs, pc.target);
+    if (!gov) continue;
+    pc.cancelRequestedAt = deps.nowMs != null ? deps.nowMs : Date.now();
+    const cancelSent = !!(deps.cancelOrder && pc.orderId);
+    if (cancelSent) {
+      Promise.resolve(deps.cancelOrder(pc.orderId, { kind: 'cancel-cover', of: pos.id, reason: 'governor' }))
+        .catch(() => { /* the sender logs it; never let a cancel break the pass */ });
+    }
+    decisions.push({ action: 'cover-defer-governor', positionId: pos.id, source: 'broker-resting',
+      floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax,
+      target: pc.target, orderId: pc.orderId, cancelSent });
+    pulled++;
+  }
+  return pulled;
+}
+
 async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   // Either mechanism can be enabled alone: the ladder walks price on a schedule, give-up reacts to the
   // position turning. They compose — give-up supersedes the ladder for a position it fires on.
@@ -2761,6 +2873,8 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   for (const pos of st.positions) {
     if (!pos.filled || pos.covered || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
+    // Being pulled (governRestingCovers): do not walk a price toward an order we have asked to cancel.
+    if (pc.cancelRequestedAt) continue;
     const mark = coverMarkNow(pc.legs, deps.getLeg);
 
     // GIVE-UP RULE (deps.coverGiveUp) — "better to fill at a small locked profit or even a small loss
@@ -3006,6 +3120,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   noteCash,
+  govFloor,              // the governor's floor under the broker: the worst the WORKING orders allow
+  governRestingCovers,   // broker-side governor cover deferral (pulls a resting cover whose fill breaches lossMax)
   applyBrokerFills,   // CLOSED LOOP — book the broker's fills; inert unless deps.fillSource === 'broker'
   creditPreferred,
   openPosition,   // exported for the failed-send contract test

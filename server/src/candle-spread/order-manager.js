@@ -132,7 +132,8 @@ function trackOrder(record, o) {
     status: 'working',
     fillPrice: null,
     lastPolledAt: null,
-    canceledReason: null
+    canceledReason: null,
+    ...(o.replaces ? { replaces: o.replaces } : {})   // the order this one replaced, while that is unconfirmed
   });
 }
 
@@ -309,7 +310,63 @@ async function reconcile(record, deps, opts = {}) {
         fillPrice: o.fillPrice, fillSide: o.fillSide, fillFrom: o.fillFrom, requestedPrice: o.requestedPrice,
         sentPrice: o.sentPrice, wrongSide: wrongSide || undefined,
         note: `broker FILLED ${o.fillSide || ''} @ ${o.fillPrice}${wrongSide ? ` — SENT AS ${o.net}` : ''}` });
+      // THE OLD ORDER WON THE RACE. It filled while its replacement was pending, so the replacement is a
+      // second live order for the same position. Pull it, and mark it so its death does not clear the
+      // position's pending state before applyBrokerFills books this fill (same pass ordering is not
+      // guaranteed: the worker may run between this poll and the next).
+      if (o.replacedBy) {
+        const nu = los.find((x) => x && x.orderId === o.replacedBy);
+        if (nu && !isTerminal(nu)) {
+          nu.supersededByFill = o.orderId;
+          if (!nu.cancelRequestedAt) {
+            try { await deps.tradingClient.orderDelete(deps.accountHash, nu.orderId); nu.cancelRequestedAt = now; }
+            catch (e) { store.appendEvent(record, { type: 'order_cancel_error', orderId: nu.orderId, note: e && e.message }); }
+          }
+        }
+        store.appendEvent(record, { type: 'order_replace_race', orderId: o.orderId, replacement: o.replacedBy,
+          kind: o.kind, positionId: o.positionId,
+          note: `the ORIGINAL order filled while its replacement #${o.replacedBy} was pending — replacement pulled` });
+        console.error(`[candle-spread] REPLACE RACE: #${o.orderId} (${o.kind}) FILLED before its replacement `
+          + `#${o.replacedBy} took over — the replacement has been cancelled`);
+      }
       continue;
+    }
+    // A REPLACE PAIR SETTLES WITHOUT TOUCHING THE POSITION. These rows' deaths are bookkeeping, not "the
+    // order we were relying on is gone": the old order confirming REPLACED is the replace completing, a
+    // replacement pulled because the original filled must not clear what that fill is about to book, and
+    // an unknown-id replace must not invite a second order. Each is recorded and the pending state kept.
+    if (DEAD.has(String(resp && resp.status).toUpperCase()) && (o.replacedBy || o.supersededByFill || o.replaceIdUnknown)) {
+      o.status = next === 'working' ? 'canceled' : next;
+      o.canceledReason = o.supersededByFill ? 'superseded-by-fill' : o.replacedBy ? 'replaced' : 'replaced-id-unknown';
+      store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
+        positionId: o.positionId || undefined, reason: o.canceledReason,
+        note: `broker ${resp && resp.status} — ${o.canceledReason}; position state kept` });
+      if (o.replaceIdUnknown) {
+        console.error(`[candle-spread] #${o.orderId} is REPLACED and its replacement id was never returned — `
+          + 'a live order is untracked');
+      }
+      continue;
+    }
+    // THE REPLACEMENT WAS REFUSED but the original never left: Schwab rejects the replace and the old
+    // order keeps working. Point the position back at the order that is actually live instead of clearing
+    // it (which would place a second one next bar while the original still rests).
+    if (DEAD.has(String(resp && resp.status).toUpperCase()) && o.replaces) {
+      const prev = los.find((x) => x && x.orderId === o.replaces);
+      if (prev && !isTerminal(prev)) {
+        o.status = next === 'working' ? 'canceled' : next;
+        o.canceledReason = 'replace-refused';
+        prev.replacedBy = null;
+        const st = record.state || {};
+        for (const p of st.positions || []) {
+          if (p && p.pendingCover && p.pendingCover.orderId === o.orderId) p.pendingCover.orderId = prev.orderId;
+          if (p && p.orderId === o.orderId) p.orderId = prev.orderId;
+          if (p && p.pendingHedge && p.pendingHedge.orderId === o.orderId) p.pendingHedge.orderId = prev.orderId;
+        }
+        store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
+          reason: 'replace-refused', restoredTo: prev.orderId,
+          note: `broker ${resp && resp.status} on a replacement — the original #${prev.orderId} is still working; tracking restored to it` });
+        continue;
+      }
     }
     if (DEAD.has(String(resp && resp.status).toUpperCase())) {
       o.status = next === 'working' ? 'canceled' : next;
@@ -333,7 +390,8 @@ async function reconcile(record, deps, opts = {}) {
     // strategy cancel, or a replace whose new id was lost. The horizon is long enough not to contradict a
     // strategy that is still actively working the order. Test orders are untouched: those must be pulled
     // quickly and nothing else is watching them.
-    const wantCancel = !o.cancelRequestedAt && ((o.testMode && age >= testCancelAfterMs)  // test order: pull it so nothing lingers
+    // A row awaiting its replace confirmation is not an orphan: the strategy is working it under a new id.
+    const wantCancel = !o.cancelRequestedAt && !o.replacedBy && ((o.testMode && age >= testCancelAfterMs)  // test order: pull it so nothing lingers
       || (!o.testMode && isOpenKind(o.kind) && age >= staleOpenCancelMs));  // orphan backstop, not a schedule
     if (wantCancel) {
       try {

@@ -145,6 +145,42 @@ const rec = (st = {}) => ({ runId: 'r', config: { variant: 'v7-10' }, state: { l
     ok(m.get('C110') === -1 && m.get('C120') === 1, 'a credit cover counts the type-flipped legs actually sent');
   }
 
+  // ── 9. A LIVE REPLACE KEEPS THE OLD ROW POLLING UNTIL THE BROKER CONFIRMS IT ──────────────────────
+  {
+    const c = client(); cs._setDeps({ isProd: true, tradingClient: c, accountHash: 'h' });
+    const r = rec({ liveOrders: [{ orderId: 'o1', kind: 'open', positionId: null, status: 'working', net: 'NET_DEBIT', placedAt: Date.now() }] });
+    const out = await cs.makeReplaceOrder(run, r)('o1', { orderType: 'NET_DEBIT', price: 6.05, legs: [] }, { kind: 'open-reprice', of: 'p7' });
+    const [o, n] = r.state.liveOrders;
+    ok(out.orderId === 'o2' && r.state.liveOrders.length === 2, 'the replacement is tracked AND the original row is kept');
+    ok(o.replacedBy === 'o2' && o.positionId === 'p7' && o.status === 'working', 'the original is linked, given its position, and still polled');
+    ok(n.replaces === 'o1', 'the replacement knows what it replaced');
+  }
+
+  // ── 10. THE GOVERNOR REFUSES TO PLACE A COVER WHOSE FILL WOULD BREACH lossMax ───────────────────────
+  {
+    const P = (side, type, strike) => ({ side, type, strike });
+    const legAt = (type, strike) => { const mid = type === 'C' ? Math.max(0.5, (31100 - strike) / 10) : Math.max(0.5, (strike - 30700) / 10);
+      return { mid, bid: mid - 0.1, ask: mid + 0.1, symbol: `S${type}${strike}` }; };
+    const mkBook = () => ({ positions: [
+      { id: 'bear', side: 'bear', filled: true, quantity: 1, limit: 5.28, covered: false, shortStrike: 30990,
+        legs: [P('long', 'P', 31000), P('short', 'P', 30990)] },
+      { id: 'b1', side: 'bull', filled: true, quantity: 1, limit: 6.0, covered: false, legs: [P('long', 'C', 30980), P('short', 'C', 30990)] },
+      { id: 'b2', side: 'bull', filled: true, quantity: 1, limit: 5.8, covered: false, legs: [P('long', 'C', 30970), P('short', 'C', 30980)] },
+      { id: 'b3', side: 'bull', filled: true, quantity: 1, limit: 5.7, covered: false, legs: [P('long', 'C', 30960), P('short', 'C', 30970)] }] });
+    const plan = { legs: [P('short', 'C', 30990), P('long', 'C', 30980)], limit: 4.7, mark: 4.7, geometry: 'tent', longStrike: 30980 };
+    const cfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1, strikeIncrement: 10 };
+    const sends = [];
+    const deps = (over) => ({ getLeg: legAt, strikeIncrement: 10, capitalRecapture: false, enforceLegUniqueness: false,
+      placeOrder: async () => { sends.push(1); return { status: 'sent', orderId: 'c1' }; }, ...over });
+    const st = mkBook(), d = [];
+    await trader.placeRestingCover(st.positions[0], plan, cfg, deps({ fillSource: 'broker', lossMax: 1500 }), '10/02 10:50', d, 'continuous', 0, st);
+    ok(sends.length === 0 && !st.positions[0].pendingCover, 'with three naked bulls the bear cover is NOT placed under the broker');
+    ok(d.some((x) => x.action === 'cover-defer-governor' && x.source === 'broker-place'), 'and the deferral is logged');
+    const st2 = mkBook();
+    await trader.placeRestingCover(st2.positions[0], plan, cfg, deps({ fillSource: 'mark', lossMax: 1500 }), '10/02 10:50', [], 'continuous', 0, st2);
+    ok(sends.length === 1, 'the mark path still places it (its deferral happens at fill time, unchanged)');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('FAIL: threw ->', e && e.stack); process.exit(1); });
