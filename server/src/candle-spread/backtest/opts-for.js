@@ -92,6 +92,11 @@ function optsFor(v, env) {
   // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
   // the 2026-09-09 CSV — the contract guard caught it on the first regeneration after the fact.
+  // OPEN FILL MODEL — 'ladder' models the live resting open (one working order, walked like the cover
+  // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster, until baselines adopt it.
+  if (env && env.openFillModel) o.openFillModel = env.openFillModel;
+  if (v.openLadder != null) o.openLadder = v.openLadder;
+  if (v.openLadderStepDollars != null) o.openLadderStepDollars = v.openLadderStepDollars;
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',

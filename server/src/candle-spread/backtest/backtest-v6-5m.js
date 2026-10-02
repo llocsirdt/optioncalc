@@ -162,8 +162,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     return Math.abs(bars[i].analysis['5m'].close - bars[j0].analysis['5m'].close) / rng;
   };
   // GEOMETRY (opts.geo) — spread WIDTH + strike selection + tent covers. Default = the $20 ATM geometry.
-  const G = { WIDTH: (opts.geo && opts.geo.WIDTH) || WIDTH, buildOpen: (opts.geo && opts.geo.buildOpen) || buildOpen, coverLegs: (opts.geo && opts.geo.coverLegs) || coverLegs };
-  const st = { dir: 'none', positions: [] };
+  const G = { WIDTH: (opts.geo && opts.geo.WIDTH) || WIDTH, buildOpen: (opts.geo && opts.geo.buildOpen) || buildOpen, coverLegs: (opts.geo && opts.geo.coverLegs) || coverLegs, capFrac: (opts.geo && opts.geo.capFrac != null) ? opts.geo.capFrac : null };
+  const st = { dir: 'none', positions: [], pendingOpen: null };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
   let capBlocked = 0, capBlockedTrend = 0, capSkipCeiling = 0, nCoverToStack = 0;   // capSkipCeiling = opens refused ONLY by the account ceiling
@@ -262,7 +262,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const bookAt = (X, extra) => {
     let t = 0;
     for (const p of st.positions) t += posPnlAt(p, X);
-    if (extra) t += posPnlAt(extra, X);
+    if (extra) t += extra._pair ? posPnlAt(extra._pair[0], X) + posPnlAt(extra._pair[1], X) : posPnlAt(extra, X);
     return t;
   };
   // EXACT book floor. The terminal payoff is piecewise-linear in the settle price with kinks ONLY at
@@ -270,7 +270,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   // tail — evaluating the distinct strikes plus one point outside each end is exact (and far cheaper
   // than sweeping a grid). `extra` = a hypothetical position (the projected floor if we added it).
   const _ks = [];
-  function floorOf(extra) {
+  // alsoPending: count the WORKING open as filled — the governor's rule under design B (live trader.govFloor):
+  // an open that can still fill cannot be refused once it does. Only the ladder model has one across bars.
+  function floorOf(extra, alsoPending) {
+    const pend = alsoPending && st.pendingOpen ? st.pendingOpen.pos : null;
+    if (pend) {
+      if (!extra) return floorOf(pend, false);
+      // two hypotheticals: fold the working open into a combined extra
+      return floorOf({ legs: extra.legs.concat(pend.legs), _pair: [extra, pend] }, false);
+    }
     _ks.length = 0;
     const push = k => { if (_ks.indexOf(k) < 0) _ks.push(k); };
     for (const p of st.positions) { for (const l of p.legs) push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) push(l.strike); }
@@ -357,6 +365,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0, ladder: 0 };
   const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
+  // OPEN LADDER MODEL (opts.openFillModel 'ladder') — the live resting open: one working order, walked like
+  // the cover ladder (trader.resolvePendingOpen, bd8f2d0), cancelled on a reversal. Off = byte-identical.
+  const openLadderModel = opts.openFillModel === 'ladder';
+  const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
+  let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
+    openReprices = 0, openPaidUp = 0;
   let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
@@ -578,6 +592,87 @@ function runDay5m(bars, signalFn, opts = {}) {
     const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
+    // BOOK AN OPEN — the one place a filled open enters the book, shared by the immediate model and the
+    // open ladder (opts.openFillModel 'ladder'), which books here when its working order fills on a LATER
+    // bar. Defined per bar so S/tau/iv/nowEpoch are the fill bar's. withLedgerDir=false when the ladder
+    // already recorded the legs and the stance at PLACEMENT (live records both when the order is sent).
+    const commitOpen = (side, o, resolvedLegs, withLedgerDir) => {
+        const _nd = o.limit * 100 * QTY;
+        st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
+        // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
+        // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
+        // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
+        // comes, cover on the signal; if instead another OPEN signal comes, cover the earlier position
+        // (now deeper in the money) as the new one goes on. Same family as cover-to-stack — free capital
+        // by locking a winner — but paced by the open cadence instead of waiting for the risk cap.
+        // Priced at the MARK: a cover placed to protect capital must not assume a profit.
+        if (opts.coverPriorOnOpen) {
+          const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge && p.openEpoch !== nowEpoch);
+          if (cands.length) {
+            // 'oldest' (the user's description: cover the first one) or 'deepest' (most ITM = biggest
+            // winner to bank, which is what cover-to-stack picks). Swept, not assumed.
+            let pick = cands[0];
+            if (opts.coverPriorPick === 'deepest') {
+              let bestM = -Infinity;
+              for (const c of cands) { const m = legsMark(c.legs, S, tau, iv); if (m > bestM) { bestM = m; pick = c; } }
+            }
+            const plegs = opts.coverGeometry && opts.coverGeometry !== 'tent'
+              ? SL.coverLegsAtShort(pick.side, SL.coverShortFor(opts.coverGeometry, pick.side, pick.shortStrike, S, legIncr), G.WIDTH)
+              : G.coverLegs(pick.side, pick.shortStrike);
+            // Same gate as the continuous path: the ladder is meant to bank a prior position that the
+            // market has carried deeper ITM, so require that there is something to bank before placing.
+            const pcost = legsMark(plegs, S, tau, iv);
+            const pml = (opts.coverLockGate ? (opts.continuousCoverMinLockFrac || 0) * G.WIDTH : 0);
+            if (!opts.coverLockGate || (pcost > 0 && (G.WIDTH - pick.limit - pcost) >= pml)) {
+              pick.pendingCover = { legs: plegs, target: coverTarget(opts, plegs, S, tau, iv, round2(G.WIDTH - pick.limit)),
+                openCost: pick.limit, minLock: 0, src: 'ladder', placedMs: nowEpoch, placedUnder: S, placedET: nowET };
+            }
+          }
+        }
+        markBookDirty();
+        if (withLedgerDir) {
+        if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
+        st.dir = side;
+        }
+        if (trackCap) {
+          depD += _nd; depC += _nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
+          // ALTERNATING opens: first N debit (pay), next N credit (receive ~the debit-equivalent at
+          // ATM by parity), repeat → net cash oscillates instead of draining.
+          const creditOpen = capTrigger ? (depR >= capTrigger) : (Math.floor(openN / altEvery) % 2 === 1);
+          depA += creditOpen ? -_nd : _nd; peakA = Math.max(peakA, depA); openN++;
+          // depR: real-legs cash — on a credit turn, the parity credit spread (+cash); else the debit (-cash).
+          const oStrikes = o.legs.map(l => l.strike), oLo = Math.min(...oStrikes), oHi = Math.max(...oStrikes);
+          const openLegsR = creditOpen ? CL.openLegsFor(side, oLo, oHi, 'credit') : o.legs;
+          depR += CL.entryMark(openLegsR, capMark) * 100 * QTY; peakR = Math.max(peakR, depR);
+        }
+    };
+    // OPEN LADDER — the working open's turn on this bar (live: resolvePendingOpen, every pass).
+    // The limit walks to placed + earned x step (cover-ladder.stepsEarned: elapsed time since placement OR
+    // underlying travel since placement), never above the ceiling or the mark, snapped DOWN to the tick and
+    // never lowered. It fills if this bar's FAVOURABLE extreme priced the spread at or below that limit
+    // (low for a bull, high for a bear — the same extreme the resting covers test) and books at the limit,
+    // which is what a resting order receives. Same end-of-bar convention as the cover ladder: the bar's
+    // limit is tested against the bar's whole range.
+    if (openLadderModel && st.pendingOpen) {
+      const po = st.pendingOpen;
+      if (openWalk) {
+        const earned = LAD.stepsEarned(nowEpoch - po.placedMs, S - po.placedUnder,
+          { stepSeconds: ladderOpts.stepSeconds, stepPoints: ladderOpts.stepPoints, steps: 1000 });
+        const stepD = opts.openLadderStepDollars != null ? opts.openLadderStepDollars
+          : (opts.ladderStepDollars != null ? opts.ladderStepDollars : 0.25);
+        const raw = Math.min(po.base + earned * stepD, po.cap, legsMark(po.o.legs, S, tau, iv));
+        const next = round2(Math.floor(raw / TICK + 1e-9) * TICK);
+        if (next > po.limit) { po.limit = next; po.pos.limit = next; po.lastMoveMs = nowEpoch; openReprices++; markBookDirty(); }
+      }
+      const fav = po.side === 'bull' ? px.low : px.high;
+      if (legsMark(po.o.legs, fav, tau, iv) <= po.limit) {
+        st.pendingOpen = null; openFilledL++; openPaidUp += round2(po.limit - po.base);
+        commitOpen(po.side, { ...po.o, limit: po.limit }, null, false);
+      } else if (nowEpoch - po.lastMoveMs >= 90 * 60000) {
+        // live's orphan backstop (order-manager staleOpenCancelMs): no movement for 90 minutes -> cancelled
+        st.pendingOpen = null; openStale++; markBookDirty();
+      }
+    }
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
     if (pFrac != null) {
       for (const pos of st.positions) {
@@ -813,10 +908,10 @@ function runDay5m(bars, signalFn, opts = {}) {
           }
         }
     if (governed) {
-          const f0 = floorNow();
+          const f0 = openLadderModel ? floorOf(null, true) : floorNow();
           const sv = { covered: pos.covered, coverLegs: pos.coverLegs, coverLimit: pos.coverLimit };
           pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true;
-          const f1 = floorOf(null);
+          const f1 = floorOf(null, openLadderModel);
           pos.covered = sv.covered; pos.coverLegs = sv.coverLegs; pos.coverLimit = sv.coverLimit;
           if (f1 < f0 && -f1 > lossMax) { coverDeferred++; continue; }   // would un-hedge the book past the ceiling
         }
@@ -973,6 +1068,14 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
+    // OPEN LADDER — ONE WORKING OPEN (live: openPosition's open-skip-pending) and CANCEL ON A REVERSAL (live:
+    // the cancel-open branch): the signal now wants the other side, or wants this side covered.
+    if (openLadderModel && st.pendingOpen) {
+      const po = st.pendingOpen;
+      if ((sig.openSide && sig.openSide !== po.side) || coverSet.includes(po.side)) {
+        st.pendingOpen = null; openCanceled++; markBookDirty();
+      } else if (sig.openSide) { openSkipPending++; sig.openSide = null; }
+    }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
 
     // STOP-OPENING GATES. Two competing answers to the same measured leak: books build a good floor by
@@ -1095,7 +1198,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // GOVERNOR HARD GATE — the projected BOOK FLOOR (rebuilt from the FINAL `o`, which the ledger
       // re-resolve above may have shifted) must stay inside lossMax. Because realized day P&L =
       // bookPayoff(settle) >= floor, and every open is gated here, the day's loss is bounded by lossMax.
-      const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }) <= lossMax;
+      const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }, openLadderModel) <= lossMax;
       if (!govOk) govBlocked++;
       // FLOOR RATCHET GATE — independent of the governor and evaluated on the same FINAL `o`. A book can
       // sit far inside lossMax and still be handing back everything it won, which is exactly the case the
@@ -1127,51 +1230,18 @@ function runDay5m(bars, signalFn, opts = {}) {
             if (legsMark(o.legs, fav, ntau, iv) > o.limit) { openMissed++; continue; }
           }
         }
-        st.positions.push({ side: sig.openSide, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
-        // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
-        // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
-        // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
-        // comes, cover on the signal; if instead another OPEN signal comes, cover the earlier position
-        // (now deeper in the money) as the new one goes on. Same family as cover-to-stack — free capital
-        // by locking a winner — but paced by the open cadence instead of waiting for the risk cap.
-        // Priced at the MARK: a cover placed to protect capital must not assume a profit.
-        if (opts.coverPriorOnOpen) {
-          const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge && p.openEpoch !== nowEpoch);
-          if (cands.length) {
-            // 'oldest' (the user's description: cover the first one) or 'deepest' (most ITM = biggest
-            // winner to bank, which is what cover-to-stack picks). Swept, not assumed.
-            let pick = cands[0];
-            if (opts.coverPriorPick === 'deepest') {
-              let bestM = -Infinity;
-              for (const c of cands) { const m = legsMark(c.legs, S, tau, iv); if (m > bestM) { bestM = m; pick = c; } }
-            }
-            const plegs = opts.coverGeometry && opts.coverGeometry !== 'tent'
-              ? SL.coverLegsAtShort(pick.side, SL.coverShortFor(opts.coverGeometry, pick.side, pick.shortStrike, S, legIncr), G.WIDTH)
-              : G.coverLegs(pick.side, pick.shortStrike);
-            // Same gate as the continuous path: the ladder is meant to bank a prior position that the
-            // market has carried deeper ITM, so require that there is something to bank before placing.
-            const pcost = legsMark(plegs, S, tau, iv);
-            const pml = (opts.coverLockGate ? (opts.continuousCoverMinLockFrac || 0) * G.WIDTH : 0);
-            if (!opts.coverLockGate || (pcost > 0 && (G.WIDTH - pick.limit - pcost) >= pml)) {
-              pick.pendingCover = { legs: plegs, target: coverTarget(opts, plegs, S, tau, iv, round2(G.WIDTH - pick.limit)),
-                openCost: pick.limit, minLock: 0, src: 'ladder', placedMs: nowEpoch, placedUnder: S, placedET: nowET };
-            }
-          }
-        }
-        markBookDirty();
-        if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }   // record actual played legs; advance alternation
-        st.dir = sig.openSide;
-        if (trackCap) {
-          depD += nd; depC += nd; peakD = Math.max(peakD, depD); peakC = Math.max(peakC, depC);
-          // ALTERNATING opens: first N debit (pay), next N credit (receive ~the debit-equivalent at
-          // ATM by parity), repeat → net cash oscillates instead of draining.
-          const creditOpen = capTrigger ? (depR >= capTrigger) : (Math.floor(openN / altEvery) % 2 === 1);
-          depA += creditOpen ? -nd : nd; peakA = Math.max(peakA, depA); openN++;
-          // depR: real-legs cash — on a credit turn, the parity credit spread (+cash); else the debit (-cash).
-          const oStrikes = o.legs.map(l => l.strike), oLo = Math.min(...oStrikes), oHi = Math.max(...oStrikes);
-          const openLegsR = creditOpen ? CL.openLegsFor(sig.openSide, oLo, oHi, 'credit') : o.legs;
-          depR += CL.entryMark(openLegsR, capMark) * 100 * QTY; peakR = Math.max(peakR, depR);
-        }
+        if (openLadderModel) {
+          // OPEN LADDER: the order WORKS from the next bar (see the fill check at the top of the bar loop).
+          // Legs and stance are recorded now, at the send, exactly as live does; nothing is booked yet.
+          openPlaced++;
+          st.pendingOpen = { side: sig.openSide, o, base: o.limit, limit: o.limit,
+            cap: G.capFrac != null ? round2(G.WIDTH * G.capFrac) : o.limit,
+            placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch,
+            pos: { legs: o.legs, limit: o.limit, covered: false, coverLegs: null, coverLimit: null } };
+          if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }
+          st.dir = sig.openSide;
+          markBookDirty();
+        } else commitOpen(sig.openSide, o, resolvedLegs, true);
       } else {
         capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
         if (strategyOk && !ceilingOk) capSkipCeiling++;   // refused ONLY by the account ceiling (would've passed the strategy risk cap)
@@ -1209,6 +1279,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
+  if (openLadderModel && st.pendingOpen) { openExpired++; st.pendingOpen = null; }   // a DAY order that never filled
   let settleBar = bars[bars.length - 1];
   if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
   // THE LAST BAR IS NOT THE CLOSE. 0DTE options settle on the OFFICIAL index close at 16:00, but the last
@@ -1282,6 +1353,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
+    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale,
+      expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
+      paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
     // is directly comparable to `terminal` (what continuing to trade produced).
