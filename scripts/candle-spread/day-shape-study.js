@@ -49,6 +49,7 @@
  *   node scripts/candle-spread/day-shape-study.js --build --workers 8   # compute + cache the day x variant grid
  *   node scripts/candle-spread/day-shape-study.js                       # analyze the cached grid
  *   [--dataDir <5m dir>] [--top 6] [--variants]                          # --variants: per-variant tables too
+ *   --start 630|690 (with --build, then without)                        # REST-OF-DAY: switched on at 10:30 / 11:30
  *   --labels [n] [--dataDir ...]                                         # print the last n days' features + shapes
  */
 const fs = require('fs');
@@ -58,7 +59,10 @@ const { parallelMap } = require('./lib/parallel');
 const arg = (f, d) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : d; };
 const ROOT = path.join(__dirname, '..', '..');
 const DIR = arg('--dataDir', path.join(ROOT, 'tests', 'backtest', 'backtest-data-5m-nq'));
-const CACHE = arg('--cache', path.join(ROOT, 'signal-lab-data', `day-shape-grid-${path.basename(DIR)}.json`));
+// --start <ET minute>: REST-OF-DAY mode — every variant is switched on at that minute with an empty book
+// (backtest opts.actionStartMin), and only shapes already KNOWN by then are analysed (no lookahead).
+const START = arg('--start', null) != null ? Number(arg('--start', null)) : null;
+const CACHE = arg('--cache', path.join(ROOT, 'signal-lab-data', `day-shape-grid-${path.basename(DIR)}${START != null ? `-start${START}` : ''}.json`));
 const TOP = Number(arg('--top', 6));
 const SHOW_VARIANTS = process.argv.includes('--variants');
 
@@ -87,6 +91,7 @@ async function build() {
     const v = u.v;
     const fn = (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
     const o = optsFor(v, { intradayIV: true, hasPx, where: 'day-shape-study' });
+    if (START != null) o.actionStartMin = START;
     return days.map((d) => Math.round(runDay5m(d.bars, fn, o).terminal));
   });
   const out = { builtAt: new Date().toISOString(), dataDir: path.basename(DIR), dates: days.map((d) => etDate(d.bars.find((b) => { const m = etMin(b.dt); return m >= 570 && m < 960; }).dt)),
@@ -137,6 +142,7 @@ const SHAPES = {
   TREND_DOWN: (f) => f.net <= -0.5 * f.R && f.er >= 0.30,
 };
 const KNOWN = { GU: '09:30', GD: '09:30', GU_FADE: '10:30', GD_BOUNCE: '10:30', H1_RALLY: '10:30', H1_SELLOFF: '10:30', H2_SELLOFF: '11:30' };
+const KNOWN_MIN = { '09:30': 570, '10:30': 630, '11:30': 690 };
 
 // Circular-rotation p-value for the difference in means between labelled and unlabelled days.
 function rotationP(y, lab) {
@@ -164,12 +170,15 @@ function analyze() {
   const series = (v) => idx.map((x) => G.pnl[v][x.i]);
   const families = [...new Set(G.variants.map(fam))].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
   const famSeries = (f) => { const vs = G.variants.filter((v) => fam(v) === f).map(series); return idx.map((_, j) => mean(vs.map((s) => s[j]))); };
-  const labels = {}; for (const [s, fn] of Object.entries(SHAPES)) labels[s] = idx.map((x) => (fn(x.f) ? 1 : 0));
+  // In rest-of-day mode only shapes knowable at the switch-on time are legitimate conditions.
+  const usable = Object.keys(SHAPES).filter((k) => START == null || (KNOWN[k] && KNOWN_MIN[KNOWN[k]] <= START));
+  const labels = {}; for (const k of usable) labels[k] = idx.map((x) => (SHAPES[k](x.f) ? 1 : 0));
 
+  if (START != null) console.log(`\nREST-OF-DAY MODE: every variant switched on at ${Math.floor(START / 60)}:${String(START % 60).padStart(2, '0')} ET with an empty book; P&L is from then to the close. Overall row = all days.`);
   console.log(`\nDAY-SHAPE STUDY — ${N} days (${idx[0].d} .. ${idx[N - 1].d}), ${G.variants.length} variants, data ${G.dataDir}`);
   console.log('Lift = mean P&L on shape days minus mean on all other days. p = circular-rotation p-value. halves = sign of the lift in each chronological half.\n');
   console.log('SHAPE FREQUENCY');
-  for (const s of Object.keys(SHAPES)) {
+  for (const s of usable) {
     const k = labels[s].reduce((a, b) => a + b, 0);
     console.log(`  ${s.padEnd(11)} ${String(k).padStart(4)} days  (${(k / N * 100).toFixed(1)}%)${KNOWN[s] ? `   known by ${KNOWN[s]}` : '   known at the close'}`);
   }
@@ -177,7 +186,7 @@ function analyze() {
   // FAMILY x SHAPE lift grid
   const fs_ = {}; for (const f of families) fs_[f] = famSeries(f);
   console.log('\nFAMILY LIFT BY SHAPE  ($/day vs that family\'s own other days; * p<0.05, ** p<0.01, ! halves disagree)');
-  const shapes = Object.keys(SHAPES);
+  const shapes = usable;
   console.log('family  ' + shapes.map((s) => s.padStart(11)).join(''));
   for (const f of families) {
     const cells = shapes.map((s) => {

@@ -572,6 +572,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
+    // LATE START (opts.actionStartMin, ET minute): no action before it — the strategy is switched ON at that
+    // time with an empty book. Earlier bars still build the signal (they stay in `bars`, exactly like the
+    // overnight skip above), so the first acted bar sees the true prior. Used to measure REST-OF-DAY P&L
+    // for an intraday switching rule. Unset = byte-identical.
+    if (opts.actionStartMin != null && etMinute(bars[i].dt) < opts.actionStartMin) continue;
     const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt);
     // REPLAY STAMPS — every position records when it opened and when its cover filled, in the same shape
     // the LIVE run records use (epoch + "MM/DD HH:MM" ET). Pure bookkeeping, never read by the P&L math;
