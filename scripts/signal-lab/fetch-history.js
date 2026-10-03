@@ -55,6 +55,7 @@ function groupByEtDay(candles) {
   for (const arr of byDate.values()) arr.sort((a, b) => a.datetime - b.datetime);
   return byDate;
 }
+const etMinuteNow = () => { const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
 const cachedCount = () => (fs.existsSync(RAW) ? fs.readdirSync(RAW).filter(f => f.startsWith(`${symbol}-`) && f.endsWith('.json')).length : 0);
 
 (async () => {
@@ -67,7 +68,12 @@ const cachedCount = () => (fs.existsSync(RAW) ? fs.readdirSync(RAW).filter(f => 
   const maxChunks = Math.ceil((days * 1.8) / CHUNK_DAYS) + 1;
   console.log(`Fetching ${symbol} (${apiSymbol}) ${freq}m history — target ${days} trading days, ${CHUNK_DAYS}-day chunks\n`);
 
-  for (let c = 0; c < maxChunks && cachedCount() < days && emptyStreak < 2; c++) {
+  // WALK THE WINDOW, NOT THE CACHE SIZE. This stopped at `cachedCount() < days`, so once the folder held
+  // `days` files for a symbol the loop never ran again: the weekday capture job reported "0 written, 0
+  // errors" every day from 2026-09-11 while new sessions went uncaptured (Schwab keeps ~48 days of 1m, so
+  // they start ageing out). maxChunks already bounds the walk to the requested window, existing files are
+  // skipped below, and two empty chunks in a row mean we have gone past what Schwab serves.
+  for (let c = 0; c < maxChunks && emptyStreak < 2; c++) {
     const endD = new Date(today); endD.setDate(today.getDate() - c * CHUNK_DAYS);
     const startD = new Date(today); startD.setDate(today.getDate() - (c + 1) * CHUNK_DAYS);
     const startDate = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate(), 0, 0, 0).getTime();
@@ -80,6 +86,9 @@ const cachedCount = () => (fs.existsSync(RAW) ? fs.readdirSync(RAW).filter(f => 
       for (const [date, arr] of [...byDate].sort((a, b) => (a[0] < b[0] ? 1 : -1))) {
         const file = path.join(RAW, `${symbol}-${date}.json`);
         if (fs.existsSync(file)) continue;
+        // A session still in progress would be cached PARTIAL and then never refreshed (existing files are
+        // skipped). Only write today's file after the cash close.
+        if (date === etDate(Date.now()) && etMinuteNow() < 16 * 60 + 15) continue;
         fs.writeFileSync(file, JSON.stringify({ symbol, date, freq, candles: arr }));
         fetched++;
         process.stdout.write(`  ${date}: ${arr.length} ${freq}m candles\n`);
