@@ -50,6 +50,7 @@
  *   node scripts/candle-spread/day-shape-study.js                       # analyze the cached grid
  *   [--dataDir <5m dir>] [--top 6] [--variants]                          # --variants: per-variant tables too
  *   --start 630|690 (with --build, then without)                        # REST-OF-DAY: switched on at 10:30 / 11:30
+ *   --preopen                                                            # PRE-OPEN: prior-day shape, gap, open vs daily / 60m BB
  *   --labels [n] [--dataDir ...]                                         # print the last n days' features + shapes
  */
 const fs = require('fs');
@@ -104,7 +105,7 @@ async function build() {
 function features(days) {
   const px = (b) => (b.px ? b.px : { open: b.analysis['5m'].open, high: b.analysis['5m'].high, low: b.analysis['5m'].low, close: b.analysis['5m'].close });
   const rows = [];
-  let prevClose = null; const ranges = [];
+  let prevClose = null; const ranges = []; const closes = []; let prevRow = null;
   for (const d of days) {
     const rth = d.bars.filter((b) => { const m = etMin(b.dt); return m >= 570 && m < 960; }).map((b) => ({ m: etMin(b.dt), ...px(b) }));
     // The study's dataset carries the 09:30 bar. The dual NQ/NDX set drops it (cold indicators), so for
@@ -118,10 +119,23 @@ function features(days) {
     const h1 = upto(630);
     let path = 0; for (let k = 1; k < rth.length; k++) path += Math.abs(rth[k].close - rth[k - 1].close);
     path += Math.abs(rth[0].close - open);
-    rows.push({ date: etDate(d.bars.find((b) => etMin(b.dt) >= 570).dt), R, gap: prevClose != null ? open - prevClose : null,
+    // PRE-OPEN BAND POSITION (no lookahead): the DAILY BB(20,2) from the 20 prior RTH closes — the bands as of
+    // yesterday's close — and the 60m BB carried by the last bar BEFORE 09:30 (the last completed hourly
+    // candle; the /NQ feed is 24h so it carries the overnight). %B = (open - lower) / (upper - lower).
+    let dPctB = null, hPctB = null;
+    if (closes.length >= 20) {
+      const w = closes.slice(-20), mu = w.reduce((a, b) => a + b, 0) / 20;
+      const sd = Math.sqrt(w.reduce((a, b) => a + (b - mu) * (b - mu), 0) / 20);
+      if (sd > 0) dPctB = (open - (mu - 2 * sd)) / (4 * sd);
+    }
+    const openDate = etDate(d.bars.find((b) => etMin(b.dt) >= 570).dt);
+    const pre = d.bars.filter((b) => etMin(b.dt) < 570 && etDate(b.dt) === openDate);
+    const h = pre.length ? pre[pre.length - 1].analysis && pre[pre.length - 1].analysis['60m'] : null;
+    if (h && h.bbupper != null && h.bblower != null && h.bbupper > h.bblower) hPctB = (open - h.bblower) / (h.bbupper - h.bblower);
+    rows.push({ prev: prevRow, dPctB, hPctB, date: etDate(d.bars.find((b) => etMin(b.dt) >= 570).dt), R, gap: prevClose != null ? open - prevClose : null,
       open, close, net: close - open, range: hi - lo, er: path > 0 ? Math.abs(close - open) / path : 0,
       h1High: Math.max(...h1.map((b) => b.high)), h1Low: Math.min(...h1.map((b) => b.low)), c1030: at(630), c1130: at(690) });
-    ranges.push(hi - lo); prevClose = close;
+    ranges.push(hi - lo); prevClose = close; closes.push(close); prevRow = rows[rows.length - 1];
   }
   return rows;
 }
@@ -143,6 +157,25 @@ const SHAPES = {
 };
 const KNOWN = { GU: '09:30', GD: '09:30', GU_FADE: '10:30', GD_BOUNCE: '10:30', H1_RALLY: '10:30', H1_SELLOFF: '10:30', H2_SELLOFF: '11:30' };
 const KNOWN_MIN = { '09:30': 570, '10:30': 630, '11:30': 690 };
+// --preopen: everything known AT THE BELL. Pre-registered buckets (2026-10-03, before any P&L was seen):
+//   PRIOR_<shape>  yesterday was that shape (all 14)           GAP_*  open vs prior close, in units of R
+//   D_*  open vs the DAILY BB(20,2) as of yesterday's close     H_*    open vs the 60m BB before the bell
+const PREOPEN = process.argv.includes('--preopen');
+function preopenConds() {
+  const C = {};
+  const okPrev = (f) => f.prev && f.prev.R != null && f.prev.gap != null && f.prev.c1130 != null;
+  for (const [k, fn] of Object.entries(SHAPES)) C['PRIOR_' + k] = (f) => okPrev(f) && fn(f.prev);
+  const g = (f) => f.gap / f.R;
+  Object.assign(C, {
+    GAP_BIGDOWN: (f) => g(f) <= -0.5, GAP_DOWN: (f) => g(f) > -0.5 && g(f) <= -0.25, GAP_FLAT: (f) => Math.abs(g(f)) < 0.25,
+    GAP_UP: (f) => g(f) >= 0.25 && g(f) < 0.5, GAP_BIGUP: (f) => g(f) >= 0.5,
+    D_BELOW: (f) => f.dPctB != null && f.dPctB < 0, D_LOWHALF: (f) => f.dPctB != null && f.dPctB >= 0 && f.dPctB < 0.5,
+    D_UPHALF: (f) => f.dPctB != null && f.dPctB >= 0.5 && f.dPctB <= 1, D_ABOVE: (f) => f.dPctB != null && f.dPctB > 1,
+    H_BELOW: (f) => f.hPctB != null && f.hPctB < 0, H_LOWHALF: (f) => f.hPctB != null && f.hPctB >= 0 && f.hPctB < 0.5,
+    H_UPHALF: (f) => f.hPctB != null && f.hPctB >= 0.5 && f.hPctB <= 1, H_ABOVE: (f) => f.hPctB != null && f.hPctB > 1,
+  });
+  return C;
+}
 
 // Circular-rotation p-value for the difference in means between labelled and unlabelled days.
 function rotationP(y, lab) {
@@ -171,8 +204,10 @@ function analyze() {
   const families = [...new Set(G.variants.map(fam))].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
   const famSeries = (f) => { const vs = G.variants.filter((v) => fam(v) === f).map(series); return idx.map((_, j) => mean(vs.map((s) => s[j]))); };
   // In rest-of-day mode only shapes knowable at the switch-on time are legitimate conditions.
-  const usable = Object.keys(SHAPES).filter((k) => START == null || (KNOWN[k] && KNOWN_MIN[KNOWN[k]] <= START));
-  const labels = {}; for (const k of usable) labels[k] = idx.map((x) => (SHAPES[k](x.f) ? 1 : 0));
+  const CONDS = PREOPEN ? preopenConds() : SHAPES;
+  if (PREOPEN) for (const k of Object.keys(CONDS)) KNOWN[k] = '09:30';
+  const usable = Object.keys(CONDS).filter((k) => START == null || (KNOWN[k] && KNOWN_MIN[KNOWN[k]] <= START));
+  const labels = {}; for (const k of usable) labels[k] = idx.map((x) => (CONDS[k](x.f) ? 1 : 0));
 
   if (START != null) console.log(`\nREST-OF-DAY MODE: every variant switched on at ${Math.floor(START / 60)}:${String(START % 60).padStart(2, '0')} ET with an empty book; P&L is from then to the close. Overall row = all days.`);
   console.log(`\nDAY-SHAPE STUDY — ${N} days (${idx[0].d} .. ${idx[N - 1].d}), ${G.variants.length} variants, data ${G.dataDir}`);
@@ -187,18 +222,21 @@ function analyze() {
   const fs_ = {}; for (const f of families) fs_[f] = famSeries(f);
   console.log('\nFAMILY LIFT BY SHAPE  ($/day vs that family\'s own other days; * p<0.05, ** p<0.01, ! halves disagree)');
   const shapes = usable;
-  console.log('family  ' + shapes.map((s) => s.padStart(11)).join(''));
-  for (const f of families) {
-    const cells = shapes.map((s) => {
-      const r = rotationP(fs_[f], labels[s]);
-      if (r.diff == null) return '—'.padStart(11);
-      const h1 = rotationP(fs_[f].slice(0, half), labels[s].slice(0, half)).diff, h2 = rotationP(fs_[f].slice(half), labels[s].slice(half)).diff;
-      const flag = (r.p < 0.01 ? '**' : r.p < 0.05 ? '*' : '') + (h1 != null && h2 != null && Math.sign(h1) !== Math.sign(h2) ? '!' : '');
-      return (fmt(r.diff) + flag).padStart(11);
-    });
-    console.log(f.padEnd(8) + cells.join(''));
+  const cellOf = (f, s) => {
+    const r = rotationP(fs_[f], labels[s]);
+    if (r.diff == null) return '—'.padStart(11);
+    const h1 = rotationP(fs_[f].slice(0, half), labels[s].slice(0, half)).diff, h2 = rotationP(fs_[f].slice(half), labels[s].slice(half)).diff;
+    const flag = (r.p < 0.01 ? '**' : r.p < 0.05 ? '*' : '') + (h1 != null && h2 != null && Math.sign(h1) !== Math.sign(h2) ? '!' : '');
+    return (fmt(r.diff) + flag).padStart(11);
+  };
+  if (shapes.length > 14) {
+    // many conditions: one row per condition, one column per family
+    console.log('condition       days' + families.map((f) => f.padStart(11)).join(''));
+    for (const s of shapes) console.log(s.padEnd(15) + String(labels[s].reduce((a, b) => a + b, 0)).padStart(5) + families.map((f) => cellOf(f, s)).join(''));
+  } else {
+    console.log('family  ' + shapes.map((s) => s.padStart(11)).join(''));
+    for (const f of families) console.log(f.padEnd(8) + shapes.map((s) => cellOf(f, s)).join(''));
   }
-
   // per shape: family avg on shape days (absolute) + best/worst variants
   for (const s of shapes) {
     const lab = labels[s], k = lab.reduce((a, b) => a + b, 0);
@@ -233,7 +271,7 @@ function labels() {
   }
 }
 
-module.exports = { features, SHAPES, loadDays, rotationP };
+module.exports = { features, SHAPES, loadDays, rotationP, preopenConds };
 if (require.main === module) {
   (async () => {
     if (process.argv.includes('--build')) await build();
