@@ -43,6 +43,14 @@
   #statRow > .panel:nth-child(1),
   #statRow > .panel:nth-child(2) { flex:1 1 260px; max-width:340px; }
   #statRow > #cmpPanel { flex:2 1 420px; max-width:none; }
+  /* Phone: the 340px cap left Day summary / Backtest expectation narrower than every panel below them.
+     One per row, full width, so all panels share the same edges. */
+  @media (max-width: 700px) { #statRow > .panel, #statRow > .panel:nth-child(1), #statRow > .panel:nth-child(2),
+    #statRow > #cmpPanel { flex:1 1 100%; max-width:none; }
+    #cmpPanel { overflow-x:auto; }
+    /* the curve header's nowrap rows ran past the panel edge: title on its own line, rows wrap */
+    .curveHead { flex-direction:column; gap:2px; } .curveHead .meta { text-align:left; min-height:0; }
+    .curveHead .meta .mrow { white-space:normal; } }
   .side-by-side .panel { flex:1 1 0; min-width:0; }
   /* DENSE stat panels: they frame the trades table rather than compete with it, so they trade padding and
      leading for height. Long labels ellipsize instead of wrapping to a second line. */
@@ -53,9 +61,10 @@
   .side-by-side.dense .kv .k { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* Below ~1100px two columns stop helping — the table gets too narrow to read next to a chart. */
   @media (max-width: 1100px) { .two { flex-direction:column; } .col-right .panel { max-height:none !important; } }
-  /* Stacked, the right column grows to the ORDERS table's width (it is allowed to be wider than the phone).
-     Mechanisms must not ride along: pin it to the viewport minus the .wrap side padding (2 x 14px). */
-  @media (max-width: 1100px) { #mechPanel { max-width:calc(100vw - 28px); box-sizing:border-box; } }
+  /* Stacked, both columns STRETCH to the page width (flex-start shrink-wrapped each to its widest content,
+     so the right column grew to the Orders table and every panel had a different right edge). The Orders
+     table alone is wider than a phone: it scrolls sideways inside its own panel (#ordScroll). */
+  @media (max-width: 1100px) { .two { align-items:stretch; } .col-left, .col-right { width:100%; } }
   #nq-chart { height:300px; }
   #nq-chart-container { border:0; }
   .panel { border:1px solid var(--grid); border-radius:6px; padding:8px 10px; }
