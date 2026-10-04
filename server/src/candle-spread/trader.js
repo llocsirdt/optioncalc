@@ -2770,6 +2770,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   const stepChanged = pos.openLadderStep == null || earned !== pos.openLadderStep;
   if (next > pos.limit && LAD.shouldReprice(pos.limit, next, tick,
     { stepChanged, spreadWidth: cfg.spreadWidth, minMoveFrac: deps.ladderMinMoveFrac })) {
+    const stepBefore = pos.openLadderStep;   // restored if the replace below does not take effect
     pos.openLadderStep = earned;
     const ks = (pos.legs || []).map((l) => l.strike);
     const w = ks.length ? Math.max(...ks) - Math.min(...ks) : cfg.spreadWidth;
@@ -2778,6 +2779,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
       ...(sentCredit ? { sentFrom: pos.sentLimit, sentTo: round2(w - next) } : {}) });
     const sentTo = sentCredit ? round2(w - next) : next;
     const sentFrom = sentCredit ? pos.sentLimit : pos.limit;   // captured BEFORE the walk, for the audit trail
+    const beforeOpen = { limit: pos.limit, sentLimit: pos.sentLimit, step: stepBefore };
     if (sentCredit) pos.sentLimit = sentTo;
     pos.limit = next;
     // AND TELL THE BROKER. This walked pos.limit purely in memory: markFill then booked an open-fill at
@@ -2793,7 +2795,19 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
         const r = await deps.replaceOrder(pos.orderId, payload,
           { kind: 'open-reprice', of: pos.id, fromLimit: sentFrom, legs: sendLegs,
             net: sentCredit ? 'CREDIT' : 'DEBIT' });
+        if (!replaceTookEffect(r)) {
+          // Same rule as concedeCover: the order did not move, so neither does the book — retried next pass.
+          pos.limit = beforeOpen.limit; pos.sentLimit = beforeOpen.sentLimit; pos.openLadderStep = beforeOpen.step;
+          decisions.push({ action: 'open-reprice-not-sent', positionId: pos.id, from: beforeOpen.limit, to: next,
+            orderId: pos.orderId, reason: (r && (r.error || r.status)) || 'no result' });
+          return 0;
+        }
         if (r && r.orderId) pos.orderId = r.orderId;
+      } else {
+        pos.limit = beforeOpen.limit; pos.sentLimit = beforeOpen.sentLimit; pos.openLadderStep = beforeOpen.step;
+        decisions.push({ action: 'open-reprice-not-sent', positionId: pos.id, from: beforeOpen.limit, to: next,
+          orderId: pos.orderId, reason: `legs unquotable (${srl.error})` });
+        return 0;
       }
     }
     return 1;
@@ -2827,9 +2841,21 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
 // and concedes exactly what the ladder asked for.
 //
 // The credit floors at one tick: conceding past zero is not a cheaper order, it is a nonsensical one.
+// DID A REPLACE ACTUALLY MOVE THE ORDER? The senders answer with a status, and only these mean the broker
+// (or, with no broker, the simulation) now has the new price. 'simulated:no-price' is a test-mode replace
+// that left the order where it was; 'error', 'blocked:*' and 'skipped:*' never reached it.
+function replaceTookEffect(r) {
+  if (!r || !r.status) return true;                 // a sender that reports nothing (tests, legacy) — assume yes
+  const st = String(r.status);
+  if (st === 'replaced' || st === 'test-replaced') return true;
+  if (st.startsWith('simulated:')) return st !== 'simulated:no-price';
+  return false;
+}
+
 async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra) {
   const tick = cfg.tickIncrement;
   const credit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
+  const before = { target: pc.target, sentCredit: pc.sentCredit };
   pc.target = to;                                  // the booked target moves with the working limit, or we
                                                    // would fill on one price and book at another
   let sentFrom = from, sentTo = to, net = 'DEBIT';
@@ -2840,16 +2866,34 @@ async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra
     net = 'CREDIT';
   }
   const legs = credit ? (pc.sentLegs || pc.legs) : pc.legs;
+  // A REPLACE THAT DID NOT HAPPEN MUST NOT MOVE THE BOOK. This set the new price first and ignored the
+  // replace's result, so a refused, blocked or failed replace left the engine believing a price was working
+  // that the broker never had. The ladder then waited for its NEXT step before trying again, and give-up
+  // never retried at all — it re-sends only when its price differs from the working one, and in memory it
+  // no longer did. So: if a replace was needed and did not take effect, put the price back and say so; the
+  // caller retries on the next pass. With no broker order (simulation) nothing is sent and nothing reverts.
   if (deps.replaceOrder && pc.orderId) {
     const srl = resolveLegs(legs, deps.getLeg);
-    if (!srl.error) {
+    let r = null, ok = false, why = null;
+    if (srl.error) why = `legs unquotable (${srl.error})`;
+    else {
       const payload = buildOrderPayload(srl.resolved, sentTo, pos.quantity || cfg.quantity, net);
-      const r = await deps.replaceOrder(pc.orderId, payload, { kind, of: pos.id, fromLimit: sentFrom, legs, net });
-      if (r && r.orderId) pc.orderId = r.orderId;
+      r = await deps.replaceOrder(pc.orderId, payload, { kind, of: pos.id, fromLimit: sentFrom, legs, net });
+      ok = replaceTookEffect(r);
+      if (!ok) why = (r && (r.error || r.status)) || 'no result';
     }
+    if (!ok) {
+      pc.target = before.target; pc.sentCredit = before.sentCredit;
+      decisions.push({ action: `${kind}-not-sent`, positionId: pos.id, from, to, sentNet: net, orderId: pc.orderId,
+        reason: why, note: 'the order did not move, so the working price was left as it was — retried next pass',
+        ...(extra || {}) });
+      return false;
+    }
+    if (r && r.orderId) pc.orderId = r.orderId;
   }
   decisions.push({ action: kind, positionId: pos.id, from, to, sentNet: net,
     ...(credit ? { sentFrom, sentTo } : {}), ...(extra || {}) });
+  return true;
 }
 
 // A COVER ALREADY RESTING AT THE BROKER IS RE-JUDGED EVERY PASS. The book moves after placement — today's
@@ -2911,9 +2955,9 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick);
         if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
-          pc.gaveUp = true;
-          await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
+          const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 });
+          if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market
       }
@@ -2930,9 +2974,11 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     // per order per day; the minMove guard below covers the pinned-to-mark case.
     const stepChanged = pc.ladderStep == null || next.step !== pc.ladderStep;
     if (!LAD.shouldReprice(pc.target, next.limit, tick, { stepChanged, spreadWidth: W, minMoveFrac: deps.ladderMinMoveFrac })) continue;
+    const prevStep = pc.ladderStep;
     pc.ladderStep = next.step;
-    await concedeCover(pos, pc, next.limit, pc.target, cfg, deps, decisions, 'cover-reprice',
+    const moved = await concedeCover(pos, pc, next.limit, pc.target, cfg, deps, decisions, 'cover-reprice',
       { step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax });
+    if (!moved) pc.ladderStep = prevStep;   // the step did not happen; let the next pass take it
   }
 }
 
