@@ -43,8 +43,12 @@ const DEFAULT_DIR = path.join(__dirname, '..', '..', 'tests', 'backtest', 'backt
 // the comparison. It writes to its own `-nowings` files and does NOT archive: it is a control, not a
 // baseline, and must never be mistaken for (or overwrite) the real one.
 const NO_WINGS = process.argv.includes('--noWings');
+// --tag <name>: any other CONTROL arm (e.g. `CANDLE_SPREAD_GIVEUP=none ... --tag giveupoff`). Same rule as
+// --noWings: its own `-<name>` files, never archived, never mistaken for the committed baseline.
+const ti = process.argv.indexOf('--tag');
+const TAG = ti >= 0 ? String(process.argv[ti + 1] || '').replace(/[^a-z0-9_-]/gi, '') : null;
 const suffix = (path.resolve(DIR) === path.resolve(DEFAULT_DIR) ? '' : '-' + path.basename(DIR).replace(/^backtest-data-5m-/, ''))
-  + (NO_WINGS ? '-nowings' : '');
+  + (NO_WINGS ? '-nowings' : '') + (TAG ? '-' + TAG : '');
 const OUT = path.join(__dirname, '..', '..', 'server', 'src', 'candle-spread',
   (INTRADAY_IV ? 'backtest-baselines' : 'backtest-baselines-flativ') + suffix + '.json');
 const usd = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
@@ -447,6 +451,6 @@ for (const v of Object.values(out.variants)) { delete v.daily; delete v.dates; }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + '\n', 'utf8');
 console.log('\nwrote', path.relative(process.cwd(), OUT));
 console.log('wrote', path.relative(process.cwd(), CSV), '(aggregate summary block + per-date rows)');
-if (!NO_WINGS) archiveRun(OUT, CSV, out);   // the control is not a baseline — never archive it
+if (!NO_WINGS && !TAG) archiveRun(OUT, CSV, out);   // a control is not a baseline — never archive it
 process.exit(anchorOK ? 0 : 2);
 })().catch(e => { console.error('baseline build failed:', e.message); process.exit(1); });
