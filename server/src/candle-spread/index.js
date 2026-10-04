@@ -586,6 +586,7 @@ const ORDER_SLIP_AB = (() => {
 // sibling, or the twin comparison measures two changes at once. So a cell's level propagates to its base,
 // `-unc` and `-cATM` variants together.
 //
+// SUPERSEDED 2026-10-04 by the width rule (minLockByWidth, below); kept for the record of why it existed.
 // The split is a CHECKERBOARD over (family, width) so the level is orthogonal to both: 5/5 at W=20 and
 // W=40, and no family sits entirely on one level. Deliberately not evidence-weighted — putting v7/v9 on
 // 0.10 because the sweep likes it there would confound level with signal block and answer nothing.
@@ -599,18 +600,17 @@ const MINLOCK_CONTROL_CELLS = new Set(
     .split(',').map(s => s.trim()).filter(Boolean));
 // `vX-W` for any variant shape — the cell a variant belongs to.
 const cellOf = (variant) => { const m = /^(v\d+)-(\d+)/.exec(variant); return m ? `${m[1]}-${m[2]}` : variant; };
+// ── WIDTH RULE (user, 2026-10-04) — replaces the checkerboard below as the fleet level ───────────────
+// The checkerboard split 0.10/0.20 across (family, width) so live could decide the level. The full-roster
+// re-sweep on the current engine (scripts/candle-spread/sweep-minlock.js, 765 days) decided it, and by
+// WIDTH, not family: capped 10-wides win on risk-adjusted terms at 0.10 (ret/DD v7-10 526 vs 336, v5-10 361
+// vs 228, v8-10 300 vs 186, v4-10 239 vs 160), while 20/40-wides earn ~8-10% more at 0.20 with ret/DD
+// usually better too (v1-40 36 -> 68, v2-40 35 -> 67). 0.15 was rarely best. One rule for every family also
+// removes the confound the user hit: families are now directly comparable at the same width.
+const minLockByWidth = (w) => (w <= 10 ? 0.10 : 0.20);
 const MINLOCK_FLEET = (() => {
   const m = new Map();
-  for (const f of MINLOCK_FAMS) {
-    for (const w of MINLOCK_WIDTHS) {
-      m.set(`${f}-${w}`, (MINLOCK_FAMS.indexOf(f) + MINLOCK_WIDTHS.indexOf(w)) % 2 === 0 ? 0.10 : 0.20);
-    }
-  }
-  // PINNED: v7-10 is the armed variant and the one configuration with real evidence behind it —
-  // 0.10 + ladder measured 89.1% cover fill, $1,446,388 total and ret/DD 591.6 over 765 days, its best
-  // result at any level. The checkerboard would have moved it to 0.20; live money does not get reshuffled
-  // to keep a grid tidy.
-  m.set('v7-10', 0.10);
+  for (const f of MINLOCK_FAMS) for (const w of MINLOCK_WIDTHS) m.set(`${f}-${w}`, minLockByWidth(w));
   return m;
 })();
 
@@ -783,10 +783,10 @@ const TUNED_CAPS = new Map([
 function applyExperiments(v, { capPreset = true } = {}) {
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
-  if (!MINLOCK_CONTROL_CELLS.has(cell) && MINLOCK_FLEET.has(cell)) {
-    v.continuousCoverMinLockFrac = MINLOCK_FLEET.get(cell);
-    applyLadderCfg(v);
-  }
+  // minLock follows the width rule on EVERY cell, controls included, so the no-ladder control cells differ
+  // from the fleet in the ladder alone.
+  if (MINLOCK_FLEET.has(cell)) v.continuousCoverMinLockFrac = MINLOCK_FLEET.get(cell);
+  if (!MINLOCK_CONTROL_CELLS.has(cell) && MINLOCK_FLEET.has(cell)) applyLadderCfg(v);
   // MIN-LOCK A/B second, so an explicit entry still overrides the fleet level for a one-off test. Empty by
   // default now that the fleet carries ladder + reduced minLock; the map is the override, not the policy.
   const ab = MIN_LOCK_AB.get(v.variant);
