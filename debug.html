@@ -387,7 +387,7 @@ function render() {
 
   // ---- summary
   const covered = pos.filter((p) => p.covered).length;
-  const unfilled = pos.filter((p) => p.pendingCover && !p.covered).length;
+  const unfilled = unfilledCovers(record);
   const fillPct = (covered + unfilled) ? Math.round(covered / (covered + unfilled) * 100) : null;
   const rows = [
     ['opens', pos.length],
@@ -478,12 +478,24 @@ function render() {
 // rate in particular is per POSITION (covered vs covered+still-resting) on both sides — the engine's own
 // coverBySrc counter uses a different denominator (every placement, including re-placements), so mixing
 // the two would invent a gap that is not there.
+// An UNFILLED cover = a position that had a cover order placed at some point and never got covered.
+// Counted from the day's decisions, NOT from pendingCover on the final state: a 0DTE cover still working at
+// the close is EXPIRED by Schwab ~20 min after settlement and the poller clears pendingCover, so the saved
+// record shows no working covers at all (2026-10-02 v7-10: 3 unfilled covers read as 0).
+function unfilledCovers(rec) {
+  const pos = ((rec && rec.state) || {}).positions || [];
+  const placed = new Set();
+  for (const e of (rec && rec.events) || []) for (const x of (e.decisions || [])) {
+    if (x.positionId && /^cover-(rest|reprice|giveup)$/.test(x.action)) placed.add(x.positionId);
+  }
+  return pos.filter((p) => !p.covered && (p.pendingCover || placed.has(p.id))).length;
+}
 function statsOf(rec) {
   if (!rec) return null;
   const pos = ((rec.state || {}).positions) || [];
   const se = (rec.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
   const covered = pos.filter((p) => p.covered).length;
-  const unfilled = pos.filter((p) => p.pendingCover && !p.covered).length;
+  const unfilled = unfilledCovers(rec);
   const isHedge = (p) => p.hedge || /^off-|^wing-|^fly-/.test(p.id || '');
   return {
     terminal: se && se.terminalPnl != null ? se.terminalPnl : null,
