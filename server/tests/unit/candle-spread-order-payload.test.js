@@ -21,8 +21,14 @@ const sig = (p) => p.orderLegCollection.map(l => `${l.instruction === 'BUY_TO_OP
 // A naked wing is one leg, and one leg is not a vertical.
 {
   const p = build([L('long', 'C', 120)]);
-  ok(p.complexOrderStrategyType === 'NONE', `a single leg is NONE, not VERTICAL (${p.complexOrderStrategyType})`);
+  // Verified against Schwab 2026-10-04: NET_DEBIT + NONE on one leg is refused at entry ("Limit price must be
+  // populated only for limit orders"); LIMIT is accepted.
+  ok(p.orderType === 'LIMIT' && p.complexOrderStrategyType === undefined, `a single leg is a LIMIT order, no complex strategy (${p.orderType}/${p.complexOrderStrategyType})`);
   ok(sig(p) === 'B1:C120', 'and goes out as itself');
+  const OM = require('../../src/candle-spread/order-manager');
+  ok(OM.netOfPayload(p) === 'NET_DEBIT', 'its recorded side is a DEBIT (a LIMIT buy), so the wrong-side guard accepts its fill');
+  ok(OM.netOfPayload(build([L('short', 'C', 120)])) === 'NET_CREDIT', 'a single-leg sell records as a CREDIT');
+  ok(OM.netOfPayload(build([L('long', 'C', 100), L('short', 'C', 110)])) === 'NET_DEBIT', 'multi-leg orders keep their own orderType');
 }
 // A butterfly's body is ONE leg at twice the size.
 {

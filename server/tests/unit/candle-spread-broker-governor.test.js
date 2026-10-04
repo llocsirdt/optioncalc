@@ -36,15 +36,16 @@ const cfg = { spreadWidth: 10, tickIncrement: 0.05, quantity: 1 };
 // A resting cover whose fill would breach is PULLED; one that would not, is left alone.
 {
   const cancels = [];
-  const deps = { ...broker, cancelOrder: async (id, m) => { cancels.push({ id, m }); return { status: 'cancelled' }; } };
-  const st = { positions: [bear(), b1(), b2(), b3()] };
+  const st = { positions: [bear(), b1(), b2(), b3()], liveOrders: [{ orderId: 'cov-bear', kind: 'cover-rest', positionId: 'bear', status: 'working' }] };
+  const deps = { ...broker, cancelOrder: async (id, m) => { cancels.push({ id, m }); const r = st.liveOrders.find((o) => o.orderId === id); if (r) r.cancelRequestedAt = 1; return { status: 'cancelled' }; } };
   const d = [];
   ok(trader.governRestingCovers(st, cfg, deps, d) === 1, 'with three naked bulls the bear cover is pulled');
   ok(cancels.length === 1 && cancels[0].id === 'cov-bear' && cancels[0].m.reason === 'governor', 'cancelled at the broker');
   const dec = d.find((x) => x.action === 'cover-defer-governor');
   ok(dec && dec.source === 'broker-resting' && Math.round(dec.floorIfBooked) === -1748, 'logged with the floor it avoided');
-  ok(st.positions[0].pendingCover && st.positions[0].pendingCover.cancelRequestedAt, 'kept pending until the broker answers');
-  ok(trader.governRestingCovers(st, cfg, deps, []) === 0 && cancels.length === 1, 'and not cancelled twice');
+  ok(st.positions[0].pendingCover && st.liveOrders[0].cancelRequestedAt, 'kept pending; the cancel is recorded on the order row');
+  ok(trader.governRestingCovers(st, cfg, deps, []) === 0 && cancels.length === 1, 'and not cancelled twice in the same pass');
+  ok(trader.governRestingCovers(JSON.parse(JSON.stringify(st)), cfg, deps, []) === 0 && cancels.length === 1, 'nor on a later pass');
 
   const st2 = { positions: [bear(), b1(), b2()] };
   const c2 = [];

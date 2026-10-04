@@ -100,18 +100,34 @@ const rec = (st = {}) => ({ runId: 'r', config: { variant: 'v7-10' }, state: { l
     const getLeg = (type, strike) => ({ mid: 5, bid: 4.9, ask: 5.1, symbol: `S${type}${strike}` });
     const hp = { id: 'h2', side: 'wing', legs: [{ side: 'long', type: 'C', strike: 100 }], filled: false, orderId: 'hy',
       pendingHedge: { kind: 'wing', limit: 1.0, orderId: 'hy', placedEpoch: 0 } };
-    const st = { positions: [hp], cashDeployed: 0 };
+    const st = { positions: [hp], cashDeployed: 0, liveOrders: [{ orderId: 'hy', kind: 'wing', status: 'working' }] };
     const cancels = [];
+    // like index.makeCancelOrder: an ACCEPTED cancel marks the order row
     const deps = { fillSource: 'broker', nowMs: 11 * 60000, getLeg, strikeIncrement: 10,
-      cancelOrder: async (id, m) => { cancels.push({ id, m }); return { status: 'cancelled' }; } };
+      cancelOrder: async (id, m) => { cancels.push({ id, m }); const r = st.liveOrders.find((o) => o.orderId === id); if (r) r.cancelRequestedAt = 1; return { status: 'cancelled' }; } };
     const d = [];
     trader.resolvePendingHedges(st, { tickIncrement: 0.05, spreadWidth: 10 }, deps, d);
+    await new Promise((r) => setImmediate(r));
     ok(cancels.length === 1 && cancels[0].id === 'hy', 'past the TTL the hedge order is cancelled AT THE BROKER');
-    ok(st.positions.includes(hp) && hp.pendingHedge && hp.pendingHedge.cancelRequestedAt,
-      'and the hedge is kept pending (holds its slot, nothing re-placed) until the broker answers');
+    ok(st.positions.includes(hp) && hp.pendingHedge && st.liveOrders[0].cancelRequestedAt,
+      'and the hedge is kept pending (holds its slot) with the cancel recorded on the ORDER ROW');
     ok(d.some((x) => x.action === 'wing-expire-cancel'), 'logged as expire-cancel');
-    trader.resolvePendingHedges(st, { tickIncrement: 0.05, spreadWidth: 10 }, deps, d);
-    ok(cancels.length === 1, 'a second pass does not cancel again');
+    const fresh = JSON.parse(JSON.stringify(st));   // the next pass reads the record from disk
+    trader.resolvePendingHedges(fresh, { tickIncrement: 0.05, spreadWidth: 10 }, deps, d);
+    ok(cancels.length === 1, 'a later pass does not cancel again — the row says a cancel is under way');
+    // A FAILED cancel leaves no mark, so the next pass retries it (it used to freeze the hedge all day).
+    {
+      const hp2 = { id: 'h3', side: 'wing', legs: [{ side: 'long', type: 'C', strike: 100 }], filled: false, orderId: 'hz',
+        pendingHedge: { kind: 'wing', limit: 1.0, orderId: 'hz', placedEpoch: 0 } };
+      const st2 = { positions: [hp2], cashDeployed: 0, liveOrders: [{ orderId: 'hz', kind: 'wing', status: 'working' }] };
+      let n = 0;
+      const failing = { ...deps, cancelOrder: async () => { n++; return { status: 'error', error: '503' }; } };
+      trader.resolvePendingHedges(st2, { tickIncrement: 0.05, spreadWidth: 10 }, failing, []);
+      await new Promise((r) => setImmediate(r));
+      ok(n === 1 && !st2.liveOrders[0].cancelRequestedAt, 'a failed cancel leaves the row unmarked');
+      trader.resolvePendingHedges(JSON.parse(JSON.stringify(st2)), { tickIncrement: 0.05, spreadWidth: 10 }, failing, []);
+      ok(n === 2, 'and the next pass RETRIES it');
+    }
     // Then the broker fills it before the cancel lands -> it books normally.
     st.liveOrders = [{ orderId: 'hy', kind: 'wing', status: 'filled', fillPrice: 1.0, fillSide: 'DEBIT', net: 'NET_DEBIT' }];
     trader.applyBrokerFills(st, { spreadWidth: 10, quantity: 1 }, { fillSource: 'broker' }, d);

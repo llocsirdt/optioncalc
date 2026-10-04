@@ -1464,9 +1464,10 @@ function makeReplaceOrder(run, record) {
         om.trackOrder(record, {
           orderId: newId, kind: (meta && meta.kind) || 'replace',
           positionId: (meta && (meta.of || meta.positionId)) || null,
-          net: sendPayload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
+          net: om.netOfPayload(sendPayload), requestedPrice: payload.price, sentPrice: sendPayload.price,
           testMode: isTest, legs: meta && meta.legs, placedAt: Date.now(),
-          replaces: (!isTest && oldRow) ? orderId : undefined
+          replaces: (!isTest && oldRow) ? orderId : undefined,
+          prior: (!isTest && oldRow && meta && meta.prior) ? meta.prior : undefined
         });
       } else {
         // THE ROW MUST DESCRIBE THE ORDER THAT IS NOW RESTING, even when the id did not change. Schwab
@@ -1487,7 +1488,7 @@ function makeReplaceOrder(run, record) {
           + 'the replacement is live at Schwab and untracked; the position check will show it');
         if (row) {
           const wasNet = row.net;
-          row.net = sendPayload.orderType;
+          row.net = om.netOfPayload(sendPayload);
           row.requestedPrice = payload.price;
           row.sentPrice = sendPayload.price;
           if (meta && meta.legs) row.legs = meta.legs;
@@ -1642,7 +1643,7 @@ function makePlaceOrder(run, record) {
       const orderId = resp && resp.orderId ? resp.orderId : null;
       om.trackOrder(record, {
         orderId, kind: meta.kind, positionId: meta.of || meta.positionId || null,
-        net: payload.orderType, requestedPrice: payload.price, sentPrice: sendPayload.price,
+        net: om.netOfPayload(payload), requestedPrice: payload.price, sentPrice: sendPayload.price,
         testMode: isTest, legs: meta.legs, placedAt: Date.now()
       });
       store.appendEvent(record, {
@@ -1653,6 +1654,9 @@ function makePlaceOrder(run, record) {
       return { status: isTest ? 'test-sent' : 'sent', filled: true, orderId };
     } catch (e) {
       store.appendEvent(record, { type: 'order_error', meta, payload: sendPayload, testMode: isTest, note: `Schwab send failed: ${e && e.message}` });
+      // A refusal AT SEND counts toward the same repeated-rejection alarm as an asynchronous REJECTED.
+      om.noteReject(record, om.rejectKey(meta && meta.kind, meta && (meta.of || meta.positionId)), String((e && e.message) || 'send failed').slice(0, 300),
+        { kind: meta && meta.kind, price: sendPayload && sendPayload.price });
       console.error(`[candle-spread] ${run.variant} ORDER SEND FAILED: ${e && e.message}`);
       // A REJECTED ORDER IS NOT A POSITION. This returned `filled: true` so the state machine would keep
       // simulating the intended strategy through a send failure — correct while nothing was real, and
@@ -3254,6 +3258,7 @@ function status() {
       // And the position-level loop — what the ACCOUNT holds vs what the book believes. null until a run
       // can really hold something (see accountPositionsIfDue).
       positionReconcile: (st && st.positionReconcile) || null,
+      rejectStreaks: (st && st.rejectStreaks && Object.keys(st.rejectStreaks).length) ? st.rejectStreaks : null,
       lastCandle: st ? st.lastCandleTime : null,
       updatedAt: rec ? rec.updatedAt : null
     };

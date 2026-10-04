@@ -69,19 +69,33 @@ function makeLegAccessor(chainData, expiration) {
 // a per-leg quantity now wins over the flat argument — which is also what makes qty > 1 correct on a fly.
 //
 // SINGLE / VERTICAL / CUSTOM is the same ladder combo-order.js already picks between.
+// HEDGE PRICES ON THE TICK, ROUNDED UP. Floor-offset, wing and fly prices are built from chain mids plus a
+// slip, so they came out at 6.77 or 1.22 — and only rounded to cents at the wire. Schwab refuses a single
+// option off the $0.05 tick (verified 2026-10-04), and a buy rounded UP to the tick stays at least as
+// fillable as the price it was meant to be.
+function tickUp(x, tick) {
+  const t = tick || 0.05;
+  return round2(Math.ceil(round2(x) / t - 1e-9) * t);
+}
+
 function buildOrderPayload(resolvedLegs, limit, quantity, net /* 'DEBIT'|'CREDIT' */) {
   const merged = CO.mergeLegs(resolvedLegs, quantity);
   // mergeLegs drops a strike whose net is zero. That cannot happen on any structure we send (it would be
   // a spread against itself), but if it ever did, sending the un-merged legs is safer than sending none.
   const legs = merged.length ? merged : resolvedLegs.map(l => ({ ...l, quantity }));
-  const strategy = legs.length === 1 ? 'NONE' : legs.length === 2 ? 'VERTICAL' : 'CUSTOM';
+  const single = legs.length === 1;
+  const strategy = single ? 'NONE' : legs.length === 2 ? 'VERTICAL' : 'CUSTOM';
   return {
-    orderType: net === 'CREDIT' ? 'NET_CREDIT' : 'NET_DEBIT',
+    // ONE OPTION IS A LIMIT ORDER, NOT A NET ONE. Verified against Schwab 2026-10-04: a single leg sent as
+    // NET_DEBIT + NONE is refused at entry ("Limit price must be populated only for limit orders") — every
+    // naked wing would have been refused, every bar. As LIMIT it is accepted. Single legs must also sit on
+    // the $0.05 tick (pennies refused above and below $3); the hedge planners snap their prices for that.
+    orderType: single ? 'LIMIT' : (net === 'CREDIT' ? 'NET_CREDIT' : 'NET_DEBIT'),
     session: 'NORMAL',
     price: limit,
     duration: 'DAY',
     orderStrategyType: 'SINGLE',
-    complexOrderStrategyType: strategy,
+    ...(single ? {} : { complexOrderStrategyType: strategy }),
     orderLegCollection: legs.map(l => ({
       instruction: l.side === 'long' ? 'BUY_TO_OPEN' : 'SELL_TO_OPEN',
       quantity: l.quantity || quantity,
@@ -798,9 +812,24 @@ function coverBreachesGovernor(st, deps, pos, legs, target, extra) {
   const f1 = govFloor(st, deps, extra || null, [pos, { ...pos, covered: true, coverLegs: legs, coverLimit: target }]);
   return (f1 < f0 && -f1 > deps.lossMax) ? { floorIfFilled: round2(f1), floorNow: round2(f0) } : null;
 }
+// IS A CANCEL ALREADY UNDER WAY FOR THIS ORDER? Read from the ORDER ROW, never from a flag on the cover or
+// hedge. The row is marked by index.makeCancelOrder only once Schwab has ACCEPTED the DELETE, and that
+// write is persisted with it. A flag set here before the cancel's answer — what this did until 2026-10-04 —
+// survived a FAILED cancel (5xx, network, token refresh): the cover was then skipped by the governor, the
+// ladder and give-up for the rest of the day, frozen at its last price, and a hedge held its budget slot
+// (blocking every later floor-offset). Now a failed cancel leaves no mark and the next pass simply retries.
+// PULLING covers the gap inside ONE pass, between asking and the answer: the ladder must not reprice an
+// order this pass is pulling. It holds in-memory objects only, so it can never outlive the pass.
+const PULLING = new WeakSet();
+function cancelUnderWay(st, orderId, obj) {
+  if (obj && PULLING.has(obj)) return true;
+  if (!orderId) return false;
+  const row = ((st && st.liveOrders) || []).find((o) => o && o.orderId === orderId);
+  return !!(row && row.cancelRequestedAt && !['filled', 'canceled', 'rejected', 'expired'].includes(row.status));
+}
 function pullCover(pos, deps, decisions, gov, source) {
   const pc = pos.pendingCover;
-  pc.cancelRequestedAt = deps.nowMs != null ? deps.nowMs : Date.now();
+  PULLING.add(pc);
   const cancelSent = !!(deps.cancelOrder && pc.orderId);
   decisions.push({ action: 'cover-defer-governor', positionId: pos.id, source,
     floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax,
@@ -816,7 +845,7 @@ async function pullCoversForOpen(st, res, cfg, deps, decisions) {
   const extra = { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false };
   const waits = [];
   for (const pos of st.positions || []) {
-    if (!restingCover(pos) || pos.pendingCover.cancelRequestedAt) continue;
+    if (!restingCover(pos) || cancelUnderWay(st, pos.pendingCover.orderId, pos.pendingCover)) continue;
     const gov = coverBreachesGovernor(st, deps, pos, pos.pendingCover.legs, pos.pendingCover.target, extra);
     if (gov) waits.push(pullCover(pos, deps, decisions, gov, 'broker-before-open'));
   }
@@ -965,7 +994,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill). An offset used to book filled:true on the strength
     // of its own cost estimate; now the observed mark has to reach the limit we place, and the limit
     // carries the standard slip so it is likelier to be crossed for real.
-    const limitPx = round2(best.debit + openSlip(cfg, deps));
+    const limitPx = tickUp(best.debit + openSlip(cfg, deps), cfg.tickIncrement);   // on the $0.05 tick: off-tick prices were sent before (2026-10-04 sweep)
     const chk = markFill(best.hp.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'floor-offset-nofill', legs: best.hp.legs, mark: null, limit: limitPx });
@@ -1077,7 +1106,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     }
     if (!resolved.length) continue;
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a wing no longer books on its own cost estimate.
-    const limitPx = round2(w.cost + openSlip(cfg, deps));
+    const limitPx = tickUp(w.cost + openSlip(cfg, deps), cfg.tickIncrement);   // on the $0.05 tick: off-tick prices were sent before (2026-10-04 sweep)
     const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: null, limit: limitPx });
@@ -1177,7 +1206,7 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
     }
     if (!resolved.length) continue;
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a fly does not book on its planned cost either.
-    const limitPx = round2(f.cost + openSlip(cfg, deps));
+    const limitPx = tickUp(f.cost + openSlip(cfg, deps), cfg.tickIncrement);   // on the $0.05 tick: off-tick prices were sent before (2026-10-04 sweep)
     const chk = markFill(f.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
       decisions.push({ action: 'fly-nofill', tag: f.tag, legs: f.legs, mark: null, limit: limitPx });
@@ -2156,6 +2185,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
       noteCash(st, (credit ? -px : px) * 100 * qty);
       o.brokerApplied = true; applied++;
+      OM.clearReject(st, OM.rejectKey(o.kind, null)); OM.clearReject(st, OM.rejectKey(o.kind, pos.id));
       decisions.push({ action: 'open-fill', source: 'broker', positionId: pos.id, side: pos.side,
         limit: pos.limit, sentNet: pos.sentNet, brokerPrice: px, cashDeployed: st.cashDeployed });
       continue;
@@ -2189,6 +2219,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       st.realizedPnl = round2(st.realizedPnl + floor);
       noteCash(st, (credit ? -px : px) * 100 * qty);
       o.brokerApplied = true; applied++;
+      OM.clearReject(st, OM.rejectKey(o.kind, pos.id));
       decisions.push({ action: 'cover-fill', source: 'broker', positionId: pos.id, coverId: pos.coverId,
         fillPrice: bookLimit, brokerPrice: px, sentNet: pos.coverSentNet, lockedFloor: floor,
         cashDeployed: st.cashDeployed });
@@ -2218,6 +2249,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
       o.brokerApplied = true; applied++;
+      OM.clearReject(st, OM.rejectKey(o.kind, null));
       decisions.push({ action: `${ph.kind}-fill`, source: 'broker', id: pos.id, legs: pos.legs,
         limit: ph.limit, fillPrice: round2(px), brokerPrice: px, cost: Math.round(spent),
         cashDeployed: st.cashDeployed });
@@ -2613,8 +2645,8 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
       // re-placed), and let the broker's answer decide — FILLED books it through applyBrokerFills, CANCELED
       // retires it through order-manager.clearDeadOrderState. The TTL runs whether or not the mark reads
       // fillable: a hedge the market crosses but the broker never fills must not hold its slot all day.
-      if (ph.placedEpoch != null && (now - ph.placedEpoch) > ttl && !ph.cancelRequestedAt) {
-        ph.cancelRequestedAt = now;
+      if (ph.placedEpoch != null && (now - ph.placedEpoch) > ttl && !cancelUnderWay(st, ph.orderId, ph)) {
+        PULLING.add(ph);   // see cancelUnderWay: the order row, not this object, carries the cancel across passes
         const cancelSent = !!(deps.cancelOrder && ph.orderId);
         if (cancelSent) {
           Promise.resolve(deps.cancelOrder(ph.orderId, { kind: `cancel-${ph.kind}`, of: pos.id, reason: 'hedge-ttl' }))
@@ -2794,7 +2826,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
           sentCredit ? 'CREDIT' : 'DEBIT');
         const r = await deps.replaceOrder(pos.orderId, payload,
           { kind: 'open-reprice', of: pos.id, fromLimit: sentFrom, legs: sendLegs,
-            net: sentCredit ? 'CREDIT' : 'DEBIT' });
+            net: sentCredit ? 'CREDIT' : 'DEBIT',
+            prior: { limit: beforeOpen.limit, sentLimit: beforeOpen.sentLimit, openLadderStep: beforeOpen.step } });
         if (!replaceTookEffect(r)) {
           // Same rule as concedeCover: the order did not move, so neither does the book — retried next pass.
           pos.limit = beforeOpen.limit; pos.sentLimit = beforeOpen.sentLimit; pos.openLadderStep = beforeOpen.step;
@@ -2852,8 +2885,26 @@ function replaceTookEffect(r) {
   return false;
 }
 
-async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra) {
+async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra, st) {
   const tick = cfg.tickIncrement;
+  // THE GOVERNOR JUDGES THE NEW PRICE TOO. governRestingCovers judges a resting cover at the price it rests
+  // at, but the ladder and give-up then RAISE that price, and under the broker the fill comes back through
+  // applyBrokerFills with no governor in the way. Give-up fires on exactly the days the book is going
+  // wrong, so a raised cover could fill and take the floor through lossMax — the 2026-10-02 breach by
+  // another road. So under the broker, a raise whose fill would breach is not sent: the order keeps its
+  // current price (still judged every pass by governRestingCovers) and the step is retried when the book
+  // allows. Logged once per refused price, not every 30s.
+  if (st && deps && deps.fillSource === 'broker' && to > (pc.target != null ? pc.target : -Infinity)) {
+    const gov = coverBreachesGovernor(st, deps, pos, pc.legs, to);
+    if (gov) {
+      if (pc.govDeferredTo !== to) {
+        decisions.push({ action: `${kind}-defer-governor`, positionId: pos.id, from, to, orderId: pc.orderId || null,
+          floorIfBooked: gov.floorIfFilled, floorNow: gov.floorNow, lossMax: deps.lossMax, ...(extra || {}) });
+      }
+      pc.govDeferredTo = to;
+      return false;
+    }
+  }
   const credit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
   const before = { target: pc.target, sentCredit: pc.sentCredit };
   pc.target = to;                                  // the booked target moves with the working limit, or we
@@ -2878,7 +2929,10 @@ async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra
     if (srl.error) why = `legs unquotable (${srl.error})`;
     else {
       const payload = buildOrderPayload(srl.resolved, sentTo, pos.quantity || cfg.quantity, net);
-      r = await deps.replaceOrder(pc.orderId, payload, { kind, of: pos.id, fromLimit: sentFrom, legs, net });
+      // `prior` rides on the replacement row so that if Schwab later REFUSES the replacement while the
+      // original keeps working, order-manager can put the price back as well as the order id.
+      r = await deps.replaceOrder(pc.orderId, payload, { kind, of: pos.id, fromLimit: sentFrom, legs, net,
+        prior: { target: before.target, sentCredit: before.sentCredit } });
       ok = replaceTookEffect(r);
       if (!ok) why = (r && (r.error || r.status)) || 'no result';
     }
@@ -2906,7 +2960,7 @@ function governRestingCovers(st, cfg, deps, decisions) {
   if (!govOn(deps) || !deps || deps.fillSource !== 'broker') return 0;
   let pulled = 0;
   for (const pos of st.positions || []) {
-    if (!restingCover(pos) || pos.pendingCover.cancelRequestedAt) continue;
+    if (!restingCover(pos) || cancelUnderWay(st, pos.pendingCover.orderId, pos.pendingCover)) continue;
     const pc = pos.pendingCover;
     const gov = coverBreachesGovernor(st, deps, pos, pc.legs, pc.target);
     if (!gov) continue;
@@ -2930,7 +2984,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     if (!pos.filled || pos.covered || !pos.pendingCover) continue;
     const pc = pos.pendingCover;
     // Being pulled (governRestingCovers): do not walk a price toward an order we have asked to cancel.
-    if (pc.cancelRequestedAt) continue;
+    if (cancelUnderWay(st, pc.orderId, pc)) continue;
     const mark = coverMarkNow(pc.legs, deps.getLeg);
 
     // GIVE-UP RULE (deps.coverGiveUp) — "better to fill at a small locked profit or even a small loss
@@ -2953,10 +3007,10 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       if (through >= pts) {
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
-        const give = L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick);
+        const give = round2(L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick));   // round2 AFTER, as every other send site
         if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
-            through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 });
+            through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 }, st);
           if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market
@@ -2977,7 +3031,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     const prevStep = pc.ladderStep;
     pc.ladderStep = next.step;
     const moved = await concedeCover(pos, pc, next.limit, pc.target, cfg, deps, decisions, 'cover-reprice',
-      { step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax });
+      { step: next.step, ideal: next.ideal, maxPay: next.maxPay, mark, capped: next.capped, atMax: next.atMax }, st);
     if (!moved) pc.ladderStep = prevStep;   // the step did not happen; let the next pass take it
   }
 }
@@ -3178,6 +3232,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   noteCash,
+  tickUp,                // hedge prices rounded UP to the tick
   govFloor,              // the governor's floor: the booked book + every open that can still fill
   pullCoversForOpen,     // broker: pull covers a prospective open would turn into lossMax breaches, before sending it
   governRestingCovers,   // broker-side governor cover deferral (pulls a resting cover whose fill breaches lossMax)

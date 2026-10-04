@@ -133,7 +133,8 @@ function trackOrder(record, o) {
     fillPrice: null,
     lastPolledAt: null,
     canceledReason: null,
-    ...(o.replaces ? { replaces: o.replaces } : {})   // the order this one replaced, while that is unconfirmed
+    ...(o.replaces ? { replaces: o.replaces } : {}),  // the order this one replaced, while that is unconfirmed
+    ...(o.prior ? { prior: o.prior } : {})             // the engine's price before this replace, for a refused-replace restore
   });
 }
 
@@ -223,6 +224,44 @@ function wirePrice(payload) {
   return cents === payload.price ? payload : { ...payload, price: cents };
 }
 
+// REPEATED REJECTIONS MUST BE LOUD. On 2026-10-02 the same cover was rejected every bar for 40 minutes and
+// the only trace was 'broker REJECTED' — no reason, no count, no alarm — while a real position sat
+// uncovered. The engine rebuilds an identical order after each rejection, so ANY rejection that will always
+// happen (a bad price, buying power, an account restriction) loops silently all day. This counts rejections
+// per position (opens: per working slot; hedges: per kind), keeps Schwab's own reason, alarms at 3 and
+// every 5 after, and resets when that position or slot actually fills. Published on status().
+// THE SIDE OF AN ORDER, as NET_DEBIT / NET_CREDIT, whatever orderType it was sent with. A single-leg order
+// goes out as LIMIT; recording 'LIMIT' as its side would make applyBrokerFills' wrong-side guard refuse
+// every fill on it. A LIMIT buy is a debit, a LIMIT sell a credit.
+function netOfPayload(p) {
+  if (!p) return null;
+  if (p.orderType !== 'LIMIT') return p.orderType || null;
+  const legs = p.orderLegCollection || [];
+  return legs.length && /^SELL/i.test(String(legs[0].instruction || '')) ? 'NET_CREDIT' : 'NET_DEBIT';
+}
+function rejectKey(kind, positionId) {
+  const fam = isOpenKind(kind) ? 'open' : /cover/.test(kind || '') ? 'cover' : HEDGE_KINDS.has(kind) ? 'hedge' : (kind || 'order');
+  if (fam === 'open') return `open:${positionId || 'slot'}`;
+  if (fam === 'hedge') return `hedge:${kind}`;
+  return `${fam}:${positionId || '?'}`;
+}
+function noteReject(record, key, reason, detail) {
+  const st = (record && record.state) || {};
+  st.rejectStreaks = st.rejectStreaks || {};
+  const r = st.rejectStreaks[key] || { count: 0 };
+  r.count++; r.lastReason = reason || null; r.lastAt = new Date().toISOString();
+  if (detail) { r.kind = detail.kind || r.kind || null; r.price = detail.price != null ? detail.price : (r.price != null ? r.price : null); }
+  st.rejectStreaks[key] = r;
+  if (r.count === 3 || (r.count > 3 && (r.count - 3) % 5 === 0)) {
+    store.appendEvent(record, { type: 'order_reject_streak', key, count: r.count, reason: r.lastReason, kind: r.kind, price: r.price,
+      note: `rejected ${r.count} times in a row — the order is being rebuilt the same way; a position may be unprotected` });
+    console.error(`[candle-spread] REPEATED REJECTION x${r.count} (${key}, ${r.kind || '?'} @ ${r.price}): `
+      + `${r.lastReason || 'no reason given'} — rebuilt identically each time; a real position may be unprotected`);
+  }
+  return r.count;
+}
+function clearReject(st, key) { if (st && st.rejectStreaks && st.rejectStreaks[key]) delete st.rejectStreaks[key]; }
+
 // EVERY KIND AN OPEN'S ORDER ROW CAN CARRY. The open ladder replaces the resting order, and the
 // replacement row is tagged 'open-reprice' — so an open that fills after being worked fills under THAT
 // kind. Matching 'open' alone is how the first live fill (v7-10, 2026-10-02, #1008147955066 @ 6.00) went
@@ -287,6 +326,13 @@ async function reconcile(record, deps, opts = {}) {
 
   for (const o of los) {
     if (isTerminal(o)) continue;
+    // A REPLACEMENT PULLED BECAUSE ITS ORIGINAL FILLED must actually be cancelled. The pull below is
+    // attempted once, at the moment the fill is seen; if that DELETE failed, nothing retried it and the
+    // replacement could fill as a second real order. Retry until the broker accepts the cancel.
+    if (o.supersededByFill && !o.cancelRequestedAt) {
+      try { await deps.tradingClient.orderDelete(deps.accountHash, o.orderId); o.cancelRequestedAt = now; }
+      catch (e) { store.appendEvent(record, { type: 'order_cancel_error', orderId: o.orderId, note: `retrying pull of superseded replacement: ${e && e.message}` }); }
+    }
     // 1) Read current broker status.
     let resp;
     try {
@@ -357,9 +403,22 @@ async function reconcile(record, deps, opts = {}) {
         o.canceledReason = 'replace-refused';
         prev.replacedBy = null;
         const st = record.state || {};
+        // THE PRICE GOES BACK WITH THE ID. Restoring only the id left the engine believing the refused price
+        // was working while the broker still held the original one — and give-up, which re-sends only when its
+        // price differs from the working one, then never re-sent. The prior values ride on the row.
+        const pr = o.prior || null;
         for (const p of st.positions || []) {
-          if (p && p.pendingCover && p.pendingCover.orderId === o.orderId) p.pendingCover.orderId = prev.orderId;
-          if (p && p.orderId === o.orderId) p.orderId = prev.orderId;
+          if (p && p.pendingCover && p.pendingCover.orderId === o.orderId) {
+            p.pendingCover.orderId = prev.orderId;
+            if (pr && pr.target != null) p.pendingCover.target = pr.target;
+            if (pr && 'sentCredit' in pr) p.pendingCover.sentCredit = pr.sentCredit;
+            p.pendingCover.ladderStep = null;          // let the ladder re-take its step against the real price
+            p.pendingCover.gaveUp = false;
+          }
+          if (p && p.orderId === o.orderId) {
+            p.orderId = prev.orderId;
+            if (pr && pr.limit != null) { p.limit = pr.limit; p.sentLimit = pr.sentLimit; p.openLadderStep = pr.openLadderStep; }
+          }
           if (p && p.pendingHedge && p.pendingHedge.orderId === o.orderId) p.pendingHedge.orderId = prev.orderId;
         }
         store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
@@ -370,10 +429,14 @@ async function reconcile(record, deps, opts = {}) {
     }
     if (DEAD.has(String(resp && resp.status).toUpperCase())) {
       o.status = next === 'working' ? 'canceled' : next;
+      // Schwab says WHY in statusDescription; it was never kept.
+      if (resp && resp.statusDescription) o.statusReason = String(resp.statusDescription).slice(0, 300);
+      if (o.status === 'rejected') noteReject(record, rejectKey(o.kind, o.positionId), o.statusReason, { kind: o.kind, price: o.sentPrice });
       const cleared = clearDeadOrderState(record, o);
       store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
         positionId: o.positionId || undefined, cleared: cleared || undefined,
-        note: `broker ${resp && resp.status}`
+        reason: o.statusReason || undefined,
+        note: `broker ${resp && resp.status}` + (o.statusReason ? ` (${o.statusReason})` : '')
           + (cleared === 'cover' ? ' — pendingCover cleared, the position is uncovered again'
             : cleared === 'open' ? ' — open slot released, it never filled' : '') });
       continue;
@@ -418,4 +481,4 @@ async function reconcile(record, deps, opts = {}) {
   }
 }
 
-module.exports = { wirePrice, isOpenKind, OPEN_KINDS, HEDGE_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
+module.exports = { netOfPayload, rejectKey, noteReject, clearReject, wirePrice, isOpenKind, OPEN_KINDS, HEDGE_KINDS, unfillablePrice, unfillableOrder, clearDeadOrderState, trackOrder, retireOrder, reconcile, isTerminal, mapStatus, extractFillPrice, extractFillNet, TERMINAL, DEAD };
