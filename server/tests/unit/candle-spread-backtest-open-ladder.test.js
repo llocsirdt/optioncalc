@@ -18,6 +18,7 @@ const v = buildRuns().find(r => r.variant === 'v7-10');
 const fn = (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
 const base = optsFor(v, { intradayIV: true, hasPx, where: 'test' });
 const lad = optsFor(v, { intradayIV: true, hasPx, where: 'test', openFillModel: 'ladder' });
+lad.recordReplay = true;   // positions come back, so hedges can be told apart from opens
 ok(base.openFillModel === undefined && lad.openFillModel === 'ladder', 'the model is opt-in through optsFor');
 let placed = 0, ends = 0, worst = Infinity, opens = 0, filled = 0;
 for (const d of days) {
@@ -26,7 +27,8 @@ for (const d of days) {
   const r = E.runDay5m(d.bars, fn, lad);
   const L = r.openLadder;
   placed += L.placed; filled += L.filled; ends += L.filled + L.canceled + L.stale + L.expired;
-  opens += r.opens; worst = Math.min(worst, r.terminal);
+  // r.opens counts EVERY position, hedges included (floor offsets, wings, flies) — count the opens only
+  opens += (r.positions || []).filter((p) => !p.hedge && !p.fly && p.side !== 'hedge').length; worst = Math.min(worst, r.terminal);
   ok(L.paidUp >= 0, 'the ladder only ever walks UP from the placed price');
 }
 ok(placed > 0, `orders were placed (${placed})`);

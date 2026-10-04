@@ -399,9 +399,16 @@ const MIN_LOCK_AB = (() => {
   return m;
 })();
 
-const GIVEUP_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP : 'v3-20,v8-20,v9-20,v9-40,v9-40-cATM')
-    .split(',').map(s => s.trim()).filter(Boolean));
+// COVER GIVE-UP — FLEET DEFAULT since 2026-10-04 (user), v7-10 included. Was an A/B on 5 variants. The
+// full-roster re-sweep (scripts/candle-spread/sweep-giveup.js, 765 days, current engine) found ON(10 pts, 5%)
+// best by total on 62 of 80 variants: capped aggregate +18%, mean max drawdown -$29.3k -> -$25.4k, cover
+// fill +6 pts, worst days unchanged; v7-10 ret/DD 526 -> 979. Enabled only after the replace-result fix
+// (daf2194) — before it, a give-up whose replace failed was never re-sent.
+// CANDLE_SPREAD_GIVEUP overrides: unset or "all" = every variant; "none" = no variant; else a list.
+const GIVEUP_ENV = process.env.CANDLE_SPREAD_GIVEUP != null ? process.env.CANDLE_SPREAD_GIVEUP.trim() : 'all';
+const GIVEUP_ALL = /^all$/i.test(GIVEUP_ENV);
+const GIVEUP_LIVE = new Set(GIVEUP_ALL || /^none$/i.test(GIVEUP_ENV) ? []
+  : GIVEUP_ENV.split(',').map(s => s.trim()).filter(Boolean));
 // CAPITAL-PRESERVATION PAIRING (2026-09-11). A TIGHT width-relative day-loss cap plus the dynamic
 // minLock ramp. Neither belongs on the fleet; together on one variant they are the configuration the user
 // can actually run on a $25k account.
@@ -846,7 +853,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
   // giveUpMaxLoss is the whole ball game: at 10 points a 5% cap is a clear win, 15% is mixed and 30% is a
   // rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is $1.00 on
   // a $20 spread, enough to cross the spread and not enough to chase.
-  if (GIVEUP_LIVE.has(v.variant)) {
+  if (GIVEUP_ALL || GIVEUP_LIVE.has(v.variant)) {
     v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
   }
   // ORDER SLIP — ticks over the mark on opens/offsets/wings; a credit twin concedes the same.
