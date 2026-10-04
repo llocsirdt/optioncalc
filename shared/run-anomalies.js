@@ -76,7 +76,7 @@
       }
       if (a.custom === 'positions') {
         const pr = record && record.state && record.state.positionReconcile;
-        if (pr && pr.severity === 'DIVERGENT') hits.push({ time: pr.at, note: `${pr.diffs} leg(s) at the last check: ${JSON.stringify(pr.byKind || {})}` });
+        if (pr && pr.severity === 'DIVERGENT') hits.push({ time: pr.at, note: `${pr.diffs} leg(s) at the last check: ${Object.entries(pr.byKind || {}).map(([k, n]) => `${n} ${k}`).join(', ')}` });
       }
       if (hits.length) out.push({ key: a.key, label: a.label, count: hits.length, detail: detailOf(a.key, hits) });
     }

@@ -95,7 +95,13 @@
   .kv .k { color:var(--muted); }
   .kv .muted { color:#aab; }
   .kv .bad { color:var(--loss); font-weight:600; }
-  .kv .k.alarm { color:var(--loss); font-weight:600; }   /* an anomaly row: the LABEL is red too, so it cannot be missed */
+  .kv .k.alarm { color:var(--loss); font-weight:600; white-space:normal !important; }   /* an anomaly row: the LABEL is red too, so it cannot be missed */
+  /* Mechanisms: a row that FIRED gets a dark label; a zero row is muted label and value alike. */
+  .kv .k.on { color:var(--fg); }
+  .kv .k.muted { color:#aab; }
+  /* an anomaly's detail sits UNDER its label (wrapping), never in the count column */
+  .kv .mlabel { display:flex; flex-direction:column; min-width:0; }
+  .kv .det { color:var(--loss); opacity:.8; font-size:10px; white-space:normal; overflow-wrap:anywhere; padding-left:12px; }
   table.ord { border-collapse:collapse; font:11px ui-monospace,monospace; width:100%; }
   table.ord th { text-align:right; padding:3px 6px; border-bottom:1px solid var(--grid); color:var(--muted);
     font-weight:600; white-space:nowrap; position:sticky; top:0; background:#fff; cursor:help;
@@ -440,9 +446,11 @@ function render() {
     $('mech').innerHTML = mrows.map(([k, v]) => {
       const zero = v === 0 || v === '0' || v === '0 / 0';
       const cls = zero ? 'muted' : hot.has(k) ? 'bad' : '';
-      return `<div><span class="k">${k}</span><span class="${cls}">${v}</span></div>`;
-    }).join('') + anomalies.map((a) =>
-      `<div title="${String(a.detail || '').replace(/"/g, '&quot;')}"><span class="k alarm">⚠ ${a.label}</span><span class="bad">${a.count}${a.detail ? ' — ' + String(a.detail).replace(/</g, '&lt;').slice(0, 140) : ''}</span></div>`).join('');
+      return `<div><span class="k ${zero ? 'muted' : 'on'}">${k}</span><span class="${cls}">${v}</span></div>`;
+    }).join('') + anomalies.map((a) => {
+      const det = a.detail ? String(a.detail).replace(/&/g, '&amp;').replace(/</g, '&lt;') : '';
+      return `<div><span class="mlabel"><span class="k alarm">⚠ ${a.label}</span>${det ? `<span class="det">${det}</span>` : ''}</span><span class="bad">${a.count}</span></div>`;
+    }).join('');
     $('mechMeta').textContent = `${d.length} decisions` + (anomalies.length ? ` · ${anomalies.length} anomal${anomalies.length === 1 ? 'y' : 'ies'}` : '');
   }
 
