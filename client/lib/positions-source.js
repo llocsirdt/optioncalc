@@ -148,8 +148,8 @@
         + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
     }).join('');
     box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}${hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : ''}</span></h4>`
-      + `<table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
-      + `<tbody>${rows}</tbody></table>`;
+      + `<div class="trade-detail-scroll"><table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
+      + `<tbody>${rows}</tbody></table></div>`;
   }
 
   // --- tabs + affordances ---

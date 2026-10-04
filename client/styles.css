@@ -179,6 +179,10 @@ pre {
    glyph + color mirroring the NQ-chart markers, tied by position # so covers pair with their opens. */
 #strategy-trade-details { margin-top: 12px; }
 #strategy-trade-details h4 { margin: 0 0 6px; }
+/* Column 1 has a FIXED width; the nowrap table is wider than it and used to paint over column 2. Keep it
+   inside the column and scroll it sideways, the same way the debug page's Orders table does. */
+#strategy-trade-details { max-width: 100%; min-width: 0; }
+.trade-detail-scroll { max-width: 100%; overflow-x: auto; }
 .trade-detail-table {
   border-collapse: collapse;
   width: 100%;
