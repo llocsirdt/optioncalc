@@ -444,7 +444,8 @@ function render() {
     // shows none of them and a bad one cannot be scrolled past. Same list the daily review tool prints.
     const anomalies = (window.RunAnomalies ? window.RunAnomalies.anomaliesOf(record) : []);
     $('mech').innerHTML = mrows.map(([k, v]) => {
-      const zero = v === 0 || v === '0' || v === '0 / 0';
+      // "nothing happened" in every shape a row can take: 0, '0 / 0', '0 / 0 / 0', '—'
+      const zero = v === 0 || v === '—' || (typeof v === 'string' && /^0( \/ 0)*$/.test(v));
       const cls = zero ? 'muted' : hot.has(k) ? 'bad' : '';
       return `<div><span class="k ${zero ? 'muted' : 'on'}">${k}</span><span class="${cls}">${v}</span></div>`;
     }).join('') + anomalies.map((a) => {
