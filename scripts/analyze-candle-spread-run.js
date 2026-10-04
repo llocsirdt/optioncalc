@@ -131,6 +131,11 @@ function renderTimeline(j) {
   if (eod && eod.terminalPnl != null) {
     console.log(`TERMINAL P/L @ settle ${eod.settle}: ${money(eod.terminalPnl)}  (guaranteed floor was ${money(eod.floorPnl)})`);
   }
+  // Things that should NOT happen on a healthy day (shared/run-anomalies.js — the same list the debug page
+  // shows in red). Every one printed here is a thing to review in detail, never to skim past.
+  const anomalies = require('../shared/run-anomalies').anomaliesOf(j);
+  console.log(anomalies.length ? `ANOMALIES (${anomalies.length}) — review each:` : 'ANOMALIES: none');
+  for (const a of anomalies) console.log(`  !! ${a.label}: ${a.count}${a.detail ? ' — ' + a.detail : ''}`);
 }
 
 // --- 3-variant comparison -------------------------------------------------

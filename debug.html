@@ -4,6 +4,7 @@
 <title>Strategy Debug — one variant, one day</title>
 <script src="shared/market-calendar.js"></script>
 <script src="shared/run-completeness.js"></script>
+<script src="shared/run-anomalies.js"></script>
 <script src="shared/portfolio-risk.js"></script>
 <script src="client/lib/risk-curve-cell.js"></script>
 <script src="client/lib/strategy-positions.js"></script>
@@ -94,6 +95,7 @@
   .kv .k { color:var(--muted); }
   .kv .muted { color:#aab; }
   .kv .bad { color:var(--loss); font-weight:600; }
+  .kv .k.alarm { color:var(--loss); font-weight:600; }   /* an anomaly row: the LABEL is red too, so it cannot be missed */
   table.ord { border-collapse:collapse; font:11px ui-monospace,monospace; width:100%; }
   table.ord th { text-align:right; padding:3px 6px; border-bottom:1px solid var(--grid); color:var(--muted);
     font-weight:600; white-space:nowrap; position:sticky; top:0; background:#fff; cursor:help;
@@ -412,27 +414,36 @@ function render() {
       ['cover give-ups', n('cover-giveup')],
       ['offsets / wings / flies', `${n('floor-offset')} / ${n('wing')} / ${n('fly')}`],
       ['hedge spend', hedgeSpend ? usd(hedgeSpend) : '—'],
-      ['hedges expired unfilled', n('offset-expire', 'wing-expire', 'fly-expire')],
+      // broker-side expiry cancels the order (-expire-cancel); the simulated path drops it (-expire)
+      ['hedges expired unfilled', n('offset-expire', 'wing-expire', 'fly-expire', 'offset-expire-cancel', 'wing-expire-cancel', 'fly-expire-cancel')],
       ['GOVERNOR blocked opens', n('open-skip-governor')],
       ['governor deferred covers', n('cover-defer-governor')],
+      ['governor refused raises', n('cover-giveup-defer-governor', 'cover-reprice-defer-governor')],
+      ['reversal cancels', n('cancel-open')],
+      ['opens skipped (one working)', n('open-skip-pending')],
+      ['fills booked at the close', (record.events || []).filter((e) => e.type === 'eod_broker_fills').reduce((a, e) => a + ((e.decisions || []).length), 0)],
       ['ratchet blocked opens', n('open-skip-ratchet')],
       ['cap blocked opens', n('open-skip-cap')],
       ['ceiling / leg-uniq refusals', `${n('open-skip-ceiling')} / ${n('open-skip-leg')}`],
       ['leg-uniqueness shifts', n('open-shift')],
       ['cover-to-stack locks', n('cover-to-stack') + (lockedByStack ? ` (${lockedByStack} winner${lockedByStack === 1 ? '' : 's'})` : '')],
       ['combo 4-leg orders', n('combo-lock-open')],
-      ['orders NOT sent', n('open-not-sent', 'cover-not-sent', 'combo-not-sent')],
       ['credit-sent opens', (st.positions || []).filter((p) => p.sentNet === 'CREDIT').length],
       ['realized (locked) floor', usd(st.realizedPnl)],
       ['peak capital deployed', st.peakCashDeployed != null ? usd(st.peakCashDeployed) : '—'],
     ];
-    const hot = new Set(['GOVERNOR blocked opens', 'orders NOT sent', 'ratchet blocked opens', 'cap blocked opens']);
+    const hot = new Set(['GOVERNOR blocked opens', 'ratchet blocked opens', 'cap blocked opens']);
+    // ANOMALIES (shared/run-anomalies.js): things that should NOT happen on a healthy day. Each is shown ONLY
+    // when it fired, label and value in red, with the reason where the record carries one — so a clean day
+    // shows none of them and a bad one cannot be scrolled past. Same list the daily review tool prints.
+    const anomalies = (window.RunAnomalies ? window.RunAnomalies.anomaliesOf(record) : []);
     $('mech').innerHTML = mrows.map(([k, v]) => {
       const zero = v === 0 || v === '0' || v === '0 / 0';
       const cls = zero ? 'muted' : hot.has(k) ? 'bad' : '';
       return `<div><span class="k">${k}</span><span class="${cls}">${v}</span></div>`;
-    }).join('');
-    $('mechMeta').textContent = `${d.length} decisions`;
+    }).join('') + anomalies.map((a) =>
+      `<div title="${String(a.detail || '').replace(/"/g, '&quot;')}"><span class="k alarm">⚠ ${a.label}</span><span class="bad">${a.count}${a.detail ? ' — ' + String(a.detail).replace(/</g, '&lt;').slice(0, 140) : ''}</span></div>`).join('');
+    $('mechMeta').textContent = `${d.length} decisions` + (anomalies.length ? ` · ${anomalies.length} anomal${anomalies.length === 1 ? 'y' : 'ies'}` : '');
   }
 
   // ---- backtest expectation for THIS variant, so live and expected sit side by side
