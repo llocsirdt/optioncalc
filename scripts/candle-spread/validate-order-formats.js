@@ -196,10 +196,13 @@ function nextTradingDay() {
       }
     }
     // 4: credit cover placed then replaced (give-up / ladder on a credit twin concede DOWN in credit)
-    const ccv = mkt(bearCoverCreditTwin) > 0 ? r2(W - mkt(bearCoverOfBull)) : null;
-    if (ccv != null) {
+    // The credit twin's VALUE is width minus the debit cover's mark (its own raw mark is negative by
+    // construction — gating on that skipped this flow silently in the first version).
+    const ccv = r2(W - mkt(bearCoverOfBull));
+    if (ccv > 0 && ccv < W) {
       const credit = OM.wirePrice(trader.buildOrderPayload(bearCoverCreditTwin, awayPrice(ccv, true), 1, 'CREDIT'));
       let X = null; try { X = (await T.placeOrderByAcct(H, credit)).orderId; } catch (e) { step('place credit cover', false, e.message); }
+      if (!X) step('place credit cover', false, 'no order id');
       if (X) {
         step('place credit cover', true, `id ${X} @ ${credit.price} credit`);
         const yPayload = OM.wirePrice({ ...credit, price: r2(credit.price - TICK) });
@@ -232,6 +235,6 @@ function nextTradingDay() {
     }
   }
 
-  console.log(`\n${failures ? `${failures} shape(s) NOT accepted by preview — see above` : 'every engine order shape passed Schwab preview'}${PLACE ? '' : ' (preview only; nothing was placed)'}`);
+  console.log(`\n${failures ? `${failures} check(s) FAILED — see above` : 'every check passed'}${PLACE || FLOWS ? '' : ' (preview only; nothing was placed)'}`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('ERR', e.message); process.exit(1); });
