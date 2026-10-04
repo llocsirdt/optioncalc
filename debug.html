@@ -180,14 +180,6 @@
       <h2>Day summary</h2>
       <div class="kv" id="summary"></div>
     </div>
-    <!-- WHAT THE ENGINE ACTUALLY DID, mechanism by mechanism. The day summary next door says how the day
-         ENDED; this says how it got there — which levers fired, how hard, and what refused. Read together
-         they answer "why is the number what it is", which neither does alone. Every figure is counted from
-         the run's own decision log, so a mechanism that never fired shows 0 rather than being absent. -->
-    <div class="panel">
-      <h2>Mechanisms <span class="meta" id="mechMeta"></span></h2>
-      <div class="kv" id="mech"></div>
-    </div>
     <div class="panel">
       <h2>Backtest expectation <span class="meta">(765d)</span></h2>
       <div class="kv" id="baseline"></div>
@@ -241,6 +233,15 @@
           <table class="ord" id="orders"></table>
         </div>
         <p class="note" id="ordNote"></p>
+      </div>
+
+      <!-- WHAT THE ENGINE ACTUALLY DID, mechanism by mechanism, under the orders it summarizes. The day
+           summary says how the day ENDED; this says how it got there — which levers fired, how hard, what
+           refused, and (in red, only when they fired) what should never have happened. Every figure is
+           counted from the run's own decision log, so a mechanism that never fired shows 0, not absent. -->
+      <div class="panel" style="margin-top:10px">
+        <h2>Mechanisms <span class="meta" id="mechMeta"></span></h2>
+        <div class="kv" id="mech"></div>
       </div>
     </div>
   </div>
