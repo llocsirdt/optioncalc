@@ -175,7 +175,7 @@
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
-    <label>source
+    <label id="srcWrap">source
       <select id="src"><option value="live">Live runs (prod)</option><option value="backtest">Backtest replay (local)</option></select>
     </label>
     <button id="reload">Reload</button>
@@ -1239,6 +1239,9 @@ function renderCurve(pos, se, T) {
     const raw = (_p.get('src') || '').toLowerCase();
     const want = /^(bt|backtest)$/.test(raw) ? 'backtest' : /^live$/.test(raw) ? 'live' : null;
     if (want) $('src').value = want;
+    // The backtest REPLAY is a local-engine tool; off localhost the page is always the prod live run (the
+    // same-day backtest still overlays via Live vs backtest). Hide the choice there rather than offer it.
+    if (!IS_LOCAL_ORIGIN) { $('src').value = 'live'; $('srcWrap').style.display = 'none'; }
   }
   await loadVariants();
   await loadBaselines();
