@@ -53,6 +53,9 @@
   .side-by-side.dense .kv .k { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* Below ~1100px two columns stop helping — the table gets too narrow to read next to a chart. */
   @media (max-width: 1100px) { .two { flex-direction:column; } .col-right .panel { max-height:none !important; } }
+  /* Stacked, the right column grows to the ORDERS table's width (it is allowed to be wider than the phone).
+     Mechanisms must not ride along: pin it to the viewport minus the .wrap side padding (2 x 14px). */
+  @media (max-width: 1100px) { #mechPanel { max-width:calc(100vw - 28px); box-sizing:border-box; } }
   #nq-chart { height:300px; }
   #nq-chart-container { border:0; }
   .panel { border:1px solid var(--grid); border-radius:6px; padding:8px 10px; }
@@ -239,7 +242,7 @@
            summary says how the day ENDED; this says how it got there — which levers fired, how hard, what
            refused, and (in red, only when they fired) what should never have happened. Every figure is
            counted from the run's own decision log, so a mechanism that never fired shows 0, not absent. -->
-      <div class="panel" style="margin-top:10px">
+      <div class="panel" id="mechPanel" style="margin-top:10px">
         <h2>Mechanisms <span class="meta" id="mechMeta"></span></h2>
         <div class="kv" id="mech"></div>
       </div>
