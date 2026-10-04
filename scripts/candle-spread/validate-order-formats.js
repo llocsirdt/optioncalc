@@ -14,14 +14,19 @@
  * placing anything (verified 2026-10-04: same messages as a real placement). Prices are the REALISTIC
  * ones the engine would send, from the live chain.
  *
- * --place additionally places each order at an UNFILLABLE price (buys at <= 50% of the bid, credits at
- * >= 1.5x the value and < width), reads the status, cancels it and confirms the cancel, stopping on any
- * anomaly. Note: Schwab rejects a single option priced far from the market ("significantly away from the
- * current market price"), so a --place single-leg result can only confirm the FORMAT, not the price; the
- * realistic price is what the preview checks.
+ * --place also PLACES each order at a near-market price that will not fill over a weekend: buys --offset
+ * dollars (default 2.00) below the mark, never below 40% of it (Schwab rejects a single option priced
+ * "significantly away from the current market price"); credits the same amount above the value, capped
+ * below the width; all on the $0.05 tick. It reads the status, cancels, confirms the cancel, and stops on
+ * any anomaly, naming the order so it can be cancelled by hand before the open.
+ *
+ * --flows exercises the order LIFECYCLE the engine relies on but that had never been verified end to end:
+ * replace (does the response carry the NEW order id, as makeReplaceOrder assumes? does the old order go to
+ * REPLACED?), a credit cover replace, a chained replace A -> B -> C, replacing a cancelled order, cancelling
+ * a cancelled order, and the final cancels — each confirmed.
  *
  * Run from the repo root (reads ./.env):
- *   node scripts/candle-spread/validate-order-formats.js [--exp YYYY-MM-DD] [--place] [--only wing,offset]
+ *   node scripts/candle-spread/validate-order-formats.js [--exp YYYY-MM-DD] [--place [--offset 2]] [--flows] [--only wing-naked,offset]
  */
 const path = require('path');
 const fs = require('fs');
@@ -44,6 +49,24 @@ const TICK = 0.05, W = 10;
 const r2 = (n) => Math.round(n * 100) / 100;
 const tickDown = (x) => r2(Math.floor(r2(x) / TICK + 1e-9) * TICK);
 const TERM = new Set(['CANCELED', 'REJECTED', 'FILLED', 'EXPIRED', 'REPLACED']);
+const OFFSET = Number(arg('--offset', 2));
+const FLOWS = process.argv.includes('--flows');
+// A near-market price that will not fill: buys OFFSET below the mark (>= 40% of it), credits OFFSET above
+// the value (< width). On the tick, rounded AWAY from a fill.
+function awayPrice(value, credit) {
+  if (credit) return Math.min(r2(W - TICK), r2(Math.ceil(r2(value + OFFSET) / TICK - 1e-9) * TICK));
+  return Math.max(TICK, tickDown(Math.max(value - OFFSET, 0.4 * value)));
+}
+async function statusOf(id, wantTerminal) {
+  let o = null;
+  for (let i = 0; i < 6; i++) { await sleep(1500); try { o = await T.orderById(H, id); } catch (e) {} if (o && (!wantTerminal || TERM.has(o.status))) break; }
+  return o;
+}
+async function cancelConfirmed(id) {
+  try { await T.orderDelete(H, id); } catch (e) { return 'cancel error: ' + String(e.message).slice(0, 120); }
+  const c = await statusOf(id, true);
+  return c && c.status === 'CANCELED' ? 'CANCELED' : `NOT CONFIRMED (${c ? c.status : 'unknown'})`;
+}
 
 function nextTradingDay() {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -106,8 +129,8 @@ function nextTradingDay() {
     if (res.preview !== 'OK') failures++;
 
     if (PLACE) {
-      const unf = s.credit ? Math.min(r2(W - TICK), tickDown(Math.max(1.5 * s.value, s.price) + 0.5)) : tickDown(Math.max(TICK, 0.5 * Math.min(s.value, s.price)));
-      if (!s.credit && !(unf < 0.5 * s.value + 1e-9)) { res.place = 'SKIPPED: could not price safely unfillable'; console.log(JSON.stringify(res)); continue; }
+      const unf = awayPrice(s.value, !!s.credit);
+      if (!(unf > 0)) { res.place = 'SKIPPED: no valid near-market price'; console.log(JSON.stringify(res)); continue; }
       const p2 = OM.wirePrice({ ...payload, price: unf });
       res.placedAt = unf;
       let id = null;
@@ -126,6 +149,89 @@ function nextTradingDay() {
     }
     console.log(JSON.stringify(res));
   }
+  // ── LIFECYCLE FLOWS ───────────────────────────────────────────────────────────────────────────────
+  if (FLOWS) {
+    console.log('\nFLOWS');
+    const step = (name, ok, detail) => { console.log(`  ${ok ? 'OK  ' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
+    const stop = (id) => { console.log(`STOP: order ${id} may still be working — cancel it in the Schwab app before the open`); process.exit(3); };
+    // A replace that reports no new id may still have created a working replacement we cannot see.
+    const needId = (newId, oldId, what) => { if (!newId || newId === oldId) { console.log(`STOP: ${what} returned no new order id — a replacement of ${oldId} may be WORKING untracked; check the Schwab app's open orders and cancel it before the open`); process.exit(4); } };
+    // 1-3: replace chain on a debit cover, then the credit twin
+    const cover = OM.wirePrice(trader.buildOrderPayload(bearCoverOfBull, awayPrice(mkt(bearCoverOfBull), false), 1, 'DEBIT'));
+    let A = null;
+    try { A = (await T.placeOrderByAcct(H, cover)).orderId; } catch (e) { step('place A (debit cover)', false, e.message); }
+    if (A) {
+      step('place A (debit cover)', true, `id ${A} @ ${cover.price}`);
+      const aStat = await statusOf(A, false);
+      step('A is working', aStat && !TERM.has(aStat.status), aStat && aStat.status);
+      // replace A -> B, exactly as makeReplaceOrder: updateOrderById, read resp.orderId
+      const bPayload = OM.wirePrice({ ...cover, price: r2(cover.price + TICK) });
+      let rB = null; try { rB = await T.updateOrderById(H, A, bPayload); } catch (e) { step('replace A -> B', false, e.message); stop(A); }
+      const B = rB && rB.orderId;
+      needId(B, A, 'replace A -> B');
+      step('replace A -> B returns a NEW order id (makeReplaceOrder relies on it)', !!B && B !== A, `resp.orderId=${B}`);
+      const aAfter = await statusOf(A, true);
+      step('A goes to REPLACED', aAfter && aAfter.status === 'REPLACED', aAfter && aAfter.status);
+      if (B) {
+        const bStat = await statusOf(B, false);
+        step('B is working at the new price', bStat && !TERM.has(bStat.status) && Math.abs(bStat.price - bPayload.price) < 1e-9, bStat && `${bStat.status} @ ${bStat.price}`);
+        // chained: B -> C before anything else polls
+        const cPayload = OM.wirePrice({ ...cover, price: r2(bPayload.price + TICK) });
+        let rC = null; try { rC = await T.updateOrderById(H, B, cPayload); } catch (e) { step('replace B -> C (chained)', false, e.message); stop(B); }
+        const Cid = rC && rC.orderId;
+        needId(Cid, B, 'replace B -> C');
+        step('replace B -> C (chained) returns a new id', !!Cid && Cid !== B, `resp.orderId=${Cid}`);
+        const bAfter = await statusOf(B, true);
+        step('B goes to REPLACED', bAfter && bAfter.status === 'REPLACED', bAfter && bAfter.status);
+        if (Cid) {
+          const c = await cancelConfirmed(Cid);
+          step('cancel C, confirmed', c === 'CANCELED', c);
+          if (c !== 'CANCELED') stop(Cid);
+          // replacing / cancelling a dead order: the engine expects Schwab to refuse both
+          try { await T.updateOrderById(H, Cid, cPayload); step('replacing a CANCELED order is refused', false, 'it was accepted!'); }
+          catch (e) { step('replacing a CANCELED order is refused', /cannot be replaced/i.test(e.message), String(e.message).slice(0, 120)); }
+          try { await T.orderDelete(H, Cid); step('cancelling a CANCELED order is refused', false, 'it was accepted!'); }
+          catch (e) { step('cancelling a CANCELED order is refused', /cannot be canceled/i.test(e.message), String(e.message).slice(0, 120)); }
+        }
+      }
+    }
+    // 4: credit cover placed then replaced (give-up / ladder on a credit twin concede DOWN in credit)
+    const ccv = mkt(bearCoverCreditTwin) > 0 ? r2(W - mkt(bearCoverOfBull)) : null;
+    if (ccv != null) {
+      const credit = OM.wirePrice(trader.buildOrderPayload(bearCoverCreditTwin, awayPrice(ccv, true), 1, 'CREDIT'));
+      let X = null; try { X = (await T.placeOrderByAcct(H, credit)).orderId; } catch (e) { step('place credit cover', false, e.message); }
+      if (X) {
+        step('place credit cover', true, `id ${X} @ ${credit.price} credit`);
+        const yPayload = OM.wirePrice({ ...credit, price: r2(credit.price - TICK) });
+        let rY = null; try { rY = await T.updateOrderById(H, X, yPayload); } catch (e) { step('replace credit cover (concede)', false, e.message); stop(X); }
+        const Y = rY && rY.orderId;
+        needId(Y, X, 'replace credit cover');
+        step('replace credit cover returns a new id', !!Y && Y !== X, `resp.orderId=${Y}`);
+        const yStat = Y ? await statusOf(Y, false) : null;
+        step('the replacement keeps NET_CREDIT at the conceded price', yStat && yStat.orderType === 'NET_CREDIT' && Math.abs(yStat.price - yPayload.price) < 1e-9, yStat && `${yStat.orderType} @ ${yStat.price}`);
+        const c = await cancelConfirmed(Y || X);
+        step('cancel the credit cover, confirmed', c === 'CANCELED', c);
+        if (c !== 'CANCELED') stop(Y || X);
+      }
+    }
+    // 5: naked wing placed and replaced as a single-leg LIMIT
+    const w = OM.wirePrice(trader.buildOrderPayload(nakedWing, awayPrice(q('C', farCall).mark, false), 1, 'DEBIT'));
+    let Wid = null; try { Wid = (await T.placeOrderByAcct(H, w)).orderId; } catch (e) { step('place naked wing (LIMIT)', false, e.message); }
+    if (Wid) {
+      const ws = await statusOf(Wid, false);
+      step('place naked wing (LIMIT)', ws && !TERM.has(ws.status), ws && `${ws.status}${ws.statusDescription ? ' — ' + ws.statusDescription : ''} @ ${w.price}`);
+      if (ws && !TERM.has(ws.status)) {
+        let rw = null; try { rw = await T.updateOrderById(H, Wid, OM.wirePrice({ ...w, price: r2(w.price + TICK) })); } catch (e) { step('replace naked wing', false, e.message); stop(Wid); }
+        const W2 = rw && rw.orderId;
+        needId(W2, Wid, 'replace naked wing');
+        step('replace naked wing returns a new id', !!W2 && W2 !== Wid, `resp.orderId=${W2}`);
+        const c = await cancelConfirmed(W2 || Wid);
+        step('cancel naked wing, confirmed', c === 'CANCELED', c);
+        if (c !== 'CANCELED') stop(W2 || Wid);
+      }
+    }
+  }
+
   console.log(`\n${failures ? `${failures} shape(s) NOT accepted by preview — see above` : 'every engine order shape passed Schwab preview'}${PLACE ? '' : ' (preview only; nothing was placed)'}`);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('ERR', e.message); process.exit(1); });
