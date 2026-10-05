@@ -214,6 +214,7 @@ pre {
 .trade-detail-table tr.td-unfilled td,
 .trade-detail-table tr.td-unfilled td * { color: #b8b8b8 !important; font-style: italic; }
 .trade-detail-table td.td-cost { color: #555; }
+.trade-detail-table .td-walked { color: #b26a00; font-weight: 700; cursor: help; margin-left: 1px; }
 /* DR/CR tag on the cost = the actual order net sent (credit = the parity twin under capital recapture). */
 .trade-detail-table .net-tag { font-size: 9px; margin-left: 2px; }
 .trade-detail-table .net-cr { color: #2e7d32; font-weight: 700; }

@@ -136,7 +136,9 @@
         : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
       const cr = e.net === 'CREDIT';
       const costStr = (cr ? `+${usd(e.cost)}` : usd(e.cost))   // credit = cash received → leading +
-        + (e.placedCost != null ? ` <span class="ps-muted" title="sent at ${usd(e.placedCost)}; the cover ladder has since walked it to ${usd(e.cost)}">(sent ${usd(e.placedCost)})</span>` : '');
+        // WALKED price: show only the current price plus a ↑ marker; the original lives in the tooltip. The old
+        // inline "(sent $305)" roughly doubled the column's width on every laddered row.
+        + (e.placedCost != null ? `<sup class="td-walked" title="walked up by the cover ladder from ${usd(e.placedCost)} (originally sent) to ${usd(e.cost)}">↑</sup>` : '');
       return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`
