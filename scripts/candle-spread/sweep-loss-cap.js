@@ -24,7 +24,7 @@
  * Usage:
  *   node scripts/candle-spread/sweep-loss-cap.js [--workers 6] [--out <dir>]
  *                                                [--variants v7-10,v6-20] [--rungs 1,1.5,2,3,4]
- *                                                [--dataDir <5m dir>]
+ *                                                [--dataDir <5m dir>] [--openFillModel ladder]
  * Emits <out>/loss-cap-sweep.json and <out>/loss-cap-sweep.csv (default out = cwd).
  */
 const path = require('path');
@@ -38,6 +38,10 @@ const { optsFor } = require('../../server/src/candle-spread/backtest/opts-for');
 const argVal = (flag, dflt) => { const i = process.argv.indexOf(flag); return i >= 0 ? process.argv[i + 1] : dflt; };
 const DIR = argVal('--dataDir', path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq'));
 const OUTDIR = argVal('--out', process.cwd());
+// --openFillModel ladder: opens rest as ONE working order walked by the live ladder (the 2026-10-03 port),
+// so the governor counts the working open as filled exactly as live does. Default = the historical
+// instant-at-the-bar assumption the 10-01 cap sweep used.
+const OPEN_FILL = argVal('--openFillModel', null);
 const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1));
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const BUMP = Number(argVal('--bump', '0')) || 0;
@@ -122,7 +126,7 @@ function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
   const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
-  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap' });
+  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL });
   const res = days.map(d => runDay5m(d.bars, fn, o));
   const daily = res.map(r => r.terminal);
   const total = daily.reduce((a, b) => a + b, 0);
@@ -169,7 +173,7 @@ if (SLICE != null) {
 
 (async () => {
   console.log(`LOSS-CAP SWEEP — ${RUNS.length} governed variants × ${JOBS.length} jobs over ${days.length} trading days (${allDays.length - days.length} non-trading excluded)`);
-  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers`);
+  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers · opens ${OPEN_FILL || 'immediate'}`);
   let rows = [];
   if (WORKERS > 1) {
     const { spawn } = require('child_process');
