@@ -70,8 +70,10 @@ const { optsFor: buildOpts } = require('../../server/src/candle-spread/backtest/
 // slip 0 through 4 because every arm was really the control. Exactly the local-wrapper-swallows-the-option
 // failure this repo keeps meeting. One place to set it means no call site can forget it.
 // ORDER_SLIP is declared below; this body only runs when called, long after.
+// OPEN_FILL_ENV folded in HERE for the same reason (2026-10-05: passing it at the call sites was swallowed by
+// this one-argument wrapper, and a full rebuild came back labelled "opens ladder" with instant-fill numbers).
 const optsFor = (v) => buildOpts(v, { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS,
-  where: 'build-backtest-baselines optsFor',
+  where: 'build-backtest-baselines optsFor', ...OPEN_FILL_ENV,
   ...(typeof ORDER_SLIP !== 'undefined' && ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : {}) });
 
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
@@ -166,7 +168,7 @@ if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
 // a header describing the opposite of what it did, in the file that gets archived as the record of the
 // run. Probe optsFor instead: it is the thing that decides.
 function effectiveSlip() {
-  try { return optsFor(RUNS[0], OPEN_FILL_ENV).orderSlipTicks; } catch (e) { return undefined; }
+  try { return optsFor(RUNS[0]).orderSlipTicks; } catch (e) { return undefined; }
 }
 function slipLabel() {
   const n = effectiveSlip();
@@ -177,7 +179,10 @@ function slipLabel() {
 
 function assertSlipArmed() {
   if (ORDER_SLIP == null) return;
-  const probe = optsFor(RUNS[0], OPEN_FILL_ENV);
+  const probe = optsFor(RUNS[0]);
+  if (OPEN_FILL !== 'immediate' && probe.openFillModel !== OPEN_FILL) {
+    throw new Error(`open fill model '${OPEN_FILL}' did not reach the engine options (got ${probe.openFillModel}) — refusing to build mislabelled baselines`);
+  }
   if (probe.orderSlipTicks !== ORDER_SLIP) {
     console.error(`\n  ✗ --orderSlipTicks ${ORDER_SLIP} did not reach optsFor (got ${probe.orderSlipTicks}).`);
     console.error('    Every arm would be the control. Refusing to run. Exiting 2.\n');
@@ -194,7 +199,7 @@ function assertSlipArmed() {
 }
 
 function computeVariant(run) {
-  const fn = wrap(run), opts = optsFor(run, OPEN_FILL_ENV);
+  const fn = wrap(run), opts = optsFor(run);
   const results = days.map(d => runDay5m(d.bars, fn, opts));
   const daily = results.map(r => r.terminal);
   const s = stats(daily);
