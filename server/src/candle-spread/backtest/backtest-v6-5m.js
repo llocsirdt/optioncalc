@@ -1247,7 +1247,11 @@ function runDay5m(bars, signalFn, opts = {}) {
           // Legs and stance are recorded now, at the send, exactly as live does; nothing is booked yet.
           openPlaced++;
           st.pendingOpen = { side: sig.openSide, o, base: o.limit, limit: o.limit,
-            cap: G.capFrac != null ? round2(G.WIDTH * G.capFrac) : o.limit,
+            // WALK CAP: how far the ladder may walk the price, separately settable from the PLACEMENT ceiling
+            // (opts.openWalkCapFrac). Placement picks the strikes under capFrac; the walk may then concede a
+            // little more to get the fill — the user's "place at 5.30, walk up to ~5.50".
+            cap: opts.openWalkCapFrac != null ? round2(G.WIDTH * Math.max(opts.openWalkCapFrac, G.capFrac || 0))
+              : (G.capFrac != null ? round2(G.WIDTH * G.capFrac) : o.limit),
             placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch,
             pos: { legs: o.legs, limit: o.limit, covered: false, coverLegs: null, coverLimit: null } };
           if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }

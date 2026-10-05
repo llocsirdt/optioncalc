@@ -112,8 +112,14 @@ const JOBS = [];
 //   B band     — adaptive, deepest ITM priced inside the user's band
 //   C sATM-band — fixed short-at-the-money, taken only inside the band
 //   D sATM-wide — fixed short-at-the-money, up to the old 65% ceiling
+//   E band+1OTM — B, but may step the short leg ONE strike out of the money to meet the band
+//   F band+walk — B for strike choice, then the ladder may walk the price up to WALK x W
+//   G — E and F together
 // Bands = the user's real limits: 10W $4.80-5.30, 20W $9.50-11.00, 40W $19-23.
 const BANDS = { 10: [0.48, 0.53], 20: [0.475, 0.55], 40: [0.475, 0.575] };
+// How far the open ladder may then walk the price to get the fill (user: "step the price up to 5.5 or so"):
+// 10W $5.50, 20W $11.50, 40W $24.
+const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
 if (process.argv.includes('--placementModes')) {
   for (const run of RUNS) {
     if (/-cATM$/.test(run.variant)) continue;
@@ -124,6 +130,10 @@ if (process.argv.includes('--placementModes')) {
     j('B band', { adaptiveGeo: true, capFrac: hi, minDebitFrac: lo });
     j('C sATM-band', { adaptiveGeo: false, spreadShift: W / 2, capFrac: hi, minDebitFrac: lo });
     j('D sATM-wide', { adaptiveGeo: false, spreadShift: W / 2, capFrac: 0.65 });
+    const walk = WALK[W] || hi;
+    j('E band+1OTM', { adaptiveGeo: true, capFrac: hi, minDebitFrac: lo, maxOtmStrikes: 1 });
+    j('F band+walk', { adaptiveGeo: true, capFrac: hi, minDebitFrac: lo, openWalkCapFrac: walk });
+    j('G band+1OTM+walk', { adaptiveGeo: true, capFrac: hi, minDebitFrac: lo, maxOtmStrikes: 1, openWalkCapFrac: walk });
   }
 } else if (process.argv.includes('--currentOnly')) {
   for (const run of RUNS) JOBS.push({ variant: run.variant, rung: 'current',

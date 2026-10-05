@@ -117,7 +117,10 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
 // under the ceiling is the dearest that fits; if it is already under the floor, every later one is cheaper
 // still and the open is declined. The user's real bands (2026-10-05): 10W $4.80-5.30, 20W $9.50-11.00,
 // 40W $19-23 — "the deepest ITM strikes keeping within those price limits".
-function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0, minDebitFrac = 0 }) {
+// maxOtmStrikes (default 0 = never OTM, byte-identical): after straddle, allow the short leg up to N strikes
+// OUT of the money, so a band that sATM is too dear for can still be met by stepping out — on a 20-wide one
+// step is the cATM shape.
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0, minDebitFrac = 0, maxOtmStrikes = 0 }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
   // the least-ITM placement available — still never OTM.
@@ -125,7 +128,7 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
     // Candidate SHORT strikes, ordered MOST ITM first. Bull: lower short strike = deeper ITM = pricier.
-    for (let k = -maxItmStrikes; k <= halfOnGrid / incr; k++) {
+    for (let k = -maxItmStrikes; k <= halfOnGrid / incr + maxOtmStrikes; k++) {
       const off = k * incr;
       const shortStrike = side === 'bull' ? center + off : center - off;
       const lo = side === 'bull' ? shortStrike - width : shortStrike;
