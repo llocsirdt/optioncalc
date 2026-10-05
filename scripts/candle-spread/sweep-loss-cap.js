@@ -43,6 +43,8 @@ const OUTDIR = argVal('--out', process.cwd());
 // so the governor counts the working open as filled exactly as live does. Default = the historical
 // instant-at-the-bar assumption the 10-01 cap sweep used.
 const OPEN_FILL = argVal('--openFillModel', null);
+// --fillThroughTicks N: a working order fills only when the bar's best price is N ticks BETTER than its limit.
+const FILL_THRU = argVal('--fillThroughTicks', null) != null ? Number(argVal('--fillThroughTicks', null)) : null;
 const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1));
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const BUMP = Number(argVal('--bump', '0')) || 0;
@@ -100,7 +102,12 @@ const genericFor = (W) => {
 // "what if it had never been tightened"). Rungs use the CAPPRES convention lossTarget = 0.7 x lossMax.
 // Deduped by lossMax so a rung that coincides with current/generic is not run twice.
 const JOBS = [];
-if (CAP_FRACS.length) {
+// --currentOnly: one job per variant at its CURRENT config (cap, ceiling) — for sweeping a fill model
+// (--openFillModel / --fillThroughTicks) across the roster rather than a knob.
+if (process.argv.includes('--currentOnly')) {
+  for (const run of RUNS) JOBS.push({ variant: run.variant, rung: 'current',
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget });
+} else if (CAP_FRACS.length) {
   for (const run of RUNS) {
     const cur = run.capFrac != null ? run.capFrac : 0.65;
     const fr = [...new Set(CAP_FRACS.concat([cur]))].sort((a, b) => a - b);
@@ -139,7 +146,7 @@ function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
   const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}) };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
-  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL });
+  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL, fillThroughTicks: FILL_THRU });
   if (CAP_FRACS.length) o.recordReplay = true;   // positions, for the open-price and per-open cover stats
   const res = days.map(d => runDay5m(d.bars, fn, o));
   // Per-OPEN stats (capFrac mode): what the opens actually cost and how often each got covered — the
@@ -202,7 +209,7 @@ if (SLICE != null) {
 
 (async () => {
   console.log(`LOSS-CAP SWEEP — ${RUNS.length} governed variants × ${JOBS.length} jobs over ${days.length} trading days (${allDays.length - days.length} non-trading excluded)`);
-  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers · opens ${OPEN_FILL || 'immediate'}`);
+  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers · opens ${OPEN_FILL || 'immediate'} · fill-through ${FILL_THRU || 0} tick(s)`);
   let rows = [];
   if (WORKERS > 1) {
     const { spawn } = require('child_process');

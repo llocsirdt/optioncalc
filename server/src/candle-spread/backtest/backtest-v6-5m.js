@@ -368,6 +368,13 @@ function runDay5m(bars, signalFn, opts = {}) {
   // OPEN LADDER MODEL (opts.openFillModel 'ladder') — the live resting open: one working order, walked like
   // the cover ladder (trader.resolvePendingOpen, bd8f2d0), cancelled on a reversal. Off = byte-identical.
   const openLadderModel = opts.openFillModel === 'ladder';
+  // FILL-THROUGH TICKS (opts.fillThroughTicks, or per side fillThroughTicksOpen / fillThroughTicksCover;
+  // default 0 = touch fills, byte-identical to before). A working order counts as filled only when the
+  // bar's best price is at least N ticks BETTER than the limit, not merely equal to it. 2026-10-05 live:
+  // the simulated variants booked 66% of opens instantly at placement and 64% of covers at 0-1 tick through,
+  // while v7-10's real orders at the same prices often did not fill. Bookings still happen AT the limit.
+  const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
+  const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
@@ -670,7 +677,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (next > po.limit) { po.limit = next; po.pos.limit = next; po.lastMoveMs = nowEpoch; openReprices++; markBookDirty(); }
       }
       const fav = po.side === 'bull' ? px.low : px.high;
-      if (legsMark(po.o.legs, fav, tau, iv) <= po.limit) {
+      if (legsMark(po.o.legs, fav, tau, iv) <= po.limit - thruOpen + 1e-9) {
         st.pendingOpen = null; openFilledL++; openPaidUp += round2(po.limit - po.base);
         commitOpen(po.side, { ...po.o, limit: po.limit }, null, false);
       } else if (nowEpoch - po.lastMoveMs >= 90 * 60000) {
@@ -884,7 +891,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       if (giveUp) giveUps++;
       if (decayed && !giveUp) decayStops++;
-      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget) {
+      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget - thruCover + 1e-9) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
         // removes the offset and can push the BOOK floor down (the 2026-02-21 mechanism). Since we own the
@@ -1232,7 +1239,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             const ntau = bs.tauFromTime(nb.dt);
             // Reuse THIS bar's vol surface rather than rebuilding next bar's: the fill happens within
             // minutes, and rebuilding would fold a vol change into what is meant to be a price test.
-            if (legsMark(o.legs, fav, ntau, iv) > o.limit) { openMissed++; continue; }
+            if (legsMark(o.legs, fav, ntau, iv) > o.limit - thruOpen + 1e-9) { openMissed++; continue; }
           }
         }
         if (openLadderModel) {

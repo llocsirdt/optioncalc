@@ -95,6 +95,7 @@ function optsFor(v, env) {
   // OPEN FILL MODEL — 'ladder' models the live resting open (one working order, walked like the cover
   // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster, until baselines adopt it.
   if (env && env.openFillModel) o.openFillModel = env.openFillModel;
+  if (env && env.fillThroughTicks != null) o.fillThroughTicks = env.fillThroughTicks;
   if (v.openLadder != null) o.openLadder = v.openLadder;
   if (v.openLadderStepDollars != null) o.openLadderStepDollars = v.openLadderStepDollars;
   if (v.coverLadder) {
