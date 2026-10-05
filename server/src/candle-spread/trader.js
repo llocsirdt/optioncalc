@@ -487,7 +487,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
     deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1);
   const rr = LL.resolveOpen(openSide, res.lower, res.upper, tempLedger, { incr: cfg.strikeIncrement, maxShift: deps.legMaxShift || 6, preferStyle: wantCreditOpen ? 'credit' : 'debit' });
   if (rr.resolution === 'skip') return false;                      // can't place open cleanly → sequential fallback (real ledger untouched)
-  const openBook = rr.resolution === 'shift' ? buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg) : res;
+  const openBook = rr.resolution === 'shift' ? buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying) : res;
   if (openBook.error || openBook.declined) return false;   // over the risk/reward ceiling → no combo either
   const openSentLegs = rr.legs;
 
@@ -1565,7 +1565,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
         // legs as if the geometry had chosen them — which is why strikes landing off-placement went
         // unnoticed. Record where it wanted to be, where it went, and what that cost.
-        out = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg);
+        out = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying);
         decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
           fromLower: plan.lower, fromUpper: plan.upper, toLower: rr.lo, toUpper: rr.hi,
           shift: rr.shift, style: rr.style, underlying,
@@ -1728,7 +1728,7 @@ function buildOpen(side, underlying, cfg, getLeg) {
   // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac is the
   // risk/reward CEILING (default 0.65 of width) and GATES the trade — it never sets the price.
   const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
-  return buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
+  return buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying);
 }
 
 // ADAPTIVE STRIKE PLACEMENT — the live port of backtest-width.makeAdaptiveGeo.
@@ -1765,7 +1765,7 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
   let tried = 0, lastDeclined = null, lastError = null;
   for (let k = -maxItm; k <= halfOnGrid / incr; k++) {
     const { lower, upper } = strikesAt(k);
-    const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg);
+    const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying);
     if (res.error) { lastError = res.error; continue; }
     tried++;
     if (res.declined) { lastDeclined = res; continue; }
@@ -1781,7 +1781,7 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
       const flexCfg = { ...cfg, capFrac: (cfg.capFrac != null ? cfg.capFrac : 0.65) + flex };
       for (let j = Math.max(-maxItm, k - back); j < k; j++) {
         const st = strikesAt(j);
-        const alt = buildOpenAtStrikes(side, st.lower, st.upper, flexCfg, getLeg);
+        const alt = buildOpenAtStrikes(side, st.lower, st.upper, flexCfg, getLeg, underlying);
         if (alt.error || alt.declined) continue;
         return { ...alt, itmStrikes: -j, placementsTried: tried, capFlexed: true, flexedFrom: -k };
       }
@@ -1799,7 +1799,7 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
 }
 
 // Build a debit-canonical open at EXPLICIT strikes (used by leg-uniqueness to reprice a shifted spread).
-function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
+function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
@@ -1834,7 +1834,7 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
   // it. 2026-10-05 09:45: every 10-wide sent the 30900/30910 bull call at 2.90 while 30910/30920 marked 6.25,
   // and the simulated ones booked it. Replayed over the archive: 10.4% of 10-wide opens were priced this way.
   {
-    const co = SQ.cheapOutlier(legs, getLeg, { incr: cfg.strikeIncrement || 10 });
+    const co = SQ.cheapOutlier(legs, getLeg, { incr: cfg.strikeIncrement || 10, underlying });
     if (!co.ok) return { error: co.reason, mark };
   }
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
@@ -2393,7 +2393,7 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   // low quote cannot book a phantom fill on the mark path (opens, covers and hedges alike). Debit shapes only;
   // a CREDIT-sent order abstains (cheapOutlier only recognises the debit verticals).
   if (net !== 'CREDIT') {
-    const co = SQ.cheapOutlier(legs, getLeg, { incr: (deps && deps.strikeIncrement) || 10 });
+    const co = SQ.cheapOutlier(legs, getLeg, { incr: (deps && deps.strikeIncrement) || 10, underlying: deps && deps.underlying });
     if (!co.ok) return { ...base, fillable: false, fill: null, badQuote: co.reason };
   }
   // PARITY, for two-leg verticals: the opposing structure at the SAME strikes must price to the width.

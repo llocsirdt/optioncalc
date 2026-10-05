@@ -137,6 +137,21 @@ function cheapOutlier(legs, getLeg, opts) {
   if (!legsFor) return { ok: true };
   const self = netQuote(legsFor(lo, hi), getLeg);
   if (!self) return { ok: true };
+  const W0 = hi - lo;
+  // IN-THE-MONEY FLOOR (the user's rule): a spread whose MIDPOINT strike is in the money is worth more than
+  // half its width; near the money a 10-wide sits ~$4.50-5.50. So one whose midpoint is at least a full
+  // strike ITM and marks under itmFloorFrac x W (default 40%) is a bad quote, even if its siblings are noisy
+  // too. Needs the underlying; a midpoint less than one strike ITM is left to the ordering check below
+  // (measured: barely-ITM spreads mark around half the width +/- noise, e.g. 3.90 at 8 points ITM).
+  if (o.underlying != null && Number.isFinite(o.underlying)) {
+    const mid = (lo + hi) / 2;
+    const itmBy = dir > 0 ? o.underlying - mid : mid - o.underlying;
+    const floor = (o.itmFloorFrac != null ? o.itmFloorFrac : 0.40) * W0;
+    if (itmBy >= incr && self.mid < floor) {
+      return { ok: false, mark: self.mid, floor: r2(floor), itmBy: r2(itmBy),
+        reason: `mark ${self.mid} is under ${r2(floor)} (${Math.round(floor / W0 * 100)}% of ${W0}) for a spread whose midpoint is ${Math.round(itmBy)} points in the money — a bad quote, not a cheap spread` };
+    }
+  }
   let worst = null;
   for (const k of [1, 2]) {
     const q = netQuote(legsFor(lo + dir * k * incr, hi + dir * k * incr), getLeg);

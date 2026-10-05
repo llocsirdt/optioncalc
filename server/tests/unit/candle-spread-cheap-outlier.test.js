@@ -53,6 +53,20 @@ const bullCall = (lo, hi) => [{ side: 'long', type: 'C', strike: lo }, { side: '
     'a credit-shaped vertical abstains');
 }
 
+// ── the IN-THE-MONEY FLOOR (user's rule): midpoint >= one strike ITM and under 40% of W -> refused ──────
+{
+  // A chain where EVERY sibling is equally depressed (ordering cannot see it): 30900/30910 at 2.90 and the
+  // spreads further out cheaper still. With NDX 30949 the midpoint 30905 is 44 points ITM.
+  const flat = chainOf(SNAP.map(([k], i) => [k, 120 - 2.9 * i, 119, 121, 40 + 2.9 * i, 39, 41]));
+  ok(SQ.cheapOutlier(bullCall(30900, 30910), flat).ok, 'without the underlying the floor abstains');
+  const r = SQ.cheapOutlier(bullCall(30900, 30910), flat, { underlying: 30949.42 });
+  ok(!r.ok && /in the money/.test(r.reason), `with NDX 30949 the 2.90 ITM spread is under the 40% floor (${r.reason})`);
+  // Barely ITM (midpoint 8 points in) is left alone — measured 3.90 marks there are noise around half width.
+  ok(SQ.cheapOutlier(bullCall(30900, 30910), flat, { underlying: 30913 }).ok, 'a midpoint under one strike ITM is not floored');
+  // OTM spreads are never floored.
+  ok(SQ.cheapOutlier(bullCall(30900, 30910), flat, { underlying: 30880 }).ok, 'an OTM spread is never floored');
+}
+
 // ── at BUILD: the adaptive walk skips the bad placement instead of sending it ──────────────────────
 {
   const cfg = { spreadWidth: 10, strikeIncrement: 10, tickIncrement: 0.05, capFrac: 0.6, maxItmStrikes: 3 };

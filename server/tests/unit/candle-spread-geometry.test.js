@@ -6,7 +6,10 @@ const trader = require('../../src/candle-spread/trader');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } };
-const getLeg = (type, strike) => ({ mid: type === 'C' ? Math.max(0.5, (22100 - strike) * 0.2) : Math.max(0.5, (strike - 21900) * 0.2), symbol: `NDX_${type}${strike}`, bid: 1, ask: 1.1 });
+// Verticals price at HALF their width (slope 0.5/point), a realistic near-the-money chain. It was 0.2 —
+// every vertical at 20% of W — which the in-the-money floor (SQ.cheapOutlier, 2026-10-05) correctly
+// refuses as an impossible quote for a spread whose midpoint is a strike or more in the money.
+const getLeg = (type, strike) => ({ mid: type === 'C' ? Math.max(0.5, (22100 - strike) * 0.5) : Math.max(0.5, (strike - 21900) * 0.5), symbol: `NDX_${type}${strike}`, bid: 1, ask: 1.1 });
 const strikesOf = res => res.legs.map(l => `${l.side[0]}${l.type}${l.strike}`).join(' ');
 
 // $20 ATM (default shift 0, default capFrac) — must be exactly the pre-existing geometry.
