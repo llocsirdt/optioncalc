@@ -137,8 +137,8 @@ function optsFor(v, env) {
     : (env && env.orderSlipTicks != null) ? env.orderSlipTicks
     : (env && env.legacyRounding === true) ? null : 0;
   o.geo = v.adaptiveGeo
-    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip })
-    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip });
+    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0 })
+    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0 });
   o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it (null = legacy)
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
@@ -156,7 +156,9 @@ function optsFor(v, env) {
       // coverFillThroughTicks -> fillThroughTicksCover (above). simOpenFillMinLooks has no backtest analogue
       // on purpose: the backtest's open models are bar-granular, and the ladder model already cannot fill
       // an open before the NEXT bar — stricter than "one more 30s look".
-      'coverFillThroughTicks', 'simOpenFillMinLooks']
+      'coverFillThroughTicks', 'simOpenFillMinLooks',
+      // minDebitFrac is consumed by the geo builders above (a price floor under capFrac).
+      'minDebitFrac']
       .concat(noWings ? WING_KEYS : []));
   return o;
 }

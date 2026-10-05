@@ -67,7 +67,7 @@ function openLimitOf(mark, slipTicks, cap, legacyRound) {
   return Math.max(TICK, cap != null ? Math.min(px, round2(cap)) : px);   // paying up never beats the ceiling
 }
 
-function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks = 0 }) {
+function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks = 0, minDebitFrac = 0 }) {
   const cf = capFrac;
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
@@ -86,6 +86,8 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
     // we had rested a bid at the ceiling instead?" is a MEASURABLE question, and it cannot be answered
     // without knowing which spread was turned down. See measure-declined-opens.js.
     if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark), legs, shortStrike: side === 'bull' ? hi : lo, restLimit: round2(width * cf) };
+    // PRICE FLOOR (minDebitFrac, default 0 = off): the fixed placement is only taken inside the band.
+    if (minDebitFrac > 0 && mark < width * minDebitFrac) return { skip: true, reason: `mark ${round2(mark)} under ${Math.round(minDebitFrac * 100)}% of $${width}`, limit: 0 };
     return { legs, shortStrike: side === 'bull' ? hi : lo, limit: openLimitOf(mark, orderSlipTicks, width * cf, round2), fracOfWidth: mark / width };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'
@@ -110,7 +112,12 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
 // IMPORTANT: this prices at the REAL mark of the chosen placement — the ceiling changes WHICH STRIKES we
 // trade, which is what the user actually does. makeGeo now honours the same "never book sub-market" rule,
 // but being a FIXED geometry it can only decline; here we walk the placement toward the money first.
-function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0 }) {
+// minDebitFrac (default 0 = off, byte-identical): a PRICE FLOOR under the ceiling, so the rule becomes "the
+// deepest-ITM placement priced INSIDE [min, max] x W". Placements are tried most-ITM first, so the first one
+// under the ceiling is the dearest that fits; if it is already under the floor, every later one is cheaper
+// still and the open is declined. The user's real bands (2026-10-05): 10W $4.80-5.30, 20W $9.50-11.00,
+// 40W $19-23 — "the deepest ITM strikes keeping within those price limits".
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0, minDebitFrac = 0 }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
   // the least-ITM placement available — still never OTM.
@@ -129,6 +136,9 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
       const mark = legsMark(legs, S, tau, iv);
       if (!(mark > 0)) continue;
       if (mark <= maxDebitFrac * width) {
+        if (minDebitFrac > 0 && mark < minDebitFrac * width) {
+          return { skip: true, reason: `deepest placement under the ceiling marks ${round2(mark)}, below the ${Math.round(minDebitFrac * 100)}% floor`, limit: 0 };
+        }
         // PRICE-FOR-STRIKES FLEX — mirrors trader.buildOpenAdaptive. The ceiling pays for a rising market
         // entirely in strikes; this gives a little on price instead to keep the placement nearer where the
         // geometry wanted it. Bounded on both axes: at most capFlexStrikes further in, at most

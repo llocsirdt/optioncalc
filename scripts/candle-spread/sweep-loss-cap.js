@@ -106,7 +106,26 @@ const genericFor = (W) => {
 const JOBS = [];
 // --currentOnly: one job per variant at its CURRENT config (cap, ceiling) — for sweeping a fill model
 // (--openFillModel / --fillThroughTicks) across the roster rather than a knob.
-if (process.argv.includes('--currentOnly')) {
+// --placementModes: strike/price placement study (2026-10-05). Per variant (fixed-geometry -cATM controls
+// excluded), at its CURRENT cap:
+//   A current  — adaptive, deepest ITM priced <= capFrac x W (as shipped)
+//   B band     — adaptive, deepest ITM priced inside the user's band
+//   C sATM-band — fixed short-at-the-money, taken only inside the band
+//   D sATM-wide — fixed short-at-the-money, up to the old 65% ceiling
+// Bands = the user's real limits: 10W $4.80-5.30, 20W $9.50-11.00, 40W $19-23.
+const BANDS = { 10: [0.48, 0.53], 20: [0.475, 0.55], 40: [0.475, 0.575] };
+if (process.argv.includes('--placementModes')) {
+  for (const run of RUNS) {
+    if (/-cATM$/.test(run.variant)) continue;
+    const W = run.spreadWidth, [lo, hi] = BANDS[W] || [0, run.capFrac || 0.65];
+    const k = Math.round(run.lossMax / (W * 100) * 100) / 100;
+    const j = (rung, over) => JOBS.push({ variant: run.variant, rung, k, lossMax: run.lossMax, lossTarget: run.lossTarget, over });
+    j('A current', {});
+    j('B band', { adaptiveGeo: true, capFrac: hi, minDebitFrac: lo });
+    j('C sATM-band', { adaptiveGeo: false, spreadShift: W / 2, capFrac: hi, minDebitFrac: lo });
+    j('D sATM-wide', { adaptiveGeo: false, spreadShift: W / 2, capFrac: 0.65 });
+  }
+} else if (process.argv.includes('--currentOnly')) {
   for (const run of RUNS) JOBS.push({ variant: run.variant, rung: 'current',
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget });
 } else if (CAP_FRACS.length) {
@@ -146,23 +165,24 @@ for (const run of RUNS) {
 
 function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
-  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}) };
+  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}), ...(job.over || {}) };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
   const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL, fillThroughTicks: FILL_THRU,
     fillThroughTicksOpen: FILL_THRU_OPEN, fillThroughTicksCover: FILL_THRU_COVER });
-  if (CAP_FRACS.length) o.recordReplay = true;   // positions, for the open-price and per-open cover stats
+  const PLACEMENT = process.argv.includes('--placementModes');
+  if (CAP_FRACS.length || PLACEMENT) o.recordReplay = true;   // positions, for the open-price and per-open cover stats
   const res = days.map(d => runDay5m(d.bars, fn, o));
   // Per-OPEN stats (capFrac mode): what the opens actually cost and how often each got covered — the
   // question behind the ceiling is "does a $6 open cover less often than a $5 one".
   let openStats = {};
-  if (CAP_FRACS.length) {
+  if (CAP_FRACS.length || PLACEMENT) {
     const ps = [];
     for (const r of res) for (const p of (r.positions || [])) if (!p.hedge && p.filled !== false && p.limit != null) ps.push(p);
     const W = run.spreadWidth;
     const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : null);
     const cov = (a) => (a.length ? Math.round(a.filter((p) => p.covered).length / a.length * 1000) / 10 : null);
     const lo = ps.filter((p) => p.limit <= 0.525 * W), hi = ps.filter((p) => p.limit >= 0.55 * W);
-    openStats = { capFrac: job.capFrac, avgOpen: avg(ps.map((p) => p.limit)), coveredPct: cov(ps),
+    openStats = { capFrac: cfg.capFrac, mode: job.rung, avgOpen: avg(ps.map((p) => p.limit)), coveredPct: cov(ps),
       nOpenLE525: lo.length, coveredLE525: cov(lo), nOpenGE55: hi.length, coveredGE55: cov(hi) };
     for (const r of res) r.positions = null;
   }

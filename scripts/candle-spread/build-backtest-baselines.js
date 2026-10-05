@@ -26,6 +26,13 @@ const RUNS = buildRuns();
 const di = process.argv.indexOf('--dataDir');
 const DIR = di >= 0 ? process.argv[di + 1] : path.join(__dirname, '..', '..', 'tests', 'backtest', 'backtest-data-5m-nq');
 const DRY = process.argv.includes('--dry');
+// OPEN FILL MODEL — 'ladder' is THE BASELINE MODEL since 2026-10-05: an open rests as one working order
+// (walked by the open ladder, fillable from the next bar), the way v7-10's real opens work. The old
+// instant-fill assumption overstated every baseline by ~half (fleet 129,249 -> 61,641/day, together with
+// the roster's 1-tick cover rule). `--openFillModel immediate` reproduces the pre-2026-10-05 baselines.
+const ofi = process.argv.indexOf('--openFillModel');
+const OPEN_FILL = ofi >= 0 ? process.argv[ofi + 1] : 'ladder';
+const OPEN_FILL_ENV = OPEN_FILL === 'immediate' ? {} : { openFillModel: OPEN_FILL };
 // INTRADAY-IV CORRECTION is now CANONICAL (2026-09-04). It reprices every leg with the calibrated
 // time-of-day IV multiplier (shared/intraday-iv-correction.json via runDay5m opts.intradayIV), measured off
 // the REAL captured chains — band-IV runs ~30% below real ATM IV at the open. Validated on 765 NQ days ×
@@ -121,7 +128,7 @@ const hasRth = d => d.bars.some(b => { const m = etMin(b.dt); return m >= 570 &&
 const days = allDays.filter(hasRth);
 const excluded = allDays.length - days.length;
 
-const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: 'rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness)', variants: {} };
+const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: `rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness), opens ${OPEN_FILL}, cover fill-through per roster`, variants: {} };
 const mean = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
 const mean2 = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100;
 
@@ -159,7 +166,7 @@ if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
 // a header describing the opposite of what it did, in the file that gets archived as the record of the
 // run. Probe optsFor instead: it is the thing that decides.
 function effectiveSlip() {
-  try { return optsFor(RUNS[0]).orderSlipTicks; } catch (e) { return undefined; }
+  try { return optsFor(RUNS[0], OPEN_FILL_ENV).orderSlipTicks; } catch (e) { return undefined; }
 }
 function slipLabel() {
   const n = effectiveSlip();
@@ -170,7 +177,7 @@ function slipLabel() {
 
 function assertSlipArmed() {
   if (ORDER_SLIP == null) return;
-  const probe = optsFor(RUNS[0]);
+  const probe = optsFor(RUNS[0], OPEN_FILL_ENV);
   if (probe.orderSlipTicks !== ORDER_SLIP) {
     console.error(`\n  ✗ --orderSlipTicks ${ORDER_SLIP} did not reach optsFor (got ${probe.orderSlipTicks}).`);
     console.error('    Every arm would be the control. Refusing to run. Exiting 2.\n');
@@ -187,7 +194,7 @@ function assertSlipArmed() {
 }
 
 function computeVariant(run) {
-  const fn = wrap(run), opts = optsFor(run);
+  const fn = wrap(run), opts = optsFor(run, OPEN_FILL_ENV);
   const results = days.map(d => runDay5m(d.bars, fn, opts));
   const daily = results.map(r => r.terminal);
   const s = stats(daily);
