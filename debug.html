@@ -745,6 +745,7 @@ function renderOrders() {
       + 'COVER** was working all day; the others never became a position. OPEN** means the spread could '
       + 'not be quoted at all, since an open limit ceils to a tick at or above its own mark'],
     ['Legs', 'the spread as actually sent'],
+    ['NDX', 'the NDX price at the bar the engine acted on at this row’s Time: for an OPEN, the bar it was created on (the order goes out a few seconds later), so read against Legs it shows how far in the money the strikes were placed; for a COVER, the bar of the row’s time'],
     ['Cost', 'cash for the order; CR = credit received, DB = debit paid'],
     ['worked', 'what the order was PLACED at, and how many times it was repriced before it filled — for '
       + 'OPENS and COVERS alike, each in the space that order was sent in (a credit order in credit). '
@@ -762,6 +763,21 @@ function renderOrders() {
     ['P&L', 'this position’s P&L at settlement'],
   ]);
   const usdc = (c) => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
+  // NDX AT ORDER CREATION, from each row's OWN record (live or backtest): the underlying of the last
+  // candle_close at or before the order's time — the bar the engine acted on.
+  const underBySrc = {};
+  const underOf = (src, epoch) => {
+    if (epoch == null) return null;
+    const rec = src === 'bt' ? btRecord : record;
+    if (!underBySrc[src]) {
+      underBySrc[src] = ((rec && rec.events) || [])
+        .filter((x) => x.type === 'candle_close' && x.underlying != null)
+        .map((x) => [Date.parse(x.time), x.underlying]).filter(([t]) => Number.isFinite(t)).sort((a, b) => a[0] - b[0]);
+    }
+    let u = null;
+    for (const [t, v] of underBySrc[src]) { if (t <= epoch + 1000) u = v; else break; }
+    return u;
+  };
   const color = (sd) => (sd === 'bull' ? 'var(--profit)' : 'var(--loss)');
   const glyph = (e) => e.hedgeKind ? '⬡'
     : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
@@ -896,6 +912,7 @@ function renderOrders() {
       // Hedge rows take the row's purple here too (the inline colour otherwise beats tr.td-hedge).
       + `<td style="color:${hedge ? '#6b5ea8' : color(e.side)}">${glyph(e)} ${label}</td>`
       + `<td class="legs">${e.legs}</td>`
+      + (() => { const u = underOf(e.src, e.epoch); return `<td class="m">${u != null ? Math.round(u) : '—'}</td>`; })()
       + `<td>${cr ? '+' : ''}${usdc(e.cost)} <span class="net ${cr ? 'cr' : 'dr'}">${cr ? 'CR' : 'DB'}</span></td>`
       + diag
       + `<td class="${open && sp ? sgn(sp.pnl) : ''}">${open && sp ? usd(sp.pnl) : '—'}</td></tr>`;

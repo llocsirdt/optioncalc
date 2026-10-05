@@ -25,6 +25,7 @@
  *   node scripts/candle-spread/sweep-loss-cap.js [--workers 6] [--out <dir>]
  *                                                [--variants v7-10,v6-20] [--rungs 1,1.5,2,3,4]
  *                                                [--dataDir <5m dir>] [--openFillModel ladder]
+ *                                                [--capFracs 0.5,0.525,0.55,0.6]   (sweep the open-price ceiling instead)
  * Emits <out>/loss-cap-sweep.json and <out>/loss-cap-sweep.csv (default out = cwd).
  */
 const path = require('path');
@@ -46,6 +47,10 @@ const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1))
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const BUMP = Number(argVal('--bump', '0')) || 0;
 const RUNGS = (argVal('--rungs', '1,1.5,2,3,4')).split(',').map(Number).filter(Number.isFinite);
+// --capFracs 0.5,0.55,0.6: sweep the OPEN-PRICE CEILING instead of the loss cap. Adaptive placement takes the
+// most-ITM strikes whose price fits under capFrac x W, so this is "how much do we let an open cost": at 0.60
+// a 10-wide opens at up to $6.00, at 0.55 up to $5.50. Every job keeps the variant's CURRENT lossMax.
+const CAP_FRACS = (argVal('--capFracs', '') || '').split(',').map(Number).filter((x) => x > 0 && x < 1);
 const SLICE = process.argv.indexOf('--_slice') >= 0 ? Number(process.argv[process.argv.indexOf('--_slice') + 1]) : null;
 const SLICE_OF = SLICE != null ? Number(process.argv[process.argv.indexOf('--_slice') + 2]) : null;
 const SLICE_OUT = process.argv.indexOf('--_out') >= 0 ? process.argv[process.argv.indexOf('--_out') + 1] : null;
@@ -95,6 +100,14 @@ const genericFor = (W) => {
 // "what if it had never been tightened"). Rungs use the CAPPRES convention lossTarget = 0.7 x lossMax.
 // Deduped by lossMax so a rung that coincides with current/generic is not run twice.
 const JOBS = [];
+if (CAP_FRACS.length) {
+  for (const run of RUNS) {
+    const cur = run.capFrac != null ? run.capFrac : 0.65;
+    const fr = [...new Set(CAP_FRACS.concat([cur]))].sort((a, b) => a - b);
+    for (const cf of fr) JOBS.push({ variant: run.variant, rung: cf === cur ? `capFrac ${cf} (current)` : `capFrac ${cf}`,
+      k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, capFrac: cf });
+  }
+} else
 for (const run of RUNS) {
   const W = run.spreadWidth;
   const gen = genericFor(W);
@@ -124,10 +137,25 @@ for (const run of RUNS) {
 
 function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
-  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget };
+  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}) };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
   const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL });
+  if (CAP_FRACS.length) o.recordReplay = true;   // positions, for the open-price and per-open cover stats
   const res = days.map(d => runDay5m(d.bars, fn, o));
+  // Per-OPEN stats (capFrac mode): what the opens actually cost and how often each got covered — the
+  // question behind the ceiling is "does a $6 open cover less often than a $5 one".
+  let openStats = {};
+  if (CAP_FRACS.length) {
+    const ps = [];
+    for (const r of res) for (const p of (r.positions || [])) if (!p.hedge && p.filled !== false && p.limit != null) ps.push(p);
+    const W = run.spreadWidth;
+    const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : null);
+    const cov = (a) => (a.length ? Math.round(a.filter((p) => p.covered).length / a.length * 1000) / 10 : null);
+    const lo = ps.filter((p) => p.limit <= 0.525 * W), hi = ps.filter((p) => p.limit >= 0.55 * W);
+    openStats = { capFrac: job.capFrac, avgOpen: avg(ps.map((p) => p.limit)), coveredPct: cov(ps),
+      nOpenLE525: lo.length, coveredLE525: cov(lo), nOpenGE55: hi.length, coveredGE55: cov(hi) };
+    for (const r of res) r.positions = null;
+  }
   const daily = res.map(r => r.terminal);
   const total = daily.reduce((a, b) => a + b, 0);
   const sorted = [...daily].sort((a, b) => a - b);
@@ -160,6 +188,7 @@ function measure(job) {
     capExceeded: daily.filter(x => x < -job.lossMax).length,
     opensBlocked: res.reduce((a, r) => a + r.governor.blocked, 0),
     offsets: res.reduce((a, r) => a + r.governor.offsets, 0),
+    ...openStats,
   };
 }
 
@@ -196,7 +225,7 @@ if (SLICE != null) {
   }
   // canonical order: roster order, then cap descending
   const order = new Map(RUNS.map((r, i) => [r.variant, i]));
-  rows.sort((a, b) => (order.get(a.variant) - order.get(b.variant)) || (b.lossMax - a.lossMax));
+  rows.sort((a, b) => (order.get(a.variant) - order.get(b.variant)) || (b.lossMax - a.lossMax) || ((a.capFrac || 0) - (b.capFrac || 0)));
   fs.mkdirSync(OUTDIR, { recursive: true });
   fs.writeFileSync(path.join(OUTDIR, 'loss-cap-sweep.json'),
     JSON.stringify({ generatedAt: new Date().toISOString(), days: days.length, from: days[0].date, to: days[days.length - 1].date, rows }, null, 1), 'utf8');
