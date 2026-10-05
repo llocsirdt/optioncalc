@@ -787,7 +787,20 @@ const TUNED_CAPS = new Map([
   ['v1-40-cATM', 8000],
   ['v6-40-cATM', 8500],]);
 
+// SIMULATED-FILL REALISM (2026-10-05), every variant. Inert under the broker (v7-10's fills are Schwab's);
+// on the mark path: an open cannot fill on the look that placed it, and a cover needs the market 1 tick
+// THROUGH its price, not just touching it. Measured that morning: 66% of simulated opens booked on the
+// placing look and 64% of covers at 0-1 tick, while v7-10's real orders at the same prices did not all fill.
+// Overridable per run (set the field before applyExperiments, or CANDLE_SPREAD_SIM_FILL=legacy for both).
+const SIM_FILL_LEGACY = String(process.env.CANDLE_SPREAD_SIM_FILL || '').toLowerCase() === 'legacy';
+function applySimFillRealism(v) {
+  if (SIM_FILL_LEGACY) return;
+  if (v.simOpenFillMinLooks == null) v.simOpenFillMinLooks = 2;
+  if (v.coverFillThroughTicks == null) v.coverFillThroughTicks = 1;
+}
+
 function applyExperiments(v, { capPreset = true } = {}) {
+  applySimFillRealism(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
   // minLock follows the width rule on EVERY cell, controls included, so the no-ladder control cells differ

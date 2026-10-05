@@ -308,16 +308,24 @@ const pendingHedge = (kind, limit, placedEpoch) => ({ positions: [{
   const p2 = mkPos();
   await work(p2);
   const asked = p2.pendingCover.sentCredit;
-  // Offer exactly the conceded credit and not a cent more: mark = W - asked on the booked legs.
+  // Offer exactly the conceded credit and not a cent more. The engine now quotes the SENT twin itself
+  // (2026-10-05: a cover judged on its debit legs looked 13 ticks through while the put twin actually
+  // working never offered it), so the chain offers `c` on the twin (short P21990 / long P22010 nets -c) and
+  // the parity mark W - c on the booked calls.
+  const offerAt = (c) => (type, strike) => {
+    if (type === 'C') return legAt(round2(W - c))(type, strike);
+    const mid = strike === 22010 ? 5 : round2(5 + c);
+    return { mid, symbol: `NDX_P${strike}`, bid: mid - 0.2, ask: mid + 0.2 };
+  };
   const d2 = [];
-  trader.resolveRestingCovers({ positions: [p2], realizedPnl: 0 }, cCfg, legAt(round2(W - asked)), d2, {});
+  trader.resolveRestingCovers({ positions: [p2], realizedPnl: 0 }, cCfg, offerAt(asked), d2, {});
   ok(p2.covered === true, `the cover fills at the price it was walked to (asked ${asked})`);
   ok(d2.some(x => x.action === 'cover-fill'), 'and books as a fill');
 
   // The same order at its ORIGINAL ask would not have filled on that quote — which is what the walk bought.
   const p3 = mkPos();
   const d3 = [];
-  trader.resolveRestingCovers({ positions: [p3], realizedPnl: 0 }, cCfg, legAt(round2(W - asked)), d3, {});
+  trader.resolveRestingCovers({ positions: [p3], realizedPnl: 0 }, cCfg, offerAt(asked), d3, {});
   ok(p3.covered === false, 'while the un-walked order at 12.95 would still be resting on the same quote');
 
   // ---- THE CASH LEDGER BOOKS AT THE FILL, FOR EVERY ORDER TYPE -------------------------------------

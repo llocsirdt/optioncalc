@@ -45,6 +45,8 @@ const OUTDIR = argVal('--out', process.cwd());
 const OPEN_FILL = argVal('--openFillModel', null);
 // --fillThroughTicks N: a working order fills only when the bar's best price is N ticks BETTER than its limit.
 const FILL_THRU = argVal('--fillThroughTicks', null) != null ? Number(argVal('--fillThroughTicks', null)) : null;
+const numArg = (f) => (argVal(f, null) != null ? Number(argVal(f, null)) : null);
+const FILL_THRU_OPEN = numArg('--fillThroughTicksOpen'), FILL_THRU_COVER = numArg('--fillThroughTicksCover');
 const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1));
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const BUMP = Number(argVal('--bump', '0')) || 0;
@@ -146,7 +148,8 @@ function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
   const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}) };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
-  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL, fillThroughTicks: FILL_THRU });
+  const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL, fillThroughTicks: FILL_THRU,
+    fillThroughTicksOpen: FILL_THRU_OPEN, fillThroughTicksCover: FILL_THRU_COVER });
   if (CAP_FRACS.length) o.recordReplay = true;   // positions, for the open-price and per-open cover stats
   const res = days.map(d => runDay5m(d.bars, fn, o));
   // Per-OPEN stats (capFrac mode): what the opens actually cost and how often each got covered — the
@@ -209,7 +212,7 @@ if (SLICE != null) {
 
 (async () => {
   console.log(`LOSS-CAP SWEEP — ${RUNS.length} governed variants × ${JOBS.length} jobs over ${days.length} trading days (${allDays.length - days.length} non-trading excluded)`);
-  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers · opens ${OPEN_FILL || 'immediate'} · fill-through ${FILL_THRU || 0} tick(s)`);
+  console.log(`  dates ${days[0].date} .. ${days[days.length - 1].date} · rungs ${RUNGS.join(', ')} × W×100 (+ current) · ${WORKERS} workers · opens ${OPEN_FILL || 'immediate'} · fill-through ${FILL_THRU || 0} tick(s) (open ${FILL_THRU_OPEN != null ? FILL_THRU_OPEN : '='}, cover ${FILL_THRU_COVER != null ? FILL_THRU_COVER : '='})`);
   let rows = [];
   if (WORKERS > 1) {
     const { spawn } = require('child_process');

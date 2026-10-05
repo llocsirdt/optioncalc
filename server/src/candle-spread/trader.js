@@ -2740,6 +2740,19 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     decisions.push({ action: 'open-mark-fillable', positionId: pos.id, mark: chk.mark,
       note: 'the mark reached our price; waiting on the broker' });
   }
+  // A SIMULATED OPEN CANNOT FILL ON THE LOOK THAT PLACED IT. Its limit is the mark ceiled to the tick, so
+  // the placing observation is "at or through" by construction: on 2026-10-05 66% of simulated opens booked
+  // that way while v7-10's real orders at the same prices took 1-34 looks (30s each) and sometimes never
+  // filled. Real opens DO fill at the mid (7 of 9 at 0 ticks or better), so the touch test stays — the
+  // order just has to still be there on a LATER observation. cfg.simOpenFillMinLooks: the roster sets 2
+  // (the placing look plus one more) for every variant; the engine default stays 1 (instant) so fixtures
+  // and replays that predate it are unchanged.
+  const minLooks = cfg.simOpenFillMinLooks != null ? cfg.simOpenFillMinLooks : 1;
+  if (chk.fillable && deps.fillSource !== 'broker' && (pos.looks || 0) < minLooks) {
+    decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit, mark: chk.mark,
+      cap: pos.cap, reason: 'at the mark on the placing look; a fill needs a later observation' });
+    return 0;
+  }
   if (chk.fillable && deps.fillSource !== 'broker') {
     pos.filled = true; pos.orderStatus = 'filled';
     // The price that actually traded: a credit open receives sentLimit, a debit one pays its limit.
@@ -3070,6 +3083,14 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     const pc = pos.pendingCover;
     const quote = spreadQuote(pc.legs, getLeg);
     const mark = quote.mark;
+    // THE CREDIT TWIN, QUOTED ON ITS OWN LEGS. A credit-sent cover rests at the broker as pc.sentLegs (the
+    // put twin of a call cover, or vice versa). Its credit used to be inferred by parity from the DEBIT
+    // legs (W - mark), which only holds while both chains quote cleanly. 2026-10-05 v7-10: the call legs
+    // marked 13 ticks through the 5.00 target while the put twin actually working was quoted 16 wide and
+    // never offered it — 302 looks, no fill, and the debug evidence claimed the market had come through.
+    // Quote what is resting; parity is the fallback only when sentLegs are missing or unquotable.
+    const sentQ = (pc.sentNet === 'CREDIT' && pc.sentLegs && pc.sentLegs.length) ? spreadQuote(pc.sentLegs, getLeg) : null;
+    const twinQuoted = !!(sentQ && sentQ.mark != null);
     // LOW-WATER MARK — the best price this resting order ever saw, pushed down on EVERY observation
     // including the ones that do not fill. With the sub-bar worker that is ~10 looks per candle instead
     // of one, so `markLow` vs `target` finally answers "did the market actually come to our price, and by
@@ -3080,7 +3101,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     const pcCredit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
     const pcks = (pc.legs || []).map((l) => l.strike);
     const pcw = pcks.length ? Math.max(...pcks) - Math.min(...pcks) : cfg.spreadWidth;
-    noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT',
+    if (pcCredit && twinQuoted) noteMarkLow(pc, sentQ, pc.sentCredit, 'CREDIT');   // credit = -mark of the twin
+    else noteMarkLow(pc, quote, pcCredit ? pc.sentCredit : pc.target, pcCredit ? 'CREDIT' : 'DEBIT',
       pcCredit ? pcw : undefined);
     notePlaced(pc, quote, deps && deps.underlying);
     // CLOSED LOOP: see the matching note in resolvePendingOpen. Everything below this line decides a fill
@@ -3099,13 +3121,22 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // credit covers deserved to fill — never whether the unfilled ones deserved not to.
     const creditRest = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
     if (mark == null) continue;
-    if (creditRest) {
+    // FILL-THROUGH: a simulated cover books only when the market is at least N ticks BETTER than its price,
+    // not merely touching it (cfg.coverFillThroughTicks: the roster sets 1 for every variant; the engine
+    // default stays 0 = touch, so fixtures and replays that predate it are unchanged). 2026-10-05:
+    // 64% of simulated cover fills booked at 0-1 tick through; those at exactly 1 tick saw the market back
+    // at their price on a median 59% of later looks against 83% for 2+ ticks.
+    const thru = (cfg.coverFillThroughTicks != null ? cfg.coverFillThroughTicks : 0) * tick;
+    // The credit the market is offering for the twin: its OWN quote when it has one, else parity.
+    const creditOffered = () => {
+      if (twinQuoted) return round2(-sentQ.mark);
       const ks = (pc.legs || []).map((l) => l.strike);
       const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
-      // The credit the market is offering for the twin, by parity with the canonical mark.
-      const creditNow = round2(cw - mark);
-      if (!(creditNow >= pc.sentCredit)) continue;       // market has not come up to our ask yet
-    } else if (mark > pc.target) {
+      return round2(cw - mark);
+    };
+    if (creditRest) {
+      if (!(creditOffered() >= pc.sentCredit + thru - 1e-9)) continue;   // market has not come up to our ask yet
+    } else if (mark > pc.target - thru + 1e-9) {
       continue;                                          // debit: not fillable yet — keep resting
     }
     // THE MAIN COVER FILL PATH, and where most of 2026-09-16's 154 bogus fills were booked. The guard
@@ -3149,7 +3180,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     if (creditRest) {
       const ks = (pc.legs || []).map((l) => l.strike);
       const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
-      const creditNow = round2(cw - mark);
+      const creditNow = creditOffered();
       const got = round2(Math.min(creditNow, Math.max(pc.sentCredit, round2(creditNow - tick))));
       fill = round2(cw - got);
     } else {

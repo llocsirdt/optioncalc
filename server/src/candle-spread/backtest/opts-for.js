@@ -95,7 +95,17 @@ function optsFor(v, env) {
   // OPEN FILL MODEL — 'ladder' models the live resting open (one working order, walked like the cover
   // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster, until baselines adopt it.
   if (env && env.openFillModel) o.openFillModel = env.openFillModel;
-  if (env && env.fillThroughTicks != null) o.fillThroughTicks = env.fillThroughTicks;
+  // FILL-THROUGH. The roster's coverFillThroughTicks (live mark path: a simulated cover needs the market a
+  // tick THROUGH its price) is the backtest's fillThroughTicksCover — same rule, both engines. A caller's
+  // env wins: a generic env.fillThroughTicks sets BOTH sides explicitly (the engine prefers the per-side
+  // value, so leaving the roster's cover value in place would silently override a sweep's generic one).
+  if (v.coverFillThroughTicks != null) o.fillThroughTicksCover = v.coverFillThroughTicks;
+  if (env && env.fillThroughTicks != null) {
+    o.fillThroughTicks = env.fillThroughTicks;
+    o.fillThroughTicksOpen = env.fillThroughTicks; o.fillThroughTicksCover = env.fillThroughTicks;
+  }
+  if (env && env.fillThroughTicksOpen != null) o.fillThroughTicksOpen = env.fillThroughTicksOpen;
+  if (env && env.fillThroughTicksCover != null) o.fillThroughTicksCover = env.fillThroughTicksCover;
   if (v.openLadder != null) o.openLadder = v.openLadder;
   if (v.openLadderStepDollars != null) o.openLadderStepDollars = v.openLadderStepDollars;
   if (v.coverLadder) {
@@ -142,7 +152,11 @@ function optsFor(v, env) {
     'wingMaxPerDay', 'wingBandSigmas', 'wingOutSteps', 'wingNaked', 'wingUpsideLambda', 'wingTailSigmas'];
   if (noWings) for (const k of WING_KEYS) delete o[k];
   VC.assertForwarded(v, Object.keys(o), `${(env && env.where) || 'optsFor'}`,
-    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac']
+    ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac',
+      // coverFillThroughTicks -> fillThroughTicksCover (above). simOpenFillMinLooks has no backtest analogue
+      // on purpose: the backtest's open models are bar-granular, and the ladder model already cannot fill
+      // an open before the NEXT bar — stricter than "one more 30s look".
+      'coverFillThroughTicks', 'simOpenFillMinLooks']
       .concat(noWings ? WING_KEYS : []));
   return o;
 }
