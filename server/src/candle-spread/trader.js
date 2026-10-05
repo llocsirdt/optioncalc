@@ -1829,6 +1829,14 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg) {
       return { error: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}`, mark };
     }
   }
+  // TOO CHEAP TO BE TRUE (SQ.cheapOutlier). A debit vertical priced below a spread further out of the money
+  // is an impossible quote; as an `error` the adaptive walk moves to the next placement instead of sending
+  // it. 2026-10-05 09:45: every 10-wide sent the 30900/30910 bull call at 2.90 while 30910/30920 marked 6.25,
+  // and the simulated ones booked it. Replayed over the archive: 10.4% of 10-wide opens were priced this way.
+  {
+    const co = SQ.cheapOutlier(legs, getLeg, { incr: cfg.strikeIncrement || 10 });
+    if (!co.ok) return { error: co.reason, mark };
+  }
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
   // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
@@ -2380,6 +2388,13 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
     const v = mono.violations[0];
     return { ...base, fillable: false, fill: null,
       badQuote: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}` };
+  }
+  // TOO CHEAP TO BE TRUE — the same ordering gate buildOpenAtStrikes applies, here at FILL time, so a noisy
+  // low quote cannot book a phantom fill on the mark path (opens, covers and hedges alike). Debit shapes only;
+  // a CREDIT-sent order abstains (cheapOutlier only recognises the debit verticals).
+  if (net !== 'CREDIT') {
+    const co = SQ.cheapOutlier(legs, getLeg, { incr: (deps && deps.strikeIncrement) || 10 });
+    if (!co.ok) return { ...base, fillable: false, fill: null, badQuote: co.reason };
   }
   // PARITY, for two-leg verticals: the opposing structure at the SAME strikes must price to the width.
   // This is the check that catches legs which are broken but net to something legal-looking — the four

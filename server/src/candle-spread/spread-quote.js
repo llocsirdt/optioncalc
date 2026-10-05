@@ -105,6 +105,53 @@ function neighbourCheck(side, lo, hi, getLeg, opts) {
 }
 
 /**
+ * TOO-CHEAP OUTLIER — a debit vertical priced BELOW a spread further out of the money.
+ *
+ * WHY. On 2026-10-05 at 09:45 every 10-wide priced the 30900/30910 bull call at 2.90 off single legs quoted
+ * $10-17 wide, while the NEXT spread out (30910/30920) marked 6.25. 14 seconds later the same chain marked
+ * it 6.55. v7-10 sent a real order at 2.90 that could never fill; every simulated 10-wide BOOKED it. The
+ * skew is structural: adaptive placement takes the most-ITM spread whose mark fits under the cap, so a
+ * noisy quote that LOOKS cheap is exactly the one selected.
+ *
+ * THE INVARIANT, not a fit. A debit vertical's value is the integral of P(S_T past x) across its strikes,
+ * so it can only FALL as the spread moves out of the money: a bull call is worth no more one strike higher,
+ * a bear put no more one strike lower. A mark below a further-OTM sibling (by more than tolFrac x W of
+ * quote noise) is impossible. A straight-line neighbour fit was tried first and refused a perfectly good
+ * near-the-money quote on a steep S-curve (18.40, 9.99, [1.60], 0.01) — the shape is not linear, the
+ * ordering always holds.
+ *
+ * Debit shapes only (long lower call / short higher call; long higher put / short lower put). Abstains
+ * (ok:true) on anything else or when no further-OTM sibling is quoted — a thin chain is not a bad one.
+ */
+function cheapOutlier(legs, getLeg, opts) {
+  const o = opts || {};
+  const tolFrac = o.tolFrac != null ? o.tolFrac : 0.10;
+  const incr = o.incr || 10;
+  if (!legs || legs.length !== 2 || legs[0].type !== legs[1].type) return { ok: true };
+  const L = legs.find((l) => l.side === 'long'), S = legs.find((l) => l.side === 'short');
+  if (!L || !S) return { ok: true };
+  const lo = Math.min(L.strike, S.strike), hi = Math.max(L.strike, S.strike);
+  let legsFor = null, dir = 0;
+  if (L.type === 'C' && L.strike === lo) { legsFor = bullCallLegs; dir = +1; }        // OTM = higher strikes
+  else if (L.type === 'P' && L.strike === hi) { legsFor = bearPutLegs; dir = -1; }    // OTM = lower strikes
+  if (!legsFor) return { ok: true };
+  const self = netQuote(legsFor(lo, hi), getLeg);
+  if (!self) return { ok: true };
+  let worst = null;
+  for (const k of [1, 2]) {
+    const q = netQuote(legsFor(lo + dir * k * incr, hi + dir * k * incr), getLeg);
+    if (q && (worst == null || q.mid > worst.mid)) worst = { k, mid: q.mid };
+  }
+  if (!worst) return { ok: true };
+  const W = hi - lo;
+  if (self.mid < worst.mid - tolFrac * W) {
+    return { ok: false, mark: self.mid, otherMid: worst.mid,
+      reason: `mark ${self.mid} is below ${worst.mid}, the spread ${worst.k} strike(s) further out of the money — a bad quote, not a cheap spread` };
+  }
+  return { ok: true };
+}
+
+/**
  * The full gate for an OPEN. Combines all three checks and returns the price to actually use.
  *   ok:false + reason 'ceiling'  → the trade itself is too expensive (decline, or move strikes)
  *   ok:false + reason 'parity'/'neighbour' → the MARK is suspect; `limit` is the parity-derived fair price
@@ -300,4 +347,4 @@ function chainMonotonic(legs, getLeg, incr) {
   return { ok: violations.length === 0, violations };
 }
 
-module.exports = { netQuote, parityCheck, parityDeviation, chainMonotonic, neighbourCheck, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };
+module.exports = { netQuote, parityCheck, parityDeviation, chainMonotonic, neighbourCheck, cheapOutlier, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };
