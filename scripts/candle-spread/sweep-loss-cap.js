@@ -249,7 +249,27 @@ function measure(job) {
     floorRaisePerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.count, 0) / days.length * 100) / 100 : null,
     floorRaiseSpentPerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.spent, 0) / days.length) : null,
     floorRaiseBlockedLocked: res[0] && res[0].floorRaise ? res.reduce((a, r) => a + r.floorRaise.blockedLocked, 0) : null,
-    lockedDays: res.filter((r) => r.floor != null && r.floor >= 0).length,
+    // FLOOR METRICS — what a floor-raising feature is FOR (the user, 2026-10-06: drawdown/worst days belong to
+    // the caps; floor raising is judged on the floor). From the engine's lock telemetry and the closing
+    // book's risk-curve extremes, over days that traded. (r.floor is realized covered P&L, NOT the book
+    // floor — an earlier 'lockedDays' column read it by mistake.)
+    ...(() => {
+      const t = res.filter((r) => r.lock && r.lock.traded);
+      const n = Math.max(1, t.length);
+      const ef = t.map((r) => r.lock.endBookFloor).sort((a, b) => a - b);
+      const mean = (f) => Math.round(t.reduce((a, r) => a + f(r), 0) / n);
+      return {
+        tradedDays: t.length,
+        eodFloorAvg: mean((r) => r.lock.endBookFloor),
+        eodFloorMedian: ef.length ? ef[Math.floor(ef.length / 2)] : null,
+        eodLockedPct: Math.round(t.filter((r) => r.lock.endFloorNoLoss).length / n * 1000) / 10,
+        eodProfitPct: Math.round(t.filter((r) => r.lock.endFloorProfit).length / n * 1000) / 10,
+        bestFloorAvg: mean((r) => (r.lock.bestFloor != null ? r.lock.bestFloor : 0)),
+        everLockedPct: Math.round(t.filter((r) => r.lock.everPositive).length / n * 1000) / 10,
+        eodPeakAvg: mean((r) => r.bestCase || 0),
+        eodRangeAvg: mean((r) => (r.bestCase || 0) - (r.worstCase || 0)),
+      };
+    })(),
     restruckPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restruck || 0), 0) / days.length * 100) / 100 : null,
     stalePerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.stale || 0), 0) / days.length * 100) / 100 : null,
     openFillRate: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + r.openLadder.filled, 0) / Math.max(1, res.reduce((a, r) => a + r.openLadder.placed, 0)) * 1000) / 10 : null,
