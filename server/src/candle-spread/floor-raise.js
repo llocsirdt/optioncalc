@@ -187,4 +187,74 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
   return { best: null, blockedLocked };
 }
 
-module.exports = { samplePoints, candidates, payoff, valleys, requiredRatio, pickBest };
+// MULTI-STEP OBJECTIVES (the user, 2026-10-06: "it's usually not a single hedge that achieves the desired
+// result"). Layered on pickBest so the measured objectives stay byte-identical.
+//   'spreadFirst' (B) — verticals and single longs may fix a valley on their own (valley objective, scored on
+//                       the valley's OUTWARD region's lowest point — they lift the tail beyond it); only when
+//                       none qualifies may anything (flies included) be bought, and then only if it raises the
+//                       band's lowest point ('band'). A fly can never be bought while it sinks the rest of the
+//                       curve; once an offset has lifted an outer valley, the near one becomes the lowest point
+//                       and its fly qualifies on the band rule.
+//   'pair'        (C) — the band rule over singles AND two-structure combinations (an offset/long + a fly, or two
+//                       of either), scored TOGETHER: the combined band-floor lift per combined dollar. Judges the
+//                       joint effect honestly — a sequence can clear a ratio step by step that the pair does not.
+// Returns { best, companion?, blockedLocked }; a companion is a second structure to place alongside best.
+function pickBestMulti(args) {
+  const obj = args.objective || 'valley';
+  if (obj === 'spreadFirst') {
+    const spreads = args.cands.filter((c) => c.kind !== 'fly');
+    const r1 = pickBest({ ...args, cands: spreads, objective: 'valley', liftMetric: 'min' });
+    if (r1.best) return r1;
+    const r2 = pickBest({ ...args, objective: 'band' });
+    return { best: r2.best, blockedLocked: r1.blockedLocked + r2.blockedLocked };
+  }
+  if (obj !== 'pair') return pickBest(args);
+  const { xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, bandLo, bandHi } = args;
+  const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
+  const floorB = Math.min(...bandIdx.map((j) => base[j]));
+  // Price + payoff every candidate once; keep the ones that lift SOME low point (pay > cost where the band is
+  // at its floor or within one premium of it), best 12 of each family by that lift per dollar.
+  const priced = [];
+  for (const c of cands) {
+    if (skip && skip(c.legs)) continue;
+    const pr = price(c.legs);
+    if (!pr || !(pr.debit > 0)) continue;
+    const cost = pr.debit * 100 * (qty || 1);
+    if (cost > budget) continue;
+    const pay = xs.map((x) => payoff(c.legs, x, qty));
+    let best = -Infinity;
+    for (const j of bandIdx) if (base[j] <= floorB + cost) best = Math.max(best, pay[j] - cost);
+    if (best > 0) priced.push({ ...c, ...pr, cost, pay, score: best / cost });
+  }
+  const top = (fly) => priced.filter((c) => (c.kind === 'fly') === fly).sort((a, b) => b.score - a.score).slice(0, 12);
+  const pool = top(false).concat(top(true));
+  const options = [];
+  const evalSet = (set) => {
+    const cost = set.reduce((t, c) => t + c.cost, 0);
+    if (cost > budget) return;
+    let after = Infinity;
+    for (const j of bandIdx) { let v = base[j] - cost; for (const c of set) v += c.pay[j]; if (v < after) after = v; }
+    const lift = after - floorB;
+    if (!(lift > 0)) return;
+    const ratio = lift / cost;
+    if (ratio >= minRatio) options.push({ set, cost, lift, ratio });
+  };
+  for (const c of pool) evalSet([c]);
+  for (let i = 0; i < pool.length; i++) for (let k = i + 1; k < pool.length; k++) evalSet([pool[i], pool[k]]);
+  options.sort((a, b) => b.ratio - a.ratio || a.set.length - b.set.length);
+  let blockedLocked = 0;
+  for (const o of options) {
+    if (gNow >= 0) {
+      const legs = o.set.reduce((l, c) => l.concat(c.legs), []);
+      if (globalFloorWith(legs, o.set.reduce((t, c) => t + c.debit, 0)) < 0) { blockedLocked++; continue; }
+    }
+    const strip = ({ pay, score, ...c }) => c;
+    // Report the pair's JOINT lift/ratio on both members (the honest number); cost stays per structure.
+    const best = { ...strip(o.set[0]), lift: o.lift, ratio: o.ratio, pairCost: o.cost };
+    const companion = o.set[1] ? { ...strip(o.set[1]), lift: o.lift, ratio: o.ratio, pairCost: o.cost } : null;
+    return { best, companion, blockedLocked };
+  }
+  return { best: null, blockedLocked };
+}
+
+module.exports = { samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };

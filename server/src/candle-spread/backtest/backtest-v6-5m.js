@@ -1023,18 +1023,21 @@ function runDay5m(bars, signalFn, opts = {}) {
           const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
-          const { best, blockedLocked } = FR.pickBest({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
+          const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
             minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric,
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;
           if (!best) break;
-          st.positions.push({ side: 'hedge', shortStrike: null, legs: best.legs, limit: best.debit, covered: false,
-            pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
-          if (enforceLegs) ledger.record(best.legs);
+          for (const h of companion ? [best, companion] : [best]) {
+            st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false,
+              pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
+            if (enforceLegs) ledger.record(h.legs);
+            frSpent += h.cost; frCount++;
+            for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(h.legs, xs[j], QTY) - h.cost;
+          }
           markBookDirty();
-          frSpent += best.cost; frCount++; frLift += best.lift;
-          for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(best.legs, xs[j], QTY) - best.cost;
+          frLift += best.lift;
         }
       }
     }

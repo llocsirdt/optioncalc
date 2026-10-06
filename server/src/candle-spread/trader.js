@@ -1309,7 +1309,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
     const bookNow = book.concat(hyp);
     const gNow = RC.bookFloor(bookNow, null, 10);
     const spentNow = hyp.reduce((t, h) => t + h.limit * 100 * qty, 0);
-    const { best, blockedLocked } = FR.pickBest({ xs, base, cands: FR.candidates(bandLo, bandHi, incr), bandLo, bandHi,
+    const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: FR.candidates(bandLo, bandHi, incr), bandLo, bandHi,
       price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
@@ -1319,34 +1319,40 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
       note: 'refused: would push a locked profit below zero' });
     if (!best) break;
-    const resolved = [];
-    for (const l of best.legs) {
-      const q = deps.getLeg(l.type, l.strike);
-      if (!q || !q.symbol) { resolved.length = 0; break; }
-      resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+    // A PAIR objective returns a companion: both are placed (each its own order, same pass).
+    let stop = false;
+    for (const h of companion ? [best, companion] : [best]) {
+      const resolved = [];
+      for (const l of h.legs) {
+        const q = deps.getLeg(l.type, l.strike);
+        if (!q || !q.symbol) { resolved.length = 0; break; }
+        resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+      }
+      if (!resolved.length) { stop = true; break; }
+      // The same quote gates every order runs (structure, usability, chain order, too-cheap) before money goes out.
+      const chk = markFill(h.legs, h.debit, deps.getLeg, tick, deps);
+      if (chk.badQuote) { decisions.push({ action: 'raise-badquote', legs: h.legs, reason: chk.badQuote }); stop = true; break; }
+      const ev = quoted.get(keyOf(h.legs)) || {};
+      const payload = buildOrderPayload(resolved, h.debit, qty, 'DEBIT');
+      const placed = await deps.placeOrder(payload, { kind: 'raise', legs: h.legs, net: 'DEBIT', limit: h.debit });
+      if (!placed || placed.filled === false) { stop = true; break; }
+      const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: h.legs, limit: h.debit,
+        markAtPlace: chk.mark, limitSent: h.debit, orderId: (placed && placed.orderId) || null,
+        pendingHedge: { limit: h.debit, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
+          placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask },
+        openedAt: candleTime, openTime: candleTime, openEpoch: nowMs,
+        quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
+      st.positions.push(pos);
+      if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(h.legs);
+      decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: h.debit, valley: h.valley || null, needRatio: h.need,
+        cost: Math.round(h.cost), lift: Math.round(h.lift), ratio: round2(h.ratio), floorNow: round2(gNow),
+        quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
+      hyp.push({ filled: true, legs: h.legs, limit: h.debit, quantity: qty, covered: false });
+      for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(h.legs, xs[j], qty) - h.cost;
+
+      placedN++;
     }
-    if (!resolved.length) break;
-    // The same quote gates every order runs (structure, usability, chain order, too-cheap) before money goes out.
-    const chk = markFill(best.legs, best.debit, deps.getLeg, tick, deps);
-    if (chk.badQuote) { decisions.push({ action: 'raise-badquote', legs: best.legs, reason: chk.badQuote }); break; }
-    const ev = quoted.get(keyOf(best.legs)) || {};
-    const payload = buildOrderPayload(resolved, best.debit, qty, 'DEBIT');
-    const placed = await deps.placeOrder(payload, { kind: 'raise', legs: best.legs, net: 'DEBIT', limit: best.debit });
-    if (!placed || placed.filled === false) break;
-    const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: best.legs, limit: best.debit,
-      markAtPlace: chk.mark, limitSent: best.debit, orderId: (placed && placed.orderId) || null,
-      pendingHedge: { limit: best.debit, kind: 'raise', markAtPlace: chk.mark, tag: best.kind, orderId: (placed && placed.orderId) || null,
-        placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask },
-      openedAt: candleTime, openTime: candleTime, openEpoch: nowMs,
-      quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
-    st.positions.push(pos);
-    if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.legs);
-    decisions.push({ action: 'raise', id: pos.id, structure: best.kind, legs: best.legs, limit: best.debit, valley: best.valley || null, needRatio: best.need,
-      cost: Math.round(best.cost), lift: Math.round(best.lift), ratio: round2(best.ratio), floorNow: round2(gNow),
-      quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
-    hyp.push({ filled: true, legs: best.legs, limit: best.debit, quantity: qty, covered: false });
-    for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(best.legs, xs[j], qty) - best.cost;
-    placedN++;
+    if (stop) break;
   }
   return placedN;
 }
