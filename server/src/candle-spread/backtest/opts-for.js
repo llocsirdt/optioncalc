@@ -113,7 +113,7 @@ function optsFor(v, env) {
   if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
   for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',
-    'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective']) if (v[k] != null) o[k] = v[k];
+    'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas']) if (v[k] != null) o[k] = v[k];
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',

@@ -1312,6 +1312,8 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
     const { best, blockedLocked } = FR.pickBest({ xs, base, cands: FR.candidates(bandLo, bandHi, incr), bandLo, bandHi,
       price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
+      minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas,
+      sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
@@ -1339,7 +1341,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
       quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.legs);
-    decisions.push({ action: 'raise', id: pos.id, structure: best.kind, legs: best.legs, limit: best.debit, valley: best.valley || null,
+    decisions.push({ action: 'raise', id: pos.id, structure: best.kind, legs: best.legs, limit: best.debit, valley: best.valley || null, needRatio: best.need,
       cost: Math.round(best.cost), lift: Math.round(best.lift), ratio: round2(best.ratio), floorNow: round2(gNow),
       quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
     hyp.push({ filled: true, legs: best.legs, limit: best.debit, quantity: qty, covered: false });

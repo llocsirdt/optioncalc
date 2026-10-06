@@ -92,7 +92,18 @@ function valleys(base) {
 //   gNow           — the book's current GLOBAL floor
 //   globalFloorWith(legs, debit) — the book's global floor if this structure were added
 //   skip(legs)     — optional veto (leg-uniqueness)
-function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi }) {
+// DISTANCE-SCALED RATIO (the user, 2026-10-06): the further from the money a fix lands, the less likely that
+// range comes into play, so the more reward per dollar it must offer. Required ratio at a valley =
+// minRatio + (minRatioFar - minRatio) x min(1, distance / farSigmas), distance = |spot - nearest point of the
+// valley| in units of ONE expected remaining move (sigmaPts). minRatioFar unset = flat minRatio everywhere.
+function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
+  if (minRatioFar == null || !(sigmaPts > 0)) return minRatio;
+  const f = Math.min(1, dist / sigmaPts / (farSigmas || 2));
+  return minRatio + (minRatioFar - minRatio) * f;
+}
+
+function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
+  minRatioFar, farSigmas, sigmaPts }) {
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
   const floorB = Math.min(...bandIdx.map((j) => base[j]));
@@ -113,6 +124,12 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
     if (xs[v.a] > spot) return { ...v, ra: v.a, rb: xs.length - 1 };           // above the money: up to the edge
     return { ...v, ra: v.a, rb: v.b };
   }) : null;
+  // NEGATIVE VALLEYS FIRST, STRICTLY: while any targeted valley is below zero, valleys already at or above zero
+  // are not fixed — spending to polish ground that is already positive while a deeper hole stays (and gets
+  // deeper by the premium) is backwards. Once every valley is >= 0 the pass may lock in more profit.
+  // (2026-10-06 replay, distance-scaled ratio: the near fly fell short of its ratio and the planner bought the
+  // far offset a SECOND time on a valley already at +\$115, sinking the floor from -885 to -990.)
+  if (vs && vs.some((v) => v.min < 0)) for (let i = vs.length - 1; i >= 0; i--) if (vs[i].min >= 0) vs.splice(i, 1);
   const regionMin = (v) => { let m = Infinity; for (let j = v.ra; j <= v.rb; j++) if (base[j] < m) m = base[j]; return m; };
   const ok = [];
   for (const c of cands) {
@@ -130,7 +147,9 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
         const lift = after - regionMin(v);
         if (!(lift > 0)) continue;
         const ratio = lift / cost;
-        if (ratio >= minRatio) ok.push({ ...c, ...pr, cost, lift, ratio, valley: { from: xs[v.a], to: xs[v.b], min: Math.round(v.min) }, _vmin: v.min });
+        const dist = spot == null ? 0 : (xs[v.b] < spot ? spot - xs[v.b] : xs[v.a] > spot ? xs[v.a] - spot : 0);
+        const need = requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts);
+        if (ratio >= need) ok.push({ ...c, ...pr, cost, lift, ratio, valley: { from: xs[v.a], to: xs[v.b], min: Math.round(v.min) }, need: Math.round(need * 100) / 100, _vmin: v.min });
       }
     } else {
       let after = Infinity;
@@ -154,4 +173,4 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
   return { best: null, blockedLocked };
 }
 
-module.exports = { samplePoints, candidates, payoff, valleys, pickBest };
+module.exports = { samplePoints, candidates, payoff, valleys, requiredRatio, pickBest };

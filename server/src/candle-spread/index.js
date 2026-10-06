@@ -1875,7 +1875,7 @@ function assertDeps(runs) {
         'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin',
         // floor raise: read straight off cfg by trader.raiseFloor
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
-        'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective']);
+        'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas']);
   }
 }
 

@@ -385,7 +385,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   const frMaxPerDay = opts.floorRaiseMaxPerDay != null ? opts.floorRaiseMaxPerDay : 8;
   const frSlipTicks = opts.floorRaiseSlipTicks != null ? opts.floorRaiseSlipTicks : 2;  // over the structure's mid
   const frAfterMin = opts.floorRaiseAfterMin != null ? opts.floorRaiseAfterMin : 0;
-  const frObjective = opts.floorRaiseObjective || 'valley';   // 'valley' (user's choice) | 'band' (lowest point)
+  const frObjective = opts.floorRaiseObjective || 'valley';
+  const frMinRatioFar = opts.floorRaiseMinRatioFar != null ? opts.floorRaiseMinRatioFar : null;   // distance-scaled ratio
+  const frFarSigmas = opts.floorRaiseFarSigmas != null ? opts.floorRaiseFarSigmas : 2;   // 'valley' (user's choice) | 'band' (lowest point)
   let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity, frBlockedLocked = 0;
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
@@ -1022,6 +1024,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
           const { best, blockedLocked } = FR.pickBest({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
+            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas,
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;
