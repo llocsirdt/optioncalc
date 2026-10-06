@@ -102,8 +102,16 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
   return minRatio + (minRatioFar - minRatio) * f;
 }
 
+// liftMetric (valley objective):
+//   'avg' (default, the user's preference 2026-10-06) — the RATIO is the AVERAGE lift across the valley's points
+//         per dollar: a fly is credited for most of what it pays where the valley is, not only its weakest edge
+//         (the 31060/31080/31100 fly on the 2026-10-05 31070-31090 valley: avg 3.4:1 vs 2.3:1 on the edge).
+//         The fix must STILL raise the lowest point of the valley's outward region — that keeps far valleys on
+//         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
+//   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric }) {
+  const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
   const floorB = Math.min(...bandIdx.map((j) => base[j]));
@@ -144,8 +152,14 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
       for (const v of vs) {
         let after = Infinity;
         for (let j = v.ra; j <= v.rb; j++) { const val = base[j] + pay[j] - cost; if (val < after) after = val; }
-        const lift = after - regionMin(v);
-        if (!(lift > 0)) continue;
+        const minLift = after - regionMin(v);
+        if (!(minLift > 0)) continue;                       // must raise the low point of its outward region
+        let lift = minLift;
+        if (avgMetric) {                                    // ratio judged on the AVERAGE lift across the valley
+          let sum = 0; for (let j = v.a; j <= v.b; j++) sum += pay[j] - cost;
+          lift = sum / (v.b - v.a + 1);
+          if (!(lift > 0)) continue;
+        }
         const ratio = lift / cost;
         const dist = spot == null ? 0 : (xs[v.b] < spot ? spot - xs[v.b] : xs[v.a] > spot ? xs[v.a] - spot : 0);
         const need = requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts);

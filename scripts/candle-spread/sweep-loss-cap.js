@@ -129,9 +129,11 @@ const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
 // Valley objective, flat vs distance-scaled ratio (near -> far at 2 sigma). 'band r2' = the measured original.
 const FR_ARMS = process.argv.includes('--floorRaiseValley') ? [
   ['off', null], ['band r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'band' }],
-  ['valley r2', { floorRaiseMinRatio: 2 }], ['valley r3', { floorRaiseMinRatio: 3 }],
-  ['valley 2->4', { floorRaiseMinRatio: 2, floorRaiseMinRatioFar: 4 }], ['valley 2->5', { floorRaiseMinRatio: 2, floorRaiseMinRatioFar: 5 }],
-  ['valley 3->5', { floorRaiseMinRatio: 3, floorRaiseMinRatioFar: 5 }]]
+  ['valley-min r2', { floorRaiseMinRatio: 2, floorRaiseLiftMetric: 'min' }],
+  ['valley-avg r2', { floorRaiseMinRatio: 2, floorRaiseLiftMetric: 'avg' }], ['valley-avg r3', { floorRaiseMinRatio: 3, floorRaiseLiftMetric: 'avg' }],
+  ['valley-avg 2->4', { floorRaiseMinRatio: 2, floorRaiseMinRatioFar: 4, floorRaiseLiftMetric: 'avg' }],
+  ['valley-avg 2->5', { floorRaiseMinRatio: 2, floorRaiseMinRatioFar: 5, floorRaiseLiftMetric: 'avg' }],
+  ['valley-avg 3->5', { floorRaiseMinRatio: 3, floorRaiseMinRatioFar: 5, floorRaiseLiftMetric: 'avg' }]]
   : process.argv.includes('--floorRaiseArms') ? [
   ['off', null], ['r1 unlimited', { floorRaiseMinRatio: 1 }], ['r2 unlimited', { floorRaiseMinRatio: 2 }],
   ['r3 unlimited', { floorRaiseMinRatio: 3 }], ['r1 25% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.25 }],
