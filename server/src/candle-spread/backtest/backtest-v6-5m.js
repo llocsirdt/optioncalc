@@ -389,6 +389,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   const frMinRatioFar = opts.floorRaiseMinRatioFar != null ? opts.floorRaiseMinRatioFar : null;   // distance-scaled ratio
   const frFarSigmas = opts.floorRaiseFarSigmas != null ? opts.floorRaiseFarSigmas : 2;   // 'valley' (user's choice) | 'band' (lowest point)
   let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity, frBlockedLocked = 0;
+  // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
+  const guTrigger = opts.giveUpTrigger || 'points';
+  let guPrev15 = null;
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
@@ -815,6 +818,21 @@ function runDay5m(bars, signalFn, opts = {}) {
           legs: (pos.pendingCover.legs || []).map(l => `${l.side[0]}${l.type}${l.strike}`).join(' ') });
       }
     }
+    // Reversal-trigger state for this bar (see the give-up block): did the signal candle break the prior one?
+    let guRev = null;
+    if (guTrigger !== 'points') {
+      const tf = guTrigger.startsWith('rev15') ? '15m' : '5m';
+      const closeOnly = guTrigger.endsWith('c');
+      const cur = A[tf];
+      let prev = null;
+      if (tf === '5m') prev = i > 0 ? bars[i - 1].analysis['5m'] : null;
+      else if (bars[i].fifteen) { prev = guPrev15; guPrev15 = cur; }
+      if (cur && prev && (tf === '5m' || bars[i].fifteen)) {
+        guRev = closeOnly
+          ? { downBreak: cur.close < prev.low, upBreak: cur.close > prev.high }
+          : { downBreak: cur.low < prev.low, upBreak: cur.high > prev.high };
+      }
+    }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
       // FILL MODEL. A resting cover is a real order at the broker, so it fills if the underlying TRADED
@@ -844,12 +862,23 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the clock, so a fast reversal triggers immediately and a quiet drift never does.
       // ACTION: pay the mark (+1 tick), bounded by giveUpMaxLoss x W so it can never become a rout.
       let giveUp = false;
-      if (opts.coverGiveUp && pos.shortStrike != null) {
+      if (opts.coverGiveUp && pos.shortStrike != null && guTrigger === 'points') {
         const pts = opts.giveUpPoints != null ? opts.giveUpPoints : 10;
         // bull loses as price FALLS below its short strike; bear loses as price RISES above it
         const through = pos.side === 'bull' ? (pos.shortStrike - S) : (S - pos.shortStrike);
         if (through >= pts) giveUp = true;
       }
+      // REVERSAL TRIGGER (opts.giveUpTrigger 'rev5' | 'rev5c' | 'rev15' | 'rev15c') — the user's ORIGINAL intent
+      // (2026-10-06): give up when the TREND reverses, not when price is N points past the short strike (which,
+      // with G placing near the money, fires almost at once). A bull position gives up when a SIGNAL (/NQ)
+      // candle breaks below the prior candle's low; a bear when one breaks above the prior high. 'rev5' /
+      // 'rev15' = the candle's low/high TRADES through the prior extreme; the 'c' forms need the CLOSE through it.
+      // 15m is judged only on bars where a 15m candle closes.
+      if (opts.coverGiveUp && guTrigger !== 'points' && guRev) {
+        const brk = pos.side === 'bull' ? guRev.downBreak : guRev.upBreak;
+        if (brk) giveUp = true;
+      }
+      if (giveUp) pos._gu = true;
       // ⛔ MEASURED AND REJECTED 2026-09-22 — kept only so the measurement is reproducible. Do not enable,
       // and do not re-measure without reading the experiments-log entry first. 922 days, 8 variants, every
       // arm worse: fleet $22.60M -> $19.36M at the LEAST bad arm (-14.3%) and drawdown got WORSE. Cover
@@ -1487,6 +1516,10 @@ function runDay5m(bars, signalFn, opts = {}) {
     wings: { count: wingCount, spent: Math.round(wingSpent) },
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
+    // Give-up by POSITION (giveUps counts per-bar price concessions): how many positions it touched, and
+    // how many of those ended covered vs still open at the close.
+    giveUpPos: st.positions.filter((p) => p._gu).length,
+    giveUpCovered: st.positions.filter((p) => p._gu && p.covered).length,
     floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked } : null,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from

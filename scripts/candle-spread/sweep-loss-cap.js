@@ -147,7 +147,16 @@ const FR_ARMS = process.argv.includes('--floorRaiseMulti') ? [
 // --giveUpCaps 0.05,0.075,0.1,0.15,0.2: give-up loss allowance (fraction of width over break-even that a
 // give-up cover may pay once the position has run giveUpPoints back through its short strike).
 const GU_CAPS = (argVal('--giveUpCaps', '') || '').split(',').filter((x) => x !== '').map(Number);
-if (GU_CAPS.length) {
+// --giveUpTriggers: the trigger itself. points10 (shipped) / points20 / reversal of the prior signal candle on
+// 5m or 15m, by a trade through (rev5, rev15) or a close through (rev5c, rev15c) the prior extreme.
+const GU_TRIGS = process.argv.includes('--giveUpTriggers') ? [
+  ['points 10', { giveUpTrigger: 'points', giveUpPoints: 10 }], ['points 20', { giveUpTrigger: 'points', giveUpPoints: 20 }],
+  ['rev 5m', { giveUpTrigger: 'rev5' }], ['rev 5m close', { giveUpTrigger: 'rev5c' }],
+  ['rev 15m', { giveUpTrigger: 'rev15' }], ['rev 15m close', { giveUpTrigger: 'rev15c' }]] : [];
+if (GU_TRIGS.length) {
+  for (const run of RUNS) for (const [name, over] of GU_TRIGS) JOBS.push({ variant: run.variant, rung: `giveUp ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over });
+} else if (GU_CAPS.length) {
   for (const run of RUNS) for (const c of GU_CAPS) JOBS.push({ variant: run.variant, rung: `giveUp ${c}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
     over: { giveUpMaxLoss: c } });
@@ -292,6 +301,8 @@ function measure(job) {
         eodRangeAvg: mean((r) => (r.bestCase || 0) - (r.worstCase || 0)),
       };
     })(),
+    giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
+    giveUpCoveredPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpCovered || 0), 0) / days.length * 100) / 100,
     giveUpsPerDay: Math.round(res.reduce((a, r) => a + (r.giveUps || 0), 0) / days.length * 100) / 100,
     nakedPerDay: Math.round(res.reduce((a, r) => a + (r.naked || 0), 0) / days.length * 100) / 100,
     skipPendingPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.skipPending || 0), 0) / days.length * 100) / 100 : null,

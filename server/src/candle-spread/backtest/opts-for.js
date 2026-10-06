@@ -88,6 +88,7 @@ function optsFor(v, env) {
     o.coverGiveUp = true;
     if (v.giveUpPoints != null) o.giveUpPoints = v.giveUpPoints;
     if (v.giveUpMaxLoss != null) o.giveUpMaxLoss = v.giveUpMaxLoss;
+    if (v.giveUpTrigger != null) o.giveUpTrigger = v.giveUpTrigger;   // 'points' | 'rev5' | 'rev5c' | 'rev15' | 'rev15c'
   }
   // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
