@@ -123,12 +123,17 @@ const BANDS = { 10: [0.48, 0.53], 20: [0.475, 0.55], 40: [0.475, 0.575] };
 // How far the open ladder may then walk the price to get the fill (user: "step the price up to 5.5 or so"):
 // 10W $5.50, 20W $11.50, 40W $24.
 const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
-// --floorRaiseFracs 0,0.1,0.25,0.5: the always-on floor-raise pass at each budget (0 = off).
-const FR_FRACS = (argVal('--floorRaiseFracs', '') || '').split(',').filter((x) => x !== '').map(Number);
-if (FR_FRACS.length) {
-  for (const run of RUNS) for (const f of FR_FRACS) JOBS.push({ variant: run.variant, rung: f ? `floorRaise ${f}` : 'floorRaise off',
+// --floorRaiseArms: the always-on floor-raise pass. Arms = off, then minRatio {1,2,3} with no budget cap (the
+// user's "any amount with at least 1:1"), and ratio 1 capped at 25% / 50% of peak for comparison. Every arm
+// keeps the hard rule: a locked profit (global floor >= 0) is never pushed below zero.
+const FR_ARMS = process.argv.includes('--floorRaiseArms') ? [
+  ['off', null], ['r1 unlimited', { floorRaiseMinRatio: 1 }], ['r2 unlimited', { floorRaiseMinRatio: 2 }],
+  ['r3 unlimited', { floorRaiseMinRatio: 3 }], ['r1 25% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.25 }],
+  ['r1 50% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.5 }]] : [];
+if (FR_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of FR_ARMS) JOBS.push({ variant: run.variant, rung: `floorRaise ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
-    over: f ? { floorRaise: true, floorRaiseBudgetFrac: f } : {} });
+    over: over ? { floorRaise: true, ...over } : {} });
 } else if (RESTRIKE.length) {
   for (const run of RUNS) for (const m of RESTRIKE) JOBS.push({ variant: run.variant, rung: m ? `restrike ${m}m` : 'restrike off',
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
@@ -243,6 +248,8 @@ function measure(job) {
     offsets: res.reduce((a, r) => a + r.governor.offsets, 0),
     floorRaisePerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.count, 0) / days.length * 100) / 100 : null,
     floorRaiseSpentPerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.spent, 0) / days.length) : null,
+    floorRaiseBlockedLocked: res[0] && res[0].floorRaise ? res.reduce((a, r) => a + r.floorRaise.blockedLocked, 0) : null,
+    lockedDays: res.filter((r) => r.floor != null && r.floor >= 0).length,
     restruckPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restruck || 0), 0) / days.length * 100) / 100 : null,
     stalePerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.stale || 0), 0) / days.length * 100) / 100 : null,
     openFillRate: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + r.openLadder.filled, 0) / Math.max(1, res.reduce((a, r) => a + r.openLadder.placed, 0)) * 1000) / 10 : null,

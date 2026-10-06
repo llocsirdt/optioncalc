@@ -375,14 +375,16 @@ function runDay5m(bars, signalFn, opts = {}) {
   // while v7-10's real orders at the same prices often did not fill. Bookings still happen AT the limit.
   // FLOOR RAISE (see the bar-loop block) — off unless opts.floorRaise.
   const floorRaiseOn = opts.floorRaise === true;
-  const frBudgetFrac = opts.floorRaiseBudgetFrac != null ? opts.floorRaiseBudgetFrac : 0.25;
-  const frMinRatio = opts.floorRaiseMinRatio != null ? opts.floorRaiseMinRatio : 3;
+  // Defaults = the user's policy (2026-10-05): ANY amount, as long as the floor rises net of cost by at least
+  // the cost (ratio 1 on NET lift) and a locked profit is never put at risk.
+  const frBudgetFrac = opts.floorRaiseBudgetFrac != null ? opts.floorRaiseBudgetFrac : Infinity;
+  const frMinRatio = opts.floorRaiseMinRatio != null ? opts.floorRaiseMinRatio : 1;
   const frSigmas = opts.floorRaiseSigmas != null ? opts.floorRaiseSigmas : 2;
   const frEvery = opts.floorRaiseEveryBars != null ? opts.floorRaiseEveryBars : 3;      // re-plan every 15 min
   const frMaxPerDay = opts.floorRaiseMaxPerDay != null ? opts.floorRaiseMaxPerDay : 8;
   const frSlipTicks = opts.floorRaiseSlipTicks != null ? opts.floorRaiseSlipTicks : 2;  // over the structure's mid
   const frAfterMin = opts.floorRaiseAfterMin != null ? opts.floorRaiseAfterMin : 0;
-  let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity;
+  let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity, frBlockedLocked = 0;
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
@@ -1017,9 +1019,15 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
         for (let n = 0; n < 2 && frCount < frMaxPerDay; n++) {
           const floorB = Math.min(...base), peakB = Math.max(...base);
-          const budget = frBudgetFrac * peakB - frSpent;
+          // Budget: a fraction of the current peak, or none at all (floorRaiseBudgetFrac null/Infinity =
+          // "any amount with the required return" — the user's stated policy).
+          const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
-          let best = null;
+          // NEVER TRADE A LOCKED PROFIT FOR A POSSIBLE LOSS (the user's hard rule): if the book's GLOBAL floor is
+          // at or above zero, a hedge may not push it below zero anywhere — including outside the band the
+          // lift is scored on, where the premium is pure cost. Checked on the exact global floor (floorOf).
+          const gNow = floorOf(null);
+          const ok = [];
           for (const legs of cands) {
             if (enforceLegs && ledger.conflicts(legs)) continue;
             const m = midOf(legs);
@@ -1032,7 +1040,16 @@ function runDay5m(bars, signalFn, opts = {}) {
             const lift = after - floorB;
             if (!(lift > 0)) continue;
             const ratio = lift / cost;
-            if (ratio >= frMinRatio && (!best || ratio > best.ratio)) best = { legs, debit, cost, ratio, lift };
+            if (ratio >= frMinRatio) ok.push({ legs, debit, cost, ratio, lift });
+          }
+          ok.sort((a, b) => b.ratio - a.ratio);
+          let best = null;
+          for (const c of ok) {
+            if (gNow >= 0) {
+              const hp = { legs: c.legs, limit: c.debit, covered: false, coverLegs: null, coverLimit: null, hedge: true };
+              if (floorOf(hp) < 0) { frBlockedLocked++; continue; }   // would put a locked profit at risk
+            }
+            best = c; break;
           }
           if (!best) break;
           st.positions.push({ side: 'hedge', shortStrike: null, legs: best.legs, limit: best.debit, covered: false,
@@ -1490,7 +1507,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     wings: { count: wingCount, spent: Math.round(wingSpent) },
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
-    floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift) } : null,
+    floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked } : null,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
