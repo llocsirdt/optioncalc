@@ -110,6 +110,38 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
     ok(st.pendingOpenId === 's', 'under the broker it is untouched (the order manager owns the real order)');
   }
 
+  // ── 5. RE-STRIKE TIMEOUT: at its cap for N minutes without a fill -> cancelled (both paths) ───────────
+  {
+    const MIN = 60000;
+    const atCap = (over = {}) => ({ positions: [{ id: 'r', side: 'bull', legs: bullCall, quantity: 1, limit: 5.5, cap: 5.5,
+      filled: false, orderStatus: 'working', openTime: '10/05 10:05', covered: false, pendingCover: null,
+      placedEpoch: 0, lastMoveEpoch: 0, ...over }], pendingOpenId: 'r', realizedPnl: 0, cashDeployed: 0 });
+    const cfgR = { ...base, openRestrikeMin: 10 };
+    let st = atCap(); let d = [];
+    await trader.resolvePendingOpen(st, cfgR, { getLeg: chain(6.5), nowMs: 1 * MIN }, d);
+    ok(st.pendingOpenId === 'r' && st.positions[0].atCapSince === 1 * MIN, 'the clock starts the first time the open is seen AT its cap');
+    await trader.resolvePendingOpen(st, cfgR, { getLeg: chain(6.5), nowMs: 10 * MIN }, d);
+    ok(st.pendingOpenId === 'r', 'at 9 min on the cap it is still working');
+    await trader.resolvePendingOpen(st, cfgR, { getLeg: chain(6.5), nowMs: 11 * MIN }, d);
+    ok(st.pendingOpenId == null && st.positions[0].orderStatus === 'cancelled', 'at 10 min on the cap it is cancelled (re-strike)');
+    ok(d.some((x) => x.action === 'open-restrike' && x.atCapMin === 10), 'and logged as open-restrike');
+    // Below its cap the timeout does not run — the ladder is still working it.
+    st = atCap({ limit: 5.2 }); d = [];
+    await trader.resolvePendingOpen(st, cfgR, { getLeg: chain(6.5), nowMs: 30 * MIN }, d);
+    ok(st.pendingOpenId === 'r' && st.positions[0].atCapSince == null, 'an open still below its cap is never re-struck');
+    // Off by default.
+    st = atCap({ atCapSince: 0 }); d = [];
+    await trader.resolvePendingOpen(st, base, { getLeg: chain(6.5), nowMs: 30 * MIN }, d);
+    ok(st.pendingOpenId === 'r', 'without openRestrikeMin nothing changes');
+    // Under the broker: the cancel is SENT and the position kept until Schwab answers (the reversal rule).
+    const sent = [];
+    st = atCap({ atCapSince: 0, orderId: 'ord-9' }); d = [];
+    await trader.resolvePendingOpen(st, cfgR, { getLeg: chain(6.5), nowMs: 11 * MIN, fillSource: 'broker',
+      cancelOrder: async (id, meta) => { sent.push({ id, meta }); return { ok: true }; } }, d);
+    ok(sent.length === 1 && sent[0].id === 'ord-9' && sent[0].meta.reason === 'restrike', 'under the broker the cancel goes to Schwab');
+    ok(st.pendingOpenId == null && st.positions[0].cancelRequestedAt === 11 * MIN, 'slot freed, position kept awaiting the broker');
+  }
+
   // ── the ROSTER turns 1 and 2 on for every variant ───────────────────────────────────────────────
   const runs = CS.buildRuns();
   ok(runs.length > 0 && runs.every((r) => r.simOpenFillMinLooks === 2 && r.coverFillThroughTicks === 1),

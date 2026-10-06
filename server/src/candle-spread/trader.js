@@ -2809,6 +2809,33 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
       return 0;
     }
   }
+  // RE-STRIKE TIMEOUT (cfg.openRestrikeMin, default off) — a STRATEGY rule, separate from the 90-minute
+  // orphan backstop above: once an open has walked all the way to its cap and still has not filled for N
+  // minutes, it is no longer being worked, only occupying the one-open slot. Cancel it so the next bar can
+  // place a fresh open at current strikes and prices ("opens must fill — work the order, re-strike, never
+  // hope"). Both paths: under the broker the cancel goes to Schwab and the position is kept until the broker
+  // answers (exactly the reversal rule), on the mark path it is simply released.
+  if (cfg.openRestrikeMin > 0 && pos.cap != null && pos.limit != null) {
+    const nowR = deps.nowMs != null ? deps.nowMs : Date.now();
+    if (pos.limit >= pos.cap - 1e-9) {
+      if (pos.atCapSince == null) pos.atCapSince = nowR;
+      if (nowR - pos.atCapSince >= cfg.openRestrikeMin * 60000) {
+        const broker = deps.fillSource === 'broker' && !!pos.orderId;
+        pos.orderStatus = 'cancelled';
+        if (deps.cancelOrder && pos.orderId) {
+          Promise.resolve(deps.cancelOrder(pos.orderId, { kind: 'cancel-open', of: pos.id, reason: 'restrike' }))
+            .catch(() => { /* the sender logs it; never let a cancel break the tick */ });
+        }
+        decisions.push({ action: 'open-restrike', positionId: pos.id, side: pos.side, limit: pos.limit, cap: pos.cap,
+          mark: chk.mark, atCapMin: Math.round((nowR - pos.atCapSince) / 60000), orderId: pos.orderId || null,
+          cancelSent: !!(deps.cancelOrder && pos.orderId), ...(broker ? { kept: 'awaiting broker confirmation' } : {}),
+          note: `at its cap for ${cfg.openRestrikeMin} min without a fill — cancelled so the next bar can re-strike` });
+        if (broker) pos.cancelRequestedAt = nowR;
+        if (st.pendingOpenId === pos.id) st.pendingOpenId = null;
+        return 0;
+      }
+    }
+  }
   if (deps.blockNewOpens) {
     decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
       mark: chk.mark, cap: pos.cap, reason: 'brake: no new opens — ladder frozen' });

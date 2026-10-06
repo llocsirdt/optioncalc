@@ -46,6 +46,9 @@ const OPEN_FILL = argVal('--openFillModel', null);
 // --fillThroughTicks N: a working order fills only when the bar's best price is N ticks BETTER than its limit.
 const FILL_THRU = argVal('--fillThroughTicks', null) != null ? Number(argVal('--fillThroughTicks', null)) : null;
 const numArg = (f) => (argVal(f, null) != null ? Number(argVal(f, null)) : null);
+// --restrikeMins 5,10,15,30: re-strike timeout study — one job per variant per value (0 = off, the 90-min
+// backstop only), at the variant's current config.
+const RESTRIKE = (argVal('--restrikeMins', '') || '').split(',').filter((x) => x !== '').map(Number);
 const FILL_THRU_OPEN = numArg('--fillThroughTicksOpen'), FILL_THRU_COVER = numArg('--fillThroughTicksCover');
 const WORKERS = Math.max(1, Math.min(16, Number(argVal('--workers', '1')) || 1));
 const ONLY = (argVal('--variants', '') || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -120,7 +123,11 @@ const BANDS = { 10: [0.48, 0.53], 20: [0.475, 0.55], 40: [0.475, 0.575] };
 // How far the open ladder may then walk the price to get the fill (user: "step the price up to 5.5 or so"):
 // 10W $5.50, 20W $11.50, 40W $24.
 const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
-if (process.argv.includes('--placementModes')) {
+if (RESTRIKE.length) {
+  for (const run of RUNS) for (const m of RESTRIKE) JOBS.push({ variant: run.variant, rung: m ? `restrike ${m}m` : 'restrike off',
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
+    over: { openRestrikeMin: m || null } });
+} else if (process.argv.includes('--placementModes')) {
   for (const run of RUNS) {
     if (/-cATM$/.test(run.variant)) continue;
     const W = run.spreadWidth, [lo, hi] = BANDS[W] || [0, run.capFrac || 0.65];
@@ -228,6 +235,9 @@ function measure(job) {
     capExceeded: daily.filter(x => x < -job.lossMax).length,
     opensBlocked: res.reduce((a, r) => a + r.governor.blocked, 0),
     offsets: res.reduce((a, r) => a + r.governor.offsets, 0),
+    restruckPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restruck || 0), 0) / days.length * 100) / 100 : null,
+    stalePerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.stale || 0), 0) / days.length * 100) / 100 : null,
+    openFillRate: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + r.openLadder.filled, 0) / Math.max(1, res.reduce((a, r) => a + r.openLadder.placed, 0)) * 1000) / 10 : null,
     ...openStats,
   };
 }

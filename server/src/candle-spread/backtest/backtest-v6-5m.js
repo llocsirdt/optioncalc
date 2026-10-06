@@ -376,6 +376,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
+  let openRestruck = 0;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
   let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
@@ -680,6 +681,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (legsMark(po.o.legs, fav, tau, iv) <= po.limit - thruOpen + 1e-9) {
         st.pendingOpen = null; openFilledL++; openPaidUp += round2(po.limit - po.base);
         commitOpen(po.side, { ...po.o, limit: po.limit }, null, false);
+      } else if (opts.openRestrikeMin > 0 && po.limit >= po.cap - 1e-9
+        && nowEpoch - (po.atCapMs != null ? po.atCapMs : (po.atCapMs = nowEpoch)) >= opts.openRestrikeMin * 60000) {
+        // RE-STRIKE TIMEOUT — mirrors trader.resolvePendingOpen: at its cap for openRestrikeMin minutes without
+        // a fill, the open is cancelled so the next bar can re-place at current strikes and prices.
+        st.pendingOpen = null; openRestruck++; markBookDirty();
       } else if (nowEpoch - po.lastMoveMs >= 90 * 60000) {
         // live's orphan backstop (order-manager staleOpenCancelMs): no movement for 90 minutes -> cancelled
         st.pendingOpen = null; openStale++; markBookDirty();
@@ -1369,7 +1375,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
-    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale,
+    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
       paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?

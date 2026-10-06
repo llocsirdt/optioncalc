@@ -109,6 +109,8 @@ function optsFor(v, env) {
   if (v.openLadder != null) o.openLadder = v.openLadder;
   if (v.openLadderStepDollars != null) o.openLadderStepDollars = v.openLadderStepDollars;
   if (v.openWalkCapFrac != null) o.openWalkCapFrac = v.openWalkCapFrac;   // ladder walk limit, above the placement ceiling
+  if (v.openRestrikeMin != null) o.openRestrikeMin = v.openRestrikeMin;   // re-strike timeout at the cap (minutes)
+  if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
