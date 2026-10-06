@@ -835,6 +835,9 @@ function applyFloorRaise(v) {
   if (FLOOR_RAISE_MODE !== 'all' && v.variant === ARMED_VARIANT) return;
   v.floorRaise = true;
   v.floorRaiseMinRatio = 2;
+  // The lowest-point rule — the best measured on the floor metrics so far (2026-10-06: locked days 33.7% ->
+  // 37.2%, closing floor +\$286). The valley variants measured worse on the floor; spreadFirst / pair pending.
+  v.floorRaiseObjective = 'band';
 }
 function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;

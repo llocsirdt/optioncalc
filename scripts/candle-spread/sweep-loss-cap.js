@@ -155,7 +155,8 @@ const GU_TRIGS = process.argv.includes('--giveUpTriggers') ? [
   ['rev 15m', { giveUpTrigger: 'rev15' }], ['rev 15m close', { giveUpTrigger: 'rev15c' }]] : [];
 if (GU_TRIGS.length) {
   for (const run of RUNS) for (const [name, over] of GU_TRIGS) JOBS.push({ variant: run.variant, rung: `giveUp ${name}`,
-    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over });
+    // floorRaise OFF explicitly: the roster turns it on by default, and this sweep measures give-up alone.
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: { floorRaise: false, ...over } });
 } else if (GU_CAPS.length) {
   for (const run of RUNS) for (const c of GU_CAPS) JOBS.push({ variant: run.variant, rung: `giveUp ${c}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
