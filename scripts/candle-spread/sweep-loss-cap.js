@@ -126,7 +126,10 @@ const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
 // --floorRaiseArms: the always-on floor-raise pass. Arms = off, then minRatio {1,2,3} with no budget cap (the
 // user's "any amount with at least 1:1"), and ratio 1 capped at 25% / 50% of peak for comparison. Every arm
 // keeps the hard rule: a locked profit (global floor >= 0) is never pushed below zero.
-const FR_ARMS = process.argv.includes('--floorRaiseArms') ? [
+const FR_ARMS = process.argv.includes('--floorRaiseValley') ? [
+  ['off', null], ['band r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'band' }],
+  ['valley r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'valley' }], ['valley r3', { floorRaiseMinRatio: 3, floorRaiseObjective: 'valley' }]]
+  : process.argv.includes('--floorRaiseArms') ? [
   ['off', null], ['r1 unlimited', { floorRaiseMinRatio: 1 }], ['r2 unlimited', { floorRaiseMinRatio: 2 }],
   ['r3 unlimited', { floorRaiseMinRatio: 3 }], ['r1 25% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.25 }],
   ['r1 50% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.5 }]] : [];
