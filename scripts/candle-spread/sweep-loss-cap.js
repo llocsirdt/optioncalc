@@ -143,7 +143,8 @@ if (GU_CAPS.length) {
 } else if (FR_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of FR_ARMS) JOBS.push({ variant: run.variant, rung: `floorRaise ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
-    over: over ? { floorRaise: true, ...over } : {} });
+    // 'off' must SET it off: the roster now turns floor raising on by default (applyFloorRaise).
+    over: over ? { floorRaise: true, ...over } : { floorRaise: false } });
 } else if (RESTRIKE.length) {
   for (const run of RUNS) for (const m of RESTRIKE) JOBS.push({ variant: run.variant, rung: m ? `restrike ${m}m` : 'restrike off',
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
