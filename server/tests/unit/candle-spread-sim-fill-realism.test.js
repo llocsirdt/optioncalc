@@ -142,6 +142,8 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
     ok(st.pendingOpenId == null && st.positions[0].cancelRequestedAt === 11 * MIN, 'slot freed, position kept awaiting the broker');
   }
 
+  ok(CS.buildRuns().every((r) => r.openRestrikeMin === 10), 'every roster variant carries the 10-minute re-strike timeout');
+
   // ── the ROSTER turns 1 and 2 on for every variant ───────────────────────────────────────────────
   const runs = CS.buildRuns();
   ok(runs.length > 0 && runs.every((r) => r.simOpenFillMinLooks === 2 && r.coverFillThroughTicks === 1),

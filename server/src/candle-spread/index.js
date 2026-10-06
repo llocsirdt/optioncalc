@@ -814,6 +814,12 @@ const TUNED_CAPS = new Map([
 // placing look and 64% of covers at 0-1 tick, while v7-10's real orders at the same prices did not all fill.
 // Overridable per run (set the field before applyExperiments, or CANDLE_SPREAD_SIM_FILL=legacy for both).
 const SIM_FILL_LEGACY = String(process.env.CANDLE_SPREAD_SIM_FILL || '').toLowerCase() === 'legacy';
+// RE-STRIKE TIMEOUT (2026-10-05), every variant: an open that has walked to its cap and still not filled for
+// 10 minutes is cancelled so the next bar can re-place it at current strikes and prices. Swept 0/5/10/15/30
+// on the G roster (realistic fills, 765 days): fleet +1.2% at 10 min with drawdown and losing days
+// unchanged; v7-10 1,113 -> 1,190. 10 over 5: two bars at the cap, and real opens have taken 15+ min to fill.
+const OPEN_RESTRIKE_MIN = 10;
+function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = OPEN_RESTRIKE_MIN; }
 function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;
   if (v.simOpenFillMinLooks == null) v.simOpenFillMinLooks = 2;
@@ -823,6 +829,7 @@ function applySimFillRealism(v) {
 function applyExperiments(v, { capPreset = true } = {}) {
   applySimFillRealism(v);
   applyPlacementG(v);
+  applyRestrike(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
   // minLock follows the width rule on EVERY cell, controls included, so the no-ladder control cells differ

@@ -26,13 +26,13 @@ for (const d of days) {
   ok(b.openLadder === undefined, 'default model reports no ladder stats');
   const r = E.runDay5m(d.bars, fn, lad);
   const L = r.openLadder;
-  placed += L.placed; filled += L.filled; ends += L.filled + L.canceled + L.stale + L.expired;
+  placed += L.placed; filled += L.filled; ends += L.filled + L.canceled + L.stale + L.expired + (L.restruck || 0);
   // r.opens counts EVERY position, hedges included (floor offsets, wings, flies) — count the opens only
   opens += (r.positions || []).filter((p) => !p.hedge && !p.fly && p.side !== 'hedge').length; worst = Math.min(worst, r.terminal);
   ok(L.paidUp >= 0, 'the ladder only ever walks UP from the placed price');
 }
 ok(placed > 0, `orders were placed (${placed})`);
-ok(placed === ends, `every placed order ends exactly one way: filled+canceled+stale+expired == placed (${ends}/${placed})`);
+ok(placed === ends, `every placed order ends exactly one way: filled+canceled+stale+expired+restruck == placed (${ends}/${placed})`);
 ok(filled === opens, `every booked open came from a filled working order (${filled} vs ${opens})`);
 ok(worst >= -v.lossMax - 1, `the governor still bounds the day (${worst} vs lossMax ${v.lossMax})`);
 console.log(`\n${pass} passed, ${fail} failed`);
