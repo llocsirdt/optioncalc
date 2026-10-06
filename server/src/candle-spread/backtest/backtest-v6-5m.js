@@ -392,6 +392,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
   let guPrev15 = null;
+  let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
@@ -820,7 +821,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     // Reversal-trigger state for this bar (see the give-up block): did the signal candle break the prior one?
     let guRev = null;
-    if (guTrigger !== 'points') {
+    if (guTrigger !== 'points' && guTrigger !== 'signal' && guTrigger !== 'beWrong') {
       const tf = guTrigger.startsWith('rev15') ? '15m' : '5m';
       const closeOnly = guTrigger.endsWith('c');
       const cur = A[tf];
@@ -874,7 +875,17 @@ function runDay5m(bars, signalFn, opts = {}) {
       // candle breaks below the prior candle's low; a bear when one breaks above the prior high. 'rev5' /
       // 'rev15' = the candle's low/high TRADES through the prior extreme; the 'c' forms need the CLOSE through it.
       // 15m is judged only on bars where a 15m candle closes.
-      if (opts.coverGiveUp && guTrigger !== 'points' && guRev) {
+      // SIGNAL TRIGGER (opts.giveUpTrigger 'signal' | 'beWrong') — the STRATEGY'S OWN reversal, the same one that
+      // cancels a working open (trader 'cancel-open'): the latest signal wants the OTHER side, or wants THIS side
+      // covered. 'beWrong' narrows it to the strict rule — the 15m candle breaking the prior extreme with a
+      // reversal candle (v7 'be-wrong' reasons). Judged on the signal of the bar that just closed.
+      if (opts.coverGiveUp && (guTrigger === 'signal' || guTrigger === 'beWrong') && guSig) {
+        const cs = guSig.coverSide;
+        const against = (guSig.openSide && guSig.openSide !== pos.side) || cs === 'both' || cs === pos.side;
+        const ok = guTrigger === 'signal' || /^be-wrong/.test(String(guSig.reason || ''));
+        if (against && ok) giveUp = true;
+      }
+      if (opts.coverGiveUp && guTrigger !== 'points' && guTrigger !== 'signal' && guTrigger !== 'beWrong' && guRev) {
         const brk = pos.side === 'bull' ? guRev.downBreak : guRev.upBreak;
         if (brk) giveUp = true;
       }
@@ -1153,6 +1164,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
     const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen, directionality: directionalityAt(i) });
+    guSig = sig;
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
