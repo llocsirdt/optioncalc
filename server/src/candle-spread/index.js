@@ -1842,8 +1842,13 @@ function assertDeps(runs) {
     //     config is a spread of the whole variant), so they are forwarded, just on the other channel.
     //   lockCoverMode / ivSkew — backtest PRICING-MODEL choices with no live counterpart: live reads real
     //     chain quotes (no modelled skew) and a resting cover either fills or does not (no fill model).
+    //   simOpenFillMinLooks / coverFillThroughTicks / minDebitFrac / openWalkCapFrac / maxOtmStrikes /
+    //     openRestrikeMin — read by the trader straight off the run's cfg (resolvePendingOpen,
+    //     resolveRestingCovers, buildOpenAtStrikes, buildOpenAdaptive), not via deps. Missing here took prod
+    //     down on 2026-10-05: the startup check refused every variant once G put them on the roster.
     VC.assertForwarded(run, keys, 'live deps (buildEngineDeps)',
-      ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew']);
+      ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew',
+        'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin']);
   }
 }
 
@@ -3310,6 +3315,9 @@ function status() {
 }
 
 module.exports = {
+  // The live STARTUP check, exported so a unit test runs it against the real roster: 2026-10-05 a roster
+  // field the check did not know took prod down at boot while every unit suite passed.
+  assertDeps,
   // The floor under every cap (1.5x one position's width) — exported so the sweep and the tests can use the
   // real rule rather than restating it. See LOSS_MAX_FLOOR_X_WIDTH.
   lossMaxFloorFor,
