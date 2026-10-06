@@ -1763,11 +1763,16 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
     return side === 'bull' ? { lower: shortStrike - W, upper: shortStrike } : { lower: shortStrike, upper: shortStrike + W };
   };
   let tried = 0, lastDeclined = null, lastError = null;
-  for (let k = -maxItm; k <= halfOnGrid / incr; k++) {
+  // maxOtmStrikes (cfg, default 0 = never OTM): after straddle, the short leg may step N strikes OUT of the
+  // money to meet a price band that sATM is too dear for (one step on a 20-wide is the cATM shape).
+  const maxOtm = cfg.maxOtmStrikes || 0;
+  for (let k = -maxItm; k <= halfOnGrid / incr + maxOtm; k++) {
     const { lower, upper } = strikesAt(k);
     const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying);
     if (res.error) { lastError = res.error; continue; }
     tried++;
+    // Under the floor: placements are tried dearest first, so every later one is cheaper still — stop.
+    if (res.belowFloor) return { ...res, placementsTried: tried };
     if (res.declined) { lastDeclined = res; continue; }
     // PRICE-FOR-STRIKES FLEX (cfg.capFlexFrac, default 0 = off, byte-identical to before). The ceiling
     // walks the placement OUT until the debit fits, so a rising market is paid for entirely in strikes.
@@ -1837,6 +1842,13 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
     const co = SQ.cheapOutlier(legs, getLeg, { incr: cfg.strikeIncrement || 10, underlying });
     if (!co.ok) return { error: co.reason, mark };
   }
+  // PRICE FLOOR (cfg.minDebitFrac, default off) — the user's band: "the deepest ITM strikes keeping within
+  // those price limits" (10W $4.80-5.30, 20W $9.50-11, 40W $19-23). A placement under the floor is declined
+  // and flagged belowFloor so the adaptive walk stops there: every later placement is cheaper still.
+  if (!exceedsCap && cfg.minDebitFrac > 0 && mark < cfg.minDebitFrac * cfg.spreadWidth - 1e-9) {
+    return { declined: true, belowFloor: true, mark, cap,
+      reason: `mark ${mark} under ${Math.round(cfg.minDebitFrac * 100)}% of $${cfg.spreadWidth} (floor ${round2(cfg.minDebitFrac * cfg.spreadWidth)})`, limit: 0 };
+  }
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
   // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
@@ -1852,9 +1864,13 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
   // SLIP OVER THE MARK (see openSlip), still bounded by the ceiling — paying up must never be a way
   // around the gate that just let this open through.
   const limit = Math.min(round2(atOrAbove + openSlip(cfg)), cap);
+  // WALK CAP (cfg.openWalkCapFrac, default = the placement ceiling): the open ladder may concede up to this
+  // to get the fill — the user's "place at 5.30, walk up to ~5.50". `cap` on the result is what the ladder
+  // walks to; placementCap is the gate the strikes were chosen under.
+  const walkCap = cfg.openWalkCapFrac != null ? Math.max(cap, round2(cfg.openWalkCapFrac * cfg.spreadWidth)) : cap;
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
-    mark, cap, limit, markLimit: atMark, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
+    mark, cap: walkCap, placementCap: cap, limit, markLimit: atMark, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
   };
 }
 

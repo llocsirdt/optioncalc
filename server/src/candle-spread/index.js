@@ -259,6 +259,27 @@ const WIDTHS = [
 ];
 const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 
+// ── PLACEMENT G (2026-10-05) — the user's own strike rule, on every ADAPTIVE variant (the -unc twins
+// included; the fixed-geometry -cATM controls are left alone). "I generally only pay 4.8-5.3 for 10W
+// spreads and try to get the deepest ITM strikes keeping within those price limits", stepping one strike
+// out of the money when even short-at-the-money is too dear, then walking the price up a little to fill.
+//   band [minDebitFrac, capFrac] x W, maxOtmStrikes 1, walk up to openWalkCapFrac x W.
+// Measured (sweep-loss-cap --placementModes, realistic fills, 765 days, 30 adaptive governed variants):
+// G 36,343/day vs the 0.60 deepest-ITM rule 35,339; 20W +3%, 40W +13%; v7-10 1,113 vs 1,151 with the
+// worst day back inside the cap (-1,455 vs -1,624) and opens ~\$0.40 cheaper. Real-chain check: sATM 10W
+// mids are ~\$5.40 (bull call) / ~\$4.95 (bear put), so the band is where the strategy actually trades.
+const PLACEMENT_G = {
+  10: { minDebitFrac: 0.48, capFrac: 0.53, openWalkCapFrac: 0.55 },     // $4.80-5.30, walk to $5.50
+  20: { minDebitFrac: 0.475, capFrac: 0.55, openWalkCapFrac: 0.575 },   // $9.50-11.00, walk to $11.50
+  40: { minDebitFrac: 0.475, capFrac: 0.575, openWalkCapFrac: 0.60 },   // $19-23, walk to $24
+};
+function applyPlacementG(v) {
+  if (!v.adaptiveGeo) return;
+  const g = PLACEMENT_G[v.spreadWidth];
+  if (!g) return;
+  Object.assign(v, g, { maxOtmStrikes: 1 });
+}
+
 // ── DAY-LOSS GOVERNOR SIZING ────────────────────────────────────────────────────────────────────────
 // TARGET = the ideal max day loss, the SAME $5,000 for every model at every width — the working level the
 // engine actively manages back toward (lock winners → buy a low-cost offset), without blocking.
@@ -801,6 +822,7 @@ function applySimFillRealism(v) {
 
 function applyExperiments(v, { capPreset = true } = {}) {
   applySimFillRealism(v);
+  applyPlacementG(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
   // minLock follows the width rule on EVERY cell, controls included, so the no-ladder control cells differ
