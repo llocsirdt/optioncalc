@@ -217,7 +217,7 @@
         // a consumer does not have to reach back into the raw record and re-derive what this module
         // already had in hand.
         hedge: !!(pos.hedge || pos.wing || pos.fly || pos.offset) || null,
-        hedgeKind: pos.wing ? 'WING' : pos.fly ? 'FLY' : (pos.hedge || pos.offset) ? 'OFFSET' : null,
+        hedgeKind: pos.raise ? 'RAISE' : pos.wing ? 'WING' : pos.fly ? 'FLY' : (pos.hedge || pos.offset) ? 'OFFSET' : null,
         openTime: pos.openTime || etCandleFromEpoch(epochFromId(pos.id)), coverTime: pos.coverTime || null,   // human CANDLE times (log/tooltip)
         // 5m-mark epoch ms → exact NQ-chart bar. openEpoch falls back to openedAt-floored for pre-epoch
         // runs (opens only; old covers have no timestamp to recover).

@@ -1,0 +1,480 @@
+{
+ "source": "v7-10 2026-10-05: book before the 15:45 open, chain at the 15:35 bar",
+ "underlying": 31102.4003,
+ "time": "2026-10-05T19:35:09.904Z",
+ "strikes": [
+  {
+   "strike": 31020,
+   "call": {
+    "mid": 83.25,
+    "bid": 75.8,
+    "ask": 90.7
+   },
+   "put": {
+    "mid": 1.02,
+    "bid": 0.75,
+    "ask": 1.3
+   }
+  },
+  {
+   "strike": 31030,
+   "call": {
+    "mid": 73.55,
+    "bid": 66,
+    "ask": 81.1
+   },
+   "put": {
+    "mid": 1.48,
+    "bid": 1.2,
+    "ask": 1.75
+   }
+  },
+  {
+   "strike": 31040,
+   "call": {
+    "mid": 62.6,
+    "bid": 56.4,
+    "ask": 68.8
+   },
+   "put": {
+    "mid": 2,
+    "bid": 1.7,
+    "ask": 2.3
+   }
+  },
+  {
+   "strike": 31050,
+   "call": {
+    "mid": 53.8,
+    "bid": 48.8,
+    "ask": 58.8
+   },
+   "put": {
+    "mid": 2.65,
+    "bid": 2.2,
+    "ask": 3.1
+   }
+  },
+  {
+   "strike": 31060,
+   "call": {
+    "mid": 44.4,
+    "bid": 40,
+    "ask": 48.8
+   },
+   "put": {
+    "mid": 3.58,
+    "bid": 2.95,
+    "ask": 4.2
+   }
+  },
+  {
+   "strike": 31070,
+   "call": {
+    "mid": 36.1,
+    "bid": 32,
+    "ask": 40.2
+   },
+   "put": {
+    "mid": 5,
+    "bid": 4.3,
+    "ask": 5.7
+   }
+  },
+  {
+   "strike": 31080,
+   "call": {
+    "mid": 28.45,
+    "bid": 24.5,
+    "ask": 32.4
+   },
+   "put": {
+    "mid": 7.15,
+    "bid": 6.3,
+    "ask": 8
+   }
+  },
+  {
+   "strike": 31090,
+   "call": {
+    "mid": 21.55,
+    "bid": 18.4,
+    "ask": 24.7
+   },
+   "put": {
+    "mid": 10.05,
+    "bid": 9,
+    "ask": 11.1
+   }
+  },
+  {
+   "strike": 31100,
+   "call": {
+    "mid": 16.7,
+    "bid": 15.4,
+    "ask": 18
+   },
+   "put": {
+    "mid": 13.65,
+    "bid": 12.3,
+    "ask": 15
+   }
+  },
+  {
+   "strike": 31110,
+   "call": {
+    "mid": 11.7,
+    "bid": 10.4,
+    "ask": 13
+   },
+   "put": {
+    "mid": 19.3,
+    "bid": 17.3,
+    "ask": 21.3
+   }
+  },
+  {
+   "strike": 31120,
+   "call": {
+    "mid": 8,
+    "bid": 7,
+    "ask": 9
+   },
+   "put": {
+    "mid": 26.05,
+    "bid": 21.8,
+    "ask": 30.3
+   }
+  },
+  {
+   "strike": 31130,
+   "call": {
+    "mid": 5.5,
+    "bid": 4.6,
+    "ask": 6.4
+   },
+   "put": {
+    "mid": 32.45,
+    "bid": 26.9,
+    "ask": 38
+   }
+  },
+  {
+   "strike": 31140,
+   "call": {
+    "mid": 3.7,
+    "bid": 3,
+    "ask": 4.4
+   },
+   "put": {
+    "mid": 41.25,
+    "bid": 35.4,
+    "ask": 47.1
+   }
+  },
+  {
+   "strike": 31150,
+   "call": {
+    "mid": 2.55,
+    "bid": 2,
+    "ask": 3.1
+   },
+   "put": {
+    "mid": 50.05,
+    "bid": 43.2,
+    "ask": 56.9
+   }
+  },
+  {
+   "strike": 31160,
+   "call": {
+    "mid": 1.8,
+    "bid": 1.4,
+    "ask": 2.2
+   },
+   "put": {
+    "mid": 59.5,
+    "bid": 52.2,
+    "ask": 66.8
+   }
+  },
+  {
+   "strike": 31170,
+   "call": {
+    "mid": 1.48,
+    "bid": 1.1,
+    "ask": 1.85
+   },
+   "put": {
+    "mid": 69.2,
+    "bid": 61.7,
+    "ask": 76.7
+   }
+  },
+  {
+   "strike": 31180,
+   "call": {
+    "mid": 0.98,
+    "bid": 0.75,
+    "ask": 1.2
+   },
+   "put": {
+    "mid": 78.65,
+    "bid": 71.4,
+    "ask": 85.9
+   }
+  }
+ ],
+ "book": [
+  {
+   "id": "pos-1791208810066-124",
+   "side": "bear",
+   "legs": [
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 30940
+    },
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 30930
+    }
+   ],
+   "limit": 5.5,
+   "quantity": 1,
+   "filled": true,
+   "covered": false,
+   "coverLegs": null,
+   "coverLimit": null,
+   "shortStrike": 30930
+  },
+  {
+   "id": "pos-1791215708068-312",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 30980
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 30990
+    }
+   ],
+   "limit": 5.8,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 30990
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31000
+    }
+   ],
+   "coverLimit": 4.2,
+   "shortStrike": 30990
+  },
+  {
+   "id": "pos-1791219308027-598",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31000
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31010
+    }
+   ],
+   "limit": 5.65,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 31010
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31020
+    }
+   ],
+   "coverLimit": 3.95,
+   "shortStrike": 31010
+  },
+  {
+   "id": "pos-1791221108020-730",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31010
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31020
+    }
+   ],
+   "limit": 5.8,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 31020
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31030
+    }
+   ],
+   "coverLimit": 3.5,
+   "shortStrike": 31020
+  },
+  {
+   "id": "pos-1791222608064-959",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31020
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31030
+    }
+   ],
+   "limit": 6,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 31030
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31040
+    }
+   ],
+   "coverLimit": 3.4,
+   "shortStrike": 31030
+  },
+  {
+   "id": "pos-1791225008839-1130",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31050
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31060
+    }
+   ],
+   "limit": 5.55,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 31060
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31070
+    }
+   ],
+   "coverLimit": 4.05,
+   "shortStrike": 31060
+  },
+  {
+   "id": "pos-1791225308795-1175",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31050
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31060
+    }
+   ],
+   "limit": 5.55,
+   "quantity": 1,
+   "filled": true,
+   "covered": true,
+   "coverLegs": [
+    {
+     "side": "short",
+     "type": "P",
+     "strike": 31060
+    },
+    {
+     "side": "long",
+     "type": "P",
+     "strike": 31070
+    }
+   ],
+   "coverLimit": 3.95,
+   "shortStrike": 31060
+  },
+  {
+   "id": "pos-1791227708528-1434",
+   "side": "bull",
+   "legs": [
+    {
+     "side": "long",
+     "type": "C",
+     "strike": 31090
+    },
+    {
+     "side": "short",
+     "type": "C",
+     "strike": 31100
+    }
+   ],
+   "limit": 4.9,
+   "quantity": 1,
+   "filled": true,
+   "covered": false,
+   "coverLegs": null,
+   "coverLimit": null,
+   "shortStrike": 31100
+  }
+ ]
+}

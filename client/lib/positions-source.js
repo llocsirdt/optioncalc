@@ -112,10 +112,10 @@
     const color = s => (s === 'bull' ? '#26a69a' : '#ef5350');
     const usd = c => (c < 0 ? '-$' : '$') + Math.abs(c).toLocaleString();
     // ⬡ for a hedge: visually distinct from both the open triangles and the cover diamond.
-    const glyph = e => (/^off-|^wing-|^fly-/.test(e.id)) ? '⬡'
+    const glyph = e => (/^off-|^wing-|^fly-|^raise-/.test(e.id)) ? '⬡'
       : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
     const coveredIds = new Set(evs.filter(e => e.type === 'cover' && !e.unfilled).map(e => e.id));   // FILLED covers only
-    const isHedge = (e) => /^off-|^wing-|^fly-/.test(e.id);
+    const isHedge = (e) => /^off-|^wing-|^fly-|^raise-/.test(e.id);
     const opens = evs.filter(e => e.type === 'open' && !isHedge(e)).length;
     const hedges = evs.filter(e => e.type === 'open' && isHedge(e)).length;
     const covers = evs.filter(e => e.type === 'cover').length;
@@ -130,7 +130,8 @@
       // matched neither, fell through to the strategy-open branch and rendered as `▼ OPEN*` — an exposed
       // position awaiting a cover, which is exactly what a fly is not. It is the same mistake this comment
       // block was written to fix for offsets and wings, repeated when flies were added.
-      const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : /^fly-/.test(e.id) ? 'FLY' : null;
+      // RAISE = a floor-raise hedge (floor-raise.js, id raise-*): same rule as the others, never a strategy open.
+      const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : /^fly-/.test(e.id) ? 'FLY' : /^raise-/.test(e.id) ? 'RAISE' : null;
       const isUncov = open && !hedge && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
       const label = hedge ? hedge
         : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');

@@ -20,6 +20,7 @@ const LAD = require('./cover-ladder');   // works a resting cover toward the mar
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
 const WC = require('./wing-convert');
+const FR = require('./floor-raise');   // always-on floor raising — SHARED planner with the backtest engine
 const FY = require('./fly-convert');   // valley repair: flies/condors — SHARED with the backtest engine
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest   // shared peak->floor wing planner (same module the backtest uses)
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
@@ -1235,6 +1236,117 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
 }
 
 
+// FLOOR RAISE (cfg.floorRaise) — the live port of the backtest's opts.floorRaise, planned by the SAME module
+// (floor-raise.js). The user's standing policy: always raise the floor when it is cheap to, negative or
+// positive, buying the best NET band-floor lift per dollar at >= cfg.floorRaiseMinRatio, never pushing a
+// locked profit (global floor >= 0) below zero. Measured over 765 days at 2:1: locked-profit days 33.7% ->
+// 37.2% fleet-wide, closing floor +\$286, closing peak not given up.
+//
+// PRICED AT THE MID (+ floorRaiseSlipTicks), not the quoted ask. The older fly/wing ports pay the ask, which
+// on 0DTE NDX makes a fly cost ~2x its mid (2026-10-05: 31060/31080/31100 put fly mid \$2.93, ask \$6.60) and
+// would never clear 2:1. NDX spreads fill near the mid; flies are UNMEASURED, so every placement records the
+// structure's mid AND its quoted ask, and the fill (or expiry) tells us what they really cost.
+//
+// One working raise at a time (a pending one already addresses the floor it was planned for), re-planned
+// every floorRaiseEveryMin minutes, rides the shared hedge pipeline (kind 'raise': TTL, broker fills, cancel).
+async function raiseFloor(st, cfg, deps, decisions, candleTime) {
+  if (cfg.floorRaise !== true) return 0;
+  const spot = deps.underlying;
+  const A = deps.A;
+  if (!(spot > 0) || !A || !A['15m'] || !st.positions.length) return 0;
+  const nowMs = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
+  const everyMs = (cfg.floorRaiseEveryMin != null ? cfg.floorRaiseEveryMin : 15) * 60000;
+  if (st.raiseLastEpoch != null && nowMs - st.raiseLastEpoch < everyMs) return 0;
+  st.raiseCount = st.raiseCount || 0; st.raiseSpent = st.raiseSpent || 0;
+  const maxPerDay = cfg.floorRaiseMaxPerDay != null ? cfg.floorRaiseMaxPerDay : 8;
+  const pend = pendingHedges(st, 'raise', cfg.quantity);
+  if (pend.n > 0 || st.raiseCount >= maxPerDay) return 0;
+  st.raiseLastEpoch = nowMs;
+
+  // SAME expected-move band as wings and flies: 15m Bollinger width -> IV (intraday term structure) -> spot*iv*sqrt(tau).
+  const nowMin = etMinutesOf(candleTime);
+  const tau = bs.tauFromTime(nowMs);
+  const ivMult = nowMin != null ? IIV.ivMultAt(nowMin) : 1;
+  const b = A['15m'];
+  const iv = bs.ivFromRelBandWidth((b.bbupper - b.bblower) / b.close) * ivMult;
+  const band = spot * iv * Math.sqrt(tau) * (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2);
+  if (!(band > 0) || !(tau > 0)) return 0;
+
+  const incr = cfg.strikeIncrement || 10;
+  const qty = cfg.quantity || 1;
+  const book = st.positions.filter((p) => p.filled !== false);
+  const { xs } = FR.samplePoints(spot, band, incr);
+  const base = xs.map((x) => RC.bookPnl(book, x));
+  const peak = Math.max(...base);
+  const budgetFrac = cfg.floorRaiseBudgetFrac;
+  const budget = budgetFrac != null && Number.isFinite(budgetFrac) ? budgetFrac * peak - st.raiseSpent : Infinity;
+  if (!(budget > 0)) return 0;
+  const tick = cfg.tickIncrement || 0.05;
+  const slip = (cfg.floorRaiseSlipTicks != null ? cfg.floorRaiseSlipTicks : 2) * tick;
+  const quoted = new Map();   // legs-key -> { mid, ask } for the evidence on the placed one
+  const keyOf = (legs) => legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
+  const price = (legs) => {
+    let mid = 0, ask = 0;
+    for (const l of legs) {
+      const q = deps.getLeg(l.type, l.strike);
+      if (!q || q.mid == null || q.bid == null || q.ask == null) return null;   // every leg must be quoted
+      const sgn = l.side === 'long' ? 1 : -1;
+      mid += sgn * q.mid;
+      ask += sgn > 0 ? q.ask : -q.bid;
+    }
+    if (!(mid > 0)) return null;
+    quoted.set(keyOf(legs), { mid: round2(mid), ask: round2(ask) });
+    return { debit: tickUp(mid + slip, tick) };
+  };
+  // VALLEY BY VALLEY, up to floorRaiseMaxPerPass per pass (2, as the backtest): after each pick the book's
+  // curve is updated with that hedge, so the next pick targets the NEXT valley rather than the same one.
+  const perPass = cfg.floorRaiseMaxPerPass != null ? cfg.floorRaiseMaxPerPass : 2;
+  const hyp = [];   // hedges placed this pass, counted in the global floor for the locked-profit check
+  let placedN = 0;
+  for (let n = 0; n < perPass && st.raiseCount + placedN < maxPerDay; n++) {
+    const bookNow = book.concat(hyp);
+    const gNow = RC.bookFloor(bookNow, null, 10);
+    const spentNow = hyp.reduce((t, h) => t + h.limit * 100 * qty, 0);
+    const { best, blockedLocked } = FR.pickBest({ xs, base, cands: FR.candidates(xs[0], xs[xs.length - 1], incr),
+      price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
+      objective: cfg.floorRaiseObjective || 'valley',
+      globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
+      skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });
+    if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
+      note: 'refused: would push a locked profit below zero' });
+    if (!best) break;
+    const resolved = [];
+    for (const l of best.legs) {
+      const q = deps.getLeg(l.type, l.strike);
+      if (!q || !q.symbol) { resolved.length = 0; break; }
+      resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
+    }
+    if (!resolved.length) break;
+    // The same quote gates every order runs (structure, usability, chain order, too-cheap) before money goes out.
+    const chk = markFill(best.legs, best.debit, deps.getLeg, tick, deps);
+    if (chk.badQuote) { decisions.push({ action: 'raise-badquote', legs: best.legs, reason: chk.badQuote }); break; }
+    const ev = quoted.get(keyOf(best.legs)) || {};
+    const payload = buildOrderPayload(resolved, best.debit, qty, 'DEBIT');
+    const placed = await deps.placeOrder(payload, { kind: 'raise', legs: best.legs, net: 'DEBIT', limit: best.debit });
+    if (!placed || placed.filled === false) break;
+    const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: best.legs, limit: best.debit,
+      markAtPlace: chk.mark, limitSent: best.debit, orderId: (placed && placed.orderId) || null,
+      pendingHedge: { limit: best.debit, kind: 'raise', markAtPlace: chk.mark, tag: best.kind, orderId: (placed && placed.orderId) || null,
+        placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask },
+      openedAt: candleTime, openTime: candleTime, openEpoch: nowMs,
+      quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
+    st.positions.push(pos);
+    if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.legs);
+    decisions.push({ action: 'raise', id: pos.id, structure: best.kind, legs: best.legs, limit: best.debit, valley: best.valley || null,
+      cost: Math.round(best.cost), lift: Math.round(best.lift), ratio: round2(best.ratio), floorNow: round2(gNow),
+      quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
+    hyp.push({ filled: true, legs: best.legs, limit: best.debit, quantity: qty, covered: false });
+    for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(best.legs, xs[j], qty) - best.cost;
+    placedN++;
+  }
+  return placedN;
+}
+
 // "MM/DD HH:MM" -> minutes from ET midnight, for the wing time gate.
 function etMinutesOf(candleTime) {
   const m = /(\d{1,2}):(\d{2})\s*$/.exec(String(candleTime || ''));
@@ -1679,6 +1791,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // buy OTM premium to bank a peak (late-day economics), a fly sells the body to fund its wings and
   // repairs a valley (early/mid-day economics). Both are ungated by the governor for the same reason.
   await convertFlies(st, cfg, deps, decisions, candleTime);
+  await raiseFloor(st, cfg, deps, decisions, candleTime);
 
   // FLOOR RATCHET — record the bar's high-water floor LAST, once every floor-moving action above has run.
   // Placed here rather than at the open gate on purpose: the open on the next bar is then measured against
@@ -2254,7 +2367,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
     // The accounting below mirrors that mark path exactly — same counters, same cash sign, same decision
     // action (`offset-fill` / `wing-fill` / `fly-fill`, which downstream analysis keys on) — differing only
     // in that the price is the broker's and `source: 'broker'` says so.
-    if (o.kind === 'floor-offset' || o.kind === 'wing' || o.kind === 'fly') {
+    if (o.kind === 'floor-offset' || o.kind === 'wing' || o.kind === 'fly' || o.kind === 'raise') {
       // BOTH ENDS, like the cover branch: a hedge row carries orderId on the position and on pendingHedge,
       // and matching only one of them is how the first version of the cover lookup missed every open.
       const pos = st.positions.find((p) => p && (p.orderId === o.orderId
@@ -2271,6 +2384,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       noteCash(st, spent);
       if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
+      else if (ph.kind === 'raise') { st.raiseCount = (st.raiseCount || 0) + 1; st.raiseSpent = round2((st.raiseSpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
       o.brokerApplied = true; applied++;
       OM.clearReject(st, OM.rejectKey(o.kind, null));
@@ -2697,6 +2811,7 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
 
       if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
+      else if (ph.kind === 'raise') { st.raiseCount = (st.raiseCount || 0) + 1; st.raiseSpent = round2((st.raiseSpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
       decisions.push({ action: `${ph.kind}-fill`, id: pos.id, legs: pos.legs, limit: ph.limit,
         fillPrice: chk.fill, mark: chk.mark, bid: chk.bid, ask: chk.ask,
@@ -3371,6 +3486,7 @@ module.exports = {
   selectCoverGeometric,
   selectCoverFixedMark,
   buyFloorOffsets,
+  raiseFloor,            // always-on floor raising (floor-raise.js) — exported for its unit test
   convertWings,
   buildCover,
   resolveLegs,

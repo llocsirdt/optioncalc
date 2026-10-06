@@ -269,7 +269,7 @@ function clearReject(st, key) { if (st && st.rejectStreaks && st.rejectStreaks[k
 // 'combo-lock-open' is deliberately NOT here — it is a 4-leg cover+open with its own booking.
 const OPEN_KINDS = new Set(['open', 'open-reprice']);
 const isOpenKind = (kind) => OPEN_KINDS.has(kind);
-const HEDGE_KINDS = new Set(['floor-offset', 'wing', 'fly']);
+const HEDGE_KINDS = new Set(['floor-offset', 'wing', 'fly', 'raise']);
 
 function clearDeadOrderState(record, o) {
   const st = (record && record.state) || {};

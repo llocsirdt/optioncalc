@@ -820,6 +820,22 @@ const SIM_FILL_LEGACY = String(process.env.CANDLE_SPREAD_SIM_FILL || '').toLower
 // unchanged; v7-10 1,113 -> 1,190. 10 over 5: two bars at the cap, and real opens have taken 15+ min to fill.
 const OPEN_RESTRIKE_MIN = 10;
 function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = OPEN_RESTRIKE_MIN; }
+
+// FLOOR RAISE (2026-10-06) — the user's standing policy, live: always buy the best near-money floor lift per
+// dollar at 2:1 or better, never pushing a locked profit below zero (floor-raise.js, shared with the
+// backtest). 765-day sweep at 2:1: locked-profit days 33.7% -> 37.2% fleet-wide, closing floor +\$286, peak
+// not given up. Rollout is env-controlled so it can be widened WITHOUT a deploy:
+//   CANDLE_SPREAD_FLOOR_RAISE = 'sim' (default) — every variant EXCEPT the armed real-money one, so the first
+//                                                 days measure real fly/vertical fills on simulated books
+//                             = 'all'           — every variant, the armed one included
+//                             = 'off'           — none
+const FLOOR_RAISE_MODE = String(process.env.CANDLE_SPREAD_FLOOR_RAISE || 'sim').toLowerCase();
+function applyFloorRaise(v) {
+  if (FLOOR_RAISE_MODE === 'off' || v.floorRaise != null) return;
+  if (FLOOR_RAISE_MODE !== 'all' && v.variant === ARMED_VARIANT) return;
+  v.floorRaise = true;
+  v.floorRaiseMinRatio = 2;
+}
 function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;
   if (v.simOpenFillMinLooks == null) v.simOpenFillMinLooks = 2;
@@ -830,6 +846,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
   applySimFillRealism(v);
   applyPlacementG(v);
   applyRestrike(v);
+  applyFloorRaise(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
   // minLock follows the width rule on EVERY cell, controls included, so the no-ladder control cells differ
@@ -1855,7 +1872,10 @@ function assertDeps(runs) {
     //     down on 2026-10-05: the startup check refused every variant once G put them on the roster.
     VC.assertForwarded(run, keys, 'live deps (buildEngineDeps)',
       ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew',
-        'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin']);
+        'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin',
+        // floor raise: read straight off cfg by trader.raiseFloor
+        'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
+        'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective']);
   }
 }
 

@@ -97,6 +97,7 @@ function skewMultAt(z) {
 // bs.bsPrice() DIRECTLY has to resolve it per leg first — handing the function straight in as sigma
 // produces NaN silently. (legsMark and buildOpen accept either form themselves.)
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
+const FR = require('../floor-raise');   // shared floor-raise planner (live trader uses the same module)
 
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 // Delegated to shared/intraday-iv.js so the LIVE engine and the backtest read the SAME calibration from
@@ -384,6 +385,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const frMaxPerDay = opts.floorRaiseMaxPerDay != null ? opts.floorRaiseMaxPerDay : 8;
   const frSlipTicks = opts.floorRaiseSlipTicks != null ? opts.floorRaiseSlipTicks : 2;  // over the structure's mid
   const frAfterMin = opts.floorRaiseAfterMin != null ? opts.floorRaiseAfterMin : 0;
+  const frObjective = opts.floorRaiseObjective || 'valley';   // 'valley' (user's choice) | 'band' (lowest point)
   let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity, frBlockedLocked = 0;
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
@@ -1000,64 +1002,34 @@ function runDay5m(bars, signalFn, opts = {}) {
       const ivAtmF = typeof iv === 'function' ? iv('C', S) : iv;
       const bw = S * ivAtmF * Math.sqrt(tau) * frSigmas;
       if (bw > 0) {
-        const lo = Math.floor((S - bw) / legIncr) * legIncr, hi = Math.ceil((S + bw) / legIncr) * legIncr;
-        const xs = [];
-        for (let x = lo; x <= hi; x += legIncr) xs.push(x);
+        // Planning is SHARED with the live trader (floor-raise.js); only the pricing is the backtest's own.
+        const { xs } = FR.samplePoints(S, bw, legIncr);
         const base = xs.map((x) => bookAt(x, null));
-        const pay = (legs, x) => { let v = 0; for (const l of legs) { const iv0 = l.type === 'C' ? Math.max(0, x - l.strike) : Math.max(0, l.strike - x); v += (l.side === 'long' ? 1 : -1) * iv0; } return v * 100 * QTY; };
         const ivForF = volFn(iv);
-        const midOf = (legs) => { let m = 0; for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike)); return m; };
-        const cands = [];
-        for (let K = lo; K <= hi; K += legIncr) for (const T of ['P', 'C']) {
-          const L1 = (k) => ({ side: 'long', type: T, strike: k }), S1 = (k) => ({ side: 'short', type: T, strike: k });
-          const dir = T === 'P' ? -1 : 1;   // a put spread's short leg sits BELOW its long; a call spread's above
-          cands.push([L1(K)]);
-          for (const w of [10, 20]) {
-            cands.push([L1(K), S1(K + dir * w)]);
-            cands.push([L1(K - w), S1(K), S1(K), L1(K + w)]);   // fly centred on K
-          }
-        }
+        const cands = FR.candidates(xs[0], xs[xs.length - 1], legIncr);
+        const price = (legs) => {
+          let m = 0;
+          for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike));
+          return m > 0 ? { debit: roundTick(m + frSlipTicks * TICK) } : null;
+        };
         for (let n = 0; n < 2 && frCount < frMaxPerDay; n++) {
-          const floorB = Math.min(...base), peakB = Math.max(...base);
+          const peakB = Math.max(...base);
           // Budget: a fraction of the current peak, or none at all (floorRaiseBudgetFrac null/Infinity =
           // "any amount with the required return" — the user's stated policy).
           const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
-          // NEVER TRADE A LOCKED PROFIT FOR A POSSIBLE LOSS (the user's hard rule): if the book's GLOBAL floor is
-          // at or above zero, a hedge may not push it below zero anywhere — including outside the band the
-          // lift is scored on, where the premium is pure cost. Checked on the exact global floor (floorOf).
           const gNow = floorOf(null);
-          const ok = [];
-          for (const legs of cands) {
-            if (enforceLegs && ledger.conflicts(legs)) continue;
-            const m = midOf(legs);
-            if (!(m > 0)) continue;
-            const debit = roundTick(m + frSlipTicks * TICK);
-            const cost = debit * 100 * QTY;
-            if (cost > budget) continue;
-            let after = Infinity;
-            for (let j = 0; j < xs.length; j++) { const v = base[j] + pay(legs, xs[j]) - cost; if (v < after) after = v; }
-            const lift = after - floorB;
-            if (!(lift > 0)) continue;
-            const ratio = lift / cost;
-            if (ratio >= frMinRatio) ok.push({ legs, debit, cost, ratio, lift });
-          }
-          ok.sort((a, b) => b.ratio - a.ratio);
-          let best = null;
-          for (const c of ok) {
-            if (gNow >= 0) {
-              const hp = { legs: c.legs, limit: c.debit, covered: false, coverLegs: null, coverLimit: null, hedge: true };
-              if (floorOf(hp) < 0) { frBlockedLocked++; continue; }   // would put a locked profit at risk
-            }
-            best = c; break;
-          }
+          const { best, blockedLocked } = FR.pickBest({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective,
+            globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
+            skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
+          frBlockedLocked += blockedLocked;
           if (!best) break;
           st.positions.push({ side: 'hedge', shortStrike: null, legs: best.legs, limit: best.debit, covered: false,
             pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
           if (enforceLegs) ledger.record(best.legs);
           markBookDirty();
           frSpent += best.cost; frCount++; frLift += best.lift;
-          for (let j = 0; j < xs.length; j++) base[j] += pay(best.legs, xs[j]) - best.cost;
+          for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(best.legs, xs[j], QTY) - best.cost;
         }
       }
     }

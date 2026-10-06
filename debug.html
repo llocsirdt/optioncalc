@@ -425,16 +425,20 @@ function render() {
     const n = (...acts) => d.filter((x) => acts.includes(x.action)).length;
     const sum = (act, f) => d.filter((x) => x.action === act).reduce((a, x) => a + (Number(x[f]) || 0), 0);
     const st = record.state || {};
-    const hedgeSpend = sum('floor-offset', 'cost') + sum('wing', 'cost') + sum('fly', 'cost');
+    const hedgeSpend = sum('floor-offset', 'cost') + sum('wing', 'cost') + sum('fly', 'cost') + sum('raise', 'cost');
     const lockedByStack = sum('cover-to-stack', 'locked');
     const mrows = [
       ['ladder reprices', n('cover-reprice') + n('open-reprice')
         + (n('cover-reprice') || n('open-reprice') ? ` (${n('open-reprice')} open / ${n('cover-reprice')} cover)` : '')],
       ['cover give-ups', n('cover-giveup')],
       ['offsets / wings / flies', `${n('floor-offset')} / ${n('wing')} / ${n('fly')}`],
+      // FLOOR RAISE (floor-raise.js): placed / filled, and what the fills cost. Placed-vs-filled is the
+      // evidence on how flies really fill at the mid on 0DTE NDX.
+      ['floor raises placed / filled', `${n('raise')} / ${n('raise-fill')}`],
+      ['floor-raise spend', sum('raise-fill', 'cost') ? usd(sum('raise-fill', 'cost')) : '—'],
       ['hedge spend', hedgeSpend ? usd(hedgeSpend) : '—'],
       // broker-side expiry cancels the order (-expire-cancel); the simulated path drops it (-expire)
-      ['hedges expired unfilled', n('offset-expire', 'wing-expire', 'fly-expire', 'offset-expire-cancel', 'wing-expire-cancel', 'fly-expire-cancel')],
+      ['hedges expired unfilled', n('offset-expire', 'wing-expire', 'fly-expire', 'raise-expire', 'offset-expire-cancel', 'wing-expire-cancel', 'fly-expire-cancel', 'raise-expire-cancel')],
       ['GOVERNOR blocked opens', n('open-skip-governor')],
       ['governor deferred covers', n('cover-defer-governor')],
       ['governor refused raises', n('cover-giveup-defer-governor', 'cover-reprice-defer-governor')],
@@ -509,7 +513,7 @@ function statsOf(rec) {
   const se = (rec.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
   const covered = pos.filter((p) => p.covered).length;
   const unfilled = unfilledCovers(rec);
-  const isHedge = (p) => p.hedge || /^off-|^wing-|^fly-/.test(p.id || '');
+  const isHedge = (p) => p.hedge || /^off-|^wing-|^fly-|^raise-/.test(p.id || '');
   return {
     terminal: se && se.terminalPnl != null ? se.terminalPnl : null,
     floor: se && se.floorPnl != null ? se.floorPnl : null,
@@ -667,6 +671,7 @@ function orderEvents(rec, src) {
     // every fly OFFSET. FLY is already a label this page knows (see REFUSED, which maps fly-nofill to it),
     // so the row was being told a kind the rest of the page contradicts.
     e.hedgeKind = (e.raw.wing || /^wing-/.test(e.id)) ? 'WING'
+      : (e.raw.raise || /^raise-/.test(e.id)) ? 'RAISE'
       : (e.raw.fly || /^fly-/.test(e.id)) ? 'FLY'
       : (e.raw.hedge || /^off-/.test(e.id)) ? 'OFFSET' : null;
   }
@@ -680,7 +685,7 @@ function orderEvents(rec, src) {
   // position at all, so a table built from positions cannot see either. The only trace is the decision
   // stream, so read it from there. Nothing is inferred: these rows exist only where the engine logged a
   // refusal, with the mark it saw and the limit it sent.
-  const REFUSED = { 'floor-offset-nofill': 'OFFSET', 'wing-nofill': 'WING', 'fly-nofill': 'FLY' };
+  const REFUSED = { 'floor-offset-nofill': 'OFFSET', 'wing-nofill': 'WING', 'fly-nofill': 'FLY', 'raise-nofill': 'RAISE' };
   let noFillSeq = 0;
   // AN ORDER THAT FILLED LATER IS NOT A REFUSED ORDER. `open` logs filled:false whenever the fill test
   // fails on the FIRST observation — but the order then rests, gets worked, and usually fills. Emitting a
