@@ -17,10 +17,19 @@
 // Pure: callers pass the book's settlement P&L at the sample points, a structure pricer, and a global-floor
 // evaluator. Payoffs are exact at settlement (piecewise-linear, kinks only at strikes).
 
-function samplePoints(spot, band, incr) {
+// Sample points. The BAND [lo, hi] is where valleys are targeted and candidates are built; `bookStrikes`
+// (optional) extends the SCORING grid to one strike past the book's outermost strikes, so a valley's outward
+// region runs to the true tail of the curve rather than stopping at the band edge (an offset spread lifts the
+// whole tail; a fly does not — the difference only shows if the tail is measured).
+function samplePoints(spot, band, incr, bookStrikes) {
   const lo = Math.floor((spot - band) / incr) * incr, hi = Math.ceil((spot + band) / incr) * incr;
+  let a = lo, b = hi;
+  if (bookStrikes && bookStrikes.length) {
+    a = Math.min(lo, Math.floor(Math.min(...bookStrikes) / incr) * incr - incr);
+    b = Math.max(hi, Math.ceil(Math.max(...bookStrikes) / incr) * incr + incr);
+  }
   const xs = [];
-  for (let x = lo; x <= hi; x += incr) xs.push(x);
+  for (let x = a; x <= b; x += incr) xs.push(x);
   return { lo, hi, xs };
 }
 
@@ -83,10 +92,28 @@ function valleys(base) {
 //   gNow           — the book's current GLOBAL floor
 //   globalFloorWith(legs, debit) — the book's global floor if this structure were added
 //   skip(legs)     — optional veto (leg-uniqueness)
-function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective }) {
-  const floorB = Math.min(...base);
+function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi }) {
+  // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
+  const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
+  const floorB = Math.min(...bandIdx.map((j) => base[j]));
   const byValley = (objective || 'valley') === 'valley';
-  const vs = byValley ? valleys(base) : null;
+  // EACH VALLEY IS SCORED ON ITS OUTWARD REGION (the user, 2026-10-06): from the valley to the edge of the
+  // band on the side AWAY from the money. A fly lifts only its own neighbourhood and leaves the lower ground
+  // beyond it; an offset spread lifts the valley AND everything past it. Scoring the valley alone could not
+  // tell them apart. With the outward region:
+  //   - a far valley prefers an offset spread (a fly there leaves the tail beyond it low);
+  //   - a near valley's region contains the far valleys, so it only gets its fly once the far side has been
+  //     lifted — offsets for the outer valleys first, flies for the near ones, without hard-coding an order.
+  // A valley straddling spot (or with no spot given) is scored on itself.
+  // Valleys are TARGETED only where they touch the band; the outward region is scored across the whole grid.
+  const inBand = (v) => (bandLo == null || xs[v.b] >= bandLo) && (bandHi == null || xs[v.a] <= bandHi);
+  const vs = byValley ? valleys(base).filter(inBand).map((v) => {
+    if (spot == null) return { ...v, ra: v.a, rb: v.b };
+    if (xs[v.b] < spot) return { ...v, ra: 0, rb: v.b };                       // below the money: down to the edge
+    if (xs[v.a] > spot) return { ...v, ra: v.a, rb: xs.length - 1 };           // above the money: up to the edge
+    return { ...v, ra: v.a, rb: v.b };
+  }) : null;
+  const regionMin = (v) => { let m = Infinity; for (let j = v.ra; j <= v.rb; j++) if (base[j] < m) m = base[j]; return m; };
   const ok = [];
   for (const c of cands) {
     if (skip && skip(c.legs)) continue;
@@ -99,15 +126,15 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
       // One entry per (candidate, valley) it fixes at the required ratio — the valley ORDER is decided below.
       for (const v of vs) {
         let after = Infinity;
-        for (let j = v.a; j <= v.b; j++) { const val = base[j] + pay[j] - cost; if (val < after) after = val; }
-        const lift = after - v.min;
+        for (let j = v.ra; j <= v.rb; j++) { const val = base[j] + pay[j] - cost; if (val < after) after = val; }
+        const lift = after - regionMin(v);
         if (!(lift > 0)) continue;
         const ratio = lift / cost;
         if (ratio >= minRatio) ok.push({ ...c, ...pr, cost, lift, ratio, valley: { from: xs[v.a], to: xs[v.b], min: Math.round(v.min) }, _vmin: v.min });
       }
     } else {
       let after = Infinity;
-      for (let j = 0; j < xs.length; j++) { const v = base[j] + payoff(c.legs, xs[j], qty) - cost; if (v < after) after = v; }
+      for (const j of bandIdx) { const v = base[j] + payoff(c.legs, xs[j], qty) - cost; if (v < after) after = v; }
       const lift = after - floorB;
       if (!(lift > 0)) continue;
       const ratio = lift / cost;

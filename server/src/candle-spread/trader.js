@@ -1275,9 +1275,11 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
   const incr = cfg.strikeIncrement || 10;
   const qty = cfg.quantity || 1;
   const book = st.positions.filter((p) => p.filled !== false);
-  const { xs } = FR.samplePoints(spot, band, incr);
+  const bookStrikes = [];
+  for (const p of book) { for (const l of p.legs || []) bookStrikes.push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) bookStrikes.push(l.strike); }
+  const { xs, lo: bandLo, hi: bandHi } = FR.samplePoints(spot, band, incr, bookStrikes);
   const base = xs.map((x) => RC.bookPnl(book, x));
-  const peak = Math.max(...base);
+  const peak = Math.max(...base.filter((v, j) => xs[j] >= bandLo && xs[j] <= bandHi));
   const budgetFrac = cfg.floorRaiseBudgetFrac;
   const budget = budgetFrac != null && Number.isFinite(budgetFrac) ? budgetFrac * peak - st.raiseSpent : Infinity;
   if (!(budget > 0)) return 0;
@@ -1307,9 +1309,9 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
     const bookNow = book.concat(hyp);
     const gNow = RC.bookFloor(bookNow, null, 10);
     const spentNow = hyp.reduce((t, h) => t + h.limit * 100 * qty, 0);
-    const { best, blockedLocked } = FR.pickBest({ xs, base, cands: FR.candidates(xs[0], xs[xs.length - 1], incr),
+    const { best, blockedLocked } = FR.pickBest({ xs, base, cands: FR.candidates(bandLo, bandHi, incr), bandLo, bandHi,
       price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
-      objective: cfg.floorRaiseObjective || 'valley',
+      objective: cfg.floorRaiseObjective || 'valley', spot,
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),

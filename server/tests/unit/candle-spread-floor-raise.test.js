@@ -39,7 +39,11 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
       placeOrder: async (payload, meta) => { sent.push({ payload, meta }); return { orderId: `o${sent.length}` }; } }, d, '10/05 15:35');
     const raises = d.filter((x) => x.action === 'raise');
     ok(n === 2 && raises.length === 2, `two valley fixes placed in one pass (${n})`);
-    ok(raises[1] && tag(raises[1].legs) === 'lP31060 sP31080 sP31080 lP31100', `the 31070-31090 valley gets the user's fly (${raises[1] && tag(raises[1].legs)})`);
+    // FAR valley -> an OFFSET spread (lifts the valley AND the tail beyond it); NEAR valley -> the fly. The
+    // user's rule (2026-10-06): a fly leaves the lower ground beyond its range, a cheap offset raises it all.
+    ok(raises[0] && raises[0].structure === 'vertical' && raises[0].valley.from === 31040,
+      `the far 31040-31050 valley gets an offset spread (${raises[0] && raises[0].structure} ${raises[0] && tag(raises[0].legs)})`);
+    ok(raises[1] && tag(raises[1].legs) === 'lP31060 sP31080 sP31080 lP31100', `the near 31070-31090 valley gets the user's fly (${raises[1] && tag(raises[1].legs)})`);
     ok(raises.every((r) => r.ratio >= 2), `every fix clears 2:1 (${raises.map((r) => r.ratio).join(', ')})`);
     ok(raises.every((r) => r.limit <= r.quotedMid + 0.15 + 1e-9 && r.limit < r.quotedAsk), 'priced at the mid + 2 ticks, not the quoted ask');
     ok(sent.every((s) => s.meta.kind === 'raise' && s.payload.orderType === 'NET_DEBIT'), 'sent as NET_DEBIT orders of kind raise');
@@ -49,6 +53,8 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     const all = st.positions.map((p) => (p.raise ? { ...p, filled: true } : p));
     const atSettle = Math.round(RC.bookPnl(all, 31076.44));
     ok(atSettle > 0 && Math.round(RC.bookPnl(fx.book, 31076.44)) === -780, `at the real 31076.44 settle the book ends +$${atSettle} instead of -$780`);
+    const gBefore = RC.bookFloor(fx.book, null, 10), gAfter = RC.bookFloor(all, null, 10);
+    ok(gAfter > gBefore + 500, `the WHOLE floor rises, tail included (global ${Math.round(gBefore)} -> ${Math.round(gAfter)})`);
     ok(st.positions.filter((p) => p.raise).every((p) => p.filled === false && p.pendingHedge && p.pendingHedge.kind === 'raise'),
       'placed hedges are WORKING orders (pendingHedge kind raise), not booked fills');
     // One working at a time: a second pass while they are pending places nothing.

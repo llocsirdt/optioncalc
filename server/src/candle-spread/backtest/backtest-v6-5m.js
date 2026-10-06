@@ -1003,23 +1003,25 @@ function runDay5m(bars, signalFn, opts = {}) {
       const bw = S * ivAtmF * Math.sqrt(tau) * frSigmas;
       if (bw > 0) {
         // Planning is SHARED with the live trader (floor-raise.js); only the pricing is the backtest's own.
-        const { xs } = FR.samplePoints(S, bw, legIncr);
+        const bookStrikes = [];
+        for (const p of st.positions) { for (const l of p.legs) bookStrikes.push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) bookStrikes.push(l.strike); }
+        const { xs, lo: bandLo, hi: bandHi } = FR.samplePoints(S, bw, legIncr, bookStrikes);
         const base = xs.map((x) => bookAt(x, null));
         const ivForF = volFn(iv);
-        const cands = FR.candidates(xs[0], xs[xs.length - 1], legIncr);
+        const cands = FR.candidates(bandLo, bandHi, legIncr);
         const price = (legs) => {
           let m = 0;
           for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike));
           return m > 0 ? { debit: roundTick(m + frSlipTicks * TICK) } : null;
         };
         for (let n = 0; n < 2 && frCount < frMaxPerDay; n++) {
-          const peakB = Math.max(...base);
+          const peakB = Math.max(...base.filter((v, j) => xs[j] >= bandLo && xs[j] <= bandHi));
           // Budget: a fraction of the current peak, or none at all (floorRaiseBudgetFrac null/Infinity =
           // "any amount with the required return" — the user's stated policy).
           const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
-          const { best, blockedLocked } = FR.pickBest({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective,
+          const { best, blockedLocked } = FR.pickBest({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;
