@@ -54,7 +54,9 @@ function restingOpen(limit) {
 // 2) The market runs AWAY -> no fill. This is the case the candle tick can never produce.
 {
   const st = restingOpen(10.20), d = [];
-  trader.resolvePendingOpen(st, cfg, { getLeg: legAt(10.60), coverLadder: false }, d);  // mark 10.60
+  // nowMs pinned: placedEpoch is 0, and with the real clock the open would look decades old and trip the
+  // 90-minute stale backstop (2026-10-05) instead of testing what this case is about.
+  trader.resolvePendingOpen(st, cfg, { getLeg: legAt(10.60), coverLadder: false, nowMs: 60000 }, d);  // mark 10.60
   ok(st.positions[0].filled === false, 'a mark above the limit does not fill');
   ok(st.pendingOpenId === 'p1', 'the order keeps working');
   ok(!d.some(x => x.action === 'open-fill'), 'no fill logged');
@@ -78,7 +80,7 @@ function restingOpen(limit) {
 // 4) The 65% ceiling still binds a working order.
 {
   const st = restingOpen(12.95), d = [];
-  trader.resolvePendingOpen(st, cfg, { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25 }, d);
+  trader.resolvePendingOpen(st, cfg, { getLeg: legAt(13.50), coverLadder: true, ladderStepDollars: 0.25, nowMs: 60000 }, d);
   ok(st.positions[0].limit <= 13, `ladder never walks past the ceiling (got ${st.positions[0].limit})`);
   ok(d.some(x => x.action === 'open-reprice' || x.action === 'open-rest'), 'ceiling case is logged');
 }

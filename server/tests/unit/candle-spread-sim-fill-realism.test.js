@@ -87,6 +87,29 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
   trader.resolveRestingCovers({ positions: [p], realizedPnl: 0 }, base, skewed, [], {});
   ok(p.covered === true, 'with no sent legs recorded it falls back to parity (7.00 >= 6.00)');
 
+  // ── 4. STALE OPEN: released after 90 min without a fill or a move (simulated path only) ───────────
+  // 2026-10-05: credit-sent opens parked at their ceiling worked from 10:05 to the close and blocked the
+  // slot (720 open-skip-pending fleet-wide). Live and the backtest both release after 90 min.
+  {
+    const mkStuck = (lastMove) => ({ positions: [{ id: 's', side: 'bull', legs: bullCall, quantity: 1, limit: 5.0, cap: 5.0,
+      filled: false, orderStatus: 'working', openTime: '10/05 10:05', covered: false, pendingCover: null,
+      placedEpoch: 0, ...(lastMove != null ? { lastMoveEpoch: lastMove } : {}) }], pendingOpenId: 's', realizedPnl: 0, cashDeployed: 0 });
+    const MIN = 60000;
+    let st = mkStuck(); let d = [];
+    await trader.resolvePendingOpen(st, base, { getLeg: chain(6.0), nowMs: 89 * MIN }, d);
+    ok(st.pendingOpenId === 's' && st.positions[0].orderStatus === 'working', 'at 89 min an unfilled open is still working');
+    st = mkStuck(); d = [];
+    await trader.resolvePendingOpen(st, base, { getLeg: chain(6.0), nowMs: 91 * MIN }, d);
+    ok(st.pendingOpenId == null && st.positions[0].orderStatus === 'cancelled', 'at 91 min with no move it is released');
+    ok(d.some((x) => x.action === 'open-stale' && x.restedMin === 91), 'and the release is logged with how long it rested');
+    st = mkStuck(60 * MIN); d = [];
+    await trader.resolvePendingOpen(st, base, { getLeg: chain(6.0), nowMs: 91 * MIN }, d);
+    ok(st.pendingOpenId === 's', 'the clock runs from the LAST MOVE: repriced at 60 min, still working at 91');
+    st = mkStuck(); d = [];
+    await trader.resolvePendingOpen(st, base, { getLeg: chain(6.0), nowMs: 91 * MIN, fillSource: 'broker' }, d);
+    ok(st.pendingOpenId === 's', 'under the broker it is untouched (the order manager owns the real order)');
+  }
+
   // ── the ROSTER turns 1 and 2 on for every variant ───────────────────────────────────────────────
   const runs = CS.buildRuns();
   ok(runs.length > 0 && runs.every((r) => r.simOpenFillMinLooks === 2 && r.coverFillThroughTicks === 1),

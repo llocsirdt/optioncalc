@@ -2774,6 +2774,25 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // where a NEW open is placed — so an open already resting kept being walked up toward the market every
   // pass, and could fill after "open nothing new". The order is left where it is (not cancelled: that is a
   // larger behaviour change, and a resting order at its placed price is what the brake-setter last saw).
+  // STALE OPEN (simulated path) — the same 90-minute backstop the other two engines already have: the live
+  // order manager cancels a real open 90 min after its last reprice (staleOpenCancelMs), and the backtest
+  // drops one after 90 min without a move. The mark path had NOTHING, so an open parked at its ceiling
+  // worked until the close and blocked the one-open slot: 2026-10-05, 12 credit-sent opens (v7/v9 20- and
+  // 40-wides) sat 10:05 -> 16:00 and the fleet logged 720 open-skip-pending (typical 30-180). The simulated
+  // variants were not trading the strategy the backtest and live trade. deps.staleOpenCancelMs overrides.
+  if (deps.fillSource !== 'broker') {
+    const staleMs = deps.staleOpenCancelMs != null ? deps.staleOpenCancelMs : 90 * 60 * 1000;
+    const nowS = deps.nowMs != null ? deps.nowMs : Date.now();
+    const lastMove = pos.lastMoveEpoch != null ? pos.lastMoveEpoch : pos.placedEpoch;
+    if (lastMove != null && nowS - lastMove >= staleMs) {
+      pos.orderStatus = 'cancelled'; pos.staleAt = nowS;
+      if (st.pendingOpenId === pos.id) st.pendingOpenId = null;
+      decisions.push({ action: 'open-stale', positionId: pos.id, side: pos.side, limit: pos.limit, mark: chk.mark,
+        restedMin: Math.round((nowS - lastMove) / 60000),
+        note: 'no fill and no reprice for 90 min — released, like the live and backtest backstops' });
+      return 0;
+    }
+  }
   if (deps.blockNewOpens) {
     decisions.push({ action: 'open-rest', positionId: pos.id, side: pos.side, limit: pos.limit,
       mark: chk.mark, cap: pos.cap, reason: 'brake: no new opens — ladder frozen' });
@@ -2842,6 +2861,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     const beforeOpen = { limit: pos.limit, sentLimit: pos.sentLimit, step: stepBefore };
     if (sentCredit) pos.sentLimit = sentTo;
     pos.limit = next;
+    pos.lastMoveEpoch = nowMs;   // the stale backstop measures from the last MOVE, as live and the backtest do
     // AND TELL THE BROKER. This walked pos.limit purely in memory: markFill then booked an open-fill at
     // the walked price while the real order still rested at the price it was placed at. The engine went
     // on to cover a position it did not own. Covers have gone out through concedeCover since b901054;
