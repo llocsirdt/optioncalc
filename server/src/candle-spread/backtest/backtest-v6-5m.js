@@ -373,6 +373,16 @@ function runDay5m(bars, signalFn, opts = {}) {
   // bar's best price is at least N ticks BETTER than the limit, not merely equal to it. 2026-10-05 live:
   // the simulated variants booked 66% of opens instantly at placement and 64% of covers at 0-1 tick through,
   // while v7-10's real orders at the same prices often did not fill. Bookings still happen AT the limit.
+  // FLOOR RAISE (see the bar-loop block) — off unless opts.floorRaise.
+  const floorRaiseOn = opts.floorRaise === true;
+  const frBudgetFrac = opts.floorRaiseBudgetFrac != null ? opts.floorRaiseBudgetFrac : 0.25;
+  const frMinRatio = opts.floorRaiseMinRatio != null ? opts.floorRaiseMinRatio : 3;
+  const frSigmas = opts.floorRaiseSigmas != null ? opts.floorRaiseSigmas : 2;
+  const frEvery = opts.floorRaiseEveryBars != null ? opts.floorRaiseEveryBars : 3;      // re-plan every 15 min
+  const frMaxPerDay = opts.floorRaiseMaxPerDay != null ? opts.floorRaiseMaxPerDay : 8;
+  const frSlipTicks = opts.floorRaiseSlipTicks != null ? opts.floorRaiseSlipTicks : 2;  // over the structure's mid
+  const frAfterMin = opts.floorRaiseAfterMin != null ? opts.floorRaiseAfterMin : 0;
+  let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity;
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
@@ -972,6 +982,68 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (f1 < worstFloor) worstFloor = f1;
       if (-f0 > worstFloorPre) worstFloorPre = -f0;   // pre-reduction exposure (what the ladder had to fix)
     }
+    // (b1b) FLOOR RAISE (opts.floorRaise, default off) — the user's standing policy (2026-10-05): ALWAYS raise
+    // the floor when it is cheap to, whether the floor is negative or already positive — "we'll always trade
+    // a little profit potential for less risk or more locked-in profit". The existing hedges each fire only
+    // in one narrow state (offsets: floor through lossTarget; wings: from a curve knee, 10% of peak; flies:
+    // off for most variants). This one pass searches EVERYTHING near the money — single longs, verticals and
+    // flies on either side, out to floorRaiseSigmas x the expected remaining move — and buys the best
+    // floor-lift per dollar while it clears floorRaiseMinRatio and the day's budget (floorRaiseBudgetFrac x the
+    // current peak). Lift is measured on the BAND floor (min P&L within that same range), the part of the
+    // curve the market can plausibly reach; settlement payoffs are exact (piecewise-linear at strikes).
+    // 2026-10-05 v7-10: a 31060/31080/31100 put fly at ~\$2.93 mid would have lifted the 31070-31090 valley
+    // by ~\$1,700 at a 31076 settle.
+    if (floorRaiseOn && etMinute(bars[i].dt) >= frAfterMin && i - frLastBar >= frEvery && st.positions.length && frCount < frMaxPerDay) {
+      frLastBar = i;
+      const ivAtmF = typeof iv === 'function' ? iv('C', S) : iv;
+      const bw = S * ivAtmF * Math.sqrt(tau) * frSigmas;
+      if (bw > 0) {
+        const lo = Math.floor((S - bw) / legIncr) * legIncr, hi = Math.ceil((S + bw) / legIncr) * legIncr;
+        const xs = [];
+        for (let x = lo; x <= hi; x += legIncr) xs.push(x);
+        const base = xs.map((x) => bookAt(x, null));
+        const pay = (legs, x) => { let v = 0; for (const l of legs) { const iv0 = l.type === 'C' ? Math.max(0, x - l.strike) : Math.max(0, l.strike - x); v += (l.side === 'long' ? 1 : -1) * iv0; } return v * 100 * QTY; };
+        const ivForF = volFn(iv);
+        const midOf = (legs) => { let m = 0; for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike)); return m; };
+        const cands = [];
+        for (let K = lo; K <= hi; K += legIncr) for (const T of ['P', 'C']) {
+          const L1 = (k) => ({ side: 'long', type: T, strike: k }), S1 = (k) => ({ side: 'short', type: T, strike: k });
+          const dir = T === 'P' ? -1 : 1;   // a put spread's short leg sits BELOW its long; a call spread's above
+          cands.push([L1(K)]);
+          for (const w of [10, 20]) {
+            cands.push([L1(K), S1(K + dir * w)]);
+            cands.push([L1(K - w), S1(K), S1(K), L1(K + w)]);   // fly centred on K
+          }
+        }
+        for (let n = 0; n < 2 && frCount < frMaxPerDay; n++) {
+          const floorB = Math.min(...base), peakB = Math.max(...base);
+          const budget = frBudgetFrac * peakB - frSpent;
+          if (!(budget > 0)) break;
+          let best = null;
+          for (const legs of cands) {
+            if (enforceLegs && ledger.conflicts(legs)) continue;
+            const m = midOf(legs);
+            if (!(m > 0)) continue;
+            const debit = roundTick(m + frSlipTicks * TICK);
+            const cost = debit * 100 * QTY;
+            if (cost > budget) continue;
+            let after = Infinity;
+            for (let j = 0; j < xs.length; j++) { const v = base[j] + pay(legs, xs[j]) - cost; if (v < after) after = v; }
+            const lift = after - floorB;
+            if (!(lift > 0)) continue;
+            const ratio = lift / cost;
+            if (ratio >= frMinRatio && (!best || ratio > best.ratio)) best = { legs, debit, cost, ratio, lift };
+          }
+          if (!best) break;
+          st.positions.push({ side: 'hedge', shortStrike: null, legs: best.legs, limit: best.debit, covered: false,
+            pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
+          if (enforceLegs) ledger.record(best.legs);
+          markBookDirty();
+          frSpent += best.cost; frCount++; frLift += best.lift;
+          for (let j = 0; j < xs.length; j++) base[j] += pay(best.legs, xs[j]) - best.cost;
+        }
+      }
+    }
     // (b2) WING CONVERSION — bank peak as floor. Runs regardless of whether the floor is healthy (that is
     // the whole point); gated by time-of-day, a re-plan interval, a per-day count and a budget expressed as
     // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
@@ -1418,6 +1490,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     wings: { count: wingCount, spent: Math.round(wingSpent) },
     // GOVERNOR telemetry: worstFloor = the worst book floor seen intraday (the number lossMax bounds);
     // breaches = bars spent through the working target; covers/offsets = what the reduction ladder did.
+    floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift) } : null,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which

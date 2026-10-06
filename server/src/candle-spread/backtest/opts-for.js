@@ -111,6 +111,9 @@ function optsFor(v, env) {
   if (v.openWalkCapFrac != null) o.openWalkCapFrac = v.openWalkCapFrac;   // ladder walk limit, above the placement ceiling
   if (v.openRestrikeMin != null) o.openRestrikeMin = v.openRestrikeMin;   // re-strike timeout at the cap (minutes)
   if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
+  // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
+  for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',
+    'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin']) if (v[k] != null) o[k] = v[k];
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
