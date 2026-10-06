@@ -130,7 +130,14 @@ const FR_ARMS = process.argv.includes('--floorRaiseArms') ? [
   ['off', null], ['r1 unlimited', { floorRaiseMinRatio: 1 }], ['r2 unlimited', { floorRaiseMinRatio: 2 }],
   ['r3 unlimited', { floorRaiseMinRatio: 3 }], ['r1 25% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.25 }],
   ['r1 50% peak', { floorRaiseMinRatio: 1, floorRaiseBudgetFrac: 0.5 }]] : [];
-if (FR_ARMS.length) {
+// --giveUpCaps 0.05,0.075,0.1,0.15,0.2: give-up loss allowance (fraction of width over break-even that a
+// give-up cover may pay once the position has run giveUpPoints back through its short strike).
+const GU_CAPS = (argVal('--giveUpCaps', '') || '').split(',').filter((x) => x !== '').map(Number);
+if (GU_CAPS.length) {
+  for (const run of RUNS) for (const c of GU_CAPS) JOBS.push({ variant: run.variant, rung: `giveUp ${c}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
+    over: { giveUpMaxLoss: c } });
+} else if (FR_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of FR_ARMS) JOBS.push({ variant: run.variant, rung: `floorRaise ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget,
     over: over ? { floorRaise: true, ...over } : {} });
@@ -270,6 +277,9 @@ function measure(job) {
         eodRangeAvg: mean((r) => (r.bestCase || 0) - (r.worstCase || 0)),
       };
     })(),
+    giveUpsPerDay: Math.round(res.reduce((a, r) => a + (r.giveUps || 0), 0) / days.length * 100) / 100,
+    nakedPerDay: Math.round(res.reduce((a, r) => a + (r.naked || 0), 0) / days.length * 100) / 100,
+    skipPendingPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.skipPending || 0), 0) / days.length * 100) / 100 : null,
     restruckPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restruck || 0), 0) / days.length * 100) / 100 : null,
     stalePerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.stale || 0), 0) / days.length * 100) / 100 : null,
     openFillRate: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + r.openLadder.filled, 0) / Math.max(1, res.reduce((a, r) => a + r.openLadder.placed, 0)) * 1000) / 10 : null,
