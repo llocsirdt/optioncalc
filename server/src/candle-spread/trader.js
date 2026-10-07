@@ -1313,6 +1313,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
       price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
+      floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null,
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });

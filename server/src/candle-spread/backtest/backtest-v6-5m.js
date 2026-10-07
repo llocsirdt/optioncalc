@@ -1064,7 +1064,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
           const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
-            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric,
+            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null,
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;

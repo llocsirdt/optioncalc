@@ -110,7 +110,7 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
 //         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
 //   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts, liftMetric }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin }) {
   const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
@@ -181,7 +181,13 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
   ok.sort((a, b) => (byValley ? (a._vmin - b._vmin) : 0) || (b.ratio - a.ratio));
   let blockedLocked = 0;
   for (const c of ok) {
-    if (gNow >= 0 && globalFloorWith(c.legs, c.debit) < 0) { blockedLocked++; continue; }
+    // Two hard rules on the GLOBAL floor: never put a locked profit at risk (the user's rule), and never push
+    // the book past the day-loss cap (floorMin = -lossMax) — a floor-raising hedge is still an order the
+    // governor bounds. Spreads-first fixes one valley at a time and its premium lowers the rest of the curve;
+    // without this a v7-10 day ended at -1,870 against a 1,500 cap (open-ladder test, 2026-10-06).
+    const g = (gNow >= 0 || floorMin != null) ? globalFloorWith(c.legs, c.debit) : null;
+    if (gNow >= 0 && g < 0) { blockedLocked++; continue; }
+    if (floorMin != null && g < floorMin && g < gNow) { blockedLocked++; continue; }
     return { best: c, blockedLocked };
   }
   return { best: null, blockedLocked };
@@ -244,9 +250,10 @@ function pickBestMulti(args) {
   options.sort((a, b) => b.ratio - a.ratio || a.set.length - b.set.length);
   let blockedLocked = 0;
   for (const o of options) {
-    if (gNow >= 0) {
+    if (gNow >= 0 || args.floorMin != null) {
       const legs = o.set.reduce((l, c) => l.concat(c.legs), []);
-      if (globalFloorWith(legs, o.set.reduce((t, c) => t + c.debit, 0)) < 0) { blockedLocked++; continue; }
+      const g = globalFloorWith(legs, o.set.reduce((t, c) => t + c.debit, 0));
+      if ((gNow >= 0 && g < 0) || (args.floorMin != null && g < args.floorMin && g < gNow)) { blockedLocked++; continue; }
     }
     const strip = ({ pay, score, ...c }) => c;
     // Report the pair's JOINT lift/ratio on both members (the honest number); cost stays per structure.

@@ -85,6 +85,22 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     ok(g >= 0 && r.best == null && r.blockedLocked === 1, `a $200 hedge on a +$${Math.round(g)} locked book is refused (blocked ${r.blockedLocked})`);
   }
 
+  // ── never push the floor past the day-loss cap (floorMin = -lossMax) ─────────────────────────────
+  {
+    // Real 15:35 book (global floor -780). A cap of $800 leaves $20 of room: the offset that lifts the far
+    // valley costs $105 and drops the near valley to -885 -> past the cap -> refused.
+    const book = fx.book;
+    const xs = []; for (let x = 31030; x <= 31130; x += 10) xs.push(x);
+    const base = xs.map((x) => RC.bookPnl(book, x));
+    const offset = [{ kind: 'vertical', legs: [{ side: 'long', type: 'P', strike: 31060 }, { side: 'short', type: 'P', strike: 31050 }] }];
+    const args = { xs, base, cands: offset, price: () => ({ debit: 1.05 }), qty: 1, minRatio: 2, budget: Infinity,
+      gNow: RC.bookFloor(book, null, 10), spot: fx.underlying, bandLo: 31030, bandHi: 31130, objective: 'valley', liftMetric: 'min',
+      globalFloorWith: (legs, debit) => RC.bookFloor(book, { legs, limit: debit, quantity: 1, covered: false }, 10) };
+    ok(FR.pickBest(args).best != null, 'with no cap the offset is bought');
+    const capped = FR.pickBest({ ...args, floorMin: -800 });
+    ok(capped.best == null && capped.blockedLocked === 1, 'with lossMax 800 the same offset is refused (would put the floor at -885)');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

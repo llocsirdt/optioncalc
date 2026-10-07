@@ -919,7 +919,14 @@ function applyExperiments(v, { capPreset = true } = {}) {
   // rout (-$1.5M to -$2.0M across the four tested). Force the exit, but CHEAPLY — 5% of width is $1.00 on
   // a $20 spread, enough to cross the spread and not enough to chase.
   if (GIVEUP_ALL || GIVEUP_LIVE.has(v.variant)) {
-    v.coverGiveUp = true; v.giveUpPoints = 10; v.giveUpMaxLoss = 0.05;
+    // ALLOWANCE BY WIDTH (2026-10-06, the user: wider spreads have a wider profitable range, so a little more
+    // can be paid to close a losing one). Swept 5/7.5/10/15/20% on the G roster with realistic fills, scored
+    // on positions closed / left open / opens freed: 10W best at 5% (more costs locked days and P&L), 20W at
+    // 7.5% (fewer left open, 13% fewer blocked opens, P&L flat), 40W at 10% (P&L +6%, 11% fewer blocked).
+    // 15-20% hurt every width. TRIGGER stays 10 points through the short strike: re-swept against candle-
+    // break and signal-reversal triggers the same day and it led on locked days and on 10W.
+    v.coverGiveUp = true; v.giveUpPoints = 10;
+    v.giveUpMaxLoss = v.spreadWidth >= 40 ? 0.10 : v.spreadWidth >= 20 ? 0.075 : 0.05;
   }
   // ORDER SLIP — ticks over the mark on opens/offsets/wings; a credit twin concedes the same.
   if (ORDER_SLIP_AB.has(v.variant)) v.orderSlipTicks = ORDER_SLIP_AB.get(v.variant);
