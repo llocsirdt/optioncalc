@@ -639,7 +639,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     // already recorded the legs and the stance at PLACEMENT (live records both when the order is sent).
     const commitOpen = (side, o, resolvedLegs, withLedgerDir) => {
         const _nd = o.limit * 100 * QTY;
-        st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET });
+        st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
+          openReason: o.reason, sigEpoch: o.sigEpoch });
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
         // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
@@ -1403,6 +1404,8 @@ function runDay5m(bars, signalFn, opts = {}) {
             if (legsMark(o.legs, fav, ntau, iv) > o.limit - thruOpen + 1e-9) { openMissed++; continue; }
           }
         }
+        // ATTRIBUTION: which signal produced this open, and when (the signal bar, not the fill bar).
+        o.reason = sig.reason; o.sigEpoch = nowEpoch;
         if (openLadderModel) {
           // OPEN LADDER: the order WORKS from the next bar (see the fill check at the top of the bar loop).
           // Legs and stance are recorded now, at the send, exactly as live does; nothing is booked yet.
