@@ -835,9 +835,12 @@ function applyFloorRaise(v) {
   if (FLOOR_RAISE_MODE !== 'all' && v.variant === ARMED_VARIANT) return;
   v.floorRaise = true;
   v.floorRaiseMinRatio = 2;
-  // The lowest-point rule — the best measured on the floor metrics so far (2026-10-06: locked days 33.7% ->
-  // 37.2%, closing floor +\$286). The valley variants measured worse on the floor; spreadFirst / pair pending.
-  v.floorRaiseObjective = 'band';
+  // SPREADS FIRST (objective B) on EVERY variant — the user's choice 2026-10-06: offset spreads fix a valley
+  // and lift the tail beyond it; when none qualifies, any structure (flies included) may still raise the
+  // book's lowest point. 765-day sweep at 2:1: fleet locked-profit days 33.7% -> 38.0%, closing floor
+  // -1,293 -> -932 (best of all arms); best on 20W/40W. On 10W the lowest-point rule locked more days
+  // (v7-10 55.4% vs 47.9% under B) — measured and recorded; the user chose B for all strategies.
+  v.floorRaiseObjective = 'spreadFirst';
 }
 function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;
