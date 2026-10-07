@@ -127,7 +127,12 @@ const WALK = { 10: 0.55, 20: 0.575, 40: 0.60 };
 // user's "any amount with at least 1:1"), and ratio 1 capped at 25% / 50% of peak for comparison. Every arm
 // keeps the hard rule: a locked profit (global floor >= 0) is never pushed below zero.
 // Valley objective, flat vs distance-scaled ratio (near -> far at 2 sigma). 'band r2' = the measured original.
-const FR_ARMS = process.argv.includes('--floorRaiseMulti') ? [
+// --floorRaiseFinal (2026-10-06): the roster's spreads-first rule vs off, under resting raises + at-limit fills,
+// plus a stricter 3:1 — decides whether the armed v7-10 trades floor raises.
+const FR_ARMS = process.argv.includes('--floorRaiseFinal') ? [
+  ['off', null], ['B spreadFirst r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'spreadFirst' }],
+  ['B spreadFirst r3', { floorRaiseMinRatio: 3, floorRaiseObjective: 'spreadFirst' }]]
+  : process.argv.includes('--floorRaiseMulti') ? [
   ['off', null], ['A band r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'band' }],
   ['B spreadFirst r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'spreadFirst' }],
   ['C pair r2', { floorRaiseMinRatio: 2, floorRaiseObjective: 'pair' }],

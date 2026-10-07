@@ -101,6 +101,10 @@ function optsFor(v, env) {
   // env wins: a generic env.fillThroughTicks sets BOTH sides explicitly (the engine prefers the per-side
   // value, so leaving the roster's cover value in place would silently override a sweep's generic one).
   if (v.coverFillThroughTicks != null) o.fillThroughTicksCover = v.coverFillThroughTicks;
+  if (v.simFillAtLimit != null) o.simFillAtLimit = v.simFillAtLimit;   // covers book AT their limit
+  // A floor raise is a resting order everywhere a backtest models the live roster (no live analogue knob:
+  // live hedges always rest). env.floorRaiseResting === false reproduces the instant-fill model.
+  if (v.floorRaise) o.floorRaiseResting = !(env && env.floorRaiseResting === false);
   if (env && env.fillThroughTicks != null) {
     o.fillThroughTicks = env.fillThroughTicks;
     o.fillThroughTicksOpen = env.fillThroughTicks; o.fillThroughTicksCover = env.fillThroughTicks;

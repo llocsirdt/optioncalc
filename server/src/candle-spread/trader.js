@@ -2575,10 +2575,15 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
     // spreadQuote signs long +, short -, so a credit structure marks NEGATIVE; the credit received is -mark.
     const credit = round2(-mark);
     if (credit < limit) return { ...base, parity, fillable: false, fill: null };
+    // AT THE LIMIT (deps.simFillAtLimit): a resting limit receives exactly what it asked.
+    if (deps && deps.simFillAtLimit) return { ...base, parity, fillable: true, fill: round2(limit) };
     // Concede at most a tick below the asked credit, never below the market.
     return { ...base, parity, fillable: true, fill: round2(Math.min(credit, Math.max(limit, credit - tick))) };
   }
   if (mark > limit) return { ...base, parity, fillable: false, fill: null };
+  // AT THE LIMIT (deps.simFillAtLimit): a resting limit order fills AT its price; the market gapping past it
+  // is not price improvement a real order receives (2026-10-06 live vs simulated, see resolveRestingCovers).
+  if (deps && deps.simFillAtLimit) return { ...base, parity, fillable: true, fill: round2(limit) };
   // The floor is the MARK, not one tick. Flooring at `tick` is what turned a nonsense mark into a $5
   // fill; a real fill never prices below what the thing is actually marked at.
   return { ...base, parity, fillable: true, fill: round2(Math.max(mark, Math.min(limit, mark + tick))) };
@@ -3016,6 +3021,19 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // Same reprice gate as the covers: a new step always goes; a limit pinned to a drifting mark only moves
   // by a meaningful amount (cover-ladder.shouldReprice), so a pinned open is not replaced every 30s.
   const stepChanged = pos.openLadderStep == null || earned !== pos.openLadderStep;
+  // GOVERNOR: walking an open UP is paying more for a position the governor already counts (design B), so it
+  // lowers the floor. A step that would push the floor down AND through lossMax is refused — the same rule
+  // covers follow (coverBreachesGovernor). Flagged 2026-10-04; cover raises were fixed then, opens were not.
+  if (next > pos.limit && govOn(deps)) {
+    const asFilled = (lim) => ({ ...pos, filled: true, limit: lim });
+    const f0 = govFloor(st, deps, null, [pos, asFilled(pos.limit)]);
+    const f1 = govFloor(st, deps, null, [pos, asFilled(next)]);
+    if (f1 < f0 && -f1 > deps.lossMax) {
+      decisions.push({ action: 'open-reprice-governor', positionId: pos.id, from: pos.limit, to: next,
+        floorIfRaised: round2(f1), floorNow: round2(f0), lossMax: deps.lossMax });
+      return 0;
+    }
+  }
   if (next > pos.limit && LAD.shouldReprice(pos.limit, next, tick,
     { stepChanged, spreadWidth: cfg.spreadWidth, minMoveFrac: deps.ladderMinMoveFrac })) {
     const stepBefore = pos.openLadderStep;   // restored if the replace below does not take effect
@@ -3370,8 +3388,14 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       const ks = (pc.legs || []).map((l) => l.strike);
       const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
       const creditNow = creditOffered();
-      const got = round2(Math.min(creditNow, Math.max(pc.sentCredit, round2(creditNow - tick))));
+      // AT THE LIMIT (cfg.simFillAtLimit): a resting limit order fills AT its price — the market gapping
+      // past it does not hand us the difference. 2026-10-06, v7-10 live vs its simulated twin on the same 8
+      // positions: +$7 real vs +$765 simulated, almost all of it this improvement.
+      const got = cfg.simFillAtLimit ? round2(pc.sentCredit)
+        : round2(Math.min(creditNow, Math.max(pc.sentCredit, round2(creditNow - tick))));
       fill = round2(cw - got);
+    } else if (cfg.simFillAtLimit) {
+      fill = round2(pc.target);
     } else {
       // Floor at the MARK, not at a tick: a fill never prices below what the thing is marked at.
       fill = round2(Math.max(mark, Math.round(Math.min(pc.target, mark + tick) / tick) * tick));

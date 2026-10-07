@@ -846,6 +846,9 @@ function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;
   if (v.simOpenFillMinLooks == null) v.simOpenFillMinLooks = 2;
   if (v.coverFillThroughTicks == null) v.coverFillThroughTicks = 1;
+  // Simulated fills (opens, covers, hedges) book AT their limit, never better (2026-10-06: simulated covers
+  // +$765 vs live +$7 on the same 8 v7-10 positions, almost all of it booked price improvement).
+  if (v.simFillAtLimit == null) v.simFillAtLimit = true;
 }
 
 function applyExperiments(v, { capPreset = true } = {}) {
@@ -1798,6 +1801,8 @@ function buildEngineDeps(run, live) {
       // CLOSED-LOOP FILLS — see FILL_SOURCE. 'mark' for every simulated run; 'broker' only for a run whose
       // orders can really fill, and only when explicitly switched on.
       fillSource: fillSourceFor(run),
+      // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
+      simFillAtLimit: run.simFillAtLimit === true,
       // Needed by the chain-monotonicity gate in markFill to find each leg's neighbours. Listed in
       // NOT_ENGINE_OPTS as geo-consumed, so it is not contract-checked, but the gate reads it off deps.
       strikeIncrement: run.strikeIncrement,

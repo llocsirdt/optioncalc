@@ -389,17 +389,25 @@ function runDay5m(bars, signalFn, opts = {}) {
   const frMinRatioFar = opts.floorRaiseMinRatioFar != null ? opts.floorRaiseMinRatioFar : null;   // distance-scaled ratio
   const frFarSigmas = opts.floorRaiseFarSigmas != null ? opts.floorRaiseFarSigmas : 2;   // 'valley' (user's choice) | 'band' (lowest point)
   let frSpent = 0, frCount = 0, frLift = 0, frLastBar = -Infinity, frBlockedLocked = 0;
+  // RESTING RAISES (opts.floorRaiseResting): a planned hedge is a LIMIT ORDER at its debit (mid + slip), not a
+  // fill. It works for floorRaiseWorkBars bars (live hedgeWorkMinutes 10 = 2 bars) and books AT ITS LIMIT
+  // only if the structure marks at or under it on a later bar (bar low / close / high — the 30s marks live
+  // sees fall between them). Nothing new is planned while one is working, as live.
+  const frResting = opts.floorRaiseResting === true;
+  const frWorkBars = opts.floorRaiseWorkBars != null ? opts.floorRaiseWorkBars : 2;
+  let frWorking = [], frPlaced = 0, frExpired = 0;
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
   let guPrev15 = null;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
+  const coverAtLimit = opts.simFillAtLimit === true;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
   let openRestruck = 0;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
-  let openMissed = 0, openTried = 0;   // openFillModel 'resting': how often a placed open never filled
+  let openMissed = 0, openTried = 0, openWalkGov = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
   let gateCutoff = 0, gateFloor = 0;   // opens blocked by the stop-opening gates
@@ -695,7 +703,16 @@ function runDay5m(bars, signalFn, opts = {}) {
           : (opts.ladderStepDollars != null ? opts.ladderStepDollars : 0.25);
         const raw = Math.min(po.base + earned * stepD, po.cap, legsMark(po.o.legs, S, tau, iv));
         const next = round2(Math.floor(raw / TICK + 1e-9) * TICK);
-        if (next > po.limit) { po.limit = next; po.pos.limit = next; po.lastMoveMs = nowEpoch; openReprices++; markBookDirty(); }
+        // GOVERNOR: a walk is a price raise on a position the governor already counts as filled (design B),
+        // so paying more lowers the floor. Refuse a step that would push it down AND through lossMax — the
+        // same rule as a cover (f1 < f0 && -f1 > lossMax). Live: trader.workPendingOpen.
+        let govOk = true;
+        if (next > po.limit && governed) {
+          const f0 = floorOf(null, true); const was = po.pos.limit;
+          po.pos.limit = next; const f1 = floorOf(null, true); po.pos.limit = was;
+          if (f1 < f0 && -f1 > lossMax) { govOk = false; openWalkGov++; }
+        }
+        if (next > po.limit && govOk) { po.limit = next; po.pos.limit = next; po.lastMoveMs = nowEpoch; openReprices++; markBookDirty(); }
       }
       const fav = po.side === 'bull' ? px.low : px.high;
       if (legsMark(po.o.legs, fav, tau, iv) <= po.limit - thruOpen + 1e-9) {
@@ -968,7 +985,10 @@ function runDay5m(bars, signalFn, opts = {}) {
         // to pay, so it must raise what we actually pay — booking at the stale ideal while filling on the
         // raised trigger buys at a price that was never available. That bug turned v6-20 into $14.9M with
         // a worst day of -$710 (eff 21,011), which is what a free-money leak looks like from the outside.
-        let cLegs = pc.legs, cLimit = roundTick(Math.min(workingTarget, legsMark(pc.legs, S, tau, iv) + TICK)), rc = null;
+        // AT THE LIMIT (opts.simFillAtLimit): a resting limit fills AT its working price, never better —
+        // the bar gapping past it is not price improvement a real order receives (live 2026-10-06).
+        const coverPx = (legs) => coverAtLimit ? roundTick(workingTarget) : roundTick(Math.min(workingTarget, legsMark(legs, S, tau, iv) + TICK));
+        let cLegs = pc.legs, cLimit = coverPx(pc.legs), rc = null;
         if (enforceLegs) {
           rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
@@ -978,7 +998,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             // shifted cover at its own mark with no target cap, which is what let a resolver-shifted cover
             // book above the lock price and bank a guaranteed loss.
             cLegs = CL.coverLegsFor(pos.side, rc.anchor, G.WIDTH, 'debit');
-            cLimit = roundTick(Math.min(workingTarget, legsMark(cLegs, S, tau, iv) + TICK));
+            cLimit = coverPx(cLegs);
           }
         }
     if (governed) {
@@ -1039,7 +1059,28 @@ function runDay5m(bars, signalFn, opts = {}) {
     // curve the market can plausibly reach; settlement payoffs are exact (piecewise-linear at strikes).
     // 2026-10-05 v7-10: a 31060/31080/31100 put fly at ~\$2.93 mid would have lifted the 31070-31090 valley
     // by ~\$1,700 at a 31076 settle.
-    if (floorRaiseOn && etMinute(bars[i].dt) >= frAfterMin && i - frLastBar >= frEvery && st.positions.length && frCount < frMaxPerDay) {
+    if (frWorking.length) {
+      const ivForW = volFn(iv);
+      const markAt = (legs, u) => { let m = 0; for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, u, l.strike, tau, ivForW(l.type, l.strike)); return m; };
+      const keep = [];
+      for (const w of frWorking) {
+        if (i <= w.bar) { keep.push(w); continue; }
+        const best = Math.min(markAt(w.h.legs, px.low), markAt(w.h.legs, S), markAt(w.h.legs, px.high));
+        const gOk = !(governed && Number.isFinite(lossMax)) || (() => {
+          const g = floorOf({ legs: w.h.legs, limit: w.h.debit, covered: false, coverLegs: null, coverLimit: null, hedge: true });
+          return !(g < -lossMax && g < floorOf(null));
+        })();
+        if (best <= w.h.debit + 1e-9 && gOk && !(enforceLegs && ledger.conflicts(w.h.legs))) {
+          st.positions.push({ side: 'hedge', shortStrike: null, legs: w.h.legs, limit: w.h.debit, covered: false,
+            pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
+          if (enforceLegs) ledger.record(w.h.legs);
+          frSpent += w.h.cost; frCount++; frLift += w.lift || 0; markBookDirty();
+        } else if (i - w.bar >= frWorkBars) frExpired++;
+        else keep.push(w);
+      }
+      frWorking = keep;
+    }
+    if (floorRaiseOn && !frWorking.length && etMinute(bars[i].dt) >= frAfterMin && i - frLastBar >= frEvery && st.positions.length && frCount < frMaxPerDay) {
       frLastBar = i;
       const ivAtmF = typeof iv === 'function' ? iv('C', S) : iv;
       const bw = S * ivAtmF * Math.sqrt(tau) * frSigmas;
@@ -1069,6 +1110,10 @@ function runDay5m(bars, signalFn, opts = {}) {
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;
           if (!best) break;
+          if (frResting) {
+            for (const h of companion ? [best, companion] : [best]) { frWorking.push({ h, bar: i, lift: h === best ? best.lift : 0 }); frPlaced++; }
+            break;   // the plan assumed these fill; re-plan only once they resolve
+          }
           for (const h of companion ? [best, companion] : [best]) {
             st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false,
               pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
@@ -1485,7 +1530,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
     bestCase, worstCase, avgTerminalPotential,
-    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck,
+    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
       paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
@@ -1532,7 +1577,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     // how many of those ended covered vs still open at the close.
     giveUpPos: st.positions.filter((p) => p._gu).length,
     giveUpCovered: st.positions.filter((p) => p._gu && p.covered).length,
-    floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked } : null,
+    floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked,
+      placed: frResting ? frPlaced : frCount, expired: frExpired } : null,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
