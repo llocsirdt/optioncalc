@@ -825,11 +825,11 @@ function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = O
 // dollar at 2:1 or better, never pushing a locked profit below zero (floor-raise.js, shared with the
 // backtest). 765-day sweep at 2:1: locked-profit days 33.7% -> 37.2% fleet-wide, closing floor +\$286, peak
 // not given up. Rollout is env-controlled so it can be widened WITHOUT a deploy:
-//   CANDLE_SPREAD_FLOOR_RAISE = 'sim' (default) — every variant EXCEPT the armed real-money one, so the first
-//                                                 days measure real fly/vertical fills on simulated books
-//                             = 'all'           — every variant, the armed one included
+//   CANDLE_SPREAD_FLOOR_RAISE = 'all' (default) — every variant, the armed real-money one included
+//                             = 'sim'           — every variant EXCEPT the armed one
 //                             = 'off'           — none
-const FLOOR_RAISE_MODE = String(process.env.CANDLE_SPREAD_FLOOR_RAISE || 'sim').toLowerCase();
+// Default 'all' (user, 2026-10-06): every strategy, the armed real-money one included.
+const FLOOR_RAISE_MODE = String(process.env.CANDLE_SPREAD_FLOOR_RAISE || 'all').toLowerCase();
 function applyFloorRaise(v) {
   if (FLOOR_RAISE_MODE === 'off' || v.floorRaise != null) return;
   if (FLOOR_RAISE_MODE !== 'all' && v.variant === ARMED_VARIANT) return;
