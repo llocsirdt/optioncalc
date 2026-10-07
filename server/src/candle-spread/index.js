@@ -1808,6 +1808,11 @@ function buildEngineDeps(run, live) {
       fillSource: fillSourceFor(run),
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
+      // Floor raise follows the CURRENT roster (and its env kill switch) even inside a sealed session —
+      // trader.raiseFloor merges this over the record's frozen config. floorRaise is always explicit so
+      // switching it off takes effect at once.
+      floorRaiseCfg: Object.assign({ floorRaise: run.floorRaise === true },
+        ...Object.keys(run).filter((k) => /^floorRaise./.test(k) && run[k] !== undefined).map((k) => ({ [k]: run[k] }))),
       // Needed by the chain-monotonicity gate in markFill to find each leg's neighbours. Listed in
       // NOT_ENGINE_OPTS as geo-consumed, so it is not contract-checked, but the gate reads it off deps.
       strikeIncrement: run.strikeIncrement,

@@ -85,6 +85,16 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     ok(g >= 0 && r.best == null && r.blockedLocked === 1, `a $200 hedge on a +$${Math.round(g)} locked book is refused (blocked ${r.blockedLocked})`);
   }
 
+  // ── live settings win over the sealed record (mid-session rollout and kill switch) ──────────────
+  {
+    const sealed = { ...cfg, floorRaise: undefined };   // a record created before floor raise existed
+    const run = async (c, frc) => { const st = fresh(); const d = [];
+      const n = await T.raiseFloor(st, c, { getLeg, underlying: fx.underlying, A, nowMs: Date.parse(fx.time), strikeIncrement: 10,
+        floorRaiseCfg: frc, placeOrder: async () => ({ orderId: 'x' }) }, d, '10/05 15:35'); return n; };
+    ok(await run(sealed, { floorRaise: true, floorRaiseMinRatio: 2 }) > 0, 'a sealed record WITHOUT floor raise still raises when the live roster has it on');
+    ok(await run(cfg, { floorRaise: false }) === 0, 'and the live kill switch stops a record sealed WITH it on');
+  }
+
   // ── never push the floor past the day-loss cap (floorMin = -lossMax) ─────────────────────────────
   {
     // Real 15:35 book (global floor -780). A cap of $800 leaves $20 of room: the offset that lifts the far

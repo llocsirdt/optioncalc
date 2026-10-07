@@ -1250,6 +1250,11 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
 // One working raise at a time (a pending one already addresses the floor it was planned for), re-planned
 // every floorRaiseEveryMin minutes, rides the shared hedge pipeline (kind 'raise': TTL, broker fills, cancel).
 async function raiseFloor(st, cfg, deps, decisions, candleTime) {
+  // LIVE SETTINGS, NOT THE SEALED RECORD (2026-10-07). A record's config is frozen at its first event, so
+  // a floor-raise rollout deployed mid-session did nothing until the next day, and the
+  // CANDLE_SPREAD_FLOOR_RAISE kill switch could not stop a session under way. Like deps.lossMax, the
+  // floor-raise settings come from the CURRENT roster when the caller supplies them.
+  if (deps && deps.floorRaiseCfg) cfg = { ...cfg, ...deps.floorRaiseCfg };
   if (cfg.floorRaise !== true) return 0;
   const spot = deps.underlying;
   const A = deps.A;
