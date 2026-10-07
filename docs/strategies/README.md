@@ -11,11 +11,11 @@ $5k/$7k/$9k caps, covers that could never move or close at a loss).
 disagree, the code is what is described here and the disagreement is listed under *Open questions*.
 
 **Rules used writing these.** No number in these files is derived. Per-variant backtest results are copied
-verbatim from `server/src/candle-spread/backtest-baselines.csv` as rebuilt 2026-10-06 on commit `0c24886`
-(G placement, realistic open/cover fills, 10-min re-strike, give-up by width, floor raise spreads-first).
-**Known optimism in those numbers:** simulated covers book at mark + 1 tick when the market gaps past the
-limit (live 2026-10-06: +$7 real vs +$765 simulated on the same 8 v7-10 positions), and floor-raise hedges
-book as filled at modelled mid + 2 ticks the bar they are planned. Historical measurements are kept only
+verbatim from `server/src/candle-spread/backtest-baselines.csv` as rebuilt 2026-10-07 on commit `43c7678`
+(G placement, ladder opens, 1-tick-through covers booked AT their limit, resting floor raises, governed
+open walks, 10-min re-strike, give-up by width, floor raise spreads-first 3:1, v7-10 cap $1,750).
+Remaining known model limits: option prices are Black-Scholes with bucketed skew, not real quotes, and fills
+are judged on 5-minute bars. Historical measurements are kept only
 where they explain a current design choice, and are dated.
 
 ---
@@ -37,30 +37,29 @@ where they explain a current design choice, and are dated.
 
 Source: the `FAMILIES` array, `index.js:176-217` (entries at `:199-216`).
 
-### Baselines — placeholders until the rebuild
+### Baselines
 
 Headline per governed variant (`AVG terminal/day $` from `backtest-baselines.csv`):
 
 | | 10W | 20W | 40W |
 |---|---|---|---|
-| v0 | 1085 | 1629 | 1671 |
-| v1 | 1235 | 1688 | 1842 |
-| v2 | 1079 | 1594 | 1601 |
-| v3 | 1124 | 1613 | 1823 |
-| v4 | 1262 | 1831 | 1855 |
-| v5 | 1419 | 1980 | 2334 |
-| v6 | 1612 | 2279 | 2860 |
-| v7 | 1655 | 2726 | 2170 |
-| v8 | 1371 | 1012 | 674 |
-| v9 | 1845 | 2524 | 2319 |
+| v0 | 1073 | 1725 | 1729 |
+| v1 | 873 | 1824 | 1811 |
+| v2 | 896 | 1746 | 1635 |
+| v3 | 1037 | 1630 | 1727 |
+| v4 | 1195 | 1641 | 1659 |
+| v5 | 1339 | 2060 | 2232 |
+| v6 | 1239 | 2347 | 2713 |
+| v7 | 1712 | 2682 | 2195 |
+| v8 | 1431 | 1156 | 554 |
+| v9 | 1805 | 2336 | 2335 |
 
 Each family file carries the fuller per-variant block (total, avg/day, worst day, win %, maxDD30, ret/maxDD30).
 
-**Source.** Rebuilt 2026-10-06 on `0c24886`, the config the server will trade: placement G, re-strike
-timeout (`e5691f2`), floor raise spreads-first on every variant (`c01b8ed`/`46b3a6f`), give-up allowance by
-width and the loss-cap guard on raises (`0c24886`). Fleet (50 governed + cATM) avg/day went 62,645 →
-87,016 against the 10-05 rebuild; most of that is floor raise, whose hedges book at modelled mid + 2 ticks
-— treat it as optimistic until live raise fills are measured. **The fill model matters more than any of those:** baselines now use **ladder
+**Source.** Rebuilt 2026-10-07 on `43c7678`, the config the server will trade. Honest-fill fixes of
+2026-10-06 (`8f10006`): a simulated order books AT its limit, never better (live vs simulated v7-10 on the
+same 8 positions had been +$7 vs +$765); backtest floor raises rest as limit orders (~70% fill) instead of
+filling on the bar they are planned; open-ladder steps are governor-checked. **The fill model matters more than any of those:** baselines now use **ladder
 opens + 1-tick-through covers** (`build-backtest-baselines.js:28-35`; `--openFillModel immediate`
 reproduces the old model). The old instant-open baselines overstated the fleet roughly 2× (fleet
 231,417 → 108,090 $/day on the 2026-10-05 rebuild, experiments log). Never compare a new number to a
@@ -207,7 +206,7 @@ at-risk debit (`trader.js:763-875`).
   | v4 | 2,000 | 4,500 | 7,000 | 4,500 | 7,500 (ceiling) |
   | v5 | 1,500 | 4,000 | 7,500 (ceiling) | 4,500 | 7,500 |
   | v6 | 2,000 | 4,500 | 7,500 (ceiling) | 7,000 | 7,500 (ceiling) |
-  | v7 | **1,500** | 6,500 | 6,000 (floor) | 6,500 | 7,000 |
+  | v7 | **1,750** | 6,500 | 6,000 (floor) | 6,500 | 7,000 |
   | v8 | 1,500 | 3,000 (floor) | 6,000 (floor) | 7,000 (untuned generic; lossTarget 5,000) | 6,000 (floor) |
   | v9 | 2,500 | 4,500 | 7,500 | 6,500 | 7,500 |
 
@@ -233,13 +232,15 @@ at-risk debit (`trader.js:763-875`).
   `CANDLE_SPREAD_FLOOR_RAISE` = `all` default / `sim` (all but the armed one) / `off`). Planner
   `floor-raise.js` is shared by both engines. Every 15 min, up to 2 structures per pass, ≤ 8/day
   (`trader.js:1252-1360`), searching single longs, 10/20-wide verticals and 10/20-wing flies inside a
-  2σ expected-move band, priced at **mid + 2 ticks**. Objective **`spreadFirst`** at **2:1**: verticals
+  2σ expected-move band, priced at **mid + 2 ticks**. Objective **`spreadFirst`** at **3:1**: verticals
   and longs may fix a valley on their own, scored on the lowest point of the valley's *outward* region out
   to the book's tail; only when none qualifies may anything (flies included) be bought, and only if it
   raises the band's lowest point (`pickBestMulti`, `floor-raise.js:208-217`). Negative valleys only while
   any exist. **Never pushes a locked profit (global floor ≥ 0) below zero; never pushes the global floor
-  past −lossMax** (or deeper if already past) (`floor-raise.js:189-190`). Measured 765 days at 2:1: fleet
-  locked-profit days 33.7% → 38.0%, closing floor −1,293 → −932 (experiments log, 2026-10-06).
+  past −lossMax** (or deeper if already past) (`floor-raise.js:189-190`). Measured 765 days, honest fills
+  (2026-10-06): off / 2:1 / **3:1** fleet locked-profit days 30.6 / 34.6 / **35.6%**, closing floor
+  −1,467 / −1,152 / **−1,069**, avg/day 62.8k / 79.0k / **84.5k**. On v7-10 it trades floor for profit:
+  locked days 51.8% → 44.9%, avg/day 1,177 → 1,630, maxDD30 −3,345 → −4,644 (user chose to trade it).
 - **Floor ratchet** — built, **off** (`RATCHET_LEVELS` all null, `index.js:1003`); measured −$1.75M and
   rejected 2026-09-16. Env-armable for a re-test.
 
@@ -279,7 +280,10 @@ v2-10 and v6-10 carry flies, so only v1-10 is free of every experiment (`index.j
   ~neutral (no change; user deferred fly decisions).
 - **2026-10-05** — realistic fill model (ladder opens, 1-tick covers) adopted for baselines; placement G,
   re-strike timeout, sim-fill realism and the `cheapOutlier` gate shipped.
-- **2026-10-06** — floor raise (spreadFirst, 2:1) on every variant; give-up allowance by width.
+- **2026-10-06** — floor raise (spreadFirst) on every variant; give-up allowance by width; fills at the
+  limit; resting raises in the backtest; open-ladder governor check.
+- **2026-10-07** — floor raise 3:1; v7-10 cap $1,500 → $1,750 (10W cap sweep with raises on: +$82/day,
+  maxDD30 −4,644 → −4,188, worst day −1,490 → −1,745).
 
 ---
 
@@ -288,7 +292,7 @@ v2-10 and v6-10 carry flies, so only v1-10 is free of every experiment (`index.j
 | # | Finding | Kind |
 |---|---|---|
 | 1 | Continuous covering still runs before the reversal/proactive steps and they skip any position with a cover working (`trader.js:1511-1576`), so on unarmed families (all but v3) the signal-driven covers mostly do not place orders; the signal still cancels working opens, resets the stance and drives the opposite open. `coverPriorOnOpen` (cover a PRIOR position when a new one opens — the 2026-09-09 reading of "continuous cover") exists only in the backtest (`backtest-v6-5m.js:635-642`), set by no variant; `coverTiming: 'each-candle'` is still a placeholder (`trader.js:1765-1767`). Roadmap #1 priority of 2026-09-09; not decided. | Open decision |
-| 2 | **Open-ladder raises are not governor-checked.** The open is gated at its placed limit; each walk step (`trader.js:2970-3068`) adds cost unchecked. Cover raises got this check in `87f7697`; opens did not. Found 2026-10-04 (ladder sweep breaches: v7-10 1 day at −$1,504 vs $1,500). | **Confirmed gap**, real-money path |
+| 2 | ~~Open-ladder raises are not governor-checked.~~ **Fixed `8f10006`:** a walk step that would push the floor down and through lossMax is refused (live `open-reprice-governor`, backtest `walkGovBlocked`). | Fixed |
 | 3 | **Give-up vs placement G.** G can place the short leg one strike OTM. A bull whose short is ~10 points above spot is already ~10 points "through" its short strike at birth, so give-up can fire on the first cover. Flagged in `77a8224` ("fires almost at once"); the 10-point trigger was kept on the 2026-10-05/06 sweeps. Behaviour of OTM-short placements under give-up not separately measured. | Suspected interaction |
 | 4 | **Cover-to-stack parity.** Live, cover-to-stack runs only when a legacy cap blocks an open (`trader.js:1729`; the governor branch at `:1712` comes first and just skips). The backtest also runs `lockDeepWinners` when the governor blocks (`backtest-v6-5m.js:1289-1293`). Inert where continuous covers exist on everything; can differ on v3 (risk-armed). | Suspected live/backtest drift (code-read, not measured) |
 | 5 | Give-up and the cover ladder in the sub-bar worker read the **last candle's** NDX (`index.js:2180-2182`), so the 10-point test can be up to 5 min stale between bars. | Documented limitation |
