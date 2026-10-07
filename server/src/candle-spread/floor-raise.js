@@ -110,7 +110,7 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
 //         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
 //   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard }) {
   const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
@@ -146,6 +146,20 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
     if (!pr || !(pr.debit > 0)) continue;
     const cost = pr.debit * 100 * (qty || 1);
     if (cost > budget) continue;
+    // NEVER FIGHT THE TREND (sideGuard, 2026-10-07): in a bull trend a hedge may not lower the floor to the
+    // RIGHT of spot (higher strikes) — a put hedge pays nothing there and drops the whole right side by its
+    // premium; in a bear trend, the mirror on the left. A hedge that LIFTS the trend-threatened side (a call
+    // spread over a book short the rally) passes. dir 0 / no guard = no bias.
+    if (sideGuard && sideGuard.dir && sideGuard.spot != null) {
+      const onSide = (x) => (sideGuard.dir > 0 ? x >= sideGuard.spot : x <= sideGuard.spot);
+      let before = Infinity, after = Infinity;
+      for (let j = 0; j < xs.length; j++) {
+        if (!onSide(xs[j])) continue;
+        before = Math.min(before, base[j]);
+        after = Math.min(after, base[j] + payoff(c.legs, xs[j], qty) - cost);
+      }
+      if (Number.isFinite(before) && after < before - 1e-9) { if (sideGuard.blocked) sideGuard.blocked.n++; continue; }
+    }
     if (byValley) {
       const pay = xs.map((x) => payoff(c.legs, x, qty));
       // One entry per (candidate, valley) it fixes at the required ratio — the valley ORDER is decided below.

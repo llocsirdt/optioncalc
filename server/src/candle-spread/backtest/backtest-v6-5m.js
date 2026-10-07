@@ -399,6 +399,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
   let guPrev15 = null;
+  // TREND STATE (trend-state.js, 2026-10-07): opts.giveUpTrend / opts.floorRaiseTrend name a definition
+  // ('A' = 15m + completed hourly, the user's choice; '15m', 'AHH', 'Af', 'AfBreak', 'H' = the controls).
+  // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
+  const TS = require('../trend-state');
+  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock) ? TS.makeTracker() : null;
+  let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const coverAtLimit = opts.simFillAtLimit === true;
@@ -605,6 +611,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
 
   for (let i = 0; i < bars.length; i++) {
+    if (trendStep) trendCtx = trendStep(bars[i].analysis, bars[i].dt);
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
     // next RTH bar's prior (bars[i-1]) is the real continuous-24h prior — matches live's true continuity.
     if (rthOnly && !inRth(bars[i].dt)) continue;
@@ -907,6 +914,14 @@ function runDay5m(bars, signalFn, opts = {}) {
         const brk = pos.side === 'bull' ? guRev.downBreak : guRev.upBreak;
         if (brk) giveUp = true;
       }
+      // TREND URGENCY (opts.giveUpTrend): a position FIGHTING the trend is not given the patient ladder — it
+      // goes to the give-up price (break-even + allowance, at most the mark + a tick) at once. 2026-10-07: two
+      // v7-10 bears sat 20-25 min at a ladder $0.30-0.60 under a market trading at break-even while the 15m
+      // turned up, then rode to settle at -$1,008.
+      if (opts.coverGiveUp && opts.giveUpTrend && trendCtx && TS.against(pos.side, TS.state(trendCtx, opts.giveUpTrend))) {
+        if (!giveUp) guTrendFires++;
+        giveUp = true;
+      }
       if (giveUp) pos._gu = true;
       // ⛔ MEASURED AND REJECTED 2026-09-22 — kept only so the measurement is reproducible. Do not enable,
       // and do not re-measure without reading the experiments-log entry first. 922 days, 8 variants, every
@@ -1060,6 +1075,17 @@ function runDay5m(bars, signalFn, opts = {}) {
     // curve the market can plausibly reach; settlement payoffs are exact (piecewise-linear at strikes).
     // 2026-10-05 v7-10: a 31060/31080/31100 put fly at ~\$2.93 mid would have lifted the 31070-31090 valley
     // by ~\$1,700 at a 31076 settle.
+    // NEVER FIGHT THE TREND for floor raises (opts.floorRaiseTrend): in a bull trend no hedge may lower the
+    // floor right of spot, in a bear trend left of it. PERMISSION to hedge against the trend
+    // (opts.floorRaiseTrendPermit 'beWrong'): the last closed bar's signal was a be-wrong reversal. A trend
+    // that is no longer aligned (state 0) carries no bias at all.
+    const frSideGuard = (spotNow) => {
+      if (!opts.floorRaiseTrend || !trendCtx) return null;
+      const dir = TS.state(trendCtx, opts.floorRaiseTrend);
+      if (!dir) return null;
+      if (opts.floorRaiseTrendPermit === 'beWrong' && guSig && /^be-wrong/.test(String(guSig.reason || ''))) return null;
+      return { dir, spot: spotNow, blocked: frTrendBlocked };
+    };
     if (frWorking.length) {
       const ivForW = volFn(iv);
       const markAt = (legs, u) => { let m = 0; for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, u, l.strike, tau, ivForW(l.type, l.strike)); return m; };
@@ -1107,6 +1133,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           const gNow = floorOf(null);
           const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
             minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null,
+            sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
           frBlockedLocked += blockedLocked;
@@ -1209,7 +1236,13 @@ function runDay5m(bars, signalFn, opts = {}) {
     // per-side held state (uncovered positions on each side) + legacy single heldDir for v4-v6.
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
-    const sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen, directionality: directionalityAt(i) });
+    let sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen, directionality: directionalityAt(i) });
+    // OPEN TREND BLOCK (opts.openTrendBlock = a trend-state definition; backtest-only control, 2026-10-07): an open
+    // AGAINST the trend is dropped (its cover side still acts). The attribution study says counter-trend opens
+    // make money on average; this arm measures what strictly refusing them costs or saves at book level.
+    if (opts.openTrendBlock && sig && sig.openSide && trendCtx && TS.against(sig.openSide, TS.state(trendCtx, opts.openTrendBlock))) {
+      sig = { ...sig, openSide: null, reason: `${sig.reason} [trend-blocked]` }; openTrendBlocked++;
+    }
     guSig = sig;
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
@@ -1581,7 +1614,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpPos: st.positions.filter((p) => p._gu).length,
     giveUpCovered: st.positions.filter((p) => p._gu && p.covered).length,
     floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked,
-      placed: frResting ? frPlaced : frCount, expired: frExpired } : null,
+      placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n } : null,
+    giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
+    openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which

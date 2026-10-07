@@ -89,7 +89,9 @@ function optsFor(v, env) {
     if (v.giveUpPoints != null) o.giveUpPoints = v.giveUpPoints;
     if (v.giveUpMaxLoss != null) o.giveUpMaxLoss = v.giveUpMaxLoss;
     if (v.giveUpTrigger != null) o.giveUpTrigger = v.giveUpTrigger;   // 'points' | 'rev5' | 'rev5c' | 'rev15' | 'rev15c'
+    if (v.giveUpTrend != null) o.giveUpTrend = v.giveUpTrend;   // trend-state definition: urgent cover when fighting it
   }
+  if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
   // the 2026-09-09 CSV — the contract guard caught it on the first regeneration after the fact.
@@ -118,7 +120,8 @@ function optsFor(v, env) {
   if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
   for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',
-    'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric']) if (v[k] != null) o[k] = v[k];
+    'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
+    'floorRaiseTrend', 'floorRaiseTrendPermit']) if (v[k] != null) o[k] = v[k];
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',

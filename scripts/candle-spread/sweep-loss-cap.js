@@ -159,7 +159,29 @@ const GU_TRIGS = process.argv.includes('--giveUpTriggers') ? [
   ['rev 5m', { giveUpTrigger: 'rev5' }], ['rev 5m close', { giveUpTrigger: 'rev5c' }],
   ['rev 15m', { giveUpTrigger: 'rev15' }], ['rev 15m close', { giveUpTrigger: 'rev15c' }],
   ['signal reversal', { giveUpTrigger: 'signal' }], ['be-wrong only', { giveUpTrigger: 'beWrong' }]] : [];
-if (GU_TRIGS.length) {
+// --trendArms (2026-10-07): NEVER FIGHT THE TREND. Every arm runs the current roster (floor raise B 3:1, give-up
+// points-10 with the by-width allowance) plus: the floor-raise side guard under each trend definition; the
+// guard + a be-wrong permit; urgent cover for a position fighting the trend (allowance as rostered, +2.5%, 10%);
+// both together; and the strict open block as a control. Definitions: A = 15m + completed hourly (the user's),
+// AHH (+ hourly higher high), Af (+ forming hourly), 15m, H (hourly only).
+const GU_BUMP = (w, add) => Math.min(0.2, (w >= 40 ? 0.10 : w >= 20 ? 0.075 : 0.05) + add);
+const TREND_ARMS = process.argv.includes('--trendArms') ? [
+  ['base', () => ({})],
+  ['hedge A', () => ({ floorRaiseTrend: 'A' })], ['hedge AHH', () => ({ floorRaiseTrend: 'AHH' })],
+  ['hedge Af', () => ({ floorRaiseTrend: 'Af' })], ['hedge 15m', () => ({ floorRaiseTrend: '15m' })],
+  ['hedge H', () => ({ floorRaiseTrend: 'H' })],
+  ['hedge A +bw permit', () => ({ floorRaiseTrend: 'A', floorRaiseTrendPermit: 'beWrong' })],
+  ['cover A', () => ({ giveUpTrend: 'A' })], ['cover A +2.5%', (r) => ({ giveUpTrend: 'A', giveUpMaxLoss: GU_BUMP(r.spreadWidth, 0.025) })],
+  ['cover A 10%', () => ({ giveUpTrend: 'A', giveUpMaxLoss: 0.10 })],
+  ['cover Af', () => ({ giveUpTrend: 'Af' })], ['cover 15m', () => ({ giveUpTrend: '15m' })],
+  ['hedge A + cover A', () => ({ floorRaiseTrend: 'A', giveUpTrend: 'A' })],
+  ['hedge Af + cover Af', () => ({ floorRaiseTrend: 'Af', giveUpTrend: 'Af' })],
+  ['open-block A (control)', () => ({ openTrendBlock: 'A' })],
+] : [];
+if (TREND_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of TREND_ARMS) JOBS.push({ variant: run.variant, rung: `trend ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+} else if (GU_TRIGS.length) {
   for (const run of RUNS) for (const [name, over] of GU_TRIGS) JOBS.push({ variant: run.variant, rung: `giveUp ${name}`,
     // floorRaise OFF explicitly: the roster turns it on by default, and this sweep measures give-up alone.
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: { floorRaise: false, ...over } });
@@ -309,6 +331,9 @@ function measure(job) {
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
+    raiseTrendBlockedPerDay: Math.round(res.reduce((a, r) => a + ((r.floorRaise && r.floorRaise.trendBlocked) || 0), 0) / days.length * 100) / 100,
+    giveUpTrendFiresPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpTrendFires || 0), 0) / days.length * 100) / 100,
+    openTrendBlockedPerDay: Math.round(res.reduce((a, r) => a + (r.openTrendBlocked || 0), 0) / days.length * 100) / 100,
     giveUpCoveredPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpCovered || 0), 0) / days.length * 100) / 100,
     giveUpsPerDay: Math.round(res.reduce((a, r) => a + (r.giveUps || 0), 0) / days.length * 100) / 100,
     nakedPerDay: Math.round(res.reduce((a, r) => a + (r.naked || 0), 0) / days.length * 100) / 100,

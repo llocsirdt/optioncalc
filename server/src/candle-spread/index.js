@@ -6,6 +6,7 @@
  */
 const store = require('./store');
 const trader = require('./trader');
+const TS = require('./trend-state');
 const om = require('./order-manager');
 const BR = require('./book-reconcile');   // does the strategy's book match the orders that really filled?
 const SC = require('./strategy-control');   // which variants trade, in what mode, right now (S3-backed)
@@ -1808,6 +1809,8 @@ function buildEngineDeps(run, live) {
       fillSource: fillSourceFor(run),
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
+      // Urgent cover for a position fighting the trend (trend-state definition name, or null = off).
+      giveUpTrend: run.giveUpTrend || null,
       // Floor raise follows the CURRENT roster (and its env kill switch) even inside a sealed session —
       // trader.raiseFloor merges this over the record's frozen config. floorRaise is always explicit so
       // switching it off takes effect at once.
@@ -1995,6 +1998,9 @@ async function processGroup(runs, kind) {
   // null it. Falls back to null only if there's genuinely no warm prior (thin/just-started data).
   const prev = ab.analysisAt(series, T - STEP_MS);
   const priorA = prev.warm ? prev.A : null;
+  // TREND STATE context (15m + completed/forming hourly) from the same signal series — trend-state.js.
+  let trendCtx = null;
+  try { trendCtx = TS.contextFromSeries(series, T); } catch (e) { console.error('[candle-spread] trend context failed:', e && e.message); }
 
   // PRICING underlying (strike centering). Single-instrument: A's own 5m close. Split (signal≠price):
   // the price instrument's just-closed 5m close.
@@ -2096,7 +2102,7 @@ async function processGroup(runs, kind) {
       const replaceOrder = makeReplaceOrder(run, record);
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
         getLeg, placeOrder, replaceOrder, cancelOrder: makeCancelOrder(run, record),
-        A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol,
+        A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol, trendCtx,
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs

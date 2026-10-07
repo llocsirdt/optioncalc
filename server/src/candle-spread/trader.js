@@ -26,6 +26,7 @@ const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier 
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');
+const TS = require('./trend-state');   // never fight the trend: 15m + hourly state, shared with the backtest
 const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
@@ -1249,7 +1250,20 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
 //
 // One working raise at a time (a pending one already addresses the floor it was planned for), re-planned
 // every floorRaiseEveryMin minutes, rides the shared hedge pipeline (kind 'raise': TTL, broker fills, cancel).
-async function raiseFloor(st, cfg, deps, decisions, candleTime) {
+// NEVER FIGHT THE TREND for floor raises (cfg.floorRaiseTrend = a trend-state definition): in a bull trend no
+// hedge may lower the floor RIGHT of spot, in a bear trend LEFT of it (floor-raise.js sideGuard). Permission to
+// hedge against the trend (cfg.floorRaiseTrendPermit 'beWrong'): this candle's signal is a be-wrong reversal.
+// A trend that is not aligned (state 0) carries no bias. 2026-10-07: 379 of 435 raises fleet-wide were
+// DOWNSIDE hedges bought while the 15m trend was up; v7-10's two cost $633 and sank its floor to -$1,731.
+function raiseSideGuard(st, cfg, sig, spot, blocked) {
+  if (!cfg.floorRaiseTrend || !st.trendCtx) return null;
+  const dir = TS.state(st.trendCtx, cfg.floorRaiseTrend);
+  if (!dir) return null;
+  if (cfg.floorRaiseTrendPermit === 'beWrong' && sig && /^be-wrong/.test(String(sig.reason || ''))) return null;
+  return { dir, spot, blocked };
+}
+
+async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   // LIVE SETTINGS, NOT THE SEALED RECORD (2026-10-07). A record's config is frozen at its first event, so
   // a floor-raise rollout deployed mid-session did nothing until the next day, and the
   // CANDLE_SPREAD_FLOOR_RAISE kill switch could not stop a session under way. Like deps.lossMax, the
@@ -1265,6 +1279,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
   st.raiseCount = st.raiseCount || 0; st.raiseSpent = st.raiseSpent || 0;
   const maxPerDay = cfg.floorRaiseMaxPerDay != null ? cfg.floorRaiseMaxPerDay : 8;
   const pend = pendingHedges(st, 'raise', cfg.quantity);
+  const trendBlocked = { n: 0 };
   if (pend.n > 0 || st.raiseCount >= maxPerDay) return 0;
   st.raiseLastEpoch = nowMs;
 
@@ -1319,12 +1334,18 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime) {
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
       floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null,
+      sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
       note: 'refused: would push a locked profit below zero' });
-    if (!best) break;
+    if (!best) {
+      if (trendBlocked.n) decisions.push({ action: 'raise-blocked-trend', count: trendBlocked.n,
+        trend: TS.state(st.trendCtx, cfg.floorRaiseTrend), ctx: st.trendCtx,
+        note: 'refused: would lower the floor on the side the trend is moving toward' });
+      break;
+    }
     // A PAIR objective returns a companion: both are placed (each its own order, same pass).
     let stop = false;
     for (const h of companion ? [best, companion] : [best]) {
@@ -1404,6 +1425,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   //     per-side held state in, { openSide, cover | coverSide } out. Everything below (open/cover/
   //     resting-fill machinery) is SHARED. See [[project_candle_spread_live_order_wiring]].
   let openSide = null, coverSet = [], portedSig = null;
+  // The trend context is computed once per candle (index.js, from the signal series) and KEPT on the state:
+  // the 30s sub-bar worker has no `A`, and give-up urgency must read the same trend between candles.
+  if (deps && deps.trendCtx) st.trendCtx = deps.trendCtx;
   if (ported) {
     const heldBull = st.positions.some(p => p.filled && p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.filled && p.side === 'bear' && !p.covered);
@@ -1807,7 +1831,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // buy OTM premium to bank a peak (late-day economics), a fly sells the body to fund its wings and
   // repairs a valley (early/mid-day economics). Both are ungated by the governor for the same reason.
   await convertFlies(st, cfg, deps, decisions, candleTime);
-  await raiseFloor(st, cfg, deps, decisions, candleTime);
+  await raiseFloor(st, cfg, deps, decisions, candleTime, portedSig);
 
   // FLOOR RATCHET — record the bar's high-water floor LAST, once every floor-moving action above has run.
   // Placed here rather than at the open gate on purpose: the open on the next bar is then measured against
@@ -3244,13 +3268,17 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       const pts = deps.giveUpPoints != null ? deps.giveUpPoints : 10;
       // a bull loses as price falls back BELOW its short strike; a bear as price rises above it
       const through = pos.side === 'bull' ? (pos.shortStrike - underlying) : (underlying - pos.shortStrike);
-      if (through >= pts) {
+      // TREND URGENCY (deps.giveUpTrend): a position FIGHTING the trend skips the patient ladder and goes to
+      // the give-up price at once — the 2026-10-07 bears sat 20-25 min under a market at break-even.
+      const trendAgainst = !!deps.giveUpTrend && TS.against(pos.side, TS.state(st.trendCtx, deps.giveUpTrend));
+      if (through >= pts || trendAgainst) {
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = round2(L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick));   // round2 AFTER, as every other send site
         if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
-            through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05 }, st);
+            through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05,
+            ...(trendAgainst && through < pts ? { trigger: 'trend' } : {}) }, st);
           if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market
@@ -3266,6 +3294,11 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     }, opts);
     // Gate on the ladder ESCALATING, not on any price wiggle. Bounds this to at most `steps` replaces
     // per order per day; the minMove guard below covers the pinned-to-mark case.
+    // NEVER WALK A COVER DOWN. The ladder only ever concedes price; a cover already above the ladder's own
+    // limit (give-up raised it) stays where it is. 2026-10-07 v7-10: whenever the cover's quote was briefly
+    // unreadable the give-up step was skipped and the ladder pulled the order from $5.20 back to $4.70 —
+    // dozens of replaces at Schwab, and near the money it would have walked away from a fill.
+    if (next.limit < pc.target - 1e-9) continue;
     const stepChanged = pc.ladderStep == null || next.step !== pc.ladderStep;
     if (!LAD.shouldReprice(pc.target, next.limit, tick, { stepChanged, spreadWidth: W, minMoveFrac: deps.ladderMinMoveFrac })) continue;
     const prevStep = pc.ladderStep;
