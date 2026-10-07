@@ -754,7 +754,10 @@ const TUNED_CAPS = new Map([
   //   v8-40  $6,000 -> $4,000   costs  $3,601 (0.9%)          for ret/DD  10.1 ->  11.0, maxDD -$35,238.
   // W=10
   ['v5-10', 1500],
-  ['v7-10', 1500],
+  // RAISED 2026-10-06 $1,500 -> $1,750 (user OK): floor raise spends cap room and blocked 35% more opens.
+  // 765-day sweep, floor raise 3:1 + honest fills: $1,750 = +$82/day (+5%), maxDD30 -4,644 -> -4,188 (the
+  // best of 1,500-3,000), worst day -1,490 -> -1,745. $2,000 earned no more and maxDD -5,113.
+  ['v7-10', 1750],
   ['v8-10', 1500],
   ['v1-10', 2000],
   ['v4-10', 2000],
@@ -834,7 +837,9 @@ function applyFloorRaise(v) {
   if (FLOOR_RAISE_MODE === 'off' || v.floorRaise != null) return;
   if (FLOOR_RAISE_MODE !== 'all' && v.variant === ARMED_VARIANT) return;
   v.floorRaise = true;
-  v.floorRaiseMinRatio = 2;
+  // 3:1 (user, 2026-10-06): under honest fills (at-limit, resting raises) 3:1 beat 2:1 on every floor metric
+  // and on P&L at every width — fleet locked days 34.6 -> 35.6%, avg/day 79.0k -> 84.5k, maxDD -35.1k -> -33.5k.
+  v.floorRaiseMinRatio = 3;
   // SPREADS FIRST (objective B) on EVERY variant — the user's choice 2026-10-06: offset spreads fix a valley
   // and lift the tail beyond it; when none qualifies, any structure (flies included) may still raise the
   // book's lowest point. 765-day sweep at 2:1: fleet locked-profit days 33.7% -> 38.0%, closing floor
