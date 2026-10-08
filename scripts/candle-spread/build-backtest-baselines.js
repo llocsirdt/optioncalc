@@ -206,6 +206,12 @@ function computeVariant(run) {
   // RISK/POTENTIAL metrics averaged across days: risk-curve extremes + trades/day + real capital deployed.
   const avgBestCase = mean(results.map(r => r.bestCase));
   const avgWorstCase = mean(results.map(r => r.worstCase));
+  // LOCKED-FLOOR DAYS — the user's headline (2026-10-08): how often a day ENDS with a positive book floor, i.e.
+  // a profit no settlement can take away. Traded days only (a day with no positions has floor 0 by default).
+  const traded = results.filter(r => r.lock && r.opens > 0);
+  const lockedDays = traded.filter(r => r.lock.endBookFloor > 0).length;
+  const lockedPct = traded.length ? lockedDays / traded.length : null;
+  const avgEndFloor = traded.length ? mean(traded.map(r => r.lock.endBookFloor)) : null;
   const avgTerminalPotential = mean(results.map(r => r.avgTerminalPotential));
   const avgTradesPerDay = mean2(results.map(r => r.opens));
   const avgPeakCapital = mean(results.map(r => (r.capital ? r.capital.peakReal : 0)));
@@ -246,7 +252,7 @@ function computeVariant(run) {
     offsetSpent: results.reduce((a, r) => a + r.governor.offsetSpent, 0),
     opensBlocked: results.reduce((a, r) => a + r.governor.blocked, 0),
   } : null;
-  return { label: run.variantLabel, daily, dates: days.map(d => d.date), ...s, avgBestCase, avgWorstCase, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov, wings: wingAgg };
+  return { label: run.variantLabel, daily, dates: days.map(d => d.date), ...s, avgBestCase, avgWorstCase, lockedPct, lockedDays, tradedDays: traded.length, avgEndFloor, avgTerminalPotential, avgTradesPerDay, avgPeakCapital, avgDeployedCapital, maxDD7, maxDD30, widthNorm, profitScore, riskScore, efficiency, returnOnCapital, governor: gov, wings: wingAgg };
 }
 
 function printRow(run, v) {
@@ -335,6 +341,8 @@ function writeSummaryCsv(file) {
   const lines = [['', ...names].join(',')];
   const row = (label, fn) => lines.push([label, ...names.map(n => fn(S[n]))].join(','));
   row('TOTAL terminal $', s2 => R2(s2.total));
+  row('LOCKED-FLOOR DAYS %', s2 => (s2.lockedPct == null ? '' : Math.round(s2.lockedPct * 1000) / 10));
+  row('AVG end-of-day floor $', s2 => (s2.avgEndFloor == null ? '' : Math.round(s2.avgEndFloor)));
   row('AVG terminal/day $', s2 => R2(s2.avgDaily));
   row('MEDIAN terminal/day $', s2 => R2(s2.median));
   row('RETURN / worst-10day-loss', s2 => s2.w10.v < 0 ? (s2.total / -s2.w10.v).toFixed(1) : '');
