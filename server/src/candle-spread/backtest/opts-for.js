@@ -178,6 +178,9 @@ function optsFor(v, env) {
       // on purpose: the backtest's open models are bar-granular, and the ladder model already cannot fill
       // an open before the NEXT bar — stricter than "one more 30s look".
       'coverFillThroughTicks', 'simOpenFillMinLooks',
+      // simMaxQuoteWidthFrac gates simulated fills on REAL quotes; the backtest prices with Black-Scholes, which
+      // has no quoted width.
+      'simMaxQuoteWidthFrac',
       // minDebitFrac is consumed by the geo builders above (a price floor under capFrac).
       'minDebitFrac', 'maxOtmStrikes']
       .concat(noWings ? WING_KEYS : []));

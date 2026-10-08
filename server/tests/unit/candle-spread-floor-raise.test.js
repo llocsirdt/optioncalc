@@ -136,6 +136,16 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     ok(m.best && m.best.kind === 'vertical', `near the cap a qualifying spread is still bought before a condor (${m.best && m.best.kind})`);
   }
 
+  // ── structure price sanity (2026-10-08 condor) ─────────────────────────────────────────────────────
+  {
+    const L = (side, type, strike) => ({ side, type, strike });
+    const badCondor = [L('long', 'C', 30670), L('short', 'C', 30680), L('short', 'C', 31000), L('long', 'C', 31010)];
+    ok(!FR.structureQuoteSane(badCondor, 0.65, 30990, { sigmaPts: 25 }).ok, 'the 10-08 12:00 condor at $0.65 (NDX inside its body) is a bad quote');
+    const userFly = [L('long', 'P', 31060), L('short', 'P', 31080), L('short', 'P', 31080), L('long', 'P', 31100)];
+    ok([8, 15, 25].every((sg) => FR.structureQuoteSane(userFly, 2.93, 31076, { sigmaPts: sg }).ok), 'the 10-05 fly at $2.93 passes at any vol');
+    ok(!FR.structureQuoteSane([L('long', 'C', 31000), L('short', 'C', 31010)], 10.5, 31100, {}).ok, 'a 10-wide priced above $10 is refused');
+  }
+
   // ── live settings win over the sealed record (mid-session rollout and kill switch) ──────────────
   {
     const sealed = { ...cfg, floorRaise: undefined };   // a record created before floor raise existed

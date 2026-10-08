@@ -1332,6 +1332,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   const tick = cfg.tickIncrement || 0.05;
   const slip = (cfg.floorRaiseSlipTicks != null ? cfg.floorRaiseSlipTicks : 2) * tick;
   const quoted = new Map();   // legs-key -> { mid, ask } for the evidence on the placed one
+  const insaneQuotes = [];   // structures refused by structureQuoteSane this pass (logged once)
   const keyOf = (legs) => legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
   const price = (legs) => {
     let mid = 0, ask = 0;
@@ -1343,6 +1344,9 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       ask += sgn > 0 ? q.ask : -q.bid;
     }
     if (!(mid > 0)) return null;
+    // A structure quoted far below what it pays at the current price is a stale/garbage quote, not a bargain.
+    const sane = FR.structureQuoteSane(legs, round2(mid), spot, { sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2) });
+    if (!sane.ok) { insaneQuotes.push({ legs: keyOf(legs), mid: round2(mid), reason: sane.reason }); return null; }
     quoted.set(keyOf(legs), { mid: round2(mid), ask: round2(ask) });
     return { debit: tickUp(mid + slip, tick) };
   };
@@ -1424,6 +1428,8 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     if (retry) { n--; continue; }   // a bad quote: same step again without that structure
     if (stop) break;
   }
+  if (insaneQuotes.length) decisions.push({ action: 'raise-quote-insane', count: insaneQuotes.length, examples: insaneQuotes.slice(0, 3),
+    note: 'structures skipped: quoted far from what they pay at the current price (stale deep-ITM legs)' });
   return placedN;
 }
 
@@ -2586,6 +2592,12 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   const mark = q.mark;
   const base = { mark, bid: q.bid, ask: q.ask, underlying: deps && deps.underlying != null ? deps.underlying : null };
   if (mark == null || limit == null || !(limit > 0)) return { ...base, fillable: false, fill: null };
+  // WIDE-QUOTE GATE for SIMULATED fills (deps.simMaxQuoteWidthFrac; see resolveRestingCovers): a mid of a market
+  // wider than the structure's own width is not a tradeable price. Real orders (broker) are untouched.
+  if (deps && deps.simMaxQuoteWidthFrac != null && deps.fillSource !== 'broker' && q.bid != null && q.ask != null) {
+    const ks = legs.map((l) => l.strike); const w = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
+    if (w > 0 && (q.ask - q.bid) > deps.simMaxQuoteWidthFrac * w) return { ...base, fillable: false, fill: null, wideQuote: true };
+  }
   // STRUCTURAL GATE, BEFORE the price comparison. `mark > limit` is the only test this used to make, and
   // an IMPOSSIBLE mark passes it trivially: a debit spread marked -32.20 is not above any positive limit,
   // so it read as fillable, and the fill price then clamped to one tick. That is how 154 covers across 55
@@ -3454,6 +3466,19 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
       return round2(cw - mark);
     };
+    // WIDE-QUOTE GATE (simulated fills only; cfg.simMaxQuoteWidthFrac). A mark that is the midpoint of a market
+    // wider than the spread itself is not a price anyone trades at: 2026-10-08 v9-10 booked a cover at 4.20 off
+    // a -4.30 / 12.60 quote on a 10-wide (8% of the week's simulated cover fills came from quotes wider than W).
+    // Keep resting; the next look tries again.
+    if (cfg.simMaxQuoteWidthFrac != null && !(deps && deps.fillSource === 'broker')) {
+      const qq = twinQuoted ? sentQ : quote;
+      const ks0 = (pc.legs || []).map((l) => l.strike);
+      const w0 = ks0.length ? Math.max(...ks0) - Math.min(...ks0) : cfg.spreadWidth;
+      if (qq && qq.bid != null && qq.ask != null && (qq.ask - qq.bid) > cfg.simMaxQuoteWidthFrac * w0) {
+        decisions.push({ action: 'cover-wide-quote', positionId: pos.id, bid: qq.bid, ask: qq.ask, mark, note: 'quote wider than the spread — not a tradeable mid' });
+        continue;
+      }
+    }
     if (creditRest) {
       if (!(creditOffered() >= pc.sentCredit + thru - 1e-9)) continue;   // market has not come up to our ask yet
     } else if (mark > pc.target - thru + 1e-9) {

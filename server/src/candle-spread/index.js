@@ -861,6 +861,9 @@ function applySimFillRealism(v) {
   // Simulated fills (opens, covers, hedges) book AT their limit, never better (2026-10-06: simulated covers
   // +$765 vs live +$7 on the same 8 v7-10 positions, almost all of it booked price improvement).
   if (v.simFillAtLimit == null) v.simFillAtLimit = true;
+  // Simulated fills refuse marks from quotes wider than the structure itself (2026-10-08: 8% of simulated cover
+  // fills, e.g. v9-10's 4.20 off a -4.30/12.60 market). Real orders are unaffected.
+  if (v.simMaxQuoteWidthFrac == null) v.simMaxQuoteWidthFrac = 1.0;
 }
 
 // STALL COVER on every variant (2026-10-08): 15 minutes without a favourable move -> cover at break-even (or
@@ -1832,6 +1835,7 @@ function buildEngineDeps(run, live) {
       fillSource: fillSourceFor(run),
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
+      simMaxQuoteWidthFrac: run.simMaxQuoteWidthFrac != null ? run.simMaxQuoteWidthFrac : null,
       // Urgent cover for a position fighting the trend (trend-state definition name, or null = off).
       giveUpTrend: run.giveUpTrend || null,
       // Stall cover: minutes without a favourable move before the cover goes to break-even (null = off).

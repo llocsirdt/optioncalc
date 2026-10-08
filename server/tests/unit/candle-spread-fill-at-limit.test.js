@@ -46,6 +46,15 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
   const no = trader.markFill(bullCall, 4.5, g, 0.05, { simFillAtLimit: true });
   ok(!no.fillable, 'and a limit the market has not reached still does not fill');
 
+  // ── 1d. wide-quote gate (sim only) ──────────────────────────────────────────────────────────────
+  {
+    const wide = (t, k) => { const q = chain(4.15)(t, k); return q && { ...q, bid: q.mid - 9, ask: q.mid + 9 }; };   // 18-wide market
+    const w1 = trader.markFill(bullCall, 5.5, wide, 0.05, { simFillAtLimit: true, simMaxQuoteWidthFrac: 1 });
+    ok(!w1.fillable && w1.wideQuote, 'a simulated fill off a market wider than the spread is refused');
+    const w2 = trader.markFill(bullCall, 5.5, wide, 0.05, { simFillAtLimit: true, simMaxQuoteWidthFrac: 1, fillSource: 'broker' });
+    ok(w2.fillable, 'real (broker) orders are not gated');
+  }
+
   // ── 1c. roster ───────────────────────────────────────────────────────────────────────────────────
   const runs = CS.buildRuns();
   ok(runs.every((r) => r.simFillAtLimit === true), 'every variant fills at its limit');

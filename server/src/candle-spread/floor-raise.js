@@ -99,6 +99,28 @@ function capAwareRatio({ minRatio, floorMin, gNow, lossMax, width, nearCapFrac, 
   return { minRatio: 0, globalRatio: nearCapRatio != null ? nearCapRatio : 1, floorMin: floorMin != null ? Math.max(floorMin, gNow) : gNow, nearCap: true };
 }
 
+// STRUCTURE PRICE SANITY (2026-10-08). The 2-leg quote gates do not cover 4-leg structures, and the valley-sized
+// menu reaches deep-ITM strikes whose quotes go stale: v7-10 12:00 placed a C30670/30680/31000/31010 condor at
+// \$0.75 (mid 0.65) with NDX inside its 320-point body. Benchmark = the structure's EXPECTED payoff under a
+// deliberately WIDE normal around spot (sigma = max(2 x the expected-move sigma, 40 pts)): wide on purpose, so a
+// peaked fly is not over-valued (the user's 10-05 fly at \$2.93 passes) while a wide plateau priced at a fraction
+// of its value is caught. Refused: mid above the most it can pay, or below minFrac x that expected payoff.
+function structureQuoteSane(legs, mid, spot, { sigmaPts, minFrac = 0.35 } = {}) {
+  if (!(mid > 0) || !(spot > 0)) return { ok: true };
+  const ks = legs.map((l) => l.strike);
+  const maxPay = Math.max(...[spot, ...ks, Math.min(...ks) - 1, Math.max(...ks) + 1].map((x) => payoff(legs, x, 1))) / 100;
+  if (mid > maxPay + 0.05) return { ok: false, reason: `mid ${mid} above the most it can ever pay (${maxPay})` };
+  const sd = Math.max(2 * (sigmaPts > 0 ? sigmaPts : 20), 40);
+  let w = 0, ev = 0;
+  for (let x = spot - 4 * sd; x <= spot + 4 * sd; x += 2.5) {
+    const z = (x - spot) / sd, p = Math.exp(-0.5 * z * z);
+    w += p; ev += p * payoff(legs, x, 1) / 100;
+  }
+  ev /= w;
+  if (ev > 1 && mid < minFrac * ev) return { ok: false, reason: `mid ${mid} far below its expected payoff (${ev.toFixed(2)})` };
+  return { ok: true };
+}
+
 // The full menu for one planning step: the fixed structures plus the ones sized to today's valleys.
 function candidatesFor(lo, hi, incr, xs, base) { return candidates(lo, hi, incr).concat(valleyCandidates(xs, base, incr, lo, hi)); }
 
@@ -347,4 +369,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
