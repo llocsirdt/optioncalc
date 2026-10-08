@@ -3026,6 +3026,7 @@ function listVariants() {
       // or sort them however it likes without the engine holding an opinion about presentation.
       minLock: v.continuousCoverMinLockFrac != null ? v.continuousCoverMinLockFrac : null,
       ladder: v.coverLadder === true,
+      about: FA.describeVariant(v.variant),   // plain-words strategy description (family-about.js)
       giveUp: v.coverGiveUp === true,
       fly: v.flyConvert === true,
     }))
