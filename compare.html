@@ -188,8 +188,6 @@
   /* .tgl sets display:inline-flex, which OVERRIDES the browser default [hidden]{display:none} — so
      el.hidden = true had no visible effect on the toolbar controls. Make hidden win. */
   [hidden] { display:none !important; }
-  /* The action group sits at the far right of the control row and stays together when the row wraps. */
-  .hrow-ctl .actbar { display:inline-flex; align-items:center; gap:6px; margin-left:auto; }
   .cell { user-select:none; -webkit-user-select:none; }
   .cell .cname { font:10px ui-monospace, monospace; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
   .cell .cname b { color:var(--fg); }
@@ -202,8 +200,9 @@
   .cell.is-partial { border-color:#f0b4b2; background:#fffafa; }
   /* Session-open marker. Information, not a warning — it is true all day, so it gets a badge rather than
      a bar, and stays clear of the alarm red so red keeps meaning "something is actually wrong". */
-  /* Toggled-on state for the uncapped button, so its current mode is readable without parsing the label. */
-  #uncBtn.on { background:#e8eef7; border-color:#9fb6d4; color:#24405f; }
+  /* Backtest table: a plain link at the end of the header text row. */
+  header .btlink { font-size:11px; color:#2a5d9f; text-decoration:none; white-space:nowrap; margin-left:auto; }
+  header .btlink:hover { text-decoration:underline; }
   .liveBadge { margin-left:7px; padding:1px 6px; border-radius:3px; background:#2f6f4f; color:#fff;
     font:600 10px/1.6 system-ui,sans-serif; letter-spacing:.4px; vertical-align:middle; cursor:help; }
   #incompleteBanner { margin:0 14px 6px; padding:6px 9px; border:1px solid #f0b4b2; background:#fff5f5;
@@ -269,19 +268,20 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.3</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.4</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
+    <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
   </div>
   <div class="hrow hrow-ctl">
   <label class="tgl"><input type="checkbox" id="syncY"> sync scale</label>
-  <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">overlay backtest</span></label>
-  <button id="uncBtn" title="The -unc twins run the same strategy with the day-loss governor OFF. They measure what the cap costs; they are not tradable candidates.">Show uncapped</button>
+  <label class="tgl" title="draw the OTHER source's curve on top (live vs backtest, same date) — scrub the slider to see where they separate"><input type="checkbox" id="cmpSrc"> <span id="cmpSrcLbl">show backtest</span></label>
+  <label class="tgl" title="The -unc twins run the same strategy with the day-loss governor OFF. They measure what the cap costs; they are not tradable candidates."><input type="checkbox" id="uncChk"> show uncapped</label>
   <span id="srcbar">
       <label class="tgl" id="gridModeWrap" title="BY VARIANT = one day across every strategy · BY DATE = one strategy across the last 4 trading weeks">grid
       <select id="gridMode" style="margin-left:4px">
-        <option value="variant">by variant</option>
-        <option value="date">by date</option>
+        <option value="variant">variant</option>
+        <option value="date">date</option>
       </select>
     </label>
     <label class="tgl" id="dateModeVariantWrap" hidden>strategy
@@ -290,23 +290,10 @@
   <label class="tgl" title="LIVE = the server's recorded shadow runs · BACKTEST = the same strategies replayed over a historical day">source
       <select id="srcSelect" style="margin-left:4px">
         <option value="live">Live runs</option>
-        <option value="backtest">Backtest replay</option>
+        <option value="backtest">Backtest</option>
       </select>
     </label>
     <label class="tgl">date <input type="date" id="replayDate" style="margin-left:4px"></label>
-  </span>
-  <!-- ACTIONS last. These three do not describe WHAT is shown (the toggles and the grid/source/date
-       selectors do that) — they act on it: reload, open elsewhere, expand a panel. Grouping them at the
-       end keeps the row reading left-to-right as "what am I looking at" then "what can I do with it",
-       instead of interleaving a Debug button between two checkboxes. -->
-  <span class="actbar">
-  <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
-    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
-    </svg>
-  </button>
-  <button id="dbgBtn" title="Debug one variant on one day — every order with the mark at placement and the limit sent" onclick="window.open('debug.html?date='+encodeURIComponent(document.getElementById('date')?document.getElementById('date').value:'')+'&src='+encodeURIComponent(SRC),'_blank')">⚙ Debug</button>
-  <button id="btTableBtn">Backtest table ▾</button>
   </span>
   </div>
 </header>
@@ -317,6 +304,12 @@
   <span class="tb-lbl">Time of day</span>
   <input type="range" id="timeSlider" min="0" max="1" value="1" step="1" disabled>
   <span id="timeLabel" class="tb-time">full day</span>
+  <!-- Reload lives in the sticky bar so it is reachable while scrolled into the charts. -->
+  <button id="refresh" class="icon" title="Reload the runs for this date" aria-label="Refresh">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>
+    </svg>
+  </button>
 </div>
 <div class="wrap" id="btWrap" style="display:none">
   <h2>Backtest averages · 765 days <span class="sub">(click a column to sort)</span><span class="sub" id="btRowCount"></span>
@@ -1445,8 +1438,8 @@ function syncModeChrome() {
   if (srcSel) srcSel.closest('.tgl').hidden = GRID_MODE === 'date';
   const cmp = document.getElementById('cmpSrc');
   if (cmp) cmp.closest('.tgl').hidden = GRID_MODE === 'date';
-  const unc = document.getElementById('uncBtn');
-  if (unc) unc.hidden = GRID_MODE === 'date';
+  const unc = document.getElementById('uncChk');
+  if (unc) unc.closest('.tgl').hidden = GRID_MODE === 'date';
   const dLbl = document.querySelector('#srcbar label.tgl:last-of-type');
   if (dLbl) dLbl.firstChild.textContent = GRID_MODE === 'date' ? 'week ending ' : 'date ';
 }
@@ -1605,7 +1598,7 @@ document.getElementById('cmpSrc').addEventListener('change', async (e) => {
   // The overlay draws the OTHER source, so name the one you'd actually get: viewing live runs it
   // overlays backtest, and viewing a backtest replay it overlays live.
   const lbl = document.getElementById('cmpSrcLbl');
-  if (lbl) lbl.textContent = SRC === 'backtest' ? 'overlay live' : 'overlay backtest';
+  if (lbl) lbl.textContent = SRC === 'backtest' ? 'show live' : 'show backtest';
   let navigating = false;
   const load = () => {
     const u = new URL(location.href);
@@ -1674,7 +1667,8 @@ async function ensureVariantCfg() {
   });
   window.addEventListener('resize', close);
 })();
-document.getElementById('btTableBtn').addEventListener('click', async () => {
+document.getElementById('btTableBtn').addEventListener('click', async (e) => {
+  e.preventDefault();
   const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');
   if (wrap.style.display !== 'none') { wrap.style.display = 'none'; btn.textContent = 'Backtest table ▾'; return; }
   const status = document.getElementById('status');
@@ -1697,11 +1691,8 @@ document.getElementById('btTable').addEventListener('click', (e) => {
   renderBtTable();
 });
 document.getElementById('btNormalize').addEventListener('change', renderBtTable);
-document.getElementById('uncBtn').addEventListener('click', () => {
-  showUnc = !showUnc;
-  const b = document.getElementById('uncBtn');
-  b.textContent = showUnc ? 'Hide uncapped' : 'Show uncapped';
-  b.classList.toggle('on', showUnc);
+document.getElementById('uncChk').addEventListener('change', (e) => {
+  showUnc = e.target.checked;
   try { render(); } catch (e) { /* nothing loaded yet */ }
   renderBtTable();
 });

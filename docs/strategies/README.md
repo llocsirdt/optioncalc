@@ -1,3 +1,5 @@
+> Operator settings (env vars, remote control, kill switches): [../SETTINGS.md](../SETTINGS.md)
+
 # Candle-spread strategy families — specification index
 
 **What this is.** One page per strategy FAMILY (v0-v9) describing how it is *meant* to operate, what the
