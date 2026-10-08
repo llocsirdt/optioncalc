@@ -108,8 +108,9 @@ function optsFor(v, env) {
   // value, so leaving the roster's cover value in place would silently override a sweep's generic one).
   if (v.coverFillThroughTicks != null) o.fillThroughTicksCover = v.coverFillThroughTicks;
   if (v.simFillAtLimit != null) o.simFillAtLimit = v.simFillAtLimit;   // covers book AT their limit
-  // A resting cover's working price never walks down — the live rule; on with the realistic fill model.
-  if (v.simFillAtLimit) o.coverNeverLower = true;
+  // A resting cover fills at the price it was RESTING at during the bar (repricing applies from the next bar);
+  // on with the realistic fill model. (coverNeverLower, the first version, overcorrected — kept off.)
+  if (v.simFillAtLimit) o.coverFillAtResting = true;
   // A floor raise is a resting order everywhere a backtest models the live roster (no live analogue knob:
   // live hedges always rest). env.floorRaiseResting === false reproduces the instant-fill model.
   if (v.floorRaise) o.floorRaiseResting = !(env && env.floorRaiseResting === false);

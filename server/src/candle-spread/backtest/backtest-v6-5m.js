@@ -1069,7 +1069,21 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       if (giveUp) giveUps++;
       if (decayed && !giveUp) decayStops++;
-      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= workingTarget - thruCover + 1e-9) {
+      // THE PRICE THAT WAS RESTING DURING THIS BAR (opts.coverFillAtResting; 2026-10-08). A real order fills at the
+      // price it was resting at when the market reached it — not at a price decided from this bar's CLOSE. So the
+      // fill test and the booked price use the working price carried INTO the bar; the price computed above
+      // (ladder, give-up, stall: up OR down) only rests from the NEXT bar. This replaces coverNeverLower, which
+      // overcorrected: it pinned a give-up price after the position recovered and booked it at a loss (40-wide
+      // average lock -\$236/cover). Lowering is allowed — it just cannot be retroactive.
+      // RAISES are immediate (live reprices within ~30 s of a give-up/stall/ladder step, well inside a 5m bar);
+      // LOWERS take effect from the next bar (a resting order cannot fill retroactively at a lower price).
+      let fillAt = workingTarget;
+      if (opts.coverFillAtResting) {
+        const resting = pc._resting != null ? pc._resting : pc.target;
+        fillAt = Math.max(resting, workingTarget);
+        pc._resting = workingTarget;
+      }
+      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= fillAt - thruCover + 1e-9) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
         // removes the offset and can push the BOOK floor down (the 2026-02-21 mechanism). Since we own the
@@ -1086,7 +1100,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         // a worst day of -$710 (eff 21,011), which is what a free-money leak looks like from the outside.
         // AT THE LIMIT (opts.simFillAtLimit): a resting limit fills AT its working price, never better —
         // the bar gapping past it is not price improvement a real order receives (live 2026-10-06).
-        const coverPx = (legs) => coverAtLimit ? roundTick(workingTarget) : roundTick(Math.min(workingTarget, legsMark(legs, S, tau, iv) + TICK));
+        const coverPx = (legs) => coverAtLimit ? roundTick(fillAt) : roundTick(Math.min(fillAt, legsMark(legs, S, tau, iv) + TICK));
         let cLegs = pc.legs, cLimit = coverPx(pc.legs), rc = null;
         if (enforceLegs) {
           rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
