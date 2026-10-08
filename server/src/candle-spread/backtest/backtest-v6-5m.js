@@ -1118,7 +1118,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         const { xs, lo: bandLo, hi: bandHi } = FR.samplePoints(S, bw, legIncr, bookStrikes);
         const base = xs.map((x) => bookAt(x, null));
         const ivForF = volFn(iv);
-        const cands = FR.candidates(bandLo, bandHi, legIncr);
+        // The menu is re-asked each step: valley-sized condors/flies follow the curve as hedges are added.
+        const candsNow = () => FR.candidatesFor(bandLo, bandHi, legIncr, xs, base);
         const price = (legs) => {
           let m = 0;
           for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike));
@@ -1131,7 +1132,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
-          const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands, price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
+          const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: candsNow(), price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
             minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null,
             sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),

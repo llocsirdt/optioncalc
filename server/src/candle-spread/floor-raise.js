@@ -49,6 +49,47 @@ function candidates(lo, hi, incr) {
   return out;
 }
 
+// VALLEY-SIZED STRUCTURES (2026-10-07). The fixed menu above (10/20-wing flies) cannot cover a WIDE valley:
+// v7-10 at 13:50 had a flat 60-point stretch (31060-31120) at -1,538, and the best fly lifted one point of it
+// and sank the rest by its premium. The user's rule: size the fly / condor to the valley AND look a strike or
+// two WIDER, so the cost is absorbed by the rising profit slope beyond the valley's edges.
+//   condor: shorts at the valley edges pushed out 0/1/2 strikes, wings 1 or 2 strikes beyond them
+//   fly:    body at each strike in the valley, wings reaching the far edge + 0/1/2 strikes
+// Both put and call forms (same payoff, different quotes). Generated from the CURRENT curve, so a caller
+// re-asks after each structure it buys. Only valleys that touch the band [lo, hi] are sized.
+function valleyCandidates(xs, base, incr, lo, hi) {
+  const out = [], seen = new Set();
+  const snapDn = (x) => Math.floor(x / incr + 1e-9) * incr, snapUp = (x) => Math.ceil(x / incr - 1e-9) * incr;
+  const add = (kind, legs) => {
+    const k = legs.map((l) => l.side[0] + l.type + l.strike).join(' ');
+    if (!seen.has(k)) { seen.add(k); out.push({ kind, legs, sized: true }); }
+  };
+  // SPANS, not just single valleys: a "wide valley" is often several adjacent lows at the same depth split by
+  // small bumps where earlier tents pay (v7-10 13:50: 31050-31080, 31100, 31120, all at -1,538). A structure
+  // sized to one of them lifts it and sinks the others by its premium; the one that helps spans them all.
+  // So each valley is also joined with the next one or two.
+  const vs = valleys(base).filter((v) => !((lo != null && xs[v.b] < lo) || (hi != null && xs[v.a] > hi)));
+  const spans = [];
+  for (let i = 0; i < vs.length; i++) for (let j = i; j < Math.min(vs.length, i + 3); j++) spans.push({ a: vs[i].a, b: vs[j].b });
+  for (const v of spans) {
+    const a = snapDn(xs[v.a]), b = snapUp(xs[v.b]);
+    for (const T of ['P', 'C']) {
+      const L = (k) => ({ side: 'long', type: T, strike: k }), S = (k) => ({ side: 'short', type: T, strike: k });
+      for (let e = 0; e <= 2; e++) {
+        const s1 = a - e * incr, s2 = b + e * incr;
+        if (s2 > s1) for (const w of [incr, 2 * incr]) add('condor', [L(s1 - w), S(s1), S(s2), L(s2 + w)]);
+        for (let c = a; c <= b; c += incr) {
+          const w = Math.max(c - a, b - c) + e * incr;
+          if (w >= incr) add('fly', [L(c - w), S(c), S(c), L(c + w)]);
+        }
+      }
+    }
+  }
+  return out;
+}
+// The full menu for one planning step: the fixed structures plus the ones sized to today's valleys.
+function candidatesFor(lo, hi, incr, xs, base) { return candidates(lo, hi, incr).concat(valleyCandidates(xs, base, incr, lo, hi)); }
+
 // Settlement value of a leg set at underlying x, in dollars for `qty` contracts.
 function payoff(legs, x, qty) {
   let v = 0;
@@ -222,7 +263,7 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
 function pickBestMulti(args) {
   const obj = args.objective || 'valley';
   if (obj === 'spreadFirst') {
-    const spreads = args.cands.filter((c) => c.kind !== 'fly');
+    const spreads = args.cands.filter((c) => c.kind === 'vertical' || c.kind === 'long');
     const r1 = pickBest({ ...args, cands: spreads, objective: 'valley', liftMetric: 'min' });
     if (r1.best) return r1;
     const r2 = pickBest({ ...args, objective: 'band' });
@@ -246,7 +287,7 @@ function pickBestMulti(args) {
     for (const j of bandIdx) if (base[j] <= floorB + cost) best = Math.max(best, pay[j] - cost);
     if (best > 0) priced.push({ ...c, ...pr, cost, pay, score: best / cost });
   }
-  const top = (fly) => priced.filter((c) => (c.kind === 'fly') === fly).sort((a, b) => b.score - a.score).slice(0, 12);
+  const top = (fly) => priced.filter((c) => (c.kind === 'fly' || c.kind === 'condor') === fly).sort((a, b) => b.score - a.score).slice(0, 12);
   const pool = top(false).concat(top(true));
   const options = [];
   const evalSet = (set) => {
@@ -278,4 +319,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };

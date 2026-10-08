@@ -1329,7 +1329,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     const bookNow = book.concat(hyp);
     const gNow = RC.bookFloor(bookNow, null, 10);
     const spentNow = hyp.reduce((t, h) => t + h.limit * 100 * qty, 0);
-    const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: FR.candidates(bandLo, bandHi, incr), bandLo, bandHi,
+    const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: FR.candidatesFor(bandLo, bandHi, incr, xs, base), bandLo, bandHi,
       price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,

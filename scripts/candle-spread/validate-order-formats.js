@@ -103,6 +103,7 @@ function nextTradingDay() {
   const wingSpread = [leg('long', 'C', farCall), leg('short', 'C', farCall + 20)];
   const nakedWing = [leg('long', 'C', farCall)];
   const fly = [leg('long', 'C', atm - 10), leg('short', 'C', atm), leg('short', 'C', atm), leg('long', 'C', atm + 10)];
+  const condor = [leg('long', 'P', atm - 40), leg('short', 'P', atm - 30), leg('short', 'P', atm + 30), leg('long', 'P', atm + 40)];
   const mkt = (legs) => vMark(legs);
   const SHAPES = [
     { id: 'open-debit', legs: bullOpen, net: 'DEBIT', price: L.roundToTick(mkt(bullOpen), TICK), value: mkt(bullOpen) },
@@ -114,6 +115,7 @@ function nextTradingDay() {
     { id: 'wing-spread', legs: wingSpread, net: 'DEBIT', price: trader.tickUp(q('C', farCall).ask - q('C', farCall + 20).bid, TICK), value: mkt(wingSpread) },
     { id: 'wing-naked', legs: nakedWing, net: 'DEBIT', price: trader.tickUp(q('C', farCall).ask, TICK), value: q('C', farCall).mark },
     { id: 'fly', legs: fly, net: 'DEBIT', price: trader.tickUp(Math.max(0.05, mkt(fly)), TICK), value: mkt(fly), note: 'not on v7-10' },
+    { id: 'condor', legs: condor, net: 'DEBIT', price: trader.tickUp(Math.max(0.05, mkt(condor)), TICK), value: mkt(condor), note: 'floor-raise valley span (2026-10-07)' },
   ].filter((s) => !ONLY || ONLY.includes(s.id));
 
   let failures = 0;

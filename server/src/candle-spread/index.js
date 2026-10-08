@@ -754,18 +754,23 @@ const TUNED_CAPS = new Map([
   //   v0-10  $3,000 -> $1,500   costs $30,068 (3.1% of total) for ret/DD 306.8 -> 379.9, maxDD -$2,473.
   //   v8-40  $6,000 -> $4,000   costs  $3,601 (0.9%)          for ret/DD  10.1 ->  11.0, maxDD -$35,238.
   // W=10
-  ['v5-10', 1500],
+  ['v5-10', 2000],
   // RAISED 2026-10-06 $1,500 -> $1,750 (user OK): floor raise spends cap room and blocked 35% more opens.
   // 765-day sweep, floor raise 3:1 + honest fills: $1,750 = +$82/day (+5%), maxDD30 -4,644 -> -4,188 (the
   // best of 1,500-3,000), worst day -1,490 -> -1,745. $2,000 earned no more and maxDD -5,113.
-  ['v7-10', 1750],
-  ['v8-10', 1500],
+  ['v7-10', 2000],
+  // ALL 10-WIDES AT $2,000 (user, 2026-10-07): one cap for the whole width so a strategy's result is not
+  // skewed by how often ITS cap binds — the families are compared on their signals, not on cap tuning.
+  // Moved: v0/v5/v8-10 1,500 -> 2,000, v7-10 1,750 -> 2,000 (real money), v2/v9-10 2,500 -> 2,000.
+  // v7-10 at 2,000 was measured 2026-10-07 (floor raise 3:1, honest fills): avg 1,702/day vs 1,712 at
+  // 1,750, maxDD30 -5,113 vs -4,188, worst day -1,985 vs -1,745.
+  ['v8-10', 2000],
   ['v1-10', 2000],
   ['v4-10', 2000],
   ['v6-10', 2000],
-  ['v2-10', 2500],
-  ['v9-10', 2500],
-  ['v0-10', 1500],
+  ['v2-10', 2000],
+  ['v9-10', 2000],
+  ['v0-10', 2000],
   // W=20
   ['v3-20', 2500],
   ['v8-20', 2500],

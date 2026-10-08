@@ -85,6 +85,26 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     ok(g >= 0 && r.best == null && r.blockedLocked === 1, `a $200 hedge on a +$${Math.round(g)} locked book is refused (blocked ${r.blockedLocked})`);
   }
 
+  // ── valley-sized menu: spans of adjacent valleys get a condor (v7-10, 2026-10-07 13:50) ─────────────────
+  {
+    // Three lows at -1,538 (31050-31080, 31100, 31120) split by bumps — the shape v7-10 had at 13:50.
+    const xs = []; for (let x = 31000; x <= 31200; x += 10) xs.push(x);
+    const low = new Set([31050, 31060, 31070, 31080, 31100, 31120]);
+    const base = xs.map((x) => (low.has(x) ? -1538 : x === 31090 || x === 31110 ? -1038 : -538));
+    const cands = FR.valleyCandidates(xs, base, 10, 31000, 31200);
+    const tagOf = (c) => c.legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
+    ok(cands.some((c) => c.kind === 'condor' && tagOf(c) === 'lP31040 sP31050 sP31120 lP31130'), 'a condor spanning all three valleys is on the menu');
+    ok(cands.some((c) => c.kind === 'condor' && tagOf(c) === 'lP31030 sP31040 sP31130 lP31140'), 'and one a strike WIDER on each side (cost absorbed by the slope beyond)');
+    ok(cands.some((c) => c.kind === 'fly' && tagOf(c) === 'lP31040 sP31090 sP31090 lP31140'), 'and a fly whose wings reach past the span');
+    const full = FR.candidatesFor(31000, 31200, 10, xs, base);
+    ok(full.length > FR.candidates(31000, 31200, 10).length, 'candidatesFor = the fixed menu + the sized structures');
+    // spreads-first stage 1 must not treat a condor as a spread
+    const pick = FR.pickBestMulti({ xs, base, cands: cands.filter((c) => c.kind === 'condor'), price: () => ({ debit: 1 }), qty: 1, minRatio: 0,
+      budget: Infinity, gNow: -1538, objective: 'spreadFirst', spot: 31150, bandLo: 31000, bandHi: 31200,
+      globalFloorWith: () => -1538 });
+    ok(pick.best && pick.best.kind === 'condor', 'condors are judged in the structures stage, not as spreads');
+  }
+
   // ── live settings win over the sealed record (mid-session rollout and kill switch) ──────────────
   {
     const sealed = { ...cfg, floorRaise: undefined };   // a record created before floor raise existed
