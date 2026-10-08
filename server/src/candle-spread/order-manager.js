@@ -312,6 +312,100 @@ function clearDeadOrderState(record, o) {
   return null;
 }
 
+// ── MANUAL-EDIT ADOPTION ──────────────────────────────────────────────────────────────────────────────
+const legSig = (o) => (o && o.orderLegCollection || []).map((l) => `${l.instruction}:${l.instrument && l.instrument.symbol}:${l.quantity}`).sort().join('|');
+const ADOPT_WINDOW_MS = 5000;         // the successor is entered in the same second the original closed (observed: 0 s)
+const ADOPT_GRACE_MS = 20000;         // give the successor time to appear in the account listing before giving up
+// Successor of a hand-edited order: a broker order on the identical legs/quantity, not already tracked,
+// entered within ADOPT_WINDOW_MS of the original's closeTime. An edited order edited AGAIN is itself REPLACED;
+// follow that chain to the live end (bounded). Returns the order, or null.
+function findSuccessor(orders, orig, known) {
+  let cur = orig;
+  for (let hop = 0; hop < 5; hop++) {
+    const closed = Date.parse(cur.closeTime || '');
+    if (!Number.isFinite(closed)) return null;
+    const sig = legSig(cur);
+    const cands = (orders || []).filter((x) => x && legSig(x) === sig && Number(x.quantity) === Number(cur.quantity)
+      && !known.has(String(x.orderId)) && String(x.orderId) !== String(cur.orderId)
+      && Math.abs(Date.parse(x.enteredTime || '') - closed) <= ADOPT_WINDOW_MS);
+    if (!cands.length) return null;
+    cands.sort((a, b) => Math.abs(Date.parse(a.enteredTime) - closed) - Math.abs(Date.parse(b.enteredTime) - closed));
+    const nx = cands[0];
+    if (String(nx.status).toUpperCase() !== 'REPLACED') return nx;
+    known.add(String(nx.orderId));
+    cur = nx;
+  }
+  return null;
+}
+// Re-point whatever the engine was working under the old id at the adopted order, at its price.
+function repointPosition(record, o, nu) {
+  const st = record.state || {};
+  const price = Number(nu.price);
+  const credit = String(nu.orderType || '').toUpperCase() === 'NET_CREDIT';
+  const width = (legs) => { const ks = (legs || []).map((l) => l.strike).filter((k) => k != null); return ks.length ? Math.max(...ks) - Math.min(...ks) : null; };
+  const r2 = (x) => Math.round(x * 100) / 100;
+  for (const p of st.positions || []) {
+    if (!p) continue;
+    const pc = p.pendingCover;
+    if (pc && String(pc.orderId) === String(o.orderId)) {
+      pc.orderId = nu.orderId;
+      if (credit) { pc.sentCredit = price; const w = width(pc.legs); if (w != null) pc.target = r2(w - price); }
+      else pc.target = price;
+      pc.ladderStep = null;            // the ladder re-takes its step from the price the user set
+      pc.adoptedManualEdit = true;
+      return 'cover';
+    }
+    if (String(p.orderId) === String(o.orderId) && !p.filled && !p.hedge) {
+      p.orderId = nu.orderId;
+      if (credit && p.sentNet === 'CREDIT') { p.sentLimit = price; const w = width(p.legs); if (w != null) p.limit = r2(w - price); }
+      else p.limit = price;
+      p.openLadderStep = null;
+      return 'open';
+    }
+    if (p.pendingHedge && String(p.pendingHedge.orderId) === String(o.orderId)) {
+      p.pendingHedge.orderId = nu.orderId; p.pendingHedge.limit = price; p.limit = price;
+      return 'hedge';
+    }
+  }
+  return null;
+}
+async function adoptManualReplacement(record, deps, o, resp, now) {
+  if (!deps.tradingClient.ordersByAccount) return 'none';
+  const closed = Date.parse(resp.closeTime || '') || now;
+  let orders = null;
+  try {
+    orders = await deps.tradingClient.ordersByAccount(deps.accountHash,
+      new Date(closed - 60 * 60 * 1000).toISOString(), new Date(now + 60 * 1000).toISOString());
+  } catch (e) {
+    store.appendEvent(record, { type: 'order_poll_error', orderId: o.orderId, note: `manual-edit lookup failed: ${e && e.message}` });
+  }
+  const los = record.state.liveOrders || [];
+  const known = new Set(los.map((x) => String(x.orderId)));
+  const nu = orders ? findSuccessor(orders, resp, known) : null;
+  if (!nu) {
+    // Not listed yet? Wait briefly before letting the engine re-create its order.
+    if (!o.manualReplaceSeenAt) o.manualReplaceSeenAt = now;
+    if (now - o.manualReplaceSeenAt < ADOPT_GRACE_MS) return 'waiting';
+    store.appendEvent(record, { type: 'order_manual_replace_unmatched', orderId: o.orderId, kind: o.kind, positionId: o.positionId || undefined,
+      note: 'REPLACED by someone else and no successor on the same legs was found — the engine will re-create its order' });
+    return 'none';
+  }
+  const what = repointPosition(record, o, nu);
+  o.status = 'canceled';
+  o.canceledReason = 'manual-edit';
+  o.replacedBy = String(nu.orderId);
+  trackOrder(record, { orderId: nu.orderId, kind: o.kind, positionId: o.positionId, legs: o.legs,
+    net: nu.orderType, requestedPrice: Number(nu.price), sentPrice: Number(nu.price), placedAt: Date.parse(nu.enteredTime) || now });
+  const row = los[los.length - 1];
+  row.adoptedFrom = String(o.orderId);
+  if (String(nu.status).toUpperCase() === 'FILLED') row.status = 'working';   // polled next in this same pass, which books it
+  store.appendEvent(record, { type: 'order_adopted_manual_edit', orderId: nu.orderId, from: o.orderId, kind: o.kind,
+    positionId: o.positionId || undefined, price: Number(nu.price), net: nu.orderType, status: nu.status, repointed: what || undefined,
+    note: `order ${o.orderId} was edited outside the engine (REPLACED, no replace of ours); adopted ${nu.orderId} @ ${nu.price}${what ? ` — ${what} now works it` : ' — no engine state pointed at it'}` });
+  console.warn(`[candle-spread] ${record.config && record.config.variant}: adopted manual edit ${o.orderId} -> ${nu.orderId} @ ${nu.price}`);
+  return 'adopted';
+}
+
 // Poll + reconcile every non-terminal real order on a run. deps: { tradingClient, accountHash }.
 // opts: { testCancelAfterMs, staleOpenCancelMs, now }. Appends order_* events and persists.
 async function reconcile(record, deps, opts = {}) {
@@ -426,6 +520,17 @@ async function reconcile(record, deps, opts = {}) {
           note: `broker ${resp && resp.status} on a replacement — the original #${prev.orderId} is still working; tracking restored to it` });
         continue;
       }
+    }
+    // A REPLACE WE DID NOT ASK FOR = SOMEONE EDITED THE ORDER BY HAND (Schwab app/website). Verified 2026-10-07
+    // (probe-manual-replace.js): an app edit retires the original as REPLACED and a NEW id carries the order —
+    // same legs and quantity, entered in the same second the original closed, tag prefix API_ instead of our
+    // TA_, and no field linking the two. Left to the generic path below, the engine read that as "my order
+    // died", cleared it, and sent a SECOND order next step: a double cover. So: find the successor and ADOPT
+    // it — the position now works (and books the fill of) the order the user set. If none matches, fall
+    // through: the engine re-creates its order exactly as before (the user wants that behaviour kept).
+    if (String(resp && resp.status).toUpperCase() === 'REPLACED' && !o.replacedBy && !o.supersededByFill && !o.replaceIdUnknown) {
+      const adopted = await adoptManualReplacement(record, deps, o, resp, now);
+      if (adopted === 'adopted' || adopted === 'waiting') continue;
     }
     if (DEAD.has(String(resp && resp.status).toUpperCase())) {
       o.status = next === 'working' ? 'canceled' : next;
