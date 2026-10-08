@@ -40,6 +40,13 @@ const isFive = a => ['1m', '5m', '15m', '60m'].every(tf => a[tf] && a[tf].bbuppe
 // Load ALL 5m bars per day (not just 15m closes). Returns { date, bars:[{dt,analysis,fifteen}] }.
 function load5mDays(dir) {
   const files = fs.readdirSync(dir).filter(f => /^backtest-[A-Z]+-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+  // OFFICIAL CLOSE (settles.json, optional: { "YYYY-MM-DD": close }). 0DTE NDX options settle on the official
+  // 16:00 index close, which the 1m capture does not contain (its last candle closes at 15:59; on 2026-10-07
+  // 31,154.66 vs the official 31,160.08). When the dataset carries it, the day gets a 16:00 bar priced at
+  // that close — rthOnly takes no action at 16:00, and settlement picks the last bar at/through 16:00, so the
+  // backtest settles exactly where live does. Without it the day settled at the 15:55 bar (+$2,341 on 10-05).
+  let settles = {};
+  try { settles = JSON.parse(fs.readFileSync(path.join(dir, 'settles.json'), 'utf8')); } catch (e) { /* none */ }
   const out = [];
   for (const f of files) {
     const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
@@ -49,6 +56,22 @@ function load5mDays(dir) {
       // without it are unchanged; runDay5m only reads it when opts.priceOf is pointed at it.
       .map(x => ({ dt: x.datetime, analysis: x.analysis, px: x.px || null, fifteen: new Date(x.datetime).getMinutes() % 15 === 0 }));
     if (bars.length < 5) continue;
+    const iso = (f.match(/(\d{4}-\d{2}-\d{2})/) || [])[1];
+    const close = iso && settles[iso];
+    if (close > 0) {
+      // 16:00 ET that day, on the epoch grid the bars use
+      const last = bars[bars.length - 1];
+      const etNow = new Date(new Date(last.dt).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const t1600 = last.dt + ((16 * 60) - (etNow.getHours() * 60 + etNow.getMinutes())) * 60000;
+      const hasClose = bars.some((b) => b.dt >= t1600 && b.dt <= t1600 + 60000);
+      if (!hasClose && t1600 > last.dt) {
+        const px = { open: close, high: close, low: close, close };
+        // pricing series only: bars without px price off the signal series, so carry the close there too
+        const a5 = { ...last.analysis['5m'], open: close, high: close, low: close, close };
+        bars.push({ dt: t1600, analysis: { ...last.analysis, '5m': last.px ? last.analysis['5m'] : a5 }, px: last.px ? px : null,
+          fifteen: true, officialClose: true });
+      }
+    }
     out.push({ date: etDay(bars[0].dt), bars });
   }
   return out;
@@ -1022,6 +1045,15 @@ function runDay5m(bars, signalFn, opts = {}) {
           const stallPx = roundTick(Math.min(be, legsMark(pc.legs, S, tau, iv) + TICK));
           if (stallPx > workingTarget) { workingTarget = stallPx; if (!pos._stall) { pos._stall = true; stallFires++; } }
         }
+      }
+      // A WORKING ORDER NEVER WALKS DOWN (opts.coverNeverLower; the live rule since 2026-10-08, trader
+      // workRestingCovers). The ladder caps its step at the current mark, so on a fast move in our favour it
+      // used to LOWER the working price to the bar-close mark and book the cover there — a price a real resting
+      // limit never gets: it fills at its own price on first touch. 10-07 10:15 bull: live covered at 3.75, the
+      // backtest booked 1.40. The live-vs-backtest audit put this optimism at ~$2,600 over four days.
+      if (opts.coverNeverLower) {
+        if (pc._working != null && workingTarget < pc._working) workingTarget = pc._working;
+        pc._working = workingTarget;
       }
       if (giveUp) giveUps++;
       if (decayed && !giveUp) decayStops++;
