@@ -3326,7 +3326,12 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = round2(L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick));   // round2 AFTER, as every other send site
-        if (give > 0 && Math.abs(give - pc.target) >= tick - 1e-9) {
+        // NEVER LOWER (2026-10-08). Give-up's price is mark + a tick capped at break-even + allowance,
+        // recomputed every pass — so a momentary dip in the mark used to PULL a working give-up cover down.
+        // v7-10 10:20 bull: give-up at \$5.00, mark dipped to 4.15 at 11:09:44, the cover was lowered to 4.20
+        // for ~25 s with no fill and went back to 5.00 as the mark ran to 6.55 — at 5.00 it would have filled.
+        // A resting order fills at its own price on touch; lowering it only loses the race.
+        if (give > 0 && give > pc.target + tick / 2) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05,
             ...(trendAgainst && through < pts ? { trigger: 'trend' } : {}) }, st);

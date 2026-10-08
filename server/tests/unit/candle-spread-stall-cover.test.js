@@ -47,6 +47,13 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
   st = mk(); d = [];
   await T.workRestingCovers(st, cfg, d, deps({ getLeg: chain(5.2), nowMs: T0 + 16 * 60000, stallCoverMin: null }), 31004);
   ok(!d.some((x) => x.action === 'cover-stall'), 'stallCoverMin null: off');
+  // 7. GIVE-UP NEVER LOWERS: a give-up cover working at 5.00 (cap) whose mark dips to 4.15 stays at 5.00
+  {
+    const st7 = mk(); st7.positions[0].pendingCover.target = 5.0; st7.positions[0].pendingCover.gaveUp = true; const d7 = [];
+    // bull short 31010, underlying 30990: 20 points through -> give-up territory; cover mark 4.15
+    await T.workRestingCovers(st7, cfg, d7, deps({ getLeg: chain(4.15), nowMs: T0 + 30 * 60000, stallCoverMin: null }), 30990);
+    ok(!d7.some((x) => /cover-(giveup|reprice|stall)/.test(x.action) && x.to < 5.0), 'a working give-up cover is never pulled down when the mark dips');
+  }
   // 6. roster
   ok(CS.buildRuns().every((r) => r.stallCoverMin === 15), 'every variant carries 15 minutes');
 
