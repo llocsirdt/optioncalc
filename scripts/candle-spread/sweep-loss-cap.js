@@ -220,7 +220,26 @@ const MINLOCK_ARMS = process.argv.includes('--minLockArms') ? [
   ['early low', (r) => ({ minLockCurve: ML(r, [[570, 0.04], [690, 'B']]) })],
   ['late low', (r) => ({ minLockCurve: ML(r, [[780, 'B'], [900, 0.04]]) })],
 ] : [];
-if (MINLOCK_ARMS.length) {
+// --revalArms (2026-10-08): RE-VALIDATE the live roster on the corrected fill model (raises immediate, lowers from
+// the next bar; official close) over the combined 2022-2026 dataset. Every arm changes ONE thing from today's roster.
+const GU_W = (w) => (w >= 40 ? 0.10 : w >= 20 ? 0.075 : 0.05);
+const REVAL_ARMS = process.argv.includes('--revalArms') ? [
+  ['roster', () => ({})],
+  ['give-up off', () => ({ coverGiveUp: false })],
+  ['give-up 5% all', () => ({ giveUpMaxLoss: 0.05 })],
+  ['give-up 20 pts', () => ({ giveUpPoints: 20 })],
+  ['stall off', () => ({ stallCoverMin: null })],
+  ['stall 10m', () => ({ stallCoverMin: 10 })],
+  ['stall 30m', () => ({ stallCoverMin: 30 })],
+  ['late off', () => ({ lateFloorAfterMin: null, lateFloorKeepLocked: false })],
+  ['late 15:00 0W', () => ({ lateFloorGiveW: 0 })],
+  ['floor raise off', () => ({ floorRaise: false })],
+  ['minLock bell 0.03', (r) => ({ minLockCurve: [[570, 0.03], [660, r.continuousCoverMinLockFrac], [780, r.continuousCoverMinLockFrac], [900, 0.03]] })],
+] : [];
+if (REVAL_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of REVAL_ARMS) JOBS.push({ variant: run.variant, rung: `reval ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+} else if (MINLOCK_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of MINLOCK_ARMS) JOBS.push({ variant: run.variant, rung: `minLock ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
 } else if (LATE_ARMS.length) {
