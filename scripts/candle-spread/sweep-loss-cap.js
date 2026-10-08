@@ -208,7 +208,22 @@ const LATE_ARMS = process.argv.includes('--lateArms') ? [
   ['15:00 keepLocked', () => ({ lateFloorAfterMin: 900, lateFloorGiveW: 99, lateFloorKeepLocked: true })],
   ['14:00 keepLocked+0.25W', () => ({ lateFloorAfterMin: 840, lateFloorGiveW: 0.25, lateFloorKeepLocked: true })],
 ] : [];
-if (LATE_ARMS.length) {
+// --minLockArms (2026-10-08): minLock by time of day. B = the variant's current minLock (10W 0.10, 20/40W 0.20).
+// Flat lows, the user's bell (low at the open, B midday, low into the close), and each half alone.
+const ML = (run, pts) => pts.map(([m, f]) => [m, f === 'B' ? run.continuousCoverMinLockFrac : f]);
+const MINLOCK_ARMS = process.argv.includes('--minLockArms') ? [
+  ['current', () => ({})],
+  ['flat 0.05', () => ({ continuousCoverMinLockFrac: 0.05 })],
+  ['flat 0.03', () => ({ continuousCoverMinLockFrac: 0.03 })],
+  ['bell 0.04', (r) => ({ minLockCurve: ML(r, [[570, 0.04], [690, 'B'], [780, 'B'], [900, 0.04]]) })],
+  ['bell 0.03', (r) => ({ minLockCurve: ML(r, [[570, 0.03], [660, 'B'], [780, 'B'], [900, 0.03]]) })],
+  ['early low', (r) => ({ minLockCurve: ML(r, [[570, 0.04], [690, 'B']]) })],
+  ['late low', (r) => ({ minLockCurve: ML(r, [[780, 'B'], [900, 0.04]]) })],
+] : [];
+if (MINLOCK_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of MINLOCK_ARMS) JOBS.push({ variant: run.variant, rung: `minLock ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+} else if (LATE_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of LATE_ARMS) JOBS.push({ variant: run.variant, rung: `late ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
 } else if (STALL_ARMS.length) {

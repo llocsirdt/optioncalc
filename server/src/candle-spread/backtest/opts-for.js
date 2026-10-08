@@ -94,6 +94,7 @@ function optsFor(v, env) {
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
   if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
+  if (v.minLockCurve != null) o.minLockCurve = v.minLockCurve;          // backtest study: minLock by time of day
   for (const k of ['lateFloorAfterMin', 'lateFloorGiveW', 'lateFloorKeepLocked']) if (v[k] != null) o[k] = v[k];   // late-day floor guard (live: trader.lateFloorLimit)
   // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from

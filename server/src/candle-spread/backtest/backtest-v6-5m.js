@@ -846,6 +846,18 @@ function runDay5m(bars, signalFn, opts = {}) {
         const prog = b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1;
         minLock = minLock * (from + (to - from) * prog);
       }
+      // minLock BY TIME OF DAY (opts.minLockCurve = [[etMinute, fracOfWidth], ...], piecewise-linear, clamped
+      // at both ends; 2026-10-08 study). The user's bell: LOW at the open (premiums high, take small locks to
+      // form tents fast), the full lock around midday, LOW again into the close (cover quickly). Replaces the
+      // constant for covers placed while it is set.
+      if (Array.isArray(opts.minLockCurve) && opts.minLockCurve.length) {
+        const pts = opts.minLockCurve, now = etMinute(bars[i].dt);
+        let f = pts[0][1];
+        if (now >= pts[pts.length - 1][0]) f = pts[pts.length - 1][1];
+        else for (let k = 1; k < pts.length; k++) if (now <= pts[k][0]) { const [a0, f0] = pts[k - 1], [a1, f1] = pts[k]; f = a1 > a0 ? f0 + (f1 - f0) * (now - a0) / (a1 - a0) : f1; break; }
+        if (now < pts[0][0]) f = pts[0][1];
+        minLock = f * G.WIDTH;
+      }
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
         const tgt = round2(G.WIDTH - pos.limit - minLock);
