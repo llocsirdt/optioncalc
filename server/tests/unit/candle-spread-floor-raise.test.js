@@ -125,6 +125,15 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
       floorMin: -1538, globalRatio: 1 });
     ok(r.best && r.best.kind === 'condor' && Math.round(r.best.lift) === 615, `near the cap the condor wins on room bought per dollar (+$${r.best && Math.round(r.best.lift)} for $385)`);
     ok(r.blockedFloor >= 1, 'and the $950 vertical (global +$50) is refused');
+    // SPREADS FIRST STILL HOLDS NEAR THE CAP: a vertical lifts the whole side it covers, a fly/condor only its
+    // span — when a spread clears the near-cap bar it is taken even though a condor scores higher per dollar.
+    const base2 = xs.map((x) => (low.has(x) ? -1538 : x === 31090 || x === 31110 ? -1038 : x >= 31140 ? -638 : -538));
+    const gw2 = (legs, debit) => Math.min(...xs.map((x, j) => base2[j] + FR.payoff(legs, x, 1) - debit * 100));
+    const vert = { kind: 'vertical', legs: [{ side: 'long', type: 'P', strike: 31130 }, { side: 'short', type: 'P', strike: 31120 }] };
+    const m = FR.pickBestMulti({ xs, base: base2, cands: [condor, vert], price: (legs) => ({ debit: legs.length === 4 ? 3.0 : 4.0 }), qty: 1,
+      minRatio: 0, budget: Infinity, gNow: -1538, objective: 'spreadFirst', spot: 31160, bandLo: 31000, bandHi: 31200,
+      globalFloorWith: gw2, floorMin: -1538, globalRatio: 1 });
+    ok(m.best && m.best.kind === 'vertical', `near the cap a qualifying spread is still bought before a condor (${m.best && m.best.kind})`);
   }
 
   // ── live settings win over the sealed record (mid-session rollout and kill switch) ──────────────
