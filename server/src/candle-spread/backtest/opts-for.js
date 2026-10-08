@@ -92,6 +92,8 @@ function optsFor(v, env) {
     if (v.giveUpTrend != null) o.giveUpTrend = v.giveUpTrend;   // trend-state definition: urgent cover when fighting it
   }
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
+  if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
+  if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
   // COVER LADDER: walk a resting cover's price up in steps as it goes stale, instead of leaving it parked
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
   // the 2026-09-09 CSV — the contract guard caught it on the first regeneration after the fact.

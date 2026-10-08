@@ -404,6 +404,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
   const TS = require('../trend-state');
   const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock) ? TS.makeTracker() : null;
+  let stallFires = 0;
   let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
@@ -647,7 +648,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     const commitOpen = (side, o, resolvedLegs, withLedgerDir) => {
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
-          openReason: o.reason, sigEpoch: o.sigEpoch });
+          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S });
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
         // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
@@ -983,6 +984,21 @@ function runDay5m(bars, signalFn, opts = {}) {
           mark: legsMark(pc.legs, S, tau, iv),
           tick: 0.05,
         }, ladderOpts).limit;
+      }
+      // STALL COVER (opts.stallCoverMin, backtest-only study, 2026-10-07): a position that has NOT moved in our favour
+      // by stallCoverPts within stallCoverMin minutes of filling stops waiting for its minLock target — its cover goes
+      // to break-even, or to the market + a tick when that is already better. Form the tent early, at almost any
+      // profit, to free cap room (the user: a blocked strategy earns nothing). Never lowers the ladder's price.
+      // NOT the minLock ramp (dead 2026-09-12: lowered every target by the CLOCK and gave away covers that would
+      // have filled higher) — this keys on the position stalling.
+      if (!giveUp && opts.stallCoverMin != null && pc.openCost != null && pos.openEpoch != null && pos.openUnder != null) {
+        const age = nowEpoch - pos.openEpoch;
+        const fav = pos.side === 'bull' ? (S - pos.openUnder) : (pos.openUnder - S);
+        if (age >= opts.stallCoverMin * 60000 && fav < (opts.stallCoverPts || 0)) {
+          const be = round2(G.WIDTH - pc.openCost);
+          const stallPx = roundTick(Math.min(be, legsMark(pc.legs, S, tau, iv) + TICK));
+          if (stallPx > workingTarget) { workingTarget = stallPx; if (!pos._stall) { pos._stall = true; stallFires++; } }
+        }
       }
       if (giveUp) giveUps++;
       if (decayed && !giveUp) decayStops++;
@@ -1622,6 +1638,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n, nearCapPasses: frNearCapPasses } : null,
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
+    stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which

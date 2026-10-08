@@ -189,7 +189,18 @@ const NEARCAP_ARMS = process.argv.includes('--nearCapArms') ? [
   ['1W 1:1', () => ({ floorRaiseNearCapFrac: 1, floorRaiseNearCapRatio: 1 })],
   ['0.25W 1:1', () => ({ floorRaiseNearCapFrac: 0.25, floorRaiseNearCapRatio: 1 })],
 ] : [];
-if (NEARCAP_ARMS.length) {
+// --stallArms (2026-10-07): STALL COVER — a position that has not moved our way by P points within M minutes of
+// filling covers at break-even (or the market if better). Arms: off, M = 3/5/10/15/30 at P = 0, and M = 5 / 10 at
+// P = 10 (must have moved 10 points our way, else stall).
+const STALL_ARMS = process.argv.includes('--stallArms') ? [
+  ['off', () => ({})], ['3m 0p', () => ({ stallCoverMin: 3 })], ['5m 0p', () => ({ stallCoverMin: 5 })],
+  ['10m 0p', () => ({ stallCoverMin: 10 })], ['15m 0p', () => ({ stallCoverMin: 15 })], ['30m 0p', () => ({ stallCoverMin: 30 })],
+  ['5m 10p', () => ({ stallCoverMin: 5, stallCoverPts: 10 })], ['10m 10p', () => ({ stallCoverMin: 10, stallCoverPts: 10 })],
+] : [];
+if (STALL_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of STALL_ARMS) JOBS.push({ variant: run.variant, rung: `stall ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+} else if (NEARCAP_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of NEARCAP_ARMS) JOBS.push({ variant: run.variant, rung: `nearCap ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
 } else if (TREND_ARMS.length) {
@@ -345,6 +356,7 @@ function measure(job) {
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
+    stallFiresPerDay: Math.round(res.reduce((a, r) => a + (r.stallFires || 0), 0) / days.length * 100) / 100,
     nearCapPassesPerDay: Math.round(res.reduce((a, r) => a + ((r.floorRaise && r.floorRaise.nearCapPasses) || 0), 0) / days.length * 100) / 100,
     raiseTrendBlockedPerDay: Math.round(res.reduce((a, r) => a + ((r.floorRaise && r.floorRaise.trendBlocked) || 0), 0) / days.length * 100) / 100,
     giveUpTrendFiresPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpTrendFires || 0), 0) / days.length * 100) / 100,
