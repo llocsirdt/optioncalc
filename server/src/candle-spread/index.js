@@ -867,10 +867,20 @@ function applySimFillRealism(v) {
 // flat; v7-10 maxDD -4,610 -> -3,910, v9-20 -23,766 -> -17,193. Env CANDLE_SPREAD_STALL_COVER=off disables.
 const STALL_COVER_MIN = /^off$/i.test(process.env.CANDLE_SPREAD_STALL_COVER || '') ? null : 15;
 function applyStallCover(v) { if (STALL_COVER_MIN != null && v.stallCoverMin == null) v.stallCoverMin = STALL_COVER_MIN; }
+// LATE-DAY FLOOR GUARD on every governed variant (2026-10-08): from 15:00 a floor that is >= 0 may not go
+// negative (opens, floor raises, floor-lowering covers). 765 days x 50 governed: locked-profit days 34.7% ->
+// 38.3% (better on 50/50), worst day better or equal on 50/50, maxDD better on 41/50, avg/day -1.5%; v7-10
+// locked 44.9% -> 48.3%, maxDD -4,610 -> -4,215. Env CANDLE_SPREAD_LATE_FLOOR=off disables.
+const LATE_FLOOR_ON = !/^off$/i.test(process.env.CANDLE_SPREAD_LATE_FLOOR || '');
+function applyLateFloor(v) {
+  if (!LATE_FLOOR_ON || v.lateFloorAfterMin != null) return;
+  v.lateFloorAfterMin = 15 * 60; v.lateFloorKeepLocked = true;
+}
 
 function applyExperiments(v, { capPreset = true } = {}) {
   applySimFillRealism(v);
   applyStallCover(v);
+  applyLateFloor(v);
   applyPlacementG(v);
   applyRestrike(v);
   applyFloorRaise(v);
@@ -1825,6 +1835,10 @@ function buildEngineDeps(run, live) {
       giveUpTrend: run.giveUpTrend || null,
       // Stall cover: minutes without a favourable move before the cover goes to break-even (null = off).
       stallCoverMin: run.stallCoverMin != null ? run.stallCoverMin : null, stallCoverPts: run.stallCoverPts || 0,
+      // Late-day floor guard (trader.lateFloorLimit): from this ET minute nothing may take the floor below the limit.
+      spreadWidth: run.spreadWidth,
+      lateFloorAfterMin: run.lateFloorAfterMin != null ? run.lateFloorAfterMin : null,
+      lateFloorGiveW: run.lateFloorGiveW != null ? run.lateFloorGiveW : null, lateFloorKeepLocked: run.lateFloorKeepLocked === true,
       // Floor raise follows the CURRENT roster (and its env kill switch) even inside a sealed session —
       // trader.raiseFloor merges this over the record's frozen config. floorRaise is always explicit so
       // switching it off takes effect at once.

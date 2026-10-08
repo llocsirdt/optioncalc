@@ -812,7 +812,9 @@ function coverBreachesGovernor(st, deps, pos, legs, target, extra) {
   if (!govOn(deps) || !deps || deps.fillSource !== 'broker' || !st) return null;
   const f0 = govFloor(st, deps, extra || null);
   const f1 = govFloor(st, deps, extra || null, [pos, { ...pos, covered: true, coverLegs: legs, coverLimit: target }]);
-  return (f1 < f0 && -f1 > deps.lossMax) ? { floorIfFilled: round2(f1), floorNow: round2(f0) } : null;
+  if (f1 < f0 && -f1 > deps.lossMax) return { floorIfFilled: round2(f1), floorNow: round2(f0) };
+  const late = lateFloorLimit(st, deps, null, deps.spreadWidth);
+  return (late != null && f1 < f0 && f1 < late) ? { floorIfFilled: round2(f1), floorNow: round2(f0), lateLimit: late } : null;
 }
 // IS A CANCEL ALREADY UNDER WAY FOR THIS ORDER? Read from the ORDER ROW, never from a flag on the cover or
 // hedge. The row is marked by index.makeCancelOrder only once Schwab has ACCEPTED the DELETE, and that
@@ -875,6 +877,30 @@ async function pullCoversForOpen(st, res, cfg, deps, decisions) {
 // Engages only once the peak clears floorRatchetMinPeak. Without that guard a fraction-of-peak budget is
 // zero while the peak is zero, which would block the morning's first trade and every trade after it.
 // Returns the floor level an open must not push the book below, or null when the ratchet is not engaged.
+// LATE-DAY FLOOR GUARD (deps.lateFloorAfterMin; adopted 2026-10-08). From that ET minute the governor changes mode:
+// nothing — open, floor raise, or a cover that would lower the floor — may take the book floor below the limit.
+// Reference = the governor's floor (design B) at the first look at or after that minute, kept on the state so
+// a restart keeps it. keepLocked: a reference >= 0 may not go negative. lateFloorGiveW: optional allowance
+// below the reference (null = none). 765 days x 50 governed, 15:00 keepLocked: locked-profit days 34.7% ->
+// 38.3% (improved on 50/50), worst day better or equal on 50/50, maxDD better on 41/50, avg/day -1.5%.
+function etMinNow(deps) {
+  const ms = deps && deps.nowMs != null ? deps.nowMs : Date.now();
+  const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  return d.getHours() * 60 + d.getMinutes();
+}
+function lateFloorLimit(st, deps, nowMin, width) {
+  if (!deps || deps.lateFloorAfterMin == null || !st) return null;
+  if (!((nowMin != null ? nowMin : etMinNow(deps)) >= deps.lateFloorAfterMin)) return null;
+  if (st.lateFloorRef == null) {
+    st.lateFloorRef = round2(govFloor(st, deps));
+    st.lateFloorRefAt = deps.nowMs != null ? deps.nowMs : Date.now();
+  }
+  const ref = st.lateFloorRef;
+  let lim = deps.lateFloorGiveW != null ? ref - deps.lateFloorGiveW * (width || 10) * 100 : -Infinity;
+  if (deps.lateFloorKeepLocked && ref >= 0) lim = Math.max(lim, 0);
+  return Number.isFinite(lim) ? lim : null;
+}
+
 function ratchetLimit(st, deps, nowMin) {
   if (!deps || deps.floorRatchet !== true) return null;
   const peak = st.peakFloor;
@@ -1338,7 +1364,8 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       price, qty, minRatio: capR.minRatio, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
-      floorMin: capR.floorMin, globalRatio: capR.globalRatio,
+      floorMin: (() => { const ll = lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth); return ll == null ? capR.floorMin : capR.floorMin == null ? ll : Math.max(capR.floorMin, ll); })(),
+      globalRatio: capR.globalRatio,
       sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
@@ -1760,6 +1787,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // govFloor: under the broker, against the book as it may be once its working orders fill.
       const projected = round2(govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
+    } else if (lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth) != null
+        && govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth)) {
+      // LATE-DAY FLOOR GUARD — after lateFloorAfterMin an open may not take the floor below the late limit.
+      decisions.push({ action: 'open-skip-late', side: openSide, limit: res.limit, lateLimit: round2(lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth)),
+        projectedFloor: round2(govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false })), reference: st.lateFloorRef });
     } else if (ratchetLimit(st, deps, etMinutesOf(candleTime)) != null
         && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps, etMinutesOf(candleTime))) {
       // FLOOR RATCHET OPEN GATE — this open would surrender more of the day's locked floor than the
@@ -3488,6 +3520,11 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
         decisions.push({ action: 'cover-defer-governor', positionId: pos.id, floorIfBooked: round2(f1), floorNow: round2(f0), lossMax: deps.lossMax });
         continue;
       }
+      const late = lateFloorLimit(st, deps, null, cfg.spreadWidth);
+      if (late != null && f1 < f0 && f1 < late) {
+        decisions.push({ action: 'cover-defer-late', positionId: pos.id, floorIfBooked: round2(f1), floorNow: round2(f0), lateLimit: late });
+        continue;
+      }
     }
     pos.covered = true;
     pos.coverId = nextId('cov');
@@ -3576,6 +3613,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
+  lateFloorLimit,                // LATE-DAY FLOOR GUARD
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
   placeRestingCover,
