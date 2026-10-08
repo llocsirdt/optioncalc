@@ -325,6 +325,21 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (ratchetAfterMin != null && !(nowMin >= ratchetAfterMin)) return null;
     return peakFloor * (1 - ratchetGiveBack);
   };
+  // LATE-DAY FLOOR GUARD (opts.lateFloorAfterMin, backtest study 2026-10-07). From that ET minute the governor
+  // changes mode: an open may not take the book floor more than lateFloorGiveW x W x 100 below the floor the
+  // book had AT that minute (the reference, whatever its sign), and — with lateFloorKeepLocked — never take a
+  // floor that was >= 0 at the reference below zero. Differs from the rejected ratchet (09-16/17), which only
+  // engaged once the floor had gone POSITIVE by >= max(1000, W x 100) and so never fired on the many days the
+  // book sits below zero all afternoon (10-07: 15 of 50 governed books closed below their 15:00 floor).
+  const lateAfter = opts.lateFloorAfterMin != null ? opts.lateFloorAfterMin : null;
+  let lateRef = null, lateBlocked = 0, floorAt14 = null, floorAt15 = null;
+  const lateFloorLimit = (nowMin) => {
+    if (lateAfter == null || !(nowMin >= lateAfter)) return null;
+    if (lateRef == null) lateRef = floorOf(null, openLadderModel);
+    let lim = lateRef - (opts.lateFloorGiveW || 0) * G.WIDTH * 100;
+    if (opts.lateFloorKeepLocked && lateRef >= 0) lim = Math.max(lim, 0);
+    return lim;
+  };
   const floorOffset = opts.floorOffset === true;
   const offMinRatio = opts.floorOffsetMinRatio != null ? opts.floorOffsetMinRatio : 3;
   const offWidths = opts.floorOffsetWidths || [20, 40, 60];
@@ -626,6 +641,14 @@ function runDay5m(bars, signalFn, opts = {}) {
     // the LIVE run records use (epoch + "MM/DD HH:MM" ET). Pure bookkeeping, never read by the P&L math;
     // it is what lets a backtest day be replayed in the compare-strategies UI exactly like a live day.
     const nowEpoch = bars[i].dt, nowET = etStamp(bars[i].dt);
+    // Book floor as the 14:00 and 15:00 bars open (reported for every run: "did the day close below its
+    // afternoon floor?"), and the late-guard reference, both taken BEFORE this bar acts.
+    { const _m = etMinute(bars[i].dt);
+      if (floorAt14 == null && _m >= 14 * 60) floorAt14 = st.positions.length ? Math.round(floorNow()) : 0;
+      if (floorAt15 == null && _m >= 15 * 60) floorAt15 = st.positions.length ? Math.round(floorNow()) : 0;
+      // counted the governor's way (design B: a working open is counted as filled), so an open placed before the
+      // reference time and filling after it is already inside the reference rather than a late surprise.
+      if (lateAfter != null && lateRef == null && _m >= lateAfter) lateRef = st.positions.length ? floorOf(null, openLadderModel) : 0; }
     lockEpoch = nowEpoch; lockET = nowET;
     // per-bar band-IV; when opts.intradayIV is on, scale by the calibrated time-of-day IV multiplier so
     // the correction flows into every legsMark/bsPrice below. Default OFF -> iv === ivOf(A) (byte-identical).
@@ -1040,6 +1063,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           const f1 = floorOf(null, openLadderModel);
           pos.covered = sv.covered; pos.coverLegs = sv.coverLegs; pos.coverLimit = sv.coverLimit;
           if (f1 < f0 && -f1 > lossMax) { coverDeferred++; continue; }   // would un-hedge the book past the ceiling
+          { const _ll = lateFloorLimit(etMinute(bars[i].dt)); if (_ll != null && f1 < f0 && f1 < _ll) { lateBlocked++; continue; } }   // late guard: same rule as an open
         }
         if (enforceLegs) {
           if (rc.resolution === 'twin') legCoverTwin++;
@@ -1153,7 +1177,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             nearCapFrac: opts.floorRaiseNearCapFrac, nearCapRatio: opts.floorRaiseNearCapRatio });
           if (capR.nearCap) frNearCapPasses++;
           const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: candsNow(), price, qty: QTY, minRatio: capR.minRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
-            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: capR.floorMin, globalRatio: capR.globalRatio,
+            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: (() => { const _ll = lateFloorLimit(etMinute(bars[i].dt)); return _ll == null ? capR.floorMin : capR.floorMin == null ? _ll : Math.max(capR.floorMin, _ll); })(), globalRatio: capR.globalRatio,
             sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
@@ -1435,7 +1459,10 @@ function runDay5m(bars, signalFn, opts = {}) {
       const ratchetOk = _ratLim == null || geoDecline
         || floorOf({ legs: o.legs, limit: o.limit, covered: false }) >= _ratLim;
       if (!ratchetOk) ratchetBlocked++;
-      if (strategyOk && ceilingOk && govOk && ratchetOk && !geoDecline) {
+      const _lateLim = lateFloorLimit(etMinute(bars[i].dt));
+      const lateOk = _lateLim == null || geoDecline || floorOf({ legs: o.legs, limit: o.limit, covered: false }, openLadderModel) >= _lateLim;
+      if (!lateOk) lateBlocked++;
+      if (strategyOk && ceilingOk && govOk && ratchetOk && lateOk && !geoDecline) {
         // OPEN FILL MODEL (opts.openFillModel, default 'immediate' = the historical assumption).
         // Until now an open was assumed FILLED AT THE LIMIT, always — the engine simply pushed the
         // position. That is the one order in the system whose execution was never modelled, and it is
@@ -1639,6 +1666,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
+    lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,
+    floorAt14, floorAt15,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which

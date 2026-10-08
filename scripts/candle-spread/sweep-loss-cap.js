@@ -197,7 +197,21 @@ const STALL_ARMS = process.argv.includes('--stallArms') ? [
   ['10m 0p', () => ({ stallCoverMin: 10 })], ['15m 0p', () => ({ stallCoverMin: 15 })], ['30m 0p', () => ({ stallCoverMin: 30 })],
   ['5m 10p', () => ({ stallCoverMin: 5, stallCoverPts: 10 })], ['10m 10p', () => ({ stallCoverMin: 10, stallCoverPts: 10 })],
 ] : [];
-if (STALL_ARMS.length) {
+// --lateArms (2026-10-07): LATE-DAY FLOOR GUARD — from 14:00 or 15:00 an open may not take the floor more than
+// G x W below the floor at that time; keepLocked also never lets a >= 0 floor go negative. Off = control.
+const LATE_ARMS = process.argv.includes('--lateArms') ? [
+  ['off', () => ({})],
+  ['14:00 0W', () => ({ lateFloorAfterMin: 840, lateFloorGiveW: 0 })], ['14:00 0.25W', () => ({ lateFloorAfterMin: 840, lateFloorGiveW: 0.25 })],
+  ['14:00 0.5W', () => ({ lateFloorAfterMin: 840, lateFloorGiveW: 0.5 })],
+  ['15:00 0W', () => ({ lateFloorAfterMin: 900, lateFloorGiveW: 0 })], ['15:00 0.25W', () => ({ lateFloorAfterMin: 900, lateFloorGiveW: 0.25 })],
+  ['15:00 0.5W', () => ({ lateFloorAfterMin: 900, lateFloorGiveW: 0.5 })],
+  ['15:00 keepLocked', () => ({ lateFloorAfterMin: 900, lateFloorGiveW: 99, lateFloorKeepLocked: true })],
+  ['14:00 keepLocked+0.25W', () => ({ lateFloorAfterMin: 840, lateFloorGiveW: 0.25, lateFloorKeepLocked: true })],
+] : [];
+if (LATE_ARMS.length) {
+  for (const run of RUNS) for (const [name, over] of LATE_ARMS) JOBS.push({ variant: run.variant, rung: `late ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+} else if (STALL_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of STALL_ARMS) JOBS.push({ variant: run.variant, rung: `stall ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
 } else if (NEARCAP_ARMS.length) {
@@ -356,6 +370,10 @@ function measure(job) {
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
+    closedBelow15Pct: Math.round(1000 * res.filter((r) => r.floorAt15 != null && r.terminal < r.floorAt15).length / days.length) / 10,
+    closedBelow14Pct: Math.round(1000 * res.filter((r) => r.floorAt14 != null && r.terminal < r.floorAt14).length / days.length) / 10,
+    shortfallVs15Avg: Math.round(res.reduce((a, r) => a + (r.floorAt15 != null ? Math.min(0, r.terminal - r.floorAt15) : 0), 0) / days.length),
+    lateBlockedPerDay: Math.round(res.reduce((a, r) => a + ((r.lateFloor && r.lateFloor.blocked) || 0), 0) / days.length * 100) / 100,
     stallFiresPerDay: Math.round(res.reduce((a, r) => a + (r.stallFires || 0), 0) / days.length * 100) / 100,
     nearCapPassesPerDay: Math.round(res.reduce((a, r) => a + ((r.floorRaise && r.floorRaise.nearCapPasses) || 0), 0) / days.length * 100) / 100,
     raiseTrendBlockedPerDay: Math.round(res.reduce((a, r) => a + ((r.floorRaise && r.floorRaise.trendBlocked) || 0), 0) / days.length * 100) / 100,
