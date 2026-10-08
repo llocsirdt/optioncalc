@@ -105,6 +105,28 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
     ok(pick.best && pick.best.kind === 'condor', 'condors are judged in the structures stage, not as spreads');
   }
 
+  // ── near the cap: 1:1 on the GLOBAL floor, never lowering it (user, 2026-10-07) ────────────────────────
+  {
+    const off = FR.capAwareRatio({ minRatio: 3, floorMin: -2000, gNow: -900, lossMax: 2000, width: 10, nearCapFrac: 0.5, nearCapRatio: 1 });
+    ok(!off.nearCap && off.minRatio === 3 && off.globalRatio == null, 'far from the cap: the normal 3:1 rule');
+    const on = FR.capAwareRatio({ minRatio: 3, floorMin: -2000, gNow: -1600, lossMax: 2000, width: 10, nearCapFrac: 0.5, nearCapRatio: 1 });
+    ok(on.nearCap && on.globalRatio === 1 && on.floorMin === -1600, 'within half a width of the cap: 1:1 on the global floor, which may not fall');
+    // Sawtooth book (v7-10 13:50 shape), floor -1,538. A pricey wide vertical lifts the valley but barely the
+    // global floor; the spanning condor lifts the global floor by more than it costs.
+    const xs = []; for (let x = 31000; x <= 31200; x += 10) xs.push(x);
+    const low = new Set([31050, 31060, 31070, 31080, 31100, 31120]);
+    const base = xs.map((x) => (low.has(x) ? -1538 : x === 31090 || x === 31110 ? -1038 : -538));
+    const gw = (legs, debit) => Math.min(...xs.map((x, j) => base[j] + FR.payoff(legs, x, 1) - debit * 100));
+    const condor = { kind: 'condor', legs: [{ side: 'long', type: 'P', strike: 31040 }, { side: 'short', type: 'P', strike: 31050 }, { side: 'short', type: 'P', strike: 31120 }, { side: 'long', type: 'P', strike: 31130 }] };
+    const wide = { kind: 'vertical', legs: [{ side: 'long', type: 'P', strike: 31130 }, { side: 'short', type: 'P', strike: 31110 }] };
+    const prices = { condor: 3.85, vertical: 9.5 };
+    const r = FR.pickBest({ xs, base, cands: [wide, condor], price: (legs) => ({ debit: legs.length === 4 ? prices.condor : prices.vertical }), qty: 1,
+      minRatio: on.minRatio, budget: Infinity, gNow: -1538, objective: 'band', bandLo: 31000, bandHi: 31200, globalFloorWith: gw,
+      floorMin: -1538, globalRatio: 1 });
+    ok(r.best && r.best.kind === 'condor' && Math.round(r.best.lift) === 615, `near the cap the condor wins on room bought per dollar (+$${r.best && Math.round(r.best.lift)} for $385)`);
+    ok(r.blockedFloor >= 1, 'and the $950 vertical (global +$50) is refused');
+  }
+
   // ── live settings win over the sealed record (mid-session rollout and kill switch) ──────────────
   {
     const sealed = { ...cfg, floorRaise: undefined };   // a record created before floor raise existed
@@ -128,7 +150,7 @@ const fresh = () => ({ positions: JSON.parse(JSON.stringify(fx.book)), realizedP
       globalFloorWith: (legs, debit) => RC.bookFloor(book, { legs, limit: debit, quantity: 1, covered: false }, 10) };
     ok(FR.pickBest(args).best != null, 'with no cap the offset is bought');
     const capped = FR.pickBest({ ...args, floorMin: -800 });
-    ok(capped.best == null && capped.blockedLocked === 1, 'with lossMax 800 the same offset is refused (would put the floor at -885)');
+    ok(capped.best == null && capped.blockedFloor === 1, 'with lossMax 800 the same offset is refused (would put the floor at -885)');
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

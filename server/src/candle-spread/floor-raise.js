@@ -87,6 +87,18 @@ function valleyCandidates(xs, base, incr, lo, hi) {
   }
   return out;
 }
+// NEAR THE CAP THE TRADE CHANGES (user, 2026-10-07). With the book floor within nearCapFrac x W of -lossMax the
+// governor is blocking (or about to block) opens, so a hedge that lifts the floor buys back the strategy's ability
+// to trade, not just insurance — the ratio can drop to nearCapRatio (default 1:1). One hard condition replaces the
+// lost margin: in that mode the hedge may NOT lower the book's global floor at all (floorMin = gNow).
+// Returns { minRatio, floorMin, nearCap } for the caller to pass to pickBestMulti.
+function capAwareRatio({ minRatio, floorMin, gNow, lossMax, width, nearCapFrac, nearCapRatio }) {
+  if (nearCapFrac == null || !(lossMax > 0) || !(width > 0) || gNow == null) return { minRatio, floorMin, nearCap: false, globalRatio: null };
+  const near = -gNow >= lossMax - nearCapFrac * width * 100;
+  if (!near) return { minRatio, floorMin, nearCap: false, globalRatio: null };
+  return { minRatio: 0, globalRatio: nearCapRatio != null ? nearCapRatio : 1, floorMin: floorMin != null ? Math.max(floorMin, gNow) : gNow, nearCap: true };
+}
+
 // The full menu for one planning step: the fixed structures plus the ones sized to today's valleys.
 function candidatesFor(lo, hi, incr, xs, base) { return candidates(lo, hi, incr).concat(valleyCandidates(xs, base, incr, lo, hi)); }
 
@@ -151,7 +163,7 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
 //         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
 //   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard, globalRatio }) {
   const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
@@ -234,7 +246,23 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
   // kept polishing a cheap far valley (a \$0.40 fly at 24:1 on a valley already at +\$150) while the deeper one
   // next to the price sat at -\$890 (2026-10-05 15:35 replay). Band objective: best ratio, as before.
   ok.sort((a, b) => (byValley ? (a._vmin - b._vmin) : 0) || (b.ratio - a.ratio));
-  let blockedLocked = 0;
+  let blockedLocked = 0, blockedFloor = 0;
+  // NEAR THE CAP (globalRatio set, see capAwareRatio): the governor reads the GLOBAL floor, so that is what a hedge
+  // must lift — by at least globalRatio per dollar — and the best is the one that buys the most room per dollar.
+  // A valley-only lift is not enough: 2026-10-07 13:50 a \$950 put vertical lifted v7-10's valley \$1,050 but its
+  // global floor only \$50 (the upside tail fell by the premium) — no room bought for the money.
+  if (globalRatio != null) {
+    const room = [];
+    for (const c of ok) {
+      const g = globalFloorWith(c.legs, c.debit);
+      if (gNow >= 0 && g < 0) { blockedLocked++; continue; }
+      const gr = (g - gNow) / c.cost;
+      if (!(g > gNow) || gr < globalRatio) { blockedFloor++; continue; }
+      room.push({ ...c, ratio: gr, lift: g - gNow, globalAfter: g });
+    }
+    room.sort((a, b) => b.ratio - a.ratio);
+    return { best: room[0] || null, blockedLocked, blockedFloor };
+  }
   for (const c of ok) {
     // Two hard rules on the GLOBAL floor: never put a locked profit at risk (the user's rule), and never push
     // the book past the day-loss cap (floorMin = -lossMax) — a floor-raising hedge is still an order the
@@ -242,10 +270,10 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
     // without this a v7-10 day ended at -1,870 against a 1,500 cap (open-ladder test, 2026-10-06).
     const g = (gNow >= 0 || floorMin != null) ? globalFloorWith(c.legs, c.debit) : null;
     if (gNow >= 0 && g < 0) { blockedLocked++; continue; }
-    if (floorMin != null && g < floorMin && g < gNow) { blockedLocked++; continue; }
-    return { best: c, blockedLocked };
+    if (floorMin != null && g < floorMin && g < gNow) { blockedFloor++; continue; }
+    return { best: c, blockedLocked, blockedFloor };
   }
-  return { best: null, blockedLocked };
+  return { best: null, blockedLocked, blockedFloor };
 }
 
 // MULTI-STEP OBJECTIVES (the user, 2026-10-06: "it's usually not a single hedge that achieves the desired
@@ -267,7 +295,7 @@ function pickBestMulti(args) {
     const r1 = pickBest({ ...args, cands: spreads, objective: 'valley', liftMetric: 'min' });
     if (r1.best) return r1;
     const r2 = pickBest({ ...args, objective: 'band' });
-    return { best: r2.best, blockedLocked: r1.blockedLocked + r2.blockedLocked };
+    return { best: r2.best, blockedLocked: r1.blockedLocked + r2.blockedLocked, blockedFloor: (r1.blockedFloor || 0) + (r2.blockedFloor || 0) };
   }
   if (obj !== 'pair') return pickBest(args);
   const { xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, bandLo, bandHi } = args;
@@ -319,4 +347,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };

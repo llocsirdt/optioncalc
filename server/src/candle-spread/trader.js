@@ -1325,21 +1325,28 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   const perPass = cfg.floorRaiseMaxPerPass != null ? cfg.floorRaiseMaxPerPass : 2;
   const hyp = [];   // hedges placed this pass, counted in the global floor for the locked-profit check
   let placedN = 0;
+  const badQuoted = new Set(); let badRetries = 0;
   for (let n = 0; n < perPass && st.raiseCount + placedN < maxPerDay; n++) {
+    let retry = false;
     const bookNow = book.concat(hyp);
     const gNow = RC.bookFloor(bookNow, null, 10);
     const spentNow = hyp.reduce((t, h) => t + h.limit * 100 * qty, 0);
-    const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: FR.candidatesFor(bandLo, bandHi, incr, xs, base), bandLo, bandHi,
-      price, qty, minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2, budget: budget - spentNow, gNow,
+    const capR = FR.capAwareRatio({ minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2,
+      floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null, gNow, lossMax: govOn(deps) ? deps.lossMax : null,
+      width: cfg.spreadWidth, nearCapFrac: cfg.floorRaiseNearCapFrac, nearCapRatio: cfg.floorRaiseNearCapRatio });
+    const { best, companion, blockedLocked, blockedFloor } = FR.pickBestMulti({ xs, base, cands: FR.candidatesFor(bandLo, bandHi, incr, xs, base), bandLo, bandHi,
+      price, qty, minRatio: capR.minRatio, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
-      floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null,
+      floorMin: capR.floorMin, globalRatio: capR.globalRatio,
       sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
-      skip: deps.enforceLegUniqueness && deps._ledger ? (legs) => deps._ledger.conflicts(legs) : null });
+      skip: (legs) => badQuoted.has(keyOf(legs)) || !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs)) });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
       note: 'refused: would push a locked profit below zero' });
+    if (blockedFloor) decisions.push({ action: 'raise-blocked-floor', count: blockedFloor, floorNow: round2(gNow), nearCap: capR.nearCap || undefined,
+      note: capR.nearCap ? 'refused: near the cap a hedge may not lower the book floor at all' : 'refused: would push the floor past the day-loss cap' });
     if (!best) {
       if (trendBlocked.n) decisions.push({ action: 'raise-blocked-trend', count: trendBlocked.n,
         trend: TS.state(st.trendCtx, cfg.floorRaiseTrend), ctx: st.trendCtx,
@@ -1358,7 +1365,14 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       if (!resolved.length) { stop = true; break; }
       // The same quote gates every order runs (structure, usability, chain order, too-cheap) before money goes out.
       const chk = markFill(h.legs, h.debit, deps.getLeg, tick, deps);
-      if (chk.badQuote) { decisions.push({ action: 'raise-badquote', legs: h.legs, reason: chk.badQuote }); stop = true; break; }
+      // A BAD QUOTE RULES OUT THAT STRUCTURE, NOT THE PASS: skip it and re-plan (bounded), so the next-best
+      // structure is still considered (2026-10-07 replay: one mispriced vertical ended the pass before the condor).
+      if (chk.badQuote) {
+        decisions.push({ action: 'raise-badquote', legs: h.legs, reason: chk.badQuote });
+        badQuoted.add(keyOf(h.legs));
+        if (badRetries++ < 5) { retry = true; }
+        stop = !retry; break;
+      }
       const ev = quoted.get(keyOf(h.legs)) || {};
       const payload = buildOrderPayload(resolved, h.debit, qty, 'DEBIT');
       const placed = await deps.placeOrder(payload, { kind: 'raise', legs: h.legs, net: 'DEBIT', limit: h.debit });
@@ -1372,6 +1386,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       st.positions.push(pos);
       if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(h.legs);
       decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: h.debit, valley: h.valley || null, needRatio: h.need,
+        nearCap: capR.nearCap || undefined,
         cost: Math.round(h.cost), lift: Math.round(h.lift), ratio: round2(h.ratio), floorNow: round2(gNow),
         quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
       hyp.push({ filled: true, legs: h.legs, limit: h.debit, quantity: qty, covered: false });
@@ -1379,6 +1394,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
 
       placedN++;
     }
+    if (retry) { n--; continue; }   // a bad quote: same step again without that structure
     if (stop) break;
   }
   return placedN;

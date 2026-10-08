@@ -395,7 +395,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // sees fall between them). Nothing new is planned while one is working, as live.
   const frResting = opts.floorRaiseResting === true;
   const frWorkBars = opts.floorRaiseWorkBars != null ? opts.floorRaiseWorkBars : 2;
-  let frWorking = [], frPlaced = 0, frExpired = 0;
+  let frWorking = [], frPlaced = 0, frExpired = 0, frNearCapPasses = 0;
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
   let guPrev15 = null;
@@ -1132,8 +1132,12 @@ function runDay5m(bars, signalFn, opts = {}) {
           const budget = Number.isFinite(frBudgetFrac) ? frBudgetFrac * peakB - frSpent : Infinity;
           if (!(budget > 0)) break;
           const gNow = floorOf(null);
-          const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: candsNow(), price, qty: QTY, minRatio: frMinRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
-            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null,
+          const capR = FR.capAwareRatio({ minRatio: frMinRatio, floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null, gNow,
+            lossMax: governed && Number.isFinite(lossMax) ? lossMax : null, width: G.WIDTH,
+            nearCapFrac: opts.floorRaiseNearCapFrac, nearCapRatio: opts.floorRaiseNearCapRatio });
+          if (capR.nearCap) frNearCapPasses++;
+          const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: candsNow(), price, qty: QTY, minRatio: capR.minRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
+            minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: capR.floorMin, globalRatio: capR.globalRatio,
             sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
@@ -1615,7 +1619,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpPos: st.positions.filter((p) => p._gu).length,
     giveUpCovered: st.positions.filter((p) => p._gu && p.covered).length,
     floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked,
-      placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n } : null,
+      placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n, nearCapPasses: frNearCapPasses } : null,
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
