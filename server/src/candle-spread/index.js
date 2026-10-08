@@ -7,6 +7,7 @@
 const store = require('./store');
 const trader = require('./trader');
 const TS = require('./trend-state');
+const FA = require('./family-about');
 const om = require('./order-manager');
 const BR = require('./book-reconcile');   // does the strategy's book match the orders that really filled?
 const SC = require('./strategy-control');   // which variants trade, in what mode, right now (S3-backed)
@@ -3350,6 +3351,8 @@ function status() {
       // the client about what an "arm" is; the tint is presentation and lives where the presenting happens.
       minLock: run.continuousCoverMinLockFrac != null ? run.continuousCoverMinLockFrac : null,
       ladder: run.coverLadder === true,
+      // Plain-words strategy description for the UI (family-about.js) — the page only presents it.
+      about: FA.describeVariant(run.variant),
       positions: st ? st.positions.length : 0,
       covered: st ? st.positions.filter(p => p.covered).length : 0,
       terminalPnl,                                    // settled terminal when the day is done, else mark-to-market

@@ -242,6 +242,14 @@
   #btWrap h2 .sub { font-weight:400; color:var(--muted); font-size:12px; }
   /* Column headers double as sort controls, so the explanation is a native title tooltip rather than a
      second click target that would fight the sort. The dotted underline is the only hint needed. */
+  /* STRATEGY ABOUT POPOVER — click (or tap) a variant id in the backtest table */
+  table.bt td.v .vinfo { cursor:pointer; text-decoration:underline dotted rgba(125,125,125,.65); text-underline-offset:3px; }
+  #aboutPop { position:absolute; z-index:50; max-width:min(420px, calc(100vw - 32px)); background:var(--bg, #fff); color:inherit;
+    border:1px solid rgba(125,125,125,.45); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.25); padding:10px 12px; font-size:12px; line-height:1.45; }
+  #aboutPop h4 { margin:0 0 6px; font-size:13px; }
+  #aboutPop .k { font-weight:600; }
+  #aboutPop p { margin:4px 0; }
+  #aboutPop .muted { opacity:.7; }
   table.bt th.hasHelp { text-decoration:underline dotted rgba(125,125,125,.65); text-underline-offset:3px; cursor:help; }
   table.bt { border-collapse:collapse; font:12px ui-monospace, Menlo, monospace; }
   table.bt th, table.bt td { padding:3px 11px; border-bottom:1px solid var(--grid); white-space:nowrap; }
@@ -973,7 +981,7 @@ function renderBtTable() {
     + '</tr></thead><tbody>';
   for (const r of rows) {
     h += '<tr>' + BT_COLS.map((c) => {
-      if (c.k === 'variant') return `<td class="v">${r.variant}</td>`;
+      if (c.k === 'variant') return `<td class="v"><span class="vinfo" data-v="${r.variant}" role="button" tabindex="0" title="what this strategy does">${r.variant}</span></td>`;
       if (c.k === 'cap') return r.cap == null
         ? `<td class="num" style="color:var(--muted)" title="no governor — this twin is uncapped">none</td>`
         : `<td class="num" style="color:var(--loss)" title="working target ${r.lossTarget == null ? '—' : '-$' + Math.abs(r.lossTarget) / 1000 + 'k'}">-$${Math.abs(r.cap) / 1000}k</td>`;
@@ -1623,6 +1631,7 @@ document.getElementById('cmpSrc').addEventListener('change', async (e) => {
 // fields are taken — the roster also carries lossMax/lossTarget, and merging those wholesale would
 // clobber the baselines' own `cap`, which is negated for display.
 let variantCfg = null;
+const variantAbout = {};   // variant -> { name, what, open, cover, suffix, shared } (server: family-about.js)
 async function ensureVariantCfg() {
   if (variantCfg) return variantCfg;
   const idx = await fetchJson(runsUrl());
@@ -1630,9 +1639,41 @@ async function ensureVariantCfg() {
   for (const v of (idx.variants || [])) {
     variantCfg[v.variant] = { minLock: v.minLock != null ? v.minLock : null,
       ladder: !!v.ladder, giveUp: !!v.giveUp, fly: !!v.fly };
+    if (v.about) variantAbout[v.variant] = v.about;
   }
   return variantCfg;
 }
+// ABOUT POPOVER: click/tap a variant id -> its plain-words description; click elsewhere or Esc closes it.
+(function aboutPopover() {
+  const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  let pop = null;
+  const close = () => { if (pop) { pop.remove(); pop = null; } };
+  const open = (el) => {
+    close();
+    const v = el.getAttribute('data-v'), a = variantAbout[v];
+    pop = document.createElement('div'); pop.id = 'aboutPop';
+    pop.innerHTML = a
+      ? `<h4>${esc(v)} — ${esc(a.name)} (${esc(a.width)}-wide)</h4><p>${esc(a.what)}</p>`
+        + `<p><span class="k">Opens:</span> ${esc(a.open)}</p><p><span class="k">Covers:</span> ${esc(a.cover)}</p>`
+        + (a.suffix ? `<p><span class="k">This row:</span> ${esc(a.suffix)}</p>` : '')
+        + `<p class="muted">${esc(a.shared)}</p>`
+      : `<h4>${esc(v)}</h4><p class="muted">No description from this server yet.</p>`;
+    document.body.appendChild(pop);
+    const r = el.getBoundingClientRect(), pw = pop.offsetWidth;
+    const left = Math.max(16, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - pw - 16));
+    pop.style.left = left + 'px'; pop.style.top = (window.scrollY + r.bottom + 6) + 'px';
+  };
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest && e.target.closest('.vinfo');
+    if (el) { e.stopPropagation(); if (pop && pop.dataset.v === el.getAttribute('data-v')) { close(); return; } open(el); if (pop) pop.dataset.v = el.getAttribute('data-v'); return; }
+    if (pop && !pop.contains(e.target)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('vinfo')) { e.preventDefault(); open(e.target); }
+  });
+  window.addEventListener('resize', close);
+})();
 document.getElementById('btTableBtn').addEventListener('click', async () => {
   const wrap = document.getElementById('btWrap'), btn = document.getElementById('btTableBtn');
   if (wrap.style.display !== 'none') { wrap.style.display = 'none'; btn.textContent = 'Backtest table ▾'; return; }
