@@ -225,7 +225,9 @@ const MINLOCK_ARMS = process.argv.includes('--minLockArms') ? [
 const GU_W = (w) => (w >= 40 ? 0.10 : w >= 20 ? 0.075 : 0.05);
 const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['roster', () => ({})],
-  ['give-up off', () => ({ coverGiveUp: false })],
+  // giveUpPoints/MaxLoss cleared too: with give-up off they are not forwarded, and the contract check refuses
+  // a roster field that would be silently dropped.
+  ['give-up off', () => ({ coverGiveUp: false, giveUpPoints: undefined, giveUpMaxLoss: undefined, giveUpTrend: undefined })],
   ['give-up 5% all', () => ({ giveUpMaxLoss: 0.05 })],
   ['give-up 20 pts', () => ({ giveUpPoints: 20 })],
   ['stall off', () => ({ stallCoverMin: null })],
