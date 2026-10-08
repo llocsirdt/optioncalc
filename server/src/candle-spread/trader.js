@@ -2376,6 +2376,8 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       else { pos.limit = round2(px); }
       pos.filled = true; pos.orderStatus = 'filled';
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
+      // when and where it filled — the stall-cover clock (workRestingCovers) starts here
+      pos.fillEpoch = Date.now(); pos.fillUnder = (deps && deps.underlying > 0) ? deps.underlying : (st.lastUnderlying || null);
       noteCash(st, (credit ? -px : px) * 100 * qty);
       o.brokerApplied = true; applied++;
       OM.clearReject(st, OM.rejectKey(o.kind, null)); OM.clearReject(st, OM.rejectKey(o.kind, pos.id));
@@ -2947,6 +2949,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   }
   if (chk.fillable && deps.fillSource !== 'broker') {
     pos.filled = true; pos.orderStatus = 'filled';
+    pos.fillEpoch = deps.nowMs != null ? deps.nowMs : Date.now(); pos.fillUnder = deps.underlying > 0 ? deps.underlying : (st.lastUnderlying || null);
     // The price that actually traded: a credit open receives sentLimit, a debit one pays its limit.
     noteCash(st, (sentCredit ? -(pos.sentLimit || 0) : (pos.limit || 0)) * 100 * (pos.quantity || cfg.quantity));
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit, cashDeployed: st.cashDeployed,
@@ -3301,6 +3304,25 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       }
     }
 
+    // STALL COVER (deps.stallCoverMin; 2026-10-08, the user's "form the tent early"): a position that has not
+    // moved stallCoverPts our way within stallCoverMin minutes of filling stops waiting for its minLock target —
+    // the cover goes to break-even, or the market + a tick when that is already better. 765 days x 50 variants at
+    // 15 min / 0 pts: avg/day +1.1%, maxDD better on 33/50, worst day better on 44/50, locked days flat; v7-10
+    // maxDD -4,610 -> -3,910. Earlier (5 min) gave away covers that would have locked more. Never lowers a price.
+    if (deps.stallCoverMin != null && pos.fillEpoch && pos.fillUnder > 0 && underlying > 0 && mark != null && pc.openCost != null) {
+      const nowS = deps.nowMs != null ? deps.nowMs : Date.now();
+      const fav = pos.side === 'bull' ? (underlying - pos.fillUnder) : (pos.fillUnder - underlying);
+      if (nowS - pos.fillEpoch >= deps.stallCoverMin * 60000 && fav < (deps.stallCoverPts || 0)) {
+        const be = round2(W - pc.openCost);
+        const px = round2(L.roundToTick(Math.min(be, round2(mark + tick)), tick));
+        if (px > pc.target + 1e-9) {
+          const moved = await concedeCover(pos, pc, px, pc.target, cfg, deps, decisions, 'cover-stall', { mark,
+            ageMin: Math.round((nowS - pos.fillEpoch) / 60000), favPts: round2(fav), breakEven: be }, st);
+          if (moved) pc.stalled = true;
+          continue;
+        }
+      }
+    }
     if (!deps.coverLadder) continue;   // ladder is opt-in separately from give-up
     const next = LAD.limitNow({
       spreadWidth: W, openCost: pc.openCost != null ? pc.openCost : pos.limit, minLock: pc.minLock || 0,

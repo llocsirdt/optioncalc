@@ -862,8 +862,15 @@ function applySimFillRealism(v) {
   if (v.simFillAtLimit == null) v.simFillAtLimit = true;
 }
 
+// STALL COVER on every variant (2026-10-08): 15 minutes without a favourable move -> cover at break-even (or
+// better). 765 days x 50 governed: avg/day +1.1%, maxDD better on 33/50, worst day better on 44/50, locked days
+// flat; v7-10 maxDD -4,610 -> -3,910, v9-20 -23,766 -> -17,193. Env CANDLE_SPREAD_STALL_COVER=off disables.
+const STALL_COVER_MIN = /^off$/i.test(process.env.CANDLE_SPREAD_STALL_COVER || '') ? null : 15;
+function applyStallCover(v) { if (STALL_COVER_MIN != null && v.stallCoverMin == null) v.stallCoverMin = STALL_COVER_MIN; }
+
 function applyExperiments(v, { capPreset = true } = {}) {
   applySimFillRealism(v);
+  applyStallCover(v);
   applyPlacementG(v);
   applyRestrike(v);
   applyFloorRaise(v);
@@ -1816,6 +1823,8 @@ function buildEngineDeps(run, live) {
       simFillAtLimit: run.simFillAtLimit === true,
       // Urgent cover for a position fighting the trend (trend-state definition name, or null = off).
       giveUpTrend: run.giveUpTrend || null,
+      // Stall cover: minutes without a favourable move before the cover goes to break-even (null = off).
+      stallCoverMin: run.stallCoverMin != null ? run.stallCoverMin : null, stallCoverPts: run.stallCoverPts || 0,
       // Floor raise follows the CURRENT roster (and its env kill switch) even inside a sealed session —
       // trader.raiseFloor merges this over the record's frozen config. floorRaise is always explicit so
       // switching it off takes effect at once.
