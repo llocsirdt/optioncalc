@@ -141,7 +141,10 @@ const LIVE_NA = new Set(['dryRun', 'signalFn', 'signalCfg', 'getLeg', 'placeOrde
   'coverSelector', 'coverGeometry', 'coverFillModel',
   // run-identity / plumbing, not strategy behaviour: the backtest is handed one day's bars and one
   // geometry, so it has no need to name the instrument or the expiry.
-  'symbol', 'expiration', 'mode', 'shift', 'width']);
+  'symbol', 'expiration', 'mode', 'shift', 'width',
+  // simulated-fill realism on REAL quotes: refuses a mark from a market wider than the structure. The backtest
+  // prices from a model with no bid/ask, so there is no wide quote for it to refuse.
+  'simMaxQuoteWidthFrac']);
 for (const k of [...forwarded].sort()) {
   if (btOpts.has(k) || LIVE_NA.has(k) || NA[k] || ALIAS[k]) continue;
   divergent.push({ side: 'LIVE-ONLY', field: k, live: liveSets ? (liveSets[k] || 0) : null });
