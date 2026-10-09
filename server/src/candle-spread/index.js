@@ -1590,7 +1590,7 @@ function makeReplaceOrder(run, record) {
     }
     const sendPayload = om.wirePrice(isTest ? { ...payload, price: testOrd.price } : payload);
     try {
-      const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, orderId, sendPayload);
+      const resp = await DEPS.tradingClient.updateOrderById(DEPS.accountHash, String(orderId), sendPayload);
       const newId = (resp && resp.orderId) ? resp.orderId : orderId;
       // A REPLACEMENT IS A NEW ORDER AT THE BROKER. Nothing tracked it, so after the first ladder step the
       // live order was invisible: never polled for a fill, never auto-cancelled in test mode, never swept
@@ -1713,7 +1713,7 @@ function makeCancelOrder(run, record) {
       return { status: `already:${tracked.status}`, orderId };
     }
     try {
-      await DEPS.tradingClient.orderDelete(DEPS.accountHash, orderId);
+      await DEPS.tradingClient.orderDelete(DEPS.accountHash, String(orderId));
       // ACCEPTED IS NOT CANCELLED. This retired the row as soon as Schwab accepted the DELETE, so the poller
       // never saw the outcome: a fill that beat the cancel was invisible, and a reversed open kept "until
       // the broker answers" never got its answer. Keep the row and let the poller resolve it — CANCELED

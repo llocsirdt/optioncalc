@@ -340,6 +340,7 @@ function findSuccessor(orders, orig, known) {
 // Re-point whatever the engine was working under the old id at the adopted order, at its price.
 function repointPosition(record, o, nu) {
   const st = record.state || {};
+  const nuId = String(nu.orderId);   // the listing's ids are NUMBERS; every engine-held id is a string
   const price = Number(nu.price);
   const credit = String(nu.orderType || '').toUpperCase() === 'NET_CREDIT';
   const width = (legs) => { const ks = (legs || []).map((l) => l.strike).filter((k) => k != null); return ks.length ? Math.max(...ks) - Math.min(...ks) : null; };
@@ -348,7 +349,7 @@ function repointPosition(record, o, nu) {
     if (!p) continue;
     const pc = p.pendingCover;
     if (pc && String(pc.orderId) === String(o.orderId)) {
-      pc.orderId = nu.orderId;
+      pc.orderId = nuId;
       if (credit) { pc.sentCredit = price; const w = width(pc.legs); if (w != null) pc.target = r2(w - price); }
       else pc.target = price;
       pc.ladderStep = null;            // the ladder re-takes its step from the price the user set
@@ -356,14 +357,14 @@ function repointPosition(record, o, nu) {
       return 'cover';
     }
     if (String(p.orderId) === String(o.orderId) && !p.filled && !p.hedge) {
-      p.orderId = nu.orderId;
+      p.orderId = nuId;
       if (credit && p.sentNet === 'CREDIT') { p.sentLimit = price; const w = width(p.legs); if (w != null) p.limit = r2(w - price); }
       else p.limit = price;
       p.openLadderStep = null;
       return 'open';
     }
     if (p.pendingHedge && String(p.pendingHedge.orderId) === String(o.orderId)) {
-      p.pendingHedge.orderId = nu.orderId; p.pendingHedge.limit = price; p.limit = price;
+      p.pendingHedge.orderId = nuId; p.pendingHedge.limit = price; p.limit = price;
       return 'hedge';
     }
   }
@@ -394,12 +395,12 @@ async function adoptManualReplacement(record, deps, o, resp, now) {
   o.status = 'canceled';
   o.canceledReason = 'manual-edit';
   o.replacedBy = String(nu.orderId);
-  trackOrder(record, { orderId: nu.orderId, kind: o.kind, positionId: o.positionId, legs: o.legs,
+  trackOrder(record, { orderId: String(nu.orderId), kind: o.kind, positionId: o.positionId, legs: o.legs,
     net: nu.orderType, requestedPrice: Number(nu.price), sentPrice: Number(nu.price), placedAt: Date.parse(nu.enteredTime) || now });
   const row = los[los.length - 1];
   row.adoptedFrom = String(o.orderId);
   if (String(nu.status).toUpperCase() === 'FILLED') row.status = 'working';   // polled next in this same pass, which books it
-  store.appendEvent(record, { type: 'order_adopted_manual_edit', orderId: nu.orderId, from: o.orderId, kind: o.kind,
+  store.appendEvent(record, { type: 'order_adopted_manual_edit', orderId: String(nu.orderId), from: o.orderId, kind: o.kind,
     positionId: o.positionId || undefined, price: Number(nu.price), net: nu.orderType, status: nu.status, repointed: what || undefined,
     note: `order ${o.orderId} was edited outside the engine (REPLACED, no replace of ours); adopted ${nu.orderId} @ ${nu.price}${what ? ` — ${what} now works it` : ' — no engine state pointed at it'}` });
   console.warn(`[candle-spread] ${record.config && record.config.variant}: adopted manual edit ${o.orderId} -> ${nu.orderId} @ ${nu.price}`);
@@ -424,13 +425,15 @@ async function reconcile(record, deps, opts = {}) {
     // attempted once, at the moment the fill is seen; if that DELETE failed, nothing retried it and the
     // replacement could fill as a second real order. Retry until the broker accepts the cancel.
     if (o.supersededByFill && !o.cancelRequestedAt) {
-      try { await deps.tradingClient.orderDelete(deps.accountHash, o.orderId); o.cancelRequestedAt = now; }
+      try { await deps.tradingClient.orderDelete(deps.accountHash, String(o.orderId)); o.cancelRequestedAt = now; }
       catch (e) { store.appendEvent(record, { type: 'order_cancel_error', orderId: o.orderId, note: `retrying pull of superseded replacement: ${e && e.message}` }); }
     }
     // 1) Read current broker status.
     let resp;
     try {
-      resp = await deps.tradingClient.orderById(deps.accountHash, o.orderId);
+      // String(): the Schwab client .trim()s the id, and the account LISTING returns ids as numbers (2026-10-09:
+      // an adopted manual edit carried a numeric id, every poll threw, and its FILLED cover was never booked).
+      resp = await deps.tradingClient.orderById(deps.accountHash, String(o.orderId));
     } catch (e) {
       store.appendEvent(record, { type: 'order_poll_error', orderId: o.orderId, note: e && e.message });
       continue;
@@ -459,7 +462,7 @@ async function reconcile(record, deps, opts = {}) {
         if (nu && !isTerminal(nu)) {
           nu.supersededByFill = o.orderId;
           if (!nu.cancelRequestedAt) {
-            try { await deps.tradingClient.orderDelete(deps.accountHash, nu.orderId); nu.cancelRequestedAt = now; }
+            try { await deps.tradingClient.orderDelete(deps.accountHash, String(nu.orderId)); nu.cancelRequestedAt = now; }
             catch (e) { store.appendEvent(record, { type: 'order_cancel_error', orderId: nu.orderId, note: e && e.message }); }
           }
         }
@@ -563,7 +566,7 @@ async function reconcile(record, deps, opts = {}) {
       || (!o.testMode && isOpenKind(o.kind) && age >= staleOpenCancelMs));  // orphan backstop, not a schedule
     if (wantCancel) {
       try {
-        await deps.tradingClient.orderDelete(deps.accountHash, o.orderId);
+        await deps.tradingClient.orderDelete(deps.accountHash, String(o.orderId));
         if (o.testMode) {
           // Test orders keep the old shortcut: nothing real can fill at an unfillable price, and the
           // strategy is simulating these positions, so clearing their pending state would break the run.

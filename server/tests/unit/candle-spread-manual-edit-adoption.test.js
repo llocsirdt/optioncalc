@@ -28,12 +28,16 @@ const edited = { orderId: 1008216063832, status: 'PENDING_ACTIVATION', price: 3.
   enteredTime: '2026-10-07T23:59:39+0000', tag: 'API_xxxxxxxxxxx', orderLegCollection: LEGS };
 const NOW = Date.parse('2026-10-08T00:00:10Z');
 
+// STRICT like the real schwab-client-js, which calls orderId.trim(): a NUMERIC id throws. The account listing
+// returns ids as numbers, and 2026-10-09 an adopted manual edit kept one — every poll threw "orderId.trim is not
+// a function" and its FILLED cover was never booked.
+const strictId = (id) => { if (typeof id !== 'string') throw new TypeError('orderId.trim is not a function'); return id; };
 function client(byId, listing) {
   const calls = { list: 0, del: [] };
   return { calls,
-    orderById: async (_h, id) => byId[String(id)] || { status: 'WORKING' },
+    orderById: async (_h, id) => byId[strictId(id)] || { status: 'WORKING' },
     ordersByAccount: async () => { calls.list++; return listing; },
-    orderDelete: async (_h, id) => { calls.del.push(id); return {}; } };
+    orderDelete: async (_h, id) => { calls.del.push(strictId(id)); return {}; } };
 }
 const mkRecord = () => {
   const pos = { id: 'p1', side: 'bull', filled: true, limit: 5.3, legs: [], covered: false,
@@ -81,6 +85,8 @@ const mkRecord = () => {
     await OM.reconcile(r, { tradingClient: c, accountHash: 'h' }, { now: NOW });
     const nu = r.state.liveOrders.find((o) => String(o.orderId) === '1008216063832');
     ok(nu && nu.status === 'filled' && Math.abs(nu.fillPrice - 3.7) < 1e-9, `the edited order's fill is seen on the same pass (${nu && nu.status} @ ${nu && nu.fillPrice})`);
+    ok(typeof nu.orderId === 'string' && typeof r.state.positions[0].pendingCover.orderId === 'string', 'adopted ids are stored as strings (the listing hands back numbers)');
+    ok(!r.events.some((e) => e.type === 'order_poll_error'), 'no poll error on the adopted order');
   }
 
   // ── 4. no successor -> grace, then the engine re-creates its order (existing behaviour) ────────────
