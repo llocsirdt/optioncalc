@@ -1104,15 +1104,17 @@ async function convertWings(st, cfg, deps, decisions, candleTime, viaRaise = fal
   const band = Math.round(spot * iv * Math.sqrt(tau) * (deps.wingBandSigmas != null ? deps.wingBandSigmas : 1.5));
   if (!(band > 0) || !(tau > 0)) return 0;
 
-  // MARKETABLE pricing off the real chain: pay the ask on a long leg, receive the bid on a short. The
-  // backtest approximates this with mid ± slip; here the actual quotes are available, so use them.
+  // PRICED OFF THE MID, NEVER THE ASK (user, 2026-10-09: "paying the ask for anything invalidates the
+  // assumptions"). This paid the ask on longs and took the bid on shorts — on 0DTE NDX roughly 2x a structure's
+  // mid — while the backtest every wing result came from prices mid ± wingSlip ($0.25) per leg. Live now prices
+  // exactly what was measured. NDX spreads fill near the mid; the ratio gate is only honest at that price.
+  // The floor-raise wing stage (viaRaise) keeps one tick per leg, like every raise.
   const wTick = cfg.tickIncrement || 0.05;
+  const wSlip = viaRaise ? wTick : (deps.wingSlip != null ? deps.wingSlip : 0.25);
   const price = (type, strike, legSide) => {
     const q = deps.getLeg(type, strike);
-    if (!q) return null;
-    if (viaRaise) return q.mid != null ? q.mid + (legSide === 'long' ? wTick : -wTick) : null;
-    const px = legSide === 'long' ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid);
-    return px != null ? px : null;
+    if (!q || q.mid == null) return null;
+    return q.mid + (legSide === 'long' ? wSlip : -wSlip);
   };
   const filled = st.positions.filter((p) => p.filled !== false);
   const bookView = filled.map((p) => ({ filled: true, legs: p.legs, limit: p.limit, quantity: p.quantity || cfg.quantity,
@@ -1210,13 +1212,14 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
   const band = Math.round(spot * iv * Math.sqrt(tau) * (deps.flyBandSig != null ? deps.flyBandSig : 1.5));
   if (!(band > 0) || !(tau > 0)) return 0;
 
-  // MARKETABLE pricing off the real chain — pay the ask on a long leg, receive the bid on a short. A fly
-  // is short the body, so getting this backwards would make it look free.
+  // PRICED OFF THE MID, NEVER THE ASK (2026-10-09, see convertWings): mid ± flySlip ($0.05) per leg, exactly the
+  // backtest's pricing. Paying the ask made a fly cost ~2x its mid (10-05: mid $2.93, ask $6.60). A fly is short
+  // the body, so the slip is conceded on BOTH sides (longs up, shorts down) — it never looks free.
+  const fSlip = deps.flySlip != null ? deps.flySlip : 0.05;
   const price = (type, strike, legSide) => {
     const q = deps.getLeg(type, strike);
-    if (!q) return null;
-    const px = legSide === 'long' ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid);
-    return px != null ? px : null;
+    if (!q || q.mid == null) return null;
+    return q.mid + (legSide === 'long' ? fSlip : -fSlip);
   };
   const filled = st.positions.filter((p) => p.filled !== false);
   const bookView = filled.map((p) => ({ filled: true, legs: p.legs, limit: p.limit, quantity: p.quantity || cfg.quantity,

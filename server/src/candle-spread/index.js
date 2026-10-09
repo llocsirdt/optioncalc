@@ -586,13 +586,12 @@ function assertBoundsCoherent(spreadWidth) {
 }
 
 const FLY_LIVE = new Set(
-  (process.env.CANDLE_SPREAD_FLY != null ? process.env.CANDLE_SPREAD_FLY
-    : 'v0-10,v0-20,v0-40,v0-20-cATM,v0-40-cATM,'
-    + 'v2-10,v2-20,v2-40,v2-20-cATM,v2-40-cATM,'
-    + 'v4-10,v4-20,v4-40,v4-20-cATM,v4-40-cATM,'
-    + 'v6-10,v6-20,v6-40,v6-20-cATM,v6-40-cATM,'
-    + 'v8-10,v8-20,v8-40,v8-20-cATM,v8-40-cATM,'
-    + 'v7-10-unc,v7-20-unc,v7-40-unc,v6-40-unc,v0-40-unc')
+  // EMPTY since 2026-10-09 (user): stand-alone fly repair is OFF for every variant. Flies stay available INSIDE
+  // floor raise (fixed and valley-sized flies/condors, priced at the mid, never past lossMax, never risking a
+  // locked profit). The stand-alone feature paid the ASK and was not governor-gated — on the reval sweep it took
+  // v7-10's worst day to -$2,300 past its $2,000 cap, for ~1 point of fleet locked days. Was the even families
+  // + 5 -unc twins (a leftover A/B split). CANDLE_SPREAD_FLY still names variants for a deliberate test.
+  (process.env.CANDLE_SPREAD_FLY != null ? process.env.CANDLE_SPREAD_FLY : '')
     .split(',').map(s => s.trim()).filter(Boolean));
 
 // ORDER SLIP A/B (2026-09-14). Opens, offsets and wings were priced exactly AT the mark, which needs the
@@ -888,7 +887,11 @@ function applyFloorRaise(v) {
 // Each stage still logs under its own action so the output shows which repair fired. Applies only where
 // floor raise is on, so CANDLE_SPREAD_FLOOR_RAISE=off (or CANDLE_SPREAD_FLOOR_FOLD=off) restores the legacy
 // hedgers exactly.
-const FLOOR_FOLD = String(process.env.CANDLE_SPREAD_FLOOR_FOLD || 'on').toLowerCase() !== 'off';
+// DEFAULT OFF since 2026-10-09 (user-approved): the reval sweep (ladder fills, 978 days, 50 governed) had the
+// legacy separate hedgers +10.6% P&L with locked-floor days 27.1% vs 20.2% (better on all 50) — dropping
+// offsets' 3:1-at-lossTarget stage cost real floor protection. Kept as code (CANDLE_SPREAD_FLOOR_FOLD=on) for a
+// redesign that keeps that stage; until then wings, offsets and floor raise run as separate features.
+const FLOOR_FOLD = String(process.env.CANDLE_SPREAD_FLOOR_FOLD || 'off').toLowerCase() === 'on';
 function applyFloorRepairFold(v) {
   if (!FLOOR_FOLD || v.floorRaise !== true) return;
   // floorOffset is INHERITED from BASE_RUNS at buildRuns' merge ({...base, ...v}), so it is not on the variant
@@ -1006,7 +1009,9 @@ function applyExperiments(v, { capPreset = true } = {}) {
     // 7.5% (fewer left open, 13% fewer blocked opens, P&L flat), 40W at 10% (P&L +6%, 11% fewer blocked).
     // 15-20% hurt every width. TRIGGER stays 10 points through the short strike: re-swept against candle-
     // break and signal-reversal triggers the same day and it led on locked days and on 10W.
-    v.coverGiveUp = true; v.giveUpPoints = 10;
+    // TRIGGER 10 -> 20 POINTS (2026-10-09, user-approved): reval sweep on the 978-day combined set, ladder open
+    // fills, 50 governed — P&L +2.5%, locked-floor days 20.2 -> 24.3% (better on 48/50), mean maxDD -65.5k -> -52.3k.
+    v.coverGiveUp = true; v.giveUpPoints = 20;
     v.giveUpMaxLoss = v.spreadWidth >= 40 ? 0.10 : v.spreadWidth >= 20 ? 0.075 : 0.05;
   }
   // ORDER SLIP — ticks over the mark on opens/offsets/wings; a credit twin concedes the same.
