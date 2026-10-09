@@ -1174,6 +1174,18 @@ app.get('/api/v1/candle-spread/status', (req, res) => {
   }
 });
 
+// WHAT THE SCHWAB ACCOUNT ACTUALLY HOLDS for an underlying + expiration (candle-spread/account-book.js): every
+// filled order with its execution prices, tagged engine / engine-unbooked / manual, cross-checked against the
+// account's position list. The UI's pull of a LIVE variant renders this, not the engine's book. ?variant= says
+// which variant is asking; `applies` is false unless that variant trades real money.
+app.get('/api/v1/candle-spread/account/:symbol/:expiration', async (req, res) => {
+  try {
+    res.json(await candleSpread.accountBook(req.params.symbol, req.params.expiration, req.query.variant));
+  } catch (error) {
+    res.status(502).json({ error: 'Failed to read the Schwab account', message: error.message });
+  }
+});
+
 // ?date= defaults to the expiration (0DTE). ?variant=v0|v1|v2 selects a shadow strategy;
 // omit it to read a pre-variant (single-strategy) run.
 app.get('/api/v1/candle-spread/runs/:symbol/:expiration', (req, res) => {

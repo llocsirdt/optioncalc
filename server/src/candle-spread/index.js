@@ -2807,7 +2807,14 @@ async function restoreHistory(days, dir) {
 }
 
 // Every entry point that opens a record funnels through this.
-function archiveReady() { return _rehydrated || Promise.resolve(null); }
+// READY = the book is back from S3 AND the control file has been read once. Every timer (candle tick, sub-bar work,
+// order poll) awaits this before acting. The control half closes a boot gap (2026-10-09): the first control
+// refresh used to happen on the first ORDER POLL, 20s after boot, so a candle tick landing inside that window ran
+// a HALTED variant on its environment mode — a deploy during a halt could send orders before the halt was read.
+let _controlLoaded = null;
+function archiveReady() {
+  return Promise.all([_rehydrated || Promise.resolve(null), _controlLoaded || Promise.resolve(null)]).then(([r]) => r);
+}
 
 function scheduleNext() {
   const delay = msToNextBoundary() + 5000; // fire 5s after the boundary
@@ -2995,6 +3002,11 @@ function start(deps) {
   started = true;
   // Kick the rehydrate off now and publish the promise; scheduleNext's handler awaits it, so the first tick
   // cannot create an empty record over a book that is still on its way back from S3.
+  // The control file, read once BEFORE anything is scheduled to act (see archiveReady). A failed read resolves
+  // anyway — SC keeps its seeded baseline and logs — so a broken S3 cannot wedge the engine; it is exactly as
+  // safe as the 20s poll that used to do the first read.
+  _controlLoaded = SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED, baseline: rosterBaseline() })
+    .catch((e) => console.error('[candle-spread] strategy-control (boot):', e && e.message));
   _rehydrated = rehydrateRuns().catch((e) => {
     console.error('[candle-spread] run archive rehydrate failed (continuing on local disk):', e && e.message);
     return { enabled: false, error: (e && e.message) || String(e) };
@@ -3460,7 +3472,55 @@ function status() {
   };
 }
 
+// ── ACCOUNT BOOK (2026-10-09) ─────────────────────────────────────────────────────────────────────────────
+// What Schwab ACTUALLY holds for one underlying + expiration, for the UI's pull of a LIVE variant (user: "the
+// pull in the UI should ALWAYS return the actual full positions set that schwab holds - NOT just what the engine
+// thinks"). Built by account-book.js from the broker's filled orders and its position list; each order is tagged
+// engine / engine-unbooked / manual against every real-sending run's order log. Read-only. Memoised briefly so
+// the UI's 45s auto-refresh (one tab or several) costs at most one account read per ACCOUNT_BOOK_TTL_MS.
+const AB = require('./account-book');
+const ACCOUNT_BOOK_TTL_MS = 15000;
+const _acctBook = new Map();   // `${symbol}:${expiration}` -> { at, promise }
+async function accountBook(symbol, expiration, variant) {
+  const sym = String(symbol || '').toUpperCase();
+  const runs = RUNS.length ? RUNS : buildRuns();   // RUNS is filled by start(); the roster otherwise
+  const live = runs.filter((r) => r.dryRun === false && String(r.symbol || '').toUpperCase() === sym);
+  // APPLIES = the asked-for variant trades real money (env-armed live; a control-file halt does not change what
+  // the account holds). The UI uses this to decide whether its pull shows the account or the engine's book.
+  const applies = variant ? live.some((r) => r.variant === variant) : live.length > 0;
+  if (!applies) return { applies: false };   // a simulated variant's pull stays the engine's book; no broker read
+  if (!(DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) {
+    return { applies, available: false, reason: 'this server has no broker connection (not prod)' };
+  }
+  const key = `${sym}:${expiration}`;
+  const hit = _acctBook.get(key);
+  if (hit && Date.now() - hit.at < ACCOUNT_BOOK_TTL_MS) return { applies, ...(await hit.promise) };
+  const promise = (async () => {
+    // A WEEK BACK: a 0DTE book fills today, but a longer-dated expiration can hold earlier fills; anything the
+    // window still misses is filled in from the position list (residual), so the legs always net to the account.
+    const exp0 = Date.parse(`${expiration}T00:00:00Z`);
+    const from = new Date((Number.isFinite(exp0) ? Math.min(exp0, Date.now()) : Date.now()) - 7 * 86400000).toISOString();
+    const [orders, det] = await Promise.all([
+      DEPS.tradingClient.ordersByAccount(DEPS.accountHash, from, new Date().toISOString()),
+      DEPS.tradingClient.accountsDetails(DEPS.accountHash, 'positions').catch((e) => { console.error('[candle-spread] account book positions:', e && e.message); return null; }),
+    ]);
+    const engineOrders = [];
+    for (const run of runs) {
+      if (!(run.dryRun === false || run.dryRun === 'test') || String(run.symbol || '').toUpperCase() !== sym) continue;
+      const rec = store.readRun(store.makeRunId(run.symbol, expiration, expiration, run.variant));
+      for (const o of (rec && rec.state && rec.state.liveOrders) || []) {
+        engineOrders.push({ orderId: o.orderId, variant: run.variant, status: o.status, brokerApplied: o.brokerApplied, adoptedFrom: o.adoptedFrom });
+      }
+    }
+    const positions = det && det.securitiesAccount ? (det.securitiesAccount.positions || []) : null;
+    return { available: true, ...AB.buildAccountBook({ symbol: sym, expiration, orders, positions, engineOrders }) };
+  })();
+  _acctBook.set(key, { at: Date.now(), promise });
+  try { return { applies, ...(await promise) }; } catch (e) { _acctBook.delete(key); throw e; }
+}
+
 module.exports = {
+  accountBook,
   // The live STARTUP check, exported so a unit test runs it against the real roster: 2026-10-05 a roster
   // field the check did not know took prod down at boot while every unit suite passed.
   assertDeps,

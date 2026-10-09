@@ -279,6 +279,14 @@
     } catch (e) { return null; }
   }
 
+  // WHAT THE SCHWAB ACCOUNT HOLDS (server: candle-spread/account-book.js). For a LIVE variant the pull renders
+  // this, never the engine's belief (user, 2026-10-09: "the UI should always show me what the account holds when
+  // pulling the LIVE strategy"). `applies` is false for a simulated variant, which keeps its engine book.
+  const accountUrl = (symbol, exp, variant) =>
+    `${RUNS_BASE}/api/v1/candle-spread/account/${encodeURIComponent(symbol)}/${encodeURIComponent(exp)}`
+    + `?variant=${encodeURIComponent(variant)}&cb=${Date.now()}`;
+  const FIVE_MIN = 5 * 60 * 1000;
+
   async function pullStrategyPositions(focus) {
     const doFocus = focus !== false;   // explicit Pull (no arg) focuses the chart; auto-refresh passes false
     const symbol = currentSymbol(), variant = currentVariant();
@@ -286,35 +294,64 @@
     if (!symbol) { setLastPulled('pick a symbol', true); return; }
     setLastPulled('pulling…', false);
     try {
-      let run;
+      // The engine's run: chart markers + the trade-details table (and the whole pull for a simulated variant).
+      let run = null, runErr = null;
       try {
-        if (!expiration) throw { status: 404 };
-        run = await fetchJson(runUrl(symbol, expiration, expiration, variant));
-      } catch (e1) {
-        if (e1.status !== 404) throw e1;
-        const r = await resolveRunDate(symbol, variant);   // roll-safe fallback: find the run's real date
-        if (!r) throw (e1 instanceof Error ? e1 : Object.assign(new Error('http 404'), { status: 404 }));
-        expiration = r.expiration;
-        run = await fetchJson(runUrl(symbol, r.expiration, r.date, variant));
+        try {
+          if (!expiration) throw { status: 404 };
+          run = await fetchJson(runUrl(symbol, expiration, expiration, variant));
+        } catch (e1) {
+          if (e1.status !== 404) throw e1;
+          const r = await resolveRunDate(symbol, variant);   // roll-safe fallback: find the run's real date
+          if (!r) throw (e1 instanceof Error ? e1 : Object.assign(new Error('http 404'), { status: 404 }));
+          expiration = r.expiration;
+          run = await fetchJson(runUrl(symbol, r.expiration, r.date, variant));
+        }
+      } catch (e) { runErr = e; }
+      // The ACCOUNT, for a live variant — even when the engine has no run (a manual-only book is still a book).
+      let acct = null;
+      if (expiration) {
+        try { acct = await fetchJson(accountUrl(symbol, expiration, variant)); }
+        catch (e) { acct = { applies: true, available: false, reason: e.message }; }
       }
-      resolvedExp[`${symbol}:${variant}`] = expiration;    // remember so restore/markers stay aligned
-      const record = run.record || run;
-      const result = strategyRunToOptionArray(record);
-      if (!result.count) { setLastPulled(`no ${variant} positions yet`, false); return; }
+      const fromAccount = !!(acct && acct.applies && acct.available);
+      if (!run && !fromAccount) throw runErr || Object.assign(new Error('http 404'), { status: 404 });
+      if (run) resolvedExp[`${symbol}:${variant}`] = expiration;    // remember so restore/markers stay aligned
+      const result = run ? strategyRunToOptionArray(run.record || run) : { count: 0, positions: [], optionArrayString: '', legEpochs: [] };
+      const optionArrayString = fromAccount ? acct.optionArrayString : result.optionArrayString;
+      const legEpochs = fromAccount ? (acct.legEpochs || []).map((e) => (e != null ? Math.floor(e / FIVE_MIN) * FIVE_MIN : null)) : (result.legEpochs || []);
+      if (!optionArrayString) { setLastPulled(fromAccount ? 'account holds nothing for this expiration' : `no ${variant} positions yet`, false); return; }
       const textInput = el('textInput');
       if (textInput) {
         // Hand the per-leg trade times over BEFORE processInput reads the textarea — the leg string itself
         // has nowhere to carry them, so the playback slider gets them through this side channel and runs
         // on the clock instead of on position count.
-        if (typeof window.setPositionTimes === 'function') window.setPositionTimes(result.optionArrayString, result.legEpochs || []);
-        textInput.value = JSON.stringify({ optionArray: result.optionArrayString }, null, 2);
+        if (typeof window.setPositionTimes === 'function') window.setPositionTimes(optionArrayString, legEpochs);
+        textInput.value = JSON.stringify({ optionArray: optionArrayString }, null, 2);
         if (typeof processInput === 'function') processInput();
       }
-      saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
-      applyTradesToChart(result.positions, doFocus);
-      renderStrategyTradeDetails(result.positions);
+      if (result.count) {
+        saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
+        applyTradesToChart(result.positions, doFocus);
+        renderStrategyTradeDetails(result.positions);
+      }
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setLastPulled(`${result.count} pos · ${t}`, false);
+      if (fromAccount) {
+        // EVERY DISAGREEMENT, SAID ON THE BAR: orders the engine did not send, fills it never booked, holdings
+        // today's fills do not explain. Full notes on hover; the server's own words.
+        const flags = acct.flags || [];
+        const c = acct.counts || {};
+        const s = el('ps-last-pulled');
+        setLastPulled(`${c.legs} legs · Schwab account · ${t}`
+          + (flags.length ? ` · ⚠ engine missing ${flags.length}: ${c.manual || 0} manual, ${c.engineUnbooked || 0} unbooked${c.residualLegs ? `, ${c.residualLegs} unexplained` : ''}` : ' · engine agrees'),
+          flags.length > 0);
+        if (s) s.title = flags.map((f) => f.note).join('\n') || 'every filled order is in the engine book';
+      } else {
+        const s = el('ps-last-pulled');
+        if (s) s.title = '';
+        setLastPulled(`${result.count} pos · ${t}` + (acct && acct.applies && !acct.available
+          ? ` · ⚠ ENGINE BOOK — Schwab account unreadable (${acct.reason || 'unavailable'})` : ''), !!(acct && acct.applies && !acct.available));
+      }
     } catch (e) {
       setLastPulled(e.status === 404 ? `no ${variant} run for ${symbol}` : `pull failed (${e.message})`, true);
     }
