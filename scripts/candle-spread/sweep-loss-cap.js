@@ -244,14 +244,15 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
     floorOffset: r.lossMax != null ? true : undefined, flyConvert: /^v[02468]-/.test(r.variant) ? true : undefined })],
   ['raise-wing off', () => ({ floorRaiseWings: undefined })],
   ['raise-cap off', () => ({ floorRaiseCapFix: undefined })],
-  // OPEN BAND HIGH SIDE (2026-10-09): roster = 50% +/- 5% of width at every width, cheap placements labelled not
-  // refused. These raise the cap (and the walk ceiling with it) to 7.5% / 10% over half the width.
-  ['band high 7.5%', (r) => (r.adaptiveGeo ? { capFrac: 0.575, openWalkCapFrac: 0.575 } : {})],
-  ['band high 10%', (r) => (r.adaptiveGeo ? { capFrac: 0.60, openWalkCapFrac: 0.60 } : {})],
+  // OPEN BAND HIGH SIDE, 10W ONLY (2026-10-09): the user set 20W $11.50 / 40W $23.50; the 10W cap ($5.50 = +5%) is
+  // measured against +7.5% / +10%. null = the arm does not apply to this variant (no job).
+  ['10W cap 5.75', (r) => (r.adaptiveGeo && r.spreadWidth === 10 ? { capFrac: 0.575, openWalkCapFrac: 0.575 } : null)],
+  ['10W cap 6.00', (r) => (r.adaptiveGeo && r.spreadWidth === 10 ? { capFrac: 0.60, openWalkCapFrac: 0.60 } : null)],
 ] : [];
 if (REVAL_ARMS.length) {
-  for (const run of RUNS) for (const [name, over] of REVAL_ARMS) JOBS.push({ variant: run.variant, rung: `reval ${name}`,
-    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });
+  for (const run of RUNS) for (const [name, over] of REVAL_ARMS) { const o = over(run); if (o === null) continue;
+    JOBS.push({ variant: run.variant, rung: `reval ${name}`,
+    k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: o }); }
 } else if (MINLOCK_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of MINLOCK_ARMS) JOBS.push({ variant: run.variant, rung: `minLock ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: over(run) });

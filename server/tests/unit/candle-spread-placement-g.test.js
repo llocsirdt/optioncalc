@@ -69,7 +69,7 @@ const G10 = { spreadWidth: 10, strikeIncrement: 10, tickIncrement: 0.05, quantit
   const g = (r) => [r.minDebitFrac, r.capFrac, r.openWalkCapFrac, r.maxOtmStrikes].join('/');
   // ONE BAND, EVERY WIDTH (2026-10-09): 50% +/- 5% of width, walk ceiling = cap.
   ok(g(by['v7-10']) === '0.45/0.55/0.55/1', `v7-10 carries the band (${g(by['v7-10'])})`);
-  ok(g(by['v7-20']) === '0.45/0.55/0.55/1' && g(by['v7-40']) === '0.45/0.55/0.55/1', `20- and 40-wide: the same band (${g(by['v7-20'])}, ${g(by['v7-40'])})`);
+  ok(g(by['v7-20']) === '0.45/0.575/0.575/1' && g(by['v7-40']) === '0.45/0.5875/0.5875/1', `20W cap $11.50, 40W $23.50 (${g(by['v7-20'])}, ${g(by['v7-40'])})`);
   ok(runs.filter((r) => /-unc$/.test(r.variant)).every((r) => g(r) === g(by[r.variant.replace(/-unc$/, '')])),
     'every -unc twin has exactly its parent\'s placement (twins differ only in the governor)');
   ok(runs.filter((r) => /-cATM$/.test(r.variant)).every((r) => r.minDebitFrac == null && !r.adaptiveGeo),
