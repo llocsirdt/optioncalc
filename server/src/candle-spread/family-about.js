@@ -30,7 +30,8 @@ const FAMILY = {
 };
 // Everything below the signal is shared by every strategy (see docs/strategies/README.md).
 const SHARED = 'Shared by all: day-loss governor, placement G (deepest ITM inside a price band), open ladder, '
-  + 'continuous covers + ladder, give-up, stall cover (15 min), late-day guard (15:00), floor raise (spreads first, 3:1).';
+  + 'continuous covers + ladder, give-up, stall cover (15 min), late-day guard (15:00), floor raise (spreads first, 3:1; '
+  + 'also the must-fix past the loss cap and peak-banking wings with an upside term).';
 
 function describeVariant(variant) {
   const m = /^(v\d)-(\d+)(-(unc|cATM))?$/.exec(String(variant || ''));

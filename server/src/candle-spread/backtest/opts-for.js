@@ -128,7 +128,9 @@ function optsFor(v, env) {
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
   for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',
     'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
-    'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseNearCapFrac', 'floorRaiseNearCapRatio']) if (v[k] != null) o[k] = v[k];
+    'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseNearCapFrac', 'floorRaiseNearCapRatio',
+    // floor-repair fold stages (2026-10-09): must-fix offsets and wings run by floor raise
+    'floorRaiseCapFix', 'floorRaiseWings']) if (v[k] != null) o[k] = v[k];
   if (v.coverLadder) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
@@ -170,7 +172,7 @@ function optsFor(v, env) {
   // In the wings-off control the wing flags are deliberately NOT forwarded; declare that to the guard
   // rather than letting it pass silently, so the omission stays an explicit choice.
   const WING_KEYS = ['wingConvert', 'wingMinRatio', 'wingAfterMin', 'wingBudgetFrac', 'wingBudget',
-    'wingMaxPerDay', 'wingBandSigmas', 'wingOutSteps', 'wingNaked', 'wingUpsideLambda', 'wingTailSigmas'];
+    'wingMaxPerDay', 'wingBandSigmas', 'wingOutSteps', 'wingNaked', 'wingUpsideLambda', 'wingTailSigmas', 'floorRaiseWings'];
   if (noWings) for (const k of WING_KEYS) delete o[k];
   VC.assertForwarded(v, Object.keys(o), `${(env && env.where) || 'optsFor'}`,
     ['capitalRecapture', 'openAlternateEvery', 'creditCoverFrac', 'coverToStackMinFrac',

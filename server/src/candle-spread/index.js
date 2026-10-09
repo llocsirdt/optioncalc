@@ -856,6 +856,31 @@ function applyFloorRaise(v) {
   // (v7-10 55.4% vs 47.9% under B) — measured and recorded; the user chose B for all strategies.
   v.floorRaiseObjective = 'spreadFirst';
 }
+// FLOOR REPAIR FOLD (user, 2026-10-09): wings, floor offsets and fly/condor repair were all built to do what
+// floor raise now does — lift the low points of the risk curve — and ran beside it as separate hedgers with
+// their own triggers, pacing and (for wings/flies) ask-side pricing. On the same bar they could buy against the
+// same valley, each blind to the other's working order. Floor raise is now the ONE floor-repair engine:
+//   - offsets' MUST-FIX (floor past lossMax: best available lift, no ratio, every bar) -> floorRaiseCapFix,
+//     run by floor raise as its `raise-cap` stage. Offsets' 3:1-at-lossTarget stage is dropped: the planner's
+//     own 3:1 pass covers it.
+//   - wings (peak -> floor, with the upside term the user chose to keep) -> floorRaiseWings, the `raise-wing`
+//     stage: runs on a floor-raise pass that found nothing, priced off the mid like every raise.
+//   - flies/condors: already on the floor-raise menu (fixed and valley-sized), priced at the mid.
+// Each stage still logs under its own action so the output shows which repair fired. Applies only where
+// floor raise is on, so CANDLE_SPREAD_FLOOR_RAISE=off (or CANDLE_SPREAD_FLOOR_FOLD=off) restores the legacy
+// hedgers exactly.
+const FLOOR_FOLD = String(process.env.CANDLE_SPREAD_FLOOR_FOLD || 'on').toLowerCase() !== 'off';
+function applyFloorRepairFold(v) {
+  if (!FLOOR_FOLD || v.floorRaise !== true) return;
+  // floorOffset is INHERITED from BASE_RUNS at buildRuns' merge ({...base, ...v}), so it is not on the variant
+  // yet; an explicit false here wins that merge. Governed (lossMax set) and not opted out = had offsets.
+  if (v.floorOffset !== false && v.lossMax != null) { v.floorRaiseCapFix = true; v.floorOffset = false; }
+  if (v.wingConvert === true) { v.floorRaiseWings = true; v.wingConvert = false; }
+  if (v.flyConvert === true) {
+    v.flyConvert = false;
+    for (const k of ['flyMinRatio', 'flyBandSig', 'flyBudget', 'flyMaxPerDay', 'flyCondors', 'flyBeforeMin']) delete v[k];
+  }
+}
 function applySimFillRealism(v) {
   if (SIM_FILL_LEGACY) return;
   if (v.simOpenFillMinLooks == null) v.simOpenFillMinLooks = 2;
@@ -973,6 +998,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
     v.flyConvert = true; v.flyMinRatio = 3; v.flyBandSig = 1.5;
     v.flyBudget = 1500; v.flyMaxPerDay = 4; v.flyCondors = true; v.flyBeforeMin = 15 * 60;
   }
+  applyFloorRepairFold(v);
   // FLOOR RATCHET last — it reads spreadWidth, which every builder has set by the time we get here.
   // `-unc` twins never take it (see the note on FLOOR_RATCHET_FLEET); the explicit A/B map overrides
   // the grid so a single arm can be re-pointed from the environment without a package + deploy.
@@ -1941,7 +1967,9 @@ function assertDeps(runs) {
         'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin',
         // floor raise: read straight off cfg by trader.raiseFloor
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
-        'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric']);
+        'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
+        // fold stages (2026-10-09): read off cfg / floorRaiseCfg by trader.raiseFloor and raiseCapFixOn
+        'floorRaiseCapFix', 'floorRaiseWings']);
   }
 }
 

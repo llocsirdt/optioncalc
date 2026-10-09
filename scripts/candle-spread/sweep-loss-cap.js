@@ -237,10 +237,13 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['late 15:00 0W', () => ({ lateFloorGiveW: 0 })],
   ['floor raise off', () => ({ floorRaise: false })],
   ['minLock bell 0.03', (r) => ({ minLockCurve: [[570, 0.03], [660, r.continuousCoverMinLockFrac], [780, r.continuousCoverMinLockFrac], [900, 0.03]] })],
-  // FLY / CONDOR VALLEY REPAIR (2026-10-09): the roster splits it by family (even on, odd off), so one of these two
-  // arms is a no-op per variant. Run both so every variant gets an on AND an off row for one fleet-wide default.
-  ['fly on', () => ({ flyConvert: true, flyMinRatio: 3, flyBandSig: 1.5, flyBudget: 1500, flyMaxPerDay: 4, flyCondors: true, flyBeforeMin: 15 * 60 })],
-  ['fly off', () => ({ flyConvert: false, flyMinRatio: undefined, flyBandSig: undefined, flyBudget: undefined, flyMaxPerDay: undefined, flyCondors: undefined, flyBeforeMin: undefined })],
+  // FLOOR REPAIR FOLD (2026-10-09): the roster runs wings + must-fix offsets as stages of floor raise. `legacy
+  // hedgers` restores the pre-fold setup (stand-alone wings, offsets incl. the 3:1-at-target stage, flies on the
+  // even families); the two `off` arms drop one fold stage each. `floor raise off` above = no floor repair at all.
+  ['legacy hedgers', (r) => ({ floorRaiseCapFix: undefined, floorRaiseWings: undefined, wingConvert: true,
+    floorOffset: r.lossMax != null ? true : undefined, flyConvert: /^v[02468]-/.test(r.variant) ? true : undefined })],
+  ['raise-wing off', () => ({ floorRaiseWings: undefined })],
+  ['raise-cap off', () => ({ floorRaiseCapFix: undefined })],
 ] : [];
 if (REVAL_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of REVAL_ARMS) JOBS.push({ variant: run.variant, rung: `reval ${name}`,

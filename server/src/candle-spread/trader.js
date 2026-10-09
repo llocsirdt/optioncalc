@@ -937,8 +937,14 @@ function noteFloorPeak(st, deps) {
 // could actually be repaired at. Respects leg-uniqueness, since a hedge that nets against an existing
 // position is not a hedge. Nothing is sent when the search finds no qualifying candidate — an expensive
 // repair is worse than the exposure it removes, which is the whole point of the gate.
+// The floor-raise settings in force: the CURRENT roster's when the caller supplies them (see raiseFloor).
+const raiseCfgOf = (cfg, deps) => (deps && deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg);
+// FLOOR RAISE CAP STAGE (floorRaiseCapFix, 2026-10-09 fold): offsets' must-fix, run by floor raise. True only
+// while floor raise itself is on, so its kill switch also stops this stage.
+const raiseCapFixOn = (cfg, deps) => { cfg = raiseCfgOf(cfg, deps); return cfg.floorRaise === true && cfg.floorRaiseCapFix === true; };
 async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, force) {
-  if (!(deps.floorOffset === true) || !govOn(deps)) return 0;
+  const viaRaise = deps.floorOffset !== true;
+  if (!(deps.floorOffset === true || (force && raiseCapFixOn(cfg, deps))) || !govOn(deps)) return 0;
   const spot = deps.underlying;
   if (!(spot > 0)) return 0;
   const minRatio = force ? 0 : (deps.floorOffsetMinRatio != null ? deps.floorOffsetMinRatio : 3);
@@ -1047,7 +1053,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     st.positions.push(best.hp);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(best.hp.legs);
     bought++;
-    decisions.push({ action: 'floor-offset', id: best.hp.id, legs: best.hp.legs, cost: round2(best.cost),
+    decisions.push({ action: viaRaise ? 'raise-cap' : 'floor-offset', id: best.hp.id, legs: best.hp.legs, cost: round2(best.cost),
       lift: round2(best.lift), ratio: round2(best.ratio), forced: !!force, limit: limitPx, mark: chk.mark,
       spentToday: round2(st.offSpent) });
   }
@@ -1068,8 +1074,10 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
 // The band (how far the underlying can plausibly travel by settle) comes from the SAME formula the
 // backtest uses — 15m Bollinger width -> implied vol -> spot·iv·√tau — so live and backtest anchor their
 // wings on the same expected move rather than two different notions of "far".
-async function convertWings(st, cfg, deps, decisions, candleTime) {
-  if (!(deps.wingConvert === true)) return 0;
+// viaRaise (2026-10-09 fold): called by floor raise as its `raise-wing` stage rather than on its own. Priced
+// like every raise — off the MID, one tick per leg toward the market — instead of paying the ask.
+async function convertWings(st, cfg, deps, decisions, candleTime, viaRaise = false) {
+  if (!(deps.wingConvert === true || viaRaise)) return 0;
   const spot = deps.underlying;
   const A = deps.A;
   if (!(spot > 0) || !A || !A['15m'] || !st.positions.length) return 0;
@@ -1097,9 +1105,11 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
 
   // MARKETABLE pricing off the real chain: pay the ask on a long leg, receive the bid on a short. The
   // backtest approximates this with mid ± slip; here the actual quotes are available, so use them.
+  const wTick = cfg.tickIncrement || 0.05;
   const price = (type, strike, legSide) => {
     const q = deps.getLeg(type, strike);
     if (!q) return null;
+    if (viaRaise) return q.mid != null ? q.mid + (legSide === 'long' ? wTick : -wTick) : null;
     const px = legSide === 'long' ? (q.ask != null ? q.ask : q.mid) : (q.bid != null ? q.bid : q.mid);
     return px != null ? px : null;
   };
@@ -1134,10 +1144,10 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     }
     if (!resolved.length) continue;
     // SAME FILL TEST AS EVERY OTHER ORDER (markFill) — a wing no longer books on its own cost estimate.
-    const limitPx = tickUp(w.cost + openSlip(cfg, deps), cfg.tickIncrement);   // on the $0.05 tick: off-tick prices were sent before (2026-10-04 sweep)
+    const limitPx = tickUp(w.cost + (viaRaise ? 0 : openSlip(cfg, deps)), cfg.tickIncrement);   // viaRaise: the tick per leg IS the slip; on the $0.05 tick: off-tick prices were sent before (2026-10-04 sweep)
     const chk = markFill(w.legs, limitPx, deps.getLeg, cfg.tickIncrement, deps);
     if (chk.mark == null) {                  // unquotable — nothing to work
-      decisions.push({ action: 'wing-nofill', tag: w.tag, legs: w.legs, mark: null, limit: limitPx });
+      decisions.push({ action: viaRaise ? 'raise-wing-nofill' : 'wing-nofill', tag: w.tag, legs: w.legs, mark: null, limit: limitPx });
       continue;
     }
     const payload = buildOrderPayload(resolved, limitPx, cfg.quantity, 'DEBIT');
@@ -1155,7 +1165,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime) {
     st.positions.push(pos);
     if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(w.legs);
     bought++;   // count + spend move to the FILL (resolvePendingHedges); budget belongs to wings we own
-    decisions.push({ action: 'wing', id: pos.id, tag: w.tag, naked: !!w.naked, side: w.side,
+    decisions.push({ action: viaRaise ? 'raise-wing' : 'wing', id: pos.id, tag: w.tag, naked: !!w.naked, side: w.side,
       cost: round2(chk.fill * 100 * cfg.quantity), ratio: w.ratio, peakNow: round2(peakNow), spentToday: st.wingSpent,
       mark: chk.mark, limit: limitPx });
   }
@@ -1306,7 +1316,10 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   const maxPerDay = cfg.floorRaiseMaxPerDay != null ? cfg.floorRaiseMaxPerDay : 8;
   const pend = pendingHedges(st, 'raise', cfg.quantity);
   const trendBlocked = { n: 0 };
-  if (pend.n > 0 || st.raiseCount >= maxPerDay) return 0;
+  // ONE WORKING REPAIR AT A TIME: a working raise-stage wing holds the slot too, or the next pass would plan
+  // against a book that does not yet include it (the double-buy the fold exists to remove).
+  const pendWing = cfg.floorRaiseWings === true ? pendingHedges(st, 'wing', cfg.quantity).n : 0;
+  if (pend.n > 0 || pendWing > 0 || st.raiseCount >= maxPerDay) return 0;
   st.raiseLastEpoch = nowMs;
 
   // SAME expected-move band as wings and flies: 15m Bollinger width -> IV (intraday term structure) -> spot*iv*sqrt(tau).
@@ -1430,6 +1443,9 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   }
   if (insaneQuotes.length) decisions.push({ action: 'raise-quote-insane', count: insaneQuotes.length, examples: insaneQuotes.slice(0, 3),
     note: 'structures skipped: quoted far from what they pay at the current price (stale deep-ITM legs)' });
+  // RAISE-WING STAGE (floorRaiseWings): nothing on the floor menu cleared its ratio this pass, so try banking
+  // the peak with the wing planner (upside term kept, the user's choice 2026-10-09). Same 15-min pass.
+  if (!placedN && cfg.floorRaiseWings === true) placedN += await convertWings(st, cfg, deps, decisions, candleTime, true);
   return placedN;
 }
 
@@ -1867,9 +1883,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   //   (1) ratio-gated offsets toward the WORKING TARGET — outsized risk reduction for a small slice of peak
   //   (2) MUST-FIX toward the HARD CEILING — take the best available lift regardless of ratio, because
   //       lossMax is a ceiling and not a preference.
-  if (govOn(deps) && deps.floorOffset === true) {
+  if (govOn(deps) && (deps.floorOffset === true || raiseCapFixOn(cfg, deps))) {
     const floorNow = () => RC.bookFloor(st.positions.filter((p) => p.filled !== false), null, 10);
-    if (deps.lossTarget != null && -floorNow() > deps.lossTarget) {
+    // (1) is legacy floorOffset only: under the floor-raise fold its 3:1 pass covers the target.
+    if (deps.floorOffset === true && deps.lossTarget != null && -floorNow() > deps.lossTarget) {
       await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossTarget, false);
     }
     if (deps.lossMax != null && -floorNow() > deps.lossMax) {

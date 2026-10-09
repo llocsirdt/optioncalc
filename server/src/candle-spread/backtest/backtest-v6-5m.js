@@ -414,6 +414,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   // while v7-10's real orders at the same prices often did not fill. Bookings still happen AT the limit.
   // FLOOR RAISE (see the bar-loop block) — off unless opts.floorRaise.
   const floorRaiseOn = opts.floorRaise === true;
+  // FLOOR REPAIR FOLD (2026-10-09; see index.js applyFloorRepairFold): offsets' must-fix and wing conversion run
+  // as stages OF floor raise. floorRaiseCapFix = must-fix past lossMax; floorRaiseWings = the wing planner on a
+  // floor-raise pass that found nothing, priced off the mid (one tick per leg) like every raise.
+  const frCapFix = floorRaiseOn && opts.floorRaiseCapFix === true;
+  const frWings = floorRaiseOn && opts.floorRaiseWings === true;
+  let frWingCount = 0, frCapCount = 0;
   // Defaults = the user's policy (2026-10-05): ANY amount, as long as the floor rises net of cost by at least
   // the cost (ratio 1 on NET lift) and a locked profit is never put at risk.
   const frBudgetFrac = opts.floorRaiseBudgetFrac != null ? opts.floorRaiseBudgetFrac : Infinity;
@@ -556,7 +562,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // Buy the cheapest high-ratio far-side offsets until the floor is back inside `limit` (or nothing
   // clears the ratio / the day budget is spent). Returns how many were bought.
   function buyFloorOffsets(limit, S, tau, iv, force) {
-    if (!floorOffset) return 0;
+    if (!floorOffset && !(force && frCapFix)) return 0;
     const ivFor = volFn(iv);
     const mark = (type, k) => bs.bsPrice(type, S, k, tau, ivFor(type, k));
     // FORCE = "must-fix" mode, used only when the floor is through the HARD ceiling: take the best
@@ -644,9 +650,10 @@ function runDay5m(bars, signalFn, opts = {}) {
     // (1) FREE first — lock deep-ITM winners, but only those that actually lift the book floor.
     floorCovers += lockDeepWinners(() => -floorNow() > lossTarget, S, tau, iv, true).length;
     // (2) Ratio-gated offsets toward the WORKING TARGET: outsized risk reduction for a small slice of peak.
-    if (-floorNow() > lossTarget) buyFloorOffsets(lossTarget, S, tau, iv, false);
+    // Legacy floorOffset only: under the floor-raise fold the planner's own 3:1 pass covers the target.
+    if (floorOffset && -floorNow() > lossTarget) buyFloorOffsets(lossTarget, S, tau, iv, false);
     // (3) MUST-FIX toward the HARD ceiling: whatever the best available lift is, take it.
-    if (-floorNow() > lossMax) buyFloorOffsets(lossMax, S, tau, iv, true);
+    if (-floorNow() > lossMax) { const n = buyFloorOffsets(lossMax, S, tau, iv, true); if (!floorOffset) frCapCount += n; }
   }
 
   for (let i = 0; i < bars.length; i++) {
@@ -1184,6 +1191,49 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (opts.floorRaiseTrendPermit === 'beWrong' && guSig && /^be-wrong/.test(String(guSig.reason || ''))) return null;
       return { dir, spot: spotNow, blocked: frTrendBlocked };
     };
+    // (b2) WING CONVERSION — bank peak as floor. Runs regardless of whether the floor is healthy (that is
+    // the whole point); gated by time-of-day, a re-plan interval, a per-day count and a budget expressed as
+    // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
+    // viaRaise: the floor-raise fold's `raise-wing` stage (floorRaiseWings) — same planner, mid pricing, run on a
+    // floor-raise pass that found nothing. Returns how many wings were booked.
+    const runWings = (viaRaise) => {
+      if (!(wingCount < wingMaxPerDay && etMinute(bars[i].dt) >= wingAfterMin && st.positions.length)) return 0;
+      wingLastBar = i;
+      let placed = 0;
+      // `iv` is a per-leg FUNCTION when ivSkew is on, so `S * iv` is NaN and the band silently fails the
+      // `> 0` test — which is why wing conversion never fired once the skew became the default. The band is
+      // an expected-move width, so it wants the ATM scalar vol, not the smile.
+      const ivAtm = typeof iv === 'function' ? iv('C', S) : iv;
+      const band = Math.round(S * ivAtm * Math.sqrt(tau) * wingBandSig);
+      if (band > 0) {
+        // marketable proxy: buy the long leg above mid, sell the short below (live swaps in real quotes)
+        // viaRaise: priced like every raise — the mid plus one tick per leg toward the market.
+        const legSlip = viaRaise ? TICK : wingSlip;
+        const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike)) + (legSide === 'long' ? legSlip : -legSlip);
+        const bookView = st.positions.map(p => ({ filled: true, legs: p.legs, limit: p.limit, quantity: QTY, covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
+        // Budget is a fraction of the CURRENT peak — there has to be a peak worth converting before we
+        // spend anything, and a small tent can never justify real premium.
+        const shape = WG.curveShape(bookView, { step: legIncr });
+        const peakNow = shape ? shape.peak.pnl : 0;
+        const budget = Math.min(opts.wingBudget != null ? opts.wingBudget : Infinity, wingBudgetFrac * peakNow);
+        const plan = peakNow > 0 && budget > 0 ? WG.planWings(bookView, {
+          spot: S, band, incr: legIncr, price, qty: QTY, step: legIncr, budget,
+          maxWings: Math.min(3, wingMaxPerDay - wingCount), minRatio: wingMinRatio,
+          // Shape of the candidate set + how much the uncapped tail is worth. Defaults reproduce the
+          // capped-at-the-anchor, spreads-only behaviour exactly.
+          outSteps: opts.wingOutSteps, naked: opts.wingNaked,
+          upsideLambda: opts.wingUpsideLambda, tailSigmas: opts.wingTailSigmas,
+        }) : null;
+        if (plan && plan.wings.length) {
+          for (const w of plan.wings) {
+            st.positions.push({ side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true, openEpoch: nowEpoch, openTime: nowET });
+            wingSpent += w.cost * 100 * QTY; wingCount++; if (viaRaise) frWingCount++; placed++;
+          }
+          markBookDirty();
+        }
+      }
+      return placed;
+    };
     if (frWorking.length) {
       const ivForW = volFn(iv);
       const markAt = (legs, u) => { let m = 0; for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, u, l.strike, tau, ivForW(l.type, l.strike)); return m; };
@@ -1207,6 +1257,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     if (floorRaiseOn && !frWorking.length && etMinute(bars[i].dt) >= frAfterMin && i - frLastBar >= frEvery && st.positions.length && frCount < frMaxPerDay) {
       frLastBar = i;
+      let frThisPass = 0;   // structures placed/booked by this pass (the raise-wing stage runs only on an empty one)
       const ivAtmF = typeof iv === 'function' ? iv('C', S) : iv;
       const bw = S * ivAtmF * Math.sqrt(tau) * frSigmas;
       if (bw > 0) {
@@ -1242,57 +1293,24 @@ function runDay5m(bars, signalFn, opts = {}) {
           frBlockedLocked += blockedLocked;
           if (!best) break;
           if (frResting) {
-            for (const h of companion ? [best, companion] : [best]) { frWorking.push({ h, bar: i, lift: h === best ? best.lift : 0 }); frPlaced++; }
+            for (const h of companion ? [best, companion] : [best]) { frWorking.push({ h, bar: i, lift: h === best ? best.lift : 0 }); frPlaced++; frThisPass++; }
             break;   // the plan assumed these fill; re-plan only once they resolve
           }
           for (const h of companion ? [best, companion] : [best]) {
             st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false,
               pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
             if (enforceLegs) ledger.record(h.legs);
-            frSpent += h.cost; frCount++;
+            frSpent += h.cost; frCount++; frThisPass++;
             for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(h.legs, xs[j], QTY) - h.cost;
           }
           markBookDirty();
           frLift += best.lift;
         }
       }
+      // RAISE-WING STAGE (floorRaiseWings): nothing on the floor menu cleared its ratio, so try banking the peak.
+      if (frWings && !frThisPass) runWings(true);
     }
-    // (b2) WING CONVERSION — bank peak as floor. Runs regardless of whether the floor is healthy (that is
-    // the whole point); gated by time-of-day, a re-plan interval, a per-day count and a budget expressed as
-    // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
-    if (wingOn && wingCount < wingMaxPerDay && etMinute(bars[i].dt) >= wingAfterMin && i - wingLastBar >= wingEvery && st.positions.length) {
-      wingLastBar = i;
-      // `iv` is a per-leg FUNCTION when ivSkew is on, so `S * iv` is NaN and the band silently fails the
-      // `> 0` test — which is why wing conversion never fired once the skew became the default. The band is
-      // an expected-move width, so it wants the ATM scalar vol, not the smile.
-      const ivAtm = typeof iv === 'function' ? iv('C', S) : iv;
-      const band = Math.round(S * ivAtm * Math.sqrt(tau) * wingBandSig);
-      if (band > 0) {
-        // marketable proxy: buy the long leg above mid, sell the short below (live swaps in real quotes)
-        const price = (type, strike, legSide) => bs.bsPrice(type, S, strike, tau, ivFor(type, strike)) + (legSide === 'long' ? wingSlip : -wingSlip);
-        const bookView = st.positions.map(p => ({ filled: true, legs: p.legs, limit: p.limit, quantity: QTY, covered: p.covered, coverLegs: p.coverLegs, coverLimit: p.coverLimit }));
-        // Budget is a fraction of the CURRENT peak — there has to be a peak worth converting before we
-        // spend anything, and a small tent can never justify real premium.
-        const shape = WG.curveShape(bookView, { step: legIncr });
-        const peakNow = shape ? shape.peak.pnl : 0;
-        const budget = Math.min(opts.wingBudget != null ? opts.wingBudget : Infinity, wingBudgetFrac * peakNow);
-        const plan = peakNow > 0 && budget > 0 ? WG.planWings(bookView, {
-          spot: S, band, incr: legIncr, price, qty: QTY, step: legIncr, budget,
-          maxWings: Math.min(3, wingMaxPerDay - wingCount), minRatio: wingMinRatio,
-          // Shape of the candidate set + how much the uncapped tail is worth. Defaults reproduce the
-          // capped-at-the-anchor, spreads-only behaviour exactly.
-          outSteps: opts.wingOutSteps, naked: opts.wingNaked,
-          upsideLambda: opts.wingUpsideLambda, tailSigmas: opts.wingTailSigmas,
-        }) : null;
-        if (plan && plan.wings.length) {
-          for (const w of plan.wings) {
-            st.positions.push({ side: 'wing', shortStrike: null, legs: w.legs, limit: w.cost, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, wing: true, openEpoch: nowEpoch, openTime: nowET });
-            wingSpent += w.cost * 100 * QTY; wingCount++;
-          }
-          markBookDirty();
-        }
-      }
-    }
+    if (wingOn && i - wingLastBar >= wingEvery) runWings(false);
     // FLY / CONDOR VALLEY REPAIR (opts.flyConvert, default OFF).
     //
     // The complement to wingConvert, not a replacement. Wings and offsets only BUY, so they need cheap
@@ -1720,7 +1738,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpPos: st.positions.filter((p) => p._gu).length,
     giveUpCovered: st.positions.filter((p) => p._gu && p.covered).length,
     floorRaise: floorRaiseOn ? { count: frCount, spent: Math.round(frSpent), lift: Math.round(frLift), blockedLocked: frBlockedLocked,
-      placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n, nearCapPasses: frNearCapPasses } : null,
+      placed: frResting ? frPlaced : frCount, expired: frExpired, trendBlocked: frTrendBlocked.n, nearCapPasses: frNearCapPasses,
+      // fold stages, counted apart so a run says which repair fired: raise-wing (wings) and raise-cap (must-fix offsets)
+      wingStage: frWings ? frWingCount : undefined, capStage: frCapFix ? frCapCount : undefined } : null,
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
