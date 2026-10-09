@@ -312,7 +312,9 @@
       let acct = null;
       if (expiration) {
         try { acct = await fetchJson(accountUrl(symbol, expiration, variant)); }
-        catch (e) { acct = { applies: true, available: false, reason: e.message }; }
+        // 404 = a server without the endpoint (not yet deployed): no account view, not an alarm. Any other
+        // failure on a server that has it is an alarm, because a live variant may be showing the wrong book.
+        catch (e) { acct = e.status === 404 ? null : { applies: true, available: false, reason: e.message }; }
       }
       const fromAccount = !!(acct && acct.applies && acct.available);
       if (!run && !fromAccount) throw runErr || Object.assign(new Error('http 404'), { status: 404 });
