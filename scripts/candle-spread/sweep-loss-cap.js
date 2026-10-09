@@ -237,6 +237,10 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['late 15:00 0W', () => ({ lateFloorGiveW: 0 })],
   ['floor raise off', () => ({ floorRaise: false })],
   ['minLock bell 0.03', (r) => ({ minLockCurve: [[570, 0.03], [660, r.continuousCoverMinLockFrac], [780, r.continuousCoverMinLockFrac], [900, 0.03]] })],
+  // FLY / CONDOR VALLEY REPAIR (2026-10-09): the roster splits it by family (even on, odd off), so one of these two
+  // arms is a no-op per variant. Run both so every variant gets an on AND an off row for one fleet-wide default.
+  ['fly on', () => ({ flyConvert: true, flyMinRatio: 3, flyBandSig: 1.5, flyBudget: 1500, flyMaxPerDay: 4, flyCondors: true, flyBeforeMin: 15 * 60 })],
+  ['fly off', () => ({ flyConvert: false, flyMinRatio: undefined, flyBandSig: undefined, flyBudget: undefined, flyMaxPerDay: undefined, flyCondors: undefined, flyBeforeMin: undefined })],
 ] : [];
 if (REVAL_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of REVAL_ARMS) JOBS.push({ variant: run.variant, rung: `reval ${name}`,
