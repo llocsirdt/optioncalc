@@ -622,11 +622,13 @@ const ORDER_SLIP_AB = (() => {
 // 0.10 because the sweep likes it there would confound level with signal block and answer nothing.
 const MINLOCK_FAMS = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9'];
 const MINLOCK_WIDTHS = [10, 20, 40];
-// THE CONTROLS — three whole cells (base + `-unc`; W=10 has no `-cATM`), so six variants keep the family
-// default and no ladder. One per signal block: v1-10 classic, v2-10 classic at-money, v6-10 multi-TF.
-// Whole cells rather than single variants, again so the twin comparison stays clean.
+// THE CONTROLS — whole cells (base + `-unc`) that run WITHOUT the ladder. EMPTY since 2026-10-09 (user): the
+// ladder is on for every variant. v1-10, v2-10 and v6-10 had been no-ladder controls since 09-15, which made
+// them read as weaker strategies when they were really the same strategy minus the ladder — and v6-10 was
+// being weighed against v7-10 as a live candidate on that basis. A control, when wanted, is ADDED alongside
+// the laddered variant for a 1:1 comparison, never made by taking the ladder off a roster variant.
 const MINLOCK_CONTROL_CELLS = new Set(
-  (process.env.CANDLE_SPREAD_MINLOCK_CTL != null ? process.env.CANDLE_SPREAD_MINLOCK_CTL : 'v1-10,v2-10,v6-10')
+  (process.env.CANDLE_SPREAD_MINLOCK_CTL != null ? process.env.CANDLE_SPREAD_MINLOCK_CTL : '')
     .split(',').map(s => s.trim()).filter(Boolean));
 // `vX-W` for any variant shape — the cell a variant belongs to.
 const cellOf = (variant) => { const m = /^(v\d+)-(\d+)/.exec(variant); return m ? `${m[1]}-${m[2]}` : variant; };
