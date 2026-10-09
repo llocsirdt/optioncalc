@@ -244,6 +244,10 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
     floorOffset: r.lossMax != null ? true : undefined, flyConvert: /^v[02468]-/.test(r.variant) ? true : undefined })],
   ['raise-wing off', () => ({ floorRaiseWings: undefined })],
   ['raise-cap off', () => ({ floorRaiseCapFix: undefined })],
+  // OPEN BAND HIGH SIDE (2026-10-09): roster = 50% +/- 5% of width at every width, cheap placements labelled not
+  // refused. These raise the cap (and the walk ceiling with it) to 7.5% / 10% over half the width.
+  ['band high 7.5%', (r) => (r.adaptiveGeo ? { capFrac: 0.575, openWalkCapFrac: 0.575 } : {})],
+  ['band high 10%', (r) => (r.adaptiveGeo ? { capFrac: 0.60, openWalkCapFrac: 0.60 } : {})],
 ] : [];
 if (REVAL_ARMS.length) {
   for (const run of RUNS) for (const [name, over] of REVAL_ARMS) JOBS.push({ variant: run.variant, rung: `reval ${name}`,

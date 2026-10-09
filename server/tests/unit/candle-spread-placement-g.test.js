@@ -52,18 +52,24 @@ const G10 = { spreadWidth: 10, strikeIncrement: 10, tickIncrement: 0.05, quantit
   ok(noOtm.declined, 'without the OTM step the same chain is declined');
 }
 {
-  // Everything that fits under $5.30 is also under the $4.80 floor: declined, not bought cheap and far OTM.
+  // Everything that fits under $5.30 is also under the $4.80 floor: the floor LABELS, never refuses (user,
+  // 2026-10-09) — the deepest placement is taken at its mark, flagged belowBand, and the ladder walks it up.
   const cheap = mkChain((k) => r2(4.0 + (30900 - k) / 10 * 0.1));
   const res = trader.buildOpenAdaptive('bull', 30905, G10, cheap);
-  ok(res.declined && res.belowFloor, `a band nothing fits is declined at the floor (${res.reason})`);
+  const sh = res.legs && res.legs.find((l) => l.side === 'short').strike;
+  ok(!res.declined && res.belowBand === true && res.limit < 4.8, `a cheap band is placed at its mark, not declined (limit ${res.limit}, belowBand ${res.belowBand})`);
+  ok(sh === 30870, `still the DEEPEST placement under the cap: 3 strikes ITM (short ${sh})`);
+  const inBand = trader.buildOpenAdaptive('bull', 30905, G10, chain);
+  ok(inBand.belowBand === undefined, 'an in-band placement carries no belowBand label');
 }
 {
   // Roster: every adaptive variant carries G for its width; -unc twins match their parent; -cATM untouched.
   const runs = CS.buildRuns();
   const by = Object.fromEntries(runs.map((r) => [r.variant, r]));
   const g = (r) => [r.minDebitFrac, r.capFrac, r.openWalkCapFrac, r.maxOtmStrikes].join('/');
-  ok(g(by['v7-10']) === '0.48/0.53/0.55/1', `v7-10 carries the 10-wide band (${g(by['v7-10'])})`);
-  ok(g(by['v7-20']) === '0.475/0.55/0.575/1' && g(by['v7-40']) === '0.475/0.575/0.6/1', '20- and 40-wide bands');
+  // ONE BAND, EVERY WIDTH (2026-10-09): 50% +/- 5% of width, walk ceiling = cap.
+  ok(g(by['v7-10']) === '0.45/0.55/0.55/1', `v7-10 carries the band (${g(by['v7-10'])})`);
+  ok(g(by['v7-20']) === '0.45/0.55/0.55/1' && g(by['v7-40']) === '0.45/0.55/0.55/1', `20- and 40-wide: the same band (${g(by['v7-20'])}, ${g(by['v7-40'])})`);
   ok(runs.filter((r) => /-unc$/.test(r.variant)).every((r) => g(r) === g(by[r.variant.replace(/-unc$/, '')])),
     'every -unc twin has exactly its parent\'s placement (twins differ only in the governor)');
   ok(runs.filter((r) => /-cATM$/.test(r.variant)).every((r) => r.minDebitFrac == null && !r.adaptiveGeo),

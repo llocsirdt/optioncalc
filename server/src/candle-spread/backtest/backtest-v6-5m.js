@@ -404,6 +404,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0, ladder: 0 };
   const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
+  let openLowBand = 0;   // opens booked under the band floor (placed at the mark and walked; the floor no longer refuses)
   // OPEN LADDER MODEL (opts.openFillModel 'ladder') — the live resting open: one working order, walked like
   // the cover ladder (trader.resolvePendingOpen, bd8f2d0), cancelled on a reversal. Off = byte-identical.
   const openLadderModel = opts.openFillModel === 'ladder';
@@ -699,6 +700,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // bar. Defined per bar so S/tau/iv/nowEpoch are the fill bar's. withLedgerDir=false when the ladder
     // already recorded the legs and the stance at PLACEMENT (live records both when the order is sent).
     const commitOpen = (side, o, resolvedLegs, withLedgerDir) => {
+        if (o.belowBand) openLowBand++;
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
           openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S });
@@ -1688,7 +1690,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openLowBand,
     bestCase, worstCase, avgTerminalPotential,
     openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,

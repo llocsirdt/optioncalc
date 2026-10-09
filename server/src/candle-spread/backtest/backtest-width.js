@@ -86,9 +86,10 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
     // we had rested a bid at the ceiling instead?" is a MEASURABLE question, and it cannot be answered
     // without knowing which spread was turned down. See measure-declined-opens.js.
     if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark), legs, shortStrike: side === 'bull' ? hi : lo, restLimit: round2(width * cf) };
-    // PRICE FLOOR (minDebitFrac, default 0 = off): the fixed placement is only taken inside the band.
-    if (minDebitFrac > 0 && mark < width * minDebitFrac) return { skip: true, reason: `mark ${round2(mark)} under ${Math.round(minDebitFrac * 100)}% of $${width}`, limit: 0 };
-    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: openLimitOf(mark, orderSlipTicks, width * cf, round2), fracOfWidth: mark / width };
+    // BAND FLOOR (minDebitFrac) LABELS, NEVER REFUSES (user, 2026-10-09): a cheap price is placed at its mark and
+    // walked up; implausible quotes are the quote gates' job, not the band's.
+    return { legs, shortStrike: side === 'bull' ? hi : lo, limit: openLimitOf(mark, orderSlipTicks, width * cf, round2), fracOfWidth: mark / width,
+      belowBand: minDebitFrac > 0 && mark < width * minDebitFrac ? true : undefined };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'
     ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
@@ -139,9 +140,9 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
       const mark = legsMark(legs, S, tau, iv);
       if (!(mark > 0)) continue;
       if (mark <= maxDebitFrac * width) {
-        if (minDebitFrac > 0 && mark < minDebitFrac * width) {
-          return { skip: true, reason: `deepest placement under the ceiling marks ${round2(mark)}, below the ${Math.round(minDebitFrac * 100)}% floor`, limit: 0 };
-        }
+        // BAND FLOOR LABELS, NEVER REFUSES (user, 2026-10-09): the deepest placement under the ceiling is taken
+        // even when it marks under the floor — placed at its mark and walked up. Was a decline.
+        const belowBand = minDebitFrac > 0 && mark < minDebitFrac * width ? true : undefined;
         // PRICE-FOR-STRIKES FLEX — mirrors trader.buildOpenAdaptive. The ceiling pays for a rising market
         // entirely in strikes; this gives a little on price instead to keep the placement nearer where the
         // geometry wanted it. Bounded on both axes: at most capFlexStrikes further in, at most
@@ -160,7 +161,7 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
             return { legs: legsJ, shortStrike: sJ, limit: openLimitOf(markJ, orderSlipTicks, (maxDebitFrac + capFlexFrac) * width, roundTick), itmStrikes: -j, fracOfWidth: markJ / width, capFlexed: true };
           }
         }
-        return { legs, shortStrike, limit: openLimitOf(mark, orderSlipTicks, maxDebitFrac * width, roundTick), itmStrikes: -k, fracOfWidth: mark / width };
+        return { legs, shortStrike, limit: openLimitOf(mark, orderSlipTicks, maxDebitFrac * width, roundTick), itmStrikes: -k, fracOfWidth: mark / width, belowBand };
       }
     }
     // Every placement from deep-ITM through straddle is above the ceiling → decline rather than overpay.

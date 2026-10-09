@@ -742,7 +742,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // itmStrikes/placementsTried are present only under adaptive placement — recording WHICH placement was
   // taken is what makes maxItmStrikes answerable from live data instead of only from the backtest.
   decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed,
-    ...(res.itmStrikes != null ? { itmStrikes: res.itmStrikes, placementsTried: res.placementsTried } : {}) });
+    ...(res.itmStrikes != null ? { itmStrikes: res.itmStrikes, placementsTried: res.placementsTried } : {}),
+    ...(res.belowBand ? { belowBand: true, bandFloor: round2(cfg.minDebitFrac * cfg.spreadWidth) } : {}) });
 }
 
 // ── DAY-LOSS GOVERNOR (deps.lossTarget / deps.lossMax) ──────────────────────────────────────────────
@@ -1995,8 +1996,6 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
     const res = buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying);
     if (res.error) { lastError = res.error; continue; }
     tried++;
-    // Under the floor: placements are tried dearest first, so every later one is cheaper still — stop.
-    if (res.belowFloor) return { ...res, placementsTried: tried };
     if (res.declined) { lastDeclined = res; continue; }
     // PRICE-FOR-STRIKES FLEX (cfg.capFlexFrac, default 0 = off, byte-identical to before). The ceiling
     // walks the placement OUT until the debit fits, so a rising market is paid for entirely in strikes.
@@ -2066,13 +2065,12 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
     const co = SQ.cheapOutlier(legs, getLeg, { incr: cfg.strikeIncrement || 10, underlying });
     if (!co.ok) return { error: co.reason, mark };
   }
-  // PRICE FLOOR (cfg.minDebitFrac, default off) — the user's band: "the deepest ITM strikes keeping within
-  // those price limits" (10W $4.80-5.30, 20W $9.50-11, 40W $19-23). A placement under the floor is declined
-  // and flagged belowFloor so the adaptive walk stops there: every later placement is cheaper still.
-  if (!exceedsCap && cfg.minDebitFrac > 0 && mark < cfg.minDebitFrac * cfg.spreadWidth - 1e-9) {
-    return { declined: true, belowFloor: true, mark, cap,
-      reason: `mark ${mark} under ${Math.round(cfg.minDebitFrac * 100)}% of $${cfg.spreadWidth} (floor ${round2(cfg.minDebitFrac * cfg.spreadWidth)})`, limit: 0 };
-  }
+  // BAND FLOOR (cfg.minDebitFrac) LABELS, NEVER REFUSES (user, 2026-10-09). It used to decline: 2026-10-09 09:45
+  // v7-10's bear had a $5.40 placement over the $5.30 cap and the next strike out at $4.75 under the $4.80 floor,
+  // so a good trade fell through the gap; replayed on 857 real 10W signals the floor refused 118 and every one of
+  // them was a real (mostly late-day) price. A cheap placement is placed AT ITS MARK and the open ladder walks it
+  // up; implausible quotes are refused above by the quote gates (saneMark, chainMonotonic, cheapOutlier).
+  const belowBand = cfg.minDebitFrac > 0 && mark < cfg.minDebitFrac * cfg.spreadWidth - 1e-9 ? true : undefined;
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
   if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
   // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
@@ -2094,7 +2092,7 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
   const walkCap = cfg.openWalkCapFrac != null ? Math.max(cap, round2(cfg.openWalkCapFrac * cfg.spreadWidth)) : cap;
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
-    mark, cap: walkCap, placementCap: cap, limit, markLimit: atMark, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
+    mark, cap: walkCap, placementCap: cap, limit, markLimit: atMark, belowBand, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
   };
 }
 

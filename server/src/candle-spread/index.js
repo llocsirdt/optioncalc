@@ -270,11 +270,28 @@ const ADAPTIVE_GEO = { adaptiveGeo: true, maxItmStrikes: 3 };
 // G 36,343/day vs the 0.60 deepest-ITM rule 35,339; 20W +3%, 40W +13%; v7-10 1,113 vs 1,151 with the
 // worst day back inside the cap (-1,455 vs -1,624) and opens ~\$0.40 cheaper. Real-chain check: sATM 10W
 // mids are ~\$5.40 (bull call) / ~\$4.95 (bear put), so the band is where the strategy actually trades.
-const PLACEMENT_G = {
-  10: { minDebitFrac: 0.48, capFrac: 0.53, openWalkCapFrac: 0.55 },     // $4.80-5.30, walk to $5.50
-  20: { minDebitFrac: 0.475, capFrac: 0.55, openWalkCapFrac: 0.575 },   // $9.50-11.00, walk to $11.50
-  40: { minDebitFrac: 0.475, capFrac: 0.575, openWalkCapFrac: 0.60 },   // $19-23, walk to $24
-};
+// ONE BAND, EVERY WIDTH (user, 2026-10-09): 50% of width +/- 5% — 10W $4.50-5.50, 20W $9-11, 40W $18-22. The cap
+// is the most an open ever pays (placed AND walked: openWalkCapFrac = capFrac), because a dear open is hard to
+// cover (the old $5.80-6.00 10W opens). The floor LABELS a cheap placement (belowBand) and never refuses it —
+// it is placed at its mark and walked up. Was 10W $4.80-5.30 walk 5.50, 20W 9.50-11 walk 11.50, 40W 19-23 walk
+// 24: on 857 real 10W signals (10-05..10-09) the old band placed 58%, this one 89% (+46% fills).
+// The HIGH side is the open question (5 vs 7.5 vs 10% of width): CANDLE_SPREAD_OPEN_BAND_HIGH = one fraction
+// for every width, or per width as `10:0.05,20:0.075,40:0.1`. CANDLE_SPREAD_OPEN_BAND_LOW sets the label floor.
+function bandFracs(envVal, dflt) {
+  const out = { 10: dflt, 20: dflt, 40: dflt };
+  const raw = String(envVal || '').trim();
+  if (!raw) return out;
+  if (/^[\d.]+$/.test(raw)) { for (const w of [10, 20, 40]) out[w] = Number(raw); return out; }
+  for (const part of raw.split(',')) { const [w, f] = part.split(':').map((x) => x.trim()); if (out[w] != null && Number.isFinite(Number(f))) out[w] = Number(f); }
+  return out;
+}
+const OPEN_BAND_HIGH = bandFracs(process.env.CANDLE_SPREAD_OPEN_BAND_HIGH, 0.05);
+const OPEN_BAND_LOW = bandFracs(process.env.CANDLE_SPREAD_OPEN_BAND_LOW, 0.05);
+const PLACEMENT_G = Object.fromEntries([10, 20, 40].map((w) => [w, {
+  minDebitFrac: Math.round((0.5 - OPEN_BAND_LOW[w]) * 1000) / 1000,
+  capFrac: Math.round((0.5 + OPEN_BAND_HIGH[w]) * 1000) / 1000,
+  openWalkCapFrac: Math.round((0.5 + OPEN_BAND_HIGH[w]) * 1000) / 1000,
+}]));
 function applyPlacementG(v) {
   if (!v.adaptiveGeo) return;
   const g = PLACEMENT_G[v.spreadWidth];
