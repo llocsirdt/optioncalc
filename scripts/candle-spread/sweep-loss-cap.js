@@ -249,8 +249,10 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['10W cap 5.75', (r) => (r.adaptiveGeo && r.spreadWidth === 10 ? { capFrac: 0.575, openWalkCapFrac: 0.575 } : null)],
   ['10W cap 6.00', (r) => (r.adaptiveGeo && r.spreadWidth === 10 ? { capFrac: 0.60, openWalkCapFrac: 0.60 } : null)],
 ] : [];
+// --arms name1,name2 : run only these reval arms (names as listed above), e.g. a re-measure under another model.
+const ARMS_ONLY = (argVal('--arms', '') || '').split(',').map((x) => x.trim()).filter(Boolean);
 if (REVAL_ARMS.length) {
-  for (const run of RUNS) for (const [name, over] of REVAL_ARMS) { const o = over(run); if (o === null) continue;
+  for (const run of RUNS) for (const [name, over] of REVAL_ARMS.filter(([n]) => !ARMS_ONLY.length || ARMS_ONLY.includes(n))) { const o = over(run); if (o === null) continue;
     JOBS.push({ variant: run.variant, rung: `reval ${name}`,
     k: Math.round(run.lossMax / (run.spreadWidth * 100) * 100) / 100, lossMax: run.lossMax, lossTarget: run.lossTarget, over: o }); }
 } else if (MINLOCK_ARMS.length) {
