@@ -242,6 +242,11 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // even families); the two `off` arms drop one fold stage each. `floor raise off` above = no floor repair at all.
   ['legacy hedgers', (r) => ({ floorRaiseCapFix: undefined, floorRaiseWings: undefined, wingConvert: true,
     floorOffset: r.lossMax != null ? true : undefined, flyConvert: /^v[02468]-/.test(r.variant) ? true : undefined })],
+  // Legacy hedgers with flies UNIFORM (user, 2026-10-09: one setting for every variant, controls added alongside).
+  ['legacy hedgers fly all', (r) => ({ floorRaiseCapFix: undefined, floorRaiseWings: undefined, wingConvert: true,
+    floorOffset: r.lossMax != null ? true : undefined, flyConvert: true })],
+  ['legacy hedgers fly none', (r) => ({ floorRaiseCapFix: undefined, floorRaiseWings: undefined, wingConvert: true,
+    floorOffset: r.lossMax != null ? true : undefined, flyConvert: undefined })],
   ['raise-wing off', () => ({ floorRaiseWings: undefined })],
   ['raise-cap off', () => ({ floorRaiseCapFix: undefined })],
   // OPEN BAND HIGH SIDE, 10W ONLY (2026-10-09): the user set 20W $11.50 / 40W $23.50; the 10W cap ($5.50 = +5%) is
