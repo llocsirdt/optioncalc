@@ -26,6 +26,7 @@ const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier 
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');
+const GC = require('./giveup-candle');   // candle give-up trigger, shared with the backtest
 const TS = require('./trend-state');   // never fight the trend: 15m + hourly state, shared with the backtest
 const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
@@ -1502,6 +1503,23 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // The trend context is computed once per candle (index.js, from the signal series) and KEPT on the state:
   // the 30s sub-bar worker has no `A`, and give-up urgency must read the same trend between candles.
   if (deps && deps.trendCtx) st.trendCtx = deps.trendCtx;
+  // CANDLE GIVE-UP (deps.giveUpCandle, giveup-candle.js): judged once per CLOSED 5m candle on the signal series —
+  // a 15m reversal, or two 5m reversals in a row (rolling across 15m boundaries). A fired side flags its open,
+  // uncovered positions; the 30s pass (workRestingCovers) then works their covers to the give-up price. The flag
+  // is sticky: the reversal has happened, the position does not get to wait for another one.
+  if (deps && deps.coverGiveUp && GC.KINDS.includes(deps.giveUpCandle) && deps.A && deps.A['5m']) {
+    st.guCandle = st.guCandle || {};
+    const f = GC.step(st.guCandle, deps.giveUpCandle, deps.A['5m'], deps.isFifteen ? deps.A['15m'] : null);
+    if (f.bull || f.bear) {
+      for (const p of st.positions) {
+        if (p.filled === false || p.covered || p.hedge || p.guCandle) continue;
+        if ((f.bull && p.side === 'bull') || (f.bear && p.side === 'bear')) {
+          p.guCandle = true;
+          decisions.push({ action: 'giveup-armed', positionId: p.id, side: p.side, kind: deps.giveUpCandle, why: f.why });
+        }
+      }
+    }
+  }
   if (ported) {
     const heldBull = st.positions.some(p => p.filled && p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.filled && p.side === 'bear' && !p.covered);
@@ -3357,7 +3375,10 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       // TREND URGENCY (deps.giveUpTrend): a position FIGHTING the trend skips the patient ladder and goes to
       // the give-up price at once — the 2026-10-07 bears sat 20-25 min under a market at break-even.
       const trendAgainst = !!deps.giveUpTrend && TS.against(pos.side, TS.state(st.trendCtx, deps.giveUpTrend));
-      if (through >= pts || trendAgainst) {
+      // giveUpPointsBackstop false = the candle rule alone decides; otherwise points and candle, whichever first.
+      const pointsFire = deps.giveUpPointsBackstop !== false && through >= pts;
+      const candleFire = pos.guCandle === true;
+      if (pointsFire || trendAgainst || candleFire) {
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = round2(L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick));   // round2 AFTER, as every other send site
@@ -3369,7 +3390,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         if (give > 0 && give > pc.target + tick / 2) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05,
-            ...(trendAgainst && through < pts ? { trigger: 'trend' } : {}) }, st);
+            trigger: pointsFire ? 'points' : candleFire ? `candle-${deps.giveUpCandle}` : 'trend' }, st);
           if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market

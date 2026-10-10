@@ -90,6 +90,8 @@ function optsFor(v, env) {
     if (v.giveUpMaxLoss != null) o.giveUpMaxLoss = v.giveUpMaxLoss;
     if (v.giveUpTrigger != null) o.giveUpTrigger = v.giveUpTrigger;   // 'points' | 'rev5' | 'rev5c' | 'rev15' | 'rev15c'
     if (v.giveUpTrend != null) o.giveUpTrend = v.giveUpTrend;   // trend-state definition: urgent cover when fighting it
+    if (v.giveUpCandle != null) o.giveUpCandle = v.giveUpCandle;   // candle reversal give-up (giveup-candle.js)
+    if (v.giveUpPointsBackstop != null) o.giveUpPointsBackstop = v.giveUpPointsBackstop;   // false = candle rule alone
   }
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even

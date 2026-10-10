@@ -248,6 +248,13 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['legacy hedgers fly none', (r) => ({ floorRaiseCapFix: undefined, floorRaiseWings: undefined, wingConvert: true,
     floorOffset: r.lossMax != null ? true : undefined, flyConvert: undefined })],
   ['raise-wing off', () => ({ floorRaiseWings: undefined })],
+  // CANDLE GIVE-UP (2026-10-10, giveup-candle.js): the user's reversal rule (15m reversal or two 5m in a row), each
+  // kind with the 20-point trigger alongside ('+pts') and alone ('only'). Roster = points 20.
+  ['give-up 10 pts', () => ({ giveUpPoints: 10 })],
+  ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
+    [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
+    [`candle ${k} only`, () => ({ giveUpCandle: k, giveUpPointsBackstop: false })],
+  ]),
   ['raise-cap off', () => ({ floorRaiseCapFix: undefined })],
   // OPEN BAND HIGH SIDE, 10W ONLY (2026-10-09): the user set 20W $11.50 / 40W $23.50; the 10W cap ($5.50 = +5%) is
   // measured against +7.5% / +10%. null = the arm does not apply to this variant (no job).

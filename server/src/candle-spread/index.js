@@ -1957,6 +1957,8 @@ function buildEngineDeps(run, live) {
       ladderStepDollars: run.ladderStepDollars,
       // GIVE-UP: force a resting cover to the market once the position turns against us. Read off deps.
       coverGiveUp: run.coverGiveUp, giveUpPoints: run.giveUpPoints, giveUpMaxLoss: run.giveUpMaxLoss,
+      // Candle give-up (giveup-candle.js): the reversal kind, and whether the points trigger stays as a backstop.
+      giveUpCandle: run.giveUpCandle || null, giveUpPointsBackstop: run.giveUpPointsBackstop,
       minLockRamp: run.minLockRamp, minLockRampStart: run.minLockRampStart, minLockRampEnd: run.minLockRampEnd,
       minLockRampFrom: run.minLockRampFrom, minLockRampTo: run.minLockRampTo,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed

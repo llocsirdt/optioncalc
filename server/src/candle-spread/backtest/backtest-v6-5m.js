@@ -120,7 +120,8 @@ function skewMultAt(z) {
 // bs.bsPrice() DIRECTLY has to resolve it per leg first — handing the function straight in as sigma
 // produces NaN silently. (legsMark and buildOpen accept either form themselves.)
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
-const FR = require('../floor-raise');   // shared floor-raise planner (live trader uses the same module)
+const FR = require('../floor-raise');
+const GC = require('../giveup-candle');   // candle give-up trigger (live trader uses the same module)   // shared floor-raise planner (live trader uses the same module)
 
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 // Delegated to shared/intraday-iv.js so the LIVE engine and the backtest read the SAME calibration from
@@ -444,6 +445,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
   let guPrev15 = null;
+  // CANDLE GIVE-UP (opts.giveUpCandle 'break'|'bbIn'|'ema'|'mid'; see giveup-candle.js). giveUpPointsBackstop
+  // false = the candle rule ALONE; otherwise it runs alongside the points trigger (whichever fires first).
+  const guCandle = opts.coverGiveUp && GC.KINDS.includes(opts.giveUpCandle) ? opts.giveUpCandle : null;
+  const guPointsOn = opts.giveUpPointsBackstop !== false;
+  const guCandleState = {};
+  let guCandleFires = 0;
   // TREND STATE (trend-state.js, 2026-10-07): opts.giveUpTrend / opts.floorRaiseTrend name a definition
   // ('A' = 15m + completed hourly, the user's choice; '15m', 'AHH', 'Af', 'AfBreak', 'H' = the controls).
   // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
@@ -914,6 +921,13 @@ function runDay5m(bars, signalFn, opts = {}) {
           legs: (pos.pendingCover.legs || []).map(l => `${l.side[0]}${l.type}${l.strike}`).join(' ') });
       }
     }
+    // Candle give-up for this bar: a fired side flags its open positions (sticky — the reversal already happened).
+    if (guCandle && A['5m']) {
+      const f = GC.step(guCandleState, guCandle, A['5m'], bars[i].fifteen ? A['15m'] : null);
+      if (f.bull || f.bear) for (const p of st.positions) {
+        if (!p.covered && !p.hedge && ((f.bull && p.side === 'bull') || (f.bear && p.side === 'bear')) && !p._guCandle) { p._guCandle = true; guCandleFires++; }
+      }
+    }
     // Reversal-trigger state for this bar (see the give-up block): did the signal candle break the prior one?
     let guRev = null;
     if (guTrigger !== 'points' && guTrigger !== 'signal' && guTrigger !== 'beWrong') {
@@ -958,7 +972,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the clock, so a fast reversal triggers immediately and a quiet drift never does.
       // ACTION: pay the mark (+1 tick), bounded by giveUpMaxLoss x W so it can never become a rout.
       let giveUp = false;
-      if (opts.coverGiveUp && pos.shortStrike != null && guTrigger === 'points') {
+      if (opts.coverGiveUp && pos._guCandle) giveUp = true;
+      if (opts.coverGiveUp && pos.shortStrike != null && guTrigger === 'points' && guPointsOn) {
         const pts = opts.giveUpPoints != null ? opts.giveUpPoints : 10;
         // bull loses as price FALLS below its short strike; bear loses as price RISES above it
         const through = pos.side === 'bull' ? (pos.shortStrike - S) : (S - pos.shortStrike);
@@ -1746,6 +1761,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // fold stages, counted apart so a run says which repair fired: raise-wing (wings) and raise-cap (must-fix offsets)
       wingStage: frWings ? frWingCount : undefined, capStage: frCapFix ? frCapCount : undefined } : null,
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
+    giveUpCandleFires: guCandle ? guCandleFires : undefined,   // positions flagged by the candle give-up rule
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,
