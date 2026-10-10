@@ -184,7 +184,7 @@ Changing any of these needs a deploy. **Kill** = an env switch exists. **Mid-ses
 | **Sim-fill realism** | Open fills no earlier than the 2nd look. Cover needs 1 tick through. Fills book at the limit. | `:825` | `SIM_FILL=legacy` | mostly (b) |
 | Credit capital trigger | 0.25×W×100 | `:707` | `CREDIT_TRIGGER_XW=0` | (a) |
 | Wings (peak→floor) | All variants: ratio 3, budget 10% of peak, upside term, priced at **mid ± $0.25/leg** (was the ask until 2026-10-09) | `WINGS`; `trader.js` `convertWings` | none | (a) |
-| Floor offsets | All 50 governed: 3:1 toward `lossTarget`, must-fix past `lossMax`, mid + $0.25/leg | `BASE_RUNS` | none | (a) |
+| Floor offsets | All 50 governed: 3:1 toward `lossTarget`; must-fix past `lossMax` at **≥ 1:1** (lift must cover cost — was any price until 2026-10-09); mid + $0.25/leg | `BASE_RUNS`; `trader.js` `buyFloorOffsets` | none | (a) |
 | Stand-alone fly repair | **Off for every variant** (2026-10-09). Flies/condors stay on the floor-raise menu, at the mid, cap-aware. | `FLY_LIVE` | `FLY` | (a) |
 | Floor-raise fold (off) | `FLOOR_FOLD=on` runs wings/offsets as floor-raise stages (`raise-wing`, `raise-cap`). Off by default: lost floor protection on the 2026-10-09 sweep. | `applyFloorRepairFold` | `FLOOR_FOLD` | (a) |
 | Day-loss governor, cover-to-stack, continuous cover, capital recapture, leg uniqueness, open-never-OTM | All variants (`BASE_RUNS`) | `:100-148` | none | (a) |

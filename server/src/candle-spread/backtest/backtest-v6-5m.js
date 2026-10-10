@@ -569,7 +569,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     // FORCE = "must-fix" mode, used only when the floor is through the HARD ceiling: take the best
     // available floor-lift-per-dollar even if it doesn't clear the ratio gate, because lossMax is a
     // ceiling, not a preference. Un-forced, the ratio gate keeps the overlay to outsized-reduction-only.
-    const minRatio = force ? 0 : offMinRatio;
+    // Forced (must-fix) relaxes the ratio to 1:1, never below — lift must cover cost (2026-10-09; was 0, which
+    // bought $2,568 of worthless offsets on 1/6/2023 v7-10 and deepened the day past its cap). Mirrors trader.js.
+    const minRatio = force ? (opts.floorOffsetForceMinRatio != null ? opts.floorOffsetForceMinRatio : 1) : offMinRatio;
     const maxCount = force ? offMaxPerDay * 3 : offMaxPerDay;
     let bought = 0;
     while (offCount < maxCount && offSpent < offBudget) {

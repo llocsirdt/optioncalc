@@ -948,7 +948,12 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
   if (!(deps.floorOffset === true || (force && raiseCapFixOn(cfg, deps))) || !govOn(deps)) return 0;
   const spot = deps.underlying;
   if (!(spot > 0)) return 0;
-  const minRatio = force ? 0 : (deps.floorOffsetMinRatio != null ? deps.floorOffsetMinRatio : 3);
+  // MUST-FIX STILL HAS TO PAY FOR ITSELF (user, 2026-10-09): forced mode used to take the best lift at ANY
+  // ratio — ratio 0 — so it could pay more than it lifted. 1/6/2023 (baseline replay) v7-10 bought two offsets
+  // for $2,568 that expired worthless and turned a -$1,645 day into -$2,388, past the $2,000 cap it was meant to
+  // defend. Forced now only relaxes the ratio to 1:1 (lift >= cost), so a repair can never deepen the worst case.
+  const minRatio = force ? (deps.floorOffsetForceMinRatio != null ? deps.floorOffsetForceMinRatio : 1)
+    : (deps.floorOffsetMinRatio != null ? deps.floorOffsetMinRatio : 3);
   const maxCount = (deps.floorOffsetMaxPerDay != null ? deps.floorOffsetMaxPerDay : 6) * (force ? 3 : 1);
   const widths = deps.floorOffsetWidths || [20, 40, 60];
   const depth = deps.floorOffsetDepth != null ? deps.floorOffsetDepth : 8;
