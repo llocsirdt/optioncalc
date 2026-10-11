@@ -358,6 +358,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   // book sits below zero all afternoon (10-07: 15 of 50 governed books closed below their 15:00 floor).
   const lateAfter = opts.lateFloorAfterMin != null ? opts.lateFloorAfterMin : null;
   let lateRef = null, lateBlocked = 0, floorAt14 = null, floorAt15 = null;
+  // INTRADAY FLOOR (2026-10-11, the user's governing metric: "keep a high floor every day from open to close"): the
+  // book floor sampled at every acted bar once a book exists — its average, and the share of bars it was >= 0.
+  let ifSum = 0, ifBars = 0, ifNonNeg = 0;
   const lateFloorLimit = (nowMin) => {
     if (lateAfter == null || !(nowMin >= lateAfter)) return null;
     if (lateRef == null) lateRef = floorOf(null, openLadderModel);
@@ -689,6 +692,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // Book floor as the 14:00 and 15:00 bars open (reported for every run: "did the day close below its
     // afternoon floor?"), and the late-guard reference, both taken BEFORE this bar acts.
     { const _m = etMinute(bars[i].dt);
+      if (st.positions.length) { const _f = floorNow(); ifSum += _f; ifBars++; if (_f >= 0) ifNonNeg++; }
       if (floorAt14 == null && _m >= 14 * 60) floorAt14 = st.positions.length ? Math.round(floorNow()) : 0;
       if (floorAt15 == null && _m >= 15 * 60) floorAt15 = st.positions.length ? Math.round(floorNow()) : 0;
       // counted the governor's way (design B: a working open is counted as filled), so an open placed before the
@@ -1812,6 +1816,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,
     floorAt14, floorAt15,
+    intradayFloorAvg: ifBars ? Math.round(ifSum / ifBars) : null, intradayFloorNonNegPct: ifBars ? Math.round(1000 * ifNonNeg / ifBars) / 10 : null,
+    tents: st.positions.filter((p) => p.covered && !p.hedge).length,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which

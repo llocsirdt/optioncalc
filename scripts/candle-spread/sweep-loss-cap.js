@@ -254,6 +254,15 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // TREND-SIDE FLOOR (2026-10-11, trend-floor.js): user — risk never biased into the trend; cover or open with-trend.
   ...['A', 'AHH'].flatMap((d) => ['coverFirst', 'cheapest'].map((o) => [`trend floor ${d} ${o}`, () => ({ trendFloor: d, trendFloorOrder: o })])),
   ['give-up 30 pts', () => ({ giveUpPoints: 30 })],
+  // COVER AGGRESSION (2026-10-11, user: keep the floor high all day; cover ASAP for a few dollars, or pay a 5-15%
+  // premium past width rather than leave positions uncovered). minLock = profit the first cover asks; ladder loss
+  // cap = how far past break-even the ladder may walk (10W $10.50 = 0.05); give-up allowance = loss on a give-up.
+  ['minLock 0.02', () => ({ continuousCoverMinLockFrac: 0.02 })],
+  ['ladder loss 0.10', () => ({ ladderLossCapFrac: 0.10 })],
+  ['cover agg 0.02 / 0.05', () => ({ continuousCoverMinLockFrac: 0.02, ladderLossCapFrac: 0.05 })],
+  ['cover agg 0.02 / 0.10', () => ({ continuousCoverMinLockFrac: 0.02, ladderLossCapFrac: 0.10 })],
+  ['cover agg 0 / 0.15', () => ({ continuousCoverMinLockFrac: 0, ladderLossCapFrac: 0.15 })],
+  ['cover agg 0.02 / 0.10 + gu 0.10', () => ({ continuousCoverMinLockFrac: 0.02, ladderLossCapFrac: 0.10, giveUpMaxLoss: 0.10 })],
   ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
@@ -433,6 +442,11 @@ function measure(job) {
         everLockedPct: Math.round(t.filter((r) => r.lock.everPositive).length / n * 1000) / 10,
         eodPeakAvg: mean((r) => r.bestCase || 0),
         eodRangeAvg: mean((r) => (r.bestCase || 0) - (r.worstCase || 0)),
+        // INTRADAY FLOOR (2026-10-11, the user's governing metric): the session-average book floor, the share of
+        // the session it sat at or above 0, and covered positions (tents) per day.
+        intradayFloorAvg: mean((r) => (r.intradayFloorAvg != null ? r.intradayFloorAvg : 0)),
+        intradayNonNegPct: Math.round(t.reduce((a, r) => a + (r.intradayFloorNonNegPct || 0), 0) / n * 10) / 10,
+        tentsPerDay: Math.round(t.reduce((a, r) => a + (r.tents || 0), 0) / n * 10) / 10,
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
