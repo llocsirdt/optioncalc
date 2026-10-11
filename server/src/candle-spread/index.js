@@ -1959,6 +1959,9 @@ function buildEngineDeps(run, live) {
       coverGiveUp: run.coverGiveUp, giveUpPoints: run.giveUpPoints, giveUpMaxLoss: run.giveUpMaxLoss,
       // Candle give-up (giveup-candle.js): the reversal kind, and whether the points trigger stays as a backstop.
       giveUpCandle: run.giveUpCandle || null, giveUpPointsBackstop: run.giveUpPointsBackstop,
+      // Trend-side floor (trend-floor.js): trend definition (null = off), action order, ratio, per-day cap.
+      trendFloor: run.trendFloor || null, trendFloorOrder: run.trendFloorOrder, trendFloorMinRatio: run.trendFloorMinRatio,
+      trendFloorMaxPerDay: run.trendFloorMaxPerDay,
       minLockRamp: run.minLockRamp, minLockRampStart: run.minLockRampStart, minLockRampEnd: run.minLockRampEnd,
       minLockRampFrom: run.minLockRampFrom, minLockRampTo: run.minLockRampTo,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed

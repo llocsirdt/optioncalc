@@ -26,7 +26,8 @@ const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier 
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');
-const GC = require('./giveup-candle');   // candle give-up trigger, shared with the backtest
+const GC = require('./giveup-candle');
+const TF = require('./trend-floor');    // trend-side floor, shared with the backtest   // candle give-up trigger, shared with the backtest
 const TS = require('./trend-state');   // never fight the trend: 15m + hourly state, shared with the backtest
 const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
@@ -1520,6 +1521,61 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       }
     }
   }
+  // TREND-SIDE FLOOR (deps.trendFloor = a trend-state definition; trend-floor.js): when the book's risk is biased
+  // INTO the trend — the trend-side floor below the other side's, or below zero — cover a position that loses if
+  // the trend continues (worked as a give-up by the 30s pass) or open a with-trend spread (through the normal
+  // open path and every gate). One action per candle, trendFloorMaxPerDay a day. Mirrors the backtest.
+  let tfOpenSide = null;
+  const tfBook = st.positions.filter((p) => p.filled !== false);
+  if (deps && deps.trendFloor && st.trendCtx && tfBook.length && (st.tfCount || 0) < (deps.trendFloorMaxPerDay != null ? deps.trendFloorMaxPerDay : 6)
+    && deps.underlying > 0 && deps.A && deps.A['15m']) {
+    const dir = TS.state(st.trendCtx, deps.trendFloor);
+    const spot = deps.underlying;
+    const nowMs = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
+    const nowMin = etMinutesOf(candleTime);
+    const b15 = deps.A['15m'];
+    const tauT = bs.tauFromTime(nowMs);
+    const ivT = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * (nowMin != null ? IIV.ivMultAt(nowMin) : 1);
+    const bandT = spot * ivT * Math.sqrt(tauT) * 2;
+    if (dir && bandT > 0 && tauT > 0) {
+      const qty = cfg.quantity || 1, W = cfg.spreadWidth, tick = cfg.tickIncrement || 0.05;
+      const strikes = [];
+      for (const p of tfBook) { for (const l of p.legs || []) strikes.push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) strikes.push(l.strike); }
+      const { xs } = FR.samplePoints(spot, bandT, cfg.strikeIncrement || 10, strikes);
+      const base = xs.map((x) => RC.bookPnl(tfBook, x));
+      const cands = [];
+      const againstSide = dir > 0 ? 'bear' : 'bull';
+      const allow = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
+      for (const p of tfBook) {
+        if (p.covered || p.hedge || p.side !== againstSide || !p.pendingCover || p.trendCover) continue;
+        const pc = p.pendingCover, mk = coverMarkNow(pc.legs, deps.getLeg);
+        if (mk == null) continue;
+        const openCost = pc.openCost != null ? pc.openCost : p.limit;
+        const px = round2(L.roundToTick(Math.min(round2(mk + tick), round2(W - openCost + allow)), tick));
+        if (!(px >= mk)) continue;   // the give-up price cannot reach the market — it would not fill
+        cands.push({ kind: 'cover', pos: p, cost: px * 100 * qty, pay: (x) => FR.payoff(pc.legs, x, qty) - px * 100 * qty });
+      }
+      if (!st.pendingOpenId) {
+        const side = dir > 0 ? 'bull' : 'bear';
+        const o = cfg.adaptiveGeo ? buildOpenAdaptive(side, spot, cfg, deps.getLeg) : buildOpen(side, spot, cfg, deps.getLeg);
+        if (o && !o.declined && !o.error && o.legs && o.limit > 0) cands.push({ kind: 'open', side, cost: o.limit * 100 * qty, pay: (x) => FR.payoff(o.legs, x, qty) - o.limit * 100 * qty });
+      }
+      const r = TF.pick({ dir, xs, base, spot, cands, minRatio: deps.trendFloorMinRatio != null ? deps.trendFloorMinRatio : 1,
+        floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null, order: deps.trendFloorOrder || 'coverFirst' });
+      if (r.best) {
+        st.tfCount = (st.tfCount || 0) + 1;
+        if (r.best.kind === 'cover') {
+          r.best.pos.trendCover = true;
+          decisions.push({ action: 'trend-floor-cover', positionId: r.best.pos.id, side: r.best.pos.side, trend: dir, lift: r.best.lift, ratio: r.best.ratio,
+            trendFloor: Math.round(r.bias.trend), counterFloor: Math.round(r.bias.counter) });
+        } else {
+          tfOpenSide = r.best.side;
+          decisions.push({ action: 'trend-floor-open', side: r.best.side, trend: dir, lift: r.best.lift, ratio: r.best.ratio,
+            trendFloor: Math.round(r.bias.trend), counterFloor: Math.round(r.bias.counter) });
+        }
+      }
+    }
+  }
   if (ported) {
     const heldBull = st.positions.some(p => p.filled && p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.filled && p.side === 'bear' && !p.covered);
@@ -1536,6 +1592,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   } else {
     openSide = L.classifyOpen(candle, priorCandle, bands);
   }
+  // The trend-side floor's open takes the candle's open slot when the signal has none (every gate still applies).
+  if (tfOpenSide && !openSide) openSide = tfOpenSide;
 
   // SIGNAL vs PRICING split: `candle` is the SIGNAL instrument (e.g. NQ futures) that drives
   // direction / Bollinger gates / reversal detection; `underlying` is the PRICING instrument's
@@ -3377,7 +3435,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       const trendAgainst = !!deps.giveUpTrend && TS.against(pos.side, TS.state(st.trendCtx, deps.giveUpTrend));
       // giveUpPointsBackstop false = the candle rule alone decides; otherwise points and candle, whichever first.
       const pointsFire = deps.giveUpPointsBackstop !== false && through >= pts;
-      const candleFire = pos.guCandle === true;
+      const candleFire = pos.guCandle === true || pos.trendCover === true;   // candle give-up, or the trend-side floor
       if (pointsFire || trendAgainst || candleFire) {
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
@@ -3390,7 +3448,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         if (give > 0 && give > pc.target + tick / 2) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05,
-            trigger: pointsFire ? 'points' : candleFire ? `candle-${deps.giveUpCandle}` : 'trend' }, st);
+            trigger: pointsFire ? 'points' : pos.trendCover ? 'trend-floor' : candleFire ? `candle-${deps.giveUpCandle}` : 'trend' }, st);
           if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market

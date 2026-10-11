@@ -251,6 +251,10 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // CANDLE GIVE-UP (2026-10-10, giveup-candle.js): the user's reversal rule (15m reversal or two 5m in a row), each
   // kind with the 20-point trigger alongside ('+pts') and alone ('only'). Roster = points 20.
   ['give-up 10 pts', () => ({ giveUpPoints: 10 })],
+  // TREND-SIDE FLOOR (2026-10-11, trend-floor.js): user — risk never biased into the trend; cover or open with-trend.
+  ...['A', 'AHH'].flatMap((d) => ['coverFirst', 'cheapest'].map((o) => [`trend floor ${d} ${o}`, () => ({ trendFloor: d, trendFloorOrder: o })])),
+  ['give-up 30 pts', () => ({ giveUpPoints: 30 })],
+  ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
     [`candle ${k} only`, () => ({ giveUpCandle: k, giveUpPointsBackstop: false })],

@@ -121,7 +121,8 @@ function skewMultAt(z) {
 // produces NaN silently. (legsMark and buildOpen accept either form themselves.)
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
 const FR = require('../floor-raise');
-const GC = require('../giveup-candle');   // candle give-up trigger (live trader uses the same module)   // shared floor-raise planner (live trader uses the same module)
+const GC = require('../giveup-candle');
+const TF = require('../trend-floor');     // trend-side floor (live trader uses the same module)   // candle give-up trigger (live trader uses the same module)   // shared floor-raise planner (live trader uses the same module)
 
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 // Delegated to shared/intraday-iv.js so the LIVE engine and the backtest read the SAME calibration from
@@ -451,11 +452,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   const guPointsOn = opts.giveUpPointsBackstop !== false;
   const guCandleState = {};
   let guCandleFires = 0;
+  // TREND-SIDE FLOOR (opts.trendFloor = a trend-state definition, trend-floor.js): when the book's risk is biased
+  // INTO the trend, cover a position that loses if the trend continues, or open a with-trend spread.
+  const tfMaxPerDay = opts.trendFloorMaxPerDay != null ? opts.trendFloorMaxPerDay : 6;
+  let tfCount = 0, tfCovers = 0, tfOpens = 0, tfBiasedBars = 0;
   // TREND STATE (trend-state.js, 2026-10-07): opts.giveUpTrend / opts.floorRaiseTrend name a definition
   // ('A' = 15m + completed hourly, the user's choice; '15m', 'AHH', 'Af', 'AfBreak', 'H' = the controls).
   // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
   const TS = require('../trend-state');
-  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock) ? TS.makeTracker() : null;
+  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock || opts.trendFloor) ? TS.makeTracker() : null;
   let stallFires = 0;
   let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
@@ -921,6 +926,43 @@ function runDay5m(bars, signalFn, opts = {}) {
           legs: (pos.pendingCover.legs || []).map(l => `${l.side[0]}${l.type}${l.strike}`).join(' ') });
       }
     }
+    // TREND-SIDE FLOOR for this bar — decided BEFORE the give-up block (a cover acts through it this bar) and the
+    // open step (an open rides the normal open path, every gate included).
+    let tfOpenSide = null;
+    if (opts.trendFloor && trendCtx && st.positions.length && tfCount < tfMaxPerDay) {
+      const dir = TS.state(trendCtx, opts.trendFloor);
+      const ivAtmT = typeof iv === 'function' ? iv('C', S) : iv;
+      const bwT = S * ivAtmT * Math.sqrt(tau) * 2;
+      if (dir && bwT > 0) {
+        const bookStrikes = [];
+        for (const p of st.positions) { for (const l of p.legs) bookStrikes.push(l.strike); if (p.covered && p.coverLegs) for (const l of p.coverLegs) bookStrikes.push(l.strike); }
+        const { xs } = FR.samplePoints(S, bwT, legIncr, bookStrikes);
+        const base = xs.map((x) => bookAt(x, null));
+        const cands = [];
+        const againstSide = dir > 0 ? 'bear' : 'bull';
+        const giveCap = (opts.giveUpMaxLoss != null ? opts.giveUpMaxLoss : 0.15) * G.WIDTH;
+        for (const p of st.positions) {
+          if (p.covered || p.hedge || p.side !== againstSide || !p.pendingCover || p._trendCover) continue;
+          const pc = p.pendingCover, mk = legsMark(pc.legs, S, tau, iv);
+          // Priced like a give-up (it acts through it): the mark + a tick, never past break-even + allowance.
+          const px = roundTick(Math.min(mk + TICK, round2(G.WIDTH - (pc.openCost != null ? pc.openCost : p.limit) + giveCap)));
+          if (!(px >= mk)) continue;   // cannot reach the market: it would not fill
+          cands.push({ kind: 'cover', pos: p, cost: px * 100 * QTY, pay: (x) => (legsPayoff(pc.legs, x) - px) * 100 * QTY });
+        }
+        if (!st.pendingOpen) {
+          const side = dir > 0 ? 'bull' : 'bear';
+          const o = G.buildOpen(side, S, tau, iv);
+          if (o && !o.skip && o.legs && o.limit > 0) cands.push({ kind: 'open', side, cost: o.limit * 100 * QTY, pay: (x) => (legsPayoff(o.legs, x) - o.limit) * 100 * QTY });
+        }
+        const r = TF.pick({ dir, xs, base, spot: S, cands, minRatio: opts.trendFloorMinRatio != null ? opts.trendFloorMinRatio : 1,
+          floorMin: governed && Number.isFinite(lossMax) ? -lossMax : null, order: opts.trendFloorOrder || 'coverFirst' });
+        if (r.bias) tfBiasedBars++;
+        if (r.best) {
+          tfCount++;
+          if (r.best.kind === 'cover') { r.best.pos._trendCover = true; tfCovers++; } else { tfOpenSide = r.best.side; tfOpens++; }
+        }
+      }
+    }
     // Candle give-up for this bar: a fired side flags its open positions (sticky — the reversal already happened).
     if (guCandle && A['5m']) {
       const f = GC.step(guCandleState, guCandle, A['5m'], bars[i].fifteen ? A['15m'] : null);
@@ -973,6 +1015,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // ACTION: pay the mark (+1 tick), bounded by giveUpMaxLoss x W so it can never become a rout.
       let giveUp = false;
       if (opts.coverGiveUp && pos._guCandle) giveUp = true;
+      if (pos._trendCover) giveUp = true;   // trend-side floor chose to cover this one (priced as a give-up)
       if (opts.coverGiveUp && pos.shortStrike != null && guTrigger === 'points' && guPointsOn) {
         const pts = opts.giveUpPoints != null ? opts.giveUpPoints : 10;
         // bull loses as price FALLS below its short strike; bear loses as price RISES above it
@@ -1384,6 +1427,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       sig = { ...sig, openSide: null, reason: `${sig.reason} [trend-blocked]` }; openTrendBlocked++;
     }
     guSig = sig;
+    // Trend-side floor chose an OPEN: it takes the bar's open slot when the signal has none, through every gate.
+    if (tfOpenSide && !sig.openSide) sig = { ...sig, openSide: tfOpenSide, reason: `${sig.reason || ''} [trend-floor]` };
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
@@ -1761,7 +1806,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       // fold stages, counted apart so a run says which repair fired: raise-wing (wings) and raise-cap (must-fix offsets)
       wingStage: frWings ? frWingCount : undefined, capStage: frCapFix ? frCapCount : undefined } : null,
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
-    giveUpCandleFires: guCandle ? guCandleFires : undefined,   // positions flagged by the candle give-up rule
+    giveUpCandleFires: guCandle ? guCandleFires : undefined,
+    trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,

@@ -93,6 +93,8 @@ function optsFor(v, env) {
     if (v.giveUpCandle != null) o.giveUpCandle = v.giveUpCandle;   // candle reversal give-up (giveup-candle.js)
     if (v.giveUpPointsBackstop != null) o.giveUpPointsBackstop = v.giveUpPointsBackstop;   // false = candle rule alone
   }
+  // TREND-SIDE FLOOR (trend-floor.js): definition, action order, ratio, per-day cap.
+  for (const k of ['trendFloor', 'trendFloorOrder', 'trendFloorMinRatio', 'trendFloorMaxPerDay']) if (v[k] != null) o[k] = v[k];
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
   if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
