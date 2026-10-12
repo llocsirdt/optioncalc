@@ -421,7 +421,11 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
         fallback: 'You can still get quotes and option expirations, but detailed chains may be temporarily unavailable.'
       });
     } else {
-      res.status(500).json({
+      // A request Schwab REJECTED (4xx — e.g. a chain for an expiration that has already expired, which a page
+      // left open over a weekend polls about once a second) is the caller's error, not the server's. Reporting
+      // it as a 500 put ~9-13% of all traffic into EB's 5xx health figure (2026-10-12).
+      const upstream4xx = /\b(4\d\d) - /.exec(error.message || '');
+      res.status(upstream4xx ? Number(upstream4xx[1]) : 500).json({
         error: 'Market data request failed',
         message: error.message,
         path: req.path
