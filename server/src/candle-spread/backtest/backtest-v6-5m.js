@@ -463,7 +463,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   // ('A' = 15m + completed hourly, the user's choice; '15m', 'AHH', 'Af', 'AfBreak', 'H' = the controls).
   // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
   const TS = require('../trend-state');
-  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock || opts.trendFloor) ? TS.makeTracker() : null;
+  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock || opts.trendFloor || opts.coverAsymTrend) ? TS.makeTracker() : null;
+  // ASYMMETRIC COVER AGGRESSION (opts.coverAsymTrend = a trend-state definition; 2026-10-11, user: "uncovered positions
+  // are just risk and only when they're biased toward the direction of the momentum is it worth being patient"). The
+  // variant's own cover knobs (minLock, ladder loss cap, give-up allowance) are the AGGRESSIVE set every position gets;
+  // a position riding the trend (judged each bar) is worked with the PATIENT set instead (coverPatient*). No trend =
+  // aggressive. Re-judged every bar, so a position that loses the trend loses its patience.
+  const asymDef = opts.coverAsymTrend || null;
+  let asymPatientBars = 0, asymAggBars = 0;
+  const withTrend = (side) => { const d = TS.state(trendCtx, asymDef); return (d === 1 && side === 'bull') || (d === -1 && side === 'bear'); };
   let stallFires = 0;
   let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
@@ -887,7 +895,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
-        const tgt = round2(G.WIDTH - pos.limit - minLock);
+        const posMinLock = asymDef && opts.coverPatientMinLock != null && withTrend(pos.side) ? opts.coverPatientMinLock * G.WIDTH : minLock;
+        const tgt = round2(G.WIDTH - pos.limit - posMinLock);
         // THE `tgt <= 0` REFUSAL IS GONE. It silently placed NO cover at all whenever the open cost plus
         // the demanded profit exceeded the width — so the positions least able to afford being naked were
         // exactly the ones left uncovered. With a ladder there is always a fillable band (break-even up to
@@ -1092,8 +1101,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the market. Live (trader.workRestingCovers) does exactly this via an early `continue`, and the
       // first version here had the opposite order — the ladder overwrote the give-up price, which made
       // the two-feature arm byte-identical to ladder-only and hid give-up entirely.
+      const patient = asymDef ? withTrend(pos.side) : false;
+      if (asymDef) { if (patient) asymPatientBars++; else asymAggBars++; }
       if (giveUp) {
-        const cap = (opts.giveUpMaxLoss != null ? opts.giveUpMaxLoss : 0.15) * G.WIDTH;
+        const guFrac = patient && opts.coverPatientGiveUp != null ? opts.coverPatientGiveUp : opts.giveUpMaxLoss;
+        const cap = (guFrac != null ? guFrac : 0.15) * G.WIDTH;
         const mk = legsMark(pc.legs, S, tau, iv);
         // never pay more than break-even + the bounded loss, and never chase above the mark
         workingTarget = roundTick(Math.min(mk + TICK, round2(G.WIDTH - pc.openCost + cap)));
@@ -1109,12 +1121,13 @@ function runDay5m(bars, signalFn, opts = {}) {
         // first ladder sweep measured when it reported all 36 arms losing $461k-$863k. Live passes the
         // mark (trader.workRestingCovers), so omitting it here also broke isomorphism.
         workingTarget = LAD.limitNow({
-          spreadWidth: G.WIDTH, openCost: pc.openCost, minLock: pc.minLock || 0,
+          spreadWidth: G.WIDTH, openCost: pc.openCost,
+          minLock: patient && opts.coverPatientMinLock != null ? opts.coverPatientMinLock * G.WIDTH : (pc.minLock || 0),
           restingMs: pc.placedMs != null ? (nowEpoch - pc.placedMs) : 0,
           underlyingMove: pc.placedUnder != null ? (S - pc.placedUnder) : 0,
           mark: legsMark(pc.legs, S, tau, iv),
           tick: 0.05,
-        }, ladderOpts).limit;
+        }, patient && opts.coverPatientLossCap != null ? { ...ladderOpts, lossCapFrac: opts.coverPatientLossCap } : ladderOpts).limit;
       }
       // STALL COVER (opts.stallCoverMin, backtest-only study, 2026-10-07): a position that has NOT moved in our favour
       // by stallCoverPts within stallCoverMin minutes of filling stops waiting for its minLock target — its cover goes
@@ -1812,6 +1825,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpTrendFires: opts.giveUpTrend ? guTrendFires : undefined,
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
+    coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,

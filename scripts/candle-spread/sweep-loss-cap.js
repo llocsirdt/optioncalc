@@ -263,6 +263,12 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['cover agg 0.02 / 0.10', () => ({ continuousCoverMinLockFrac: 0.02, ladderLossCapFrac: 0.10 })],
   ['cover agg 0 / 0.15', () => ({ continuousCoverMinLockFrac: 0, ladderLossCapFrac: 0.15 })],
   ['cover agg 0.02 / 0.10 + gu 0.10', () => ({ continuousCoverMinLockFrac: 0.02, ladderLossCapFrac: 0.10, giveUpMaxLoss: 0.10 })],
+  // ASYMMETRIC (2026-10-11, user: patient only WITH momentum): the aggressive set for every position, the roster's
+  // own (patient) set for positions riding the trend, judged each bar by a trend-state definition.
+  ...['A', 'AHH'].flatMap((d) => [['0.02 / 0.10 + gu 0.10', 0.02, 0.10, 0.10], ['0.02 / 0.05', 0.02, 0.05, null]].map(([n, ml, lc, gu]) =>
+    [`asym ${d} ${n}`, (r) => ({ continuousCoverMinLockFrac: ml, ladderLossCapFrac: lc, ...(gu != null ? { giveUpMaxLoss: gu } : {}),
+      coverAsymTrend: d, coverPatientMinLock: r.continuousCoverMinLockFrac || 0, coverPatientLossCap: r.ladderLossCapFrac || 0,
+      ...(r.giveUpMaxLoss != null ? { coverPatientGiveUp: r.giveUpMaxLoss } : {}) })])),
   ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],

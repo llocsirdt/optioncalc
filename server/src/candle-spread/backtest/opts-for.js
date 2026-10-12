@@ -95,6 +95,8 @@ function optsFor(v, env) {
   }
   // TREND-SIDE FLOOR (trend-floor.js): definition, action order, ratio, per-day cap.
   for (const k of ['trendFloor', 'trendFloorOrder', 'trendFloorMinRatio', 'trendFloorMaxPerDay']) if (v[k] != null) o[k] = v[k];
+  // ASYMMETRIC COVER AGGRESSION: patient knobs for with-trend positions (backtest study, 2026-10-11).
+  for (const k of ['coverAsymTrend', 'coverPatientMinLock', 'coverPatientLossCap', 'coverPatientGiveUp']) if (v[k] != null) o[k] = v[k];
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
   if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
