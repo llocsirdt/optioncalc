@@ -1113,6 +1113,12 @@ function underlyingAt(T) {
   for (const p of underMap) { if (p.epoch <= T) u = p.under; else break; }
   return u;
 }
+// The freshest underlying the record carries: the engine's own lastUnderlying, else the last candle close.
+function lastUnderlying() {
+  const u = record && record.state && record.state.lastUnderlying;
+  if (Number.isFinite(u)) return u;
+  return underMap.length ? underMap[underMap.length - 1].under : null;
+}
 function currentT() {
   const s = document.getElementById('timeSlider');
   if (!s || s.disabled || !dayMax) return null;
@@ -1172,7 +1178,9 @@ function renderCurve(pos, se, T) {
   const bookPos = T != null ? bookAsOf(record, T) : pos;
   // The underlying AT T has to reach buildCell, not just be patched on afterwards: it is part of what the
   // x-domain must contain, and computing the domain without it was how the marker ended up off-chart.
-  const uAt = T != null ? underlyingAt(T) : null;
+  // At full day the settle wins once it exists (buildCell prefers it); before then — a live session — fall back
+  // to the LAST KNOWN underlying so the "now" line and value are always drawn, as on the other pages.
+  const uAt = T != null ? underlyingAt(T) : lastUnderlying();
   const d = buildCell(bookPos, T != null ? null : se, null, null, uAt);
   if (d && T != null) {
     d.underlying = uAt;
