@@ -33,6 +33,15 @@ const DRY = process.argv.includes('--dry');
 const ofi = process.argv.indexOf('--openFillModel');
 const OPEN_FILL = ofi >= 0 ? process.argv[ofi + 1] : 'ladder';
 const OPEN_FILL_ENV = OPEN_FILL === 'immediate' ? {} : { openFillModel: OPEN_FILL };
+// SUB-BAR FILL MODEL — the default since 2026-10-12 (accuracy rule): live places the cover on the open's fill
+// (30s worker), so a new cover may only fill on prices AFTER that fill — 1m candles where we have them
+// (--sub1m, NDX/NQ raw 1m), the inferred bar path elsewhere. The old model let it fill anywhere in the bar it
+// was placed in (~30% of same-bar cover fills were look-ahead). `--subBarFill none` reproduces the old model.
+const sbi = process.argv.indexOf('--subBarFill');
+const SUB_FILL = sbi >= 0 ? process.argv[sbi + 1] : '1m';
+const s1i = process.argv.indexOf('--sub1m');
+const SUB1M_DIR = s1i >= 0 ? process.argv[s1i + 1] : path.join(__dirname, '..', '..', 'signal-lab-data', 'raw-1m');
+if (SUB_FILL !== 'none') OPEN_FILL_ENV.subBarFill = SUB_FILL;
 // INTRADAY-IV CORRECTION is now CANONICAL (2026-09-04). It reprices every leg with the calibrated
 // time-of-day IV multiplier (shared/intraday-iv-correction.json via runDay5m opts.intradayIV), measured off
 // the REAL captured chains — band-IV runs ~30% below real ATM IV at the open. Validated on 765 NQ days ×
@@ -119,6 +128,7 @@ function rollingDD(daily, W) {
 
 const allDays = load5mDays(DIR);
 if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
+const SUB1M_DAYS = SUB_FILL === '1m' && fs.existsSync(SUB1M_DIR) ? require('./backtest-v6-5m').attachSub1m(allDays, SUB1M_DIR) : 0;
 // Does this dataset carry a separate NDX price series? (the dual NQ-signal/NDX-priced set does)
 const HAS_PX = allDays.some(d => d.bars.some(b => b.px));
 
@@ -130,7 +140,7 @@ const hasRth = d => d.bars.some(b => { const m = etMin(b.dt); return m >= 570 &&
 const days = allDays.filter(hasRth);
 const excluded = allDays.length - days.length;
 
-const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: `rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness), opens ${OPEN_FILL}, cover fill-through per roster`, variants: {} };
+const out = { generatedAt: new Date().toISOString(), dataDir: path.basename(DIR), days: days.length, calendarDays: allDays.length, nonTradingDays: excluded, model: `rthActionOnly (24h bands, RTH action), QTY=1, tradeable days only, live config (recapture + leg-uniqueness), opens ${OPEN_FILL}, sub-bar cover fill ${SUB_FILL}${SUB_FILL === '1m' ? ` (1m on ${SUB1M_DAYS} days, bar path elsewhere)` : ''}, cover fill-through per roster`, variants: {} };
 const mean = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
 const mean2 = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100;
 
@@ -274,6 +284,8 @@ if (SLICE != null) {
 }
 
 assertSlipArmed();
+if (SUB_FILL !== 'none' && optsFor(RUNS[0]).subBarFill !== SUB_FILL) throw new Error(`sub-bar fill '${SUB_FILL}' did not reach the engine options — refusing to build mislabelled baselines`);
+console.log(`  sub-bar cover fill: ${SUB_FILL}${SUB_FILL === '1m' ? ` — 1m candles on ${SUB1M_DAYS} days, bar path elsewhere` : ''}`);
 console.log(`  pricing: ${HAS_PX ? 'cash NDX (px series) — signals off /NQ' : 'the signal series itself (single-instrument dataset)'}`);
 console.log(`BACKTEST BASELINES — ${RUNS.length} variants × ${days.length} trading days (${excluded} non-trading calendar entries excluded)${WORKERS > 1 ? ` · ${WORKERS} workers` : ''}`
   + ` · ${slipLabel()}\n`);
