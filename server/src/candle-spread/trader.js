@@ -191,6 +191,21 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       && m != null && m >= (deps.creditCoverFrac != null ? deps.creditCoverFrac : 0.65) * W;
     if (creditPreferred(st, deps, legacy)) style = 'credit';
   }
+  // THE BROKER SAID THIS FORM CLOSES A POSITION WE HOLD (2026-10-12 15:20, v7-10). Schwab rejects an order whose
+  // "to open" leg would actually reduce an existing holding ("The order is not an opening transaction"): the
+  // 15:15 bear's credit put cover sold the 30640 put while the account was LONG it (from the 14:45 put fly), and
+  // the leg ledger had no record of that long, so the resolver kept choosing the same form — rebuilt identically
+  // every 20s, rejected every time, position uncovered. On that rejection try the OTHER form (same strikes,
+  // other option type — economically the same cover); if it is rejected too the streak flips it back.
+  {
+    const rj = st && st.rejectStreaks && st.rejectStreaks[`cover:${pos.id}`];
+    if (rj && /not an opening transaction/i.test(String(rj.lastReason || ''))) {
+      const flipped = (rj.count % 2 === 1) ? (style === 'credit' ? 'debit' : 'credit') : style;
+      if (flipped !== style) decisions.push({ action: 'cover-style-flip', positionId: pos.id, from: style, to: flipped, rejects: rj.count,
+        note: 'broker rejected the last cover as closing an existing position — sending the other form' });
+      style = flipped;
+    }
+  }
   // RESOLVE now, COMMIT after the send. The resolver has to run here — its answer decides which legs we
   // send — but recording them is a commitment, and it used to happen unconditionally, before the send and
   // before the `if (!sentOk)` bail below. So `cover-not-sent` (unquotable sent legs, or a non-positive
