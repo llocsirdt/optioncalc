@@ -210,6 +210,11 @@ function v7Signal(A, prior, ctx = {}) {
     return { openSide: 'bear', coverSide: null, reason: 'trend-cont-bear' };
   }
 
+  // (6) GREEN-BREAKS-HIGH (cfg.breakOpen 'flat'|'any', off by default) — see candle-patterns.breakOpen. Never
+  //     covers: in 'any' mode an open against a held side is a be-wrong style hedge, as v7 already does.
+  const bo = pat.breakOpen(c15, prior15, cfg.breakOpen, heldBull, heldBear);
+  if (bo) return { openSide: bo.openSide, coverSide: null, reason: bo.reason };
+
   return { openSide: null, coverSide: null, reason: 'neutral' };
 }
 

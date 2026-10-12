@@ -53,4 +53,19 @@ function bullishReversalCandle(c, prior) {
   return isBottomRejection(c) || isBullishEngulfing(c, prior) || (isDoji(c) && parts(c).green);
 }
 
-module.exports = { parts, isDoji, isTopRejection, isBottomRejection, isBearishEngulfing, isBullishEngulfing, bearishReversalCandle, bullishReversalCandle };
+// GREEN-BREAKS-HIGH (2026-10-12, v4-v7 cfg.breakOpen, OFF by default) — the v0-v3 open rule as an EXTRA trigger
+// for the multi-timeframe families: a green 15m candle that breaks the prior 15m high opens bull, a red one that
+// breaks the prior low opens bear, regardless of where price sits against the midline. It is checked LAST, so
+// every v4 rule (and its pause) still wins. mode 'flat' fires only when nothing is held against it (no
+// opposite-side position); 'any' fires even then (a be-wrong style open, never covering the other side).
+// User 2026-10-12: the 10:45-11:00 bar (green, broke the prior high, 100 pts under a falling midline) opened
+// nothing on v7-10 while v0-v3 opened bull.
+function breakOpen(c15, prior15, mode, heldBull, heldBear) {
+  if (!mode || !c15 || !prior15 || prior15.high == null || prior15.low == null) return null;
+  const green = c15.close >= (c15.open != null ? c15.open : c15.close);
+  if (green && c15.high > prior15.high && (mode === 'any' || !heldBear)) return { openSide: 'bull', reason: 'green-breaks-high' };
+  if (!green && c15.low < prior15.low && (mode === 'any' || !heldBull)) return { openSide: 'bear', reason: 'red-breaks-low' };
+  return null;
+}
+
+module.exports = { breakOpen, parts, isDoji, isTopRejection, isBottomRejection, isBearishEngulfing, isBullishEngulfing, bearishReversalCandle, bullishReversalCandle };

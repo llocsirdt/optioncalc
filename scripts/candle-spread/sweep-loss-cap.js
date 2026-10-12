@@ -283,6 +283,9 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['sub 1m', () => ({ subBarFill: '1m' })],
   ['sub path', () => ({ subBarFill: 'path' })],
   ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
+  // GREEN-BREAKS-HIGH (2026-10-12, user): the v0-v3 open rule as an extra, last-priority 15m trigger on the v4 lineage
+  // (v4-v9). 'flat' = only with nothing held against it; 'any' = even then (never covers). null = not a v4+ variant.
+  ...['flat', 'any'].map((m) => [`break open ${m}`, (r) => (/^v[4-9]-/.test(r.variant) ? { signalCfg: { ...(r.signalCfg || {}), breakOpen: m } } : null)]),
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
     [`candle ${k} only`, () => ({ giveUpCandle: k, giveUpPointsBackstop: false })],

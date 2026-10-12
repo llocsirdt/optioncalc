@@ -149,6 +149,10 @@ function v5Signal(A, prior, ctx = {}) {
     return { openSide: 'bear', cover: false, reason: 'trend-cont-bear' };
   }
 
+  // (6) GREEN-BREAKS-HIGH (cfg.breakOpen 'flat'|'any', off by default) — see candle-patterns.breakOpen.
+  const bo = pat.breakOpen(c15, prior15, cfg.breakOpen, held === 'bull', held === 'bear');
+  if (bo) return { openSide: bo.openSide, cover: false, reason: bo.reason };
+
   return { openSide: null, cover: false, reason: 'neutral' };
 }
 
