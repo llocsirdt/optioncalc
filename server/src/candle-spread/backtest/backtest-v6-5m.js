@@ -471,6 +471,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // aggressive. Re-judged every bar, so a position that loses the trend loses its patience.
   const asymDef = opts.coverAsymTrend || null;
   let asymPatientBars = 0, asymAggBars = 0;
+  let coverSameBar = 0;   // covers booked on the bar they were placed (see opts.coverNextBar)
   const withTrend = (side) => { const d = TS.state(trendCtx, asymDef); return (d === 1 && side === 'bull') || (d === -1 && side === 'bear'); };
   let stallFires = 0;
   let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
@@ -1000,6 +1001,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     for (const pos of st.positions) {                       // (a) resolve resting covers vs THIS 5m bar
       if (!pos.pendingCover) continue;
+      // SAME-BAR LOOK-AHEAD (opts.coverNextBar; 2026-10-11). A cover is placed at this bar's CLOSE (S = close), so this
+      // bar's high/low happened BEFORE it existed. Live places at the 5m close and works it from then on. On, a cover is
+      // first tested against the NEXT bar (opens already work this way: "the order WORKS from the next bar").
+      const _newCover = pos.pendingCover.placedMs === nowEpoch;
+      if (_newCover && opts.coverNextBar) continue;
       // FILL MODEL. A resting cover is a real order at the broker, so it fills if the underlying TRADED
       // THROUGH the level that makes the cover cheap enough — i.e. price it at the bar's most favourable
       // extreme (high for a bull, whose put-spread cover cheapens as price rises; low for a bear). That is
@@ -1216,6 +1222,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
         pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null;
         pos.coverEpoch = nowEpoch; pos.coverTime = nowET; markBookDirty();
+        if (_newCover) coverSameBar++;
         if (rc && rc.wing !== G.WIDTH) continue;   // anchor cover: legacy skips the capital accounting below
         if (trackCap) {
           const cd = pos.coverLimit * 100 * QTY;
@@ -1826,6 +1833,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
+    coverSameBar,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,

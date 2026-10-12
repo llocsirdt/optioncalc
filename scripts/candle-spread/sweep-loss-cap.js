@@ -269,6 +269,7 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
     [`asym ${d} ${n}`, (r) => ({ continuousCoverMinLockFrac: ml, ladderLossCapFrac: lc, ...(gu != null ? { giveUpMaxLoss: gu } : {}),
       coverAsymTrend: d, coverPatientMinLock: r.continuousCoverMinLockFrac || 0, coverPatientLossCap: r.ladderLossCapFrac || 0,
       ...(r.giveUpMaxLoss != null ? { coverPatientGiveUp: r.giveUpMaxLoss } : {}) })])),
+  ['cover next bar', () => ({ coverNextBar: true })],   // remove the same-bar cover look-ahead
   ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
@@ -453,6 +454,7 @@ function measure(job) {
         intradayFloorAvg: mean((r) => (r.intradayFloorAvg != null ? r.intradayFloorAvg : 0)),
         intradayNonNegPct: Math.round(t.reduce((a, r) => a + (r.intradayFloorNonNegPct || 0), 0) / n * 10) / 10,
         tentsPerDay: Math.round(t.reduce((a, r) => a + (r.tents || 0), 0) / n * 10) / 10,
+        coverSameBarPerDay: Math.round(t.reduce((a, r) => a + (r.coverSameBar || 0), 0) / n * 100) / 100,
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,

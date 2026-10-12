@@ -1380,6 +1380,13 @@ function etParts(date = new Date()) {
   return { weekday: p.weekday, hour, minute: parseInt(p.minute, 10) };
 }
 
+// "MM/DD HH:MM" ET — the candle-time convention (markTimeEST) for actions taken between candle closes.
+function etStampNow(date = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date).map(x => [x.type, x.value]));
+  return `${p.month}/${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute}`;
+}
+
 const RTH_WEEKDAYS = new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
 const STEP_MS = 5 * 60 * 1000;           // the engine now steps every 5m (v6/v7 act intra-15m)
 const FIRST_ACTION_MIN = 9 * 60 + 35;   // 9:35 close of the first (9:30-9:35) 5m candle
@@ -2318,7 +2325,9 @@ async function runRestingWork() {
       const hasOpen = !!st.pendingOpenId;
       const hasCover = (st.positions || []).some(p => p.filled !== false && !p.covered && p.pendingCover);
       const hasHedge = (st.positions || []).some(p => p.filled === false && p.pendingHedge);
-      if (hasOpen || hasCover || hasHedge) pending.push({ run, cfg, record });
+      // A filled, uncovered position with no cover working yet — the worker places it (cover on fill, below).
+      const hasNaked = run.continuousCover === true && (st.positions || []).some(p => p.filled && !p.covered && !p.pendingCover && !p.hedge);
+      if (hasOpen || hasCover || hasHedge || hasNaked) pending.push({ run, cfg, record });
     }
     if (!pending.length) return;
     // ONE chain read for the whole pass. The 5s freshness window in getOrFetchChainData means every
@@ -2346,6 +2355,11 @@ async function runRestingWork() {
         trader.applyBrokerFills(st, cfg, deps, decisions);
         await trader.resolvePendingOpen(st, cfg, deps, decisions);
         trader.resolvePendingHedges(st, cfg, deps, decisions);
+        // COVER ON FILL (2026-10-11, user): place the continuous cover the moment the open's fill is confirmed, not
+        // at the next 5m close (up to five minutes uncovered). Same function and rules as the candle close's step 2b.
+        if (cfg.coverFillModel === 'resting' && run.continuousCover === true && typeof run.signalFn === 'function') {
+          await trader.placeContinuousCovers(st, cfg, deps, decisions, etStampNow(), st.lastUnderlying);
+        }
         if (cfg.coverFillModel === 'resting') {
           // BOTH, and in this order, exactly as processCandleClose does it (trader.js). workRestingCovers
           // only WALKS the ladder; resolveRestingCovers is what tests whether the mark reached the target

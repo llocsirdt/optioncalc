@@ -1466,6 +1466,65 @@ function etMinutesOf(candleTime) {
   return m ? (+m[1]) * 60 + (+m[2]) : null;
 }
 
+// CONTINUOUS COVER PLACEMENT — shared by the candle close (step 2b) and the 30-second sub-bar worker. The worker
+// calls it right after a broker fill books the open (2026-10-11, user: "It should be placed immediately after the
+// open fill confirmation" — the 5m close left a filled open uncovered for up to five minutes). Idempotent: a position
+// that already has a pendingCover is skipped, so both call sites are correct, never double.
+async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying) {
+  // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
+  // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
+  // compute the identical target for the identical bar.
+  //
+  // WHY: `W - openCost - minLock` is a FIXED price but the premium it competes against DECAYS all day.
+  // Early it sits far below a rich mark and cannot fill, so the position sits naked for hours; by
+  // afternoon the same target is reachable. Measured across 29 variants, ramping raised COVER FILL on
+  // 29/29 (mean +4.1 pts) and, on the variants where covers were being skipped outright, raised covers
+  // PLACED by up to 21% — the `W - open - minLock <= 0` gate below stops rejecting them.
+  //
+  // IT IS NOT A FREE WIN AND IS NOT A FLEET DEFAULT: uncapped it trades floor for those fills and loses
+  // on 18 of 29 variants (-$1.1M aggregate). It only pays where a tight day-loss cap already bounds the
+  // floor, which is why it ships ON for v7-10 (lossMax $1,000) and OFF everywhere else. See index.js.
+  let minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+  if (deps.minLockRamp) {
+    const a = deps.minLockRampStart != null ? deps.minLockRampStart : 9 * 60 + 30;
+    const b = deps.minLockRampEnd != null ? deps.minLockRampEnd : 12 * 60 + 30;
+    const from = deps.minLockRampFrom != null ? deps.minLockRampFrom : 0;
+    const to = deps.minLockRampTo != null ? deps.minLockRampTo : 1;
+    const now = etMinutesOf(candleTime);
+    // No clock (a malformed candle time) must not silently mean "ask for nothing" — fall back to the
+    // full constant lock, the safe end of the ramp.
+    const prog = now == null ? 1 : (b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1);
+    minLock = minLock * (from + (to - from) * prog);
+  }
+  // ARMING (deps.continuousCoverArmFrac / continuousCoverOppRatio) — unset keeps the original
+  // behaviour: rest a cover on EVERY position the instant it opens, which maximises locking but decides
+  // each position's outcome at birth. When set, arm on either:
+  //   (a) BOOK RISK — the day's worst case has reached armFrac x lossTarget, the governor's own measure;
+  //   (b) OPPORTUNITY — this cover is cheap enough to lock at least oppRatio x what it costs. Without
+  //       (b) a couple of deep winners can sit uncovered through a whole reversal purely because total
+  //       book risk never approached the target; lockDeepWinners does not catch that, being gated on the
+  //       floor ALREADY breaching lossTarget.
+  const armFrac = deps.continuousCoverArmFrac, oppRatio = deps.continuousCoverOppRatio;
+  const armedByRisk = armFrac == null
+    || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
+  for (const pos of st.positions) {
+    if (!pos.filled || pos.covered || pos.pendingCover) continue;
+    if (round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
+    const plan = selectCoverGeometric(pos, cfg, deps.getLeg, underlying);
+    if (plan.error) continue;
+    if (!armedByRisk) {
+      // Not armed by book risk — take it only if it stands on its own as a trade.
+      if (oppRatio == null) continue;
+      const cost = plan.mark;
+      const locked = cfg.spreadWidth - pos.limit - cost;
+      if (!(cost > 0) || locked < oppRatio * cost) continue;
+      decisions.push({ action: 'cover-arm-opportunity', positionId: pos.id, cost, locked: round2(locked),
+        ratio: round2(locked / cost), geometry: plan.geometry });
+    }
+    await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock, st);
+  }
+}
+
 // --- Core per-tick sequence (testable) ------------------------------------
 // deps: { getLeg(type,strike), placeOrder(payload, meta)->Promise<{status,filled}>, dryRun }
 // async because placeOrder may send a real order to Schwab (awaited network call).
@@ -1688,58 +1747,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // signal cover skips anything already pending). Reversing the order here would silently trade a
   // different strategy from the one the baselines describe.
   if (ported && deps.continuousCover === true && cfg.coverFillModel === 'resting') {
-    // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
-    // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
-    // compute the identical target for the identical bar.
-    //
-    // WHY: `W - openCost - minLock` is a FIXED price but the premium it competes against DECAYS all day.
-    // Early it sits far below a rich mark and cannot fill, so the position sits naked for hours; by
-    // afternoon the same target is reachable. Measured across 29 variants, ramping raised COVER FILL on
-    // 29/29 (mean +4.1 pts) and, on the variants where covers were being skipped outright, raised covers
-    // PLACED by up to 21% — the `W - open - minLock <= 0` gate below stops rejecting them.
-    //
-    // IT IS NOT A FREE WIN AND IS NOT A FLEET DEFAULT: uncapped it trades floor for those fills and loses
-    // on 18 of 29 variants (-$1.1M aggregate). It only pays where a tight day-loss cap already bounds the
-    // floor, which is why it ships ON for v7-10 (lossMax $1,000) and OFF everywhere else. See index.js.
-    let minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
-    if (deps.minLockRamp) {
-      const a = deps.minLockRampStart != null ? deps.minLockRampStart : 9 * 60 + 30;
-      const b = deps.minLockRampEnd != null ? deps.minLockRampEnd : 12 * 60 + 30;
-      const from = deps.minLockRampFrom != null ? deps.minLockRampFrom : 0;
-      const to = deps.minLockRampTo != null ? deps.minLockRampTo : 1;
-      const now = etMinutesOf(candleTime);
-      // No clock (a malformed candle time) must not silently mean "ask for nothing" — fall back to the
-      // full constant lock, the safe end of the ramp.
-      const prog = now == null ? 1 : (b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1);
-      minLock = minLock * (from + (to - from) * prog);
-    }
-    // ARMING (deps.continuousCoverArmFrac / continuousCoverOppRatio) — unset keeps the original
-    // behaviour: rest a cover on EVERY position the instant it opens, which maximises locking but decides
-    // each position's outcome at birth. When set, arm on either:
-    //   (a) BOOK RISK — the day's worst case has reached armFrac x lossTarget, the governor's own measure;
-    //   (b) OPPORTUNITY — this cover is cheap enough to lock at least oppRatio x what it costs. Without
-    //       (b) a couple of deep winners can sit uncovered through a whole reversal purely because total
-    //       book risk never approached the target; lockDeepWinners does not catch that, being gated on the
-    //       floor ALREADY breaching lossTarget.
-    const armFrac = deps.continuousCoverArmFrac, oppRatio = deps.continuousCoverOppRatio;
-    const armedByRisk = armFrac == null
-      || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
-    for (const pos of st.positions) {
-      if (!pos.filled || pos.covered || pos.pendingCover) continue;
-      if (round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
-      const plan = selectCoverGeometric(pos, cfg, deps.getLeg, underlying);
-      if (plan.error) continue;
-      if (!armedByRisk) {
-        // Not armed by book risk — take it only if it stands on its own as a trade.
-        if (oppRatio == null) continue;
-        const cost = plan.mark;
-        const locked = cfg.spreadWidth - pos.limit - cost;
-        if (!(cost > 0) || locked < oppRatio * cost) continue;
-        decisions.push({ action: 'cover-arm-opportunity', positionId: pos.id, cost, locked: round2(locked),
-          ratio: round2(locked / cost), geometry: plan.geometry });
-      }
-      await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock, st);
-    }
+    await placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying);
   }
 
   // (3) COVER — only on a CONFIRMED reversal (see spread-logic.shouldCover): a candle
@@ -3745,6 +3753,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
+  placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)
   lateFloorLimit,                // LATE-DAY FLOOR GUARD
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
