@@ -286,6 +286,9 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // GREEN-BREAKS-HIGH (2026-10-12, user): the v0-v3 open rule as an extra, last-priority 15m trigger on the v4 lineage
   // (v4-v9). 'flat' = only with nothing held against it; 'any' = even then (never covers). null = not a v4+ variant.
   ...['flat', 'any'].map((m) => [`break open ${m}`, (r) => (/^v[4-9]-/.test(r.variant) ? { signalCfg: { ...(r.signalCfg || {}), breakOpen: m } } : null)]),
+  // OVER-CAP OPENS REST AT THE CAP (2026-10-12, user: place at the cap, or lower and walk up — never no action).
+  // openOverCapBelow = how far under the cap the order starts (fraction of width here, so 10W -1% = $0.10).
+  ...[['@cap', 0], ['-1%W', 0.01], ['-2.5%W', 0.025]].map(([n, f]) => [`over cap ${n}`, (r) => ({ openOverCapBelow: Math.round(f * r.spreadWidth * 100) / 100 })]),
   // HOURLY BAND GATE (2026-10-12, user): no trend-continuation open in the direction the last completed hour closed
   // ('close') / reached ('touch') beyond its Bollinger band. v4 lineage only.
   ...['close', 'touch'].map((m) => [`htf gate ${m}`, (r) => (/^v[4-9]-/.test(r.variant) ? { signalCfg: { ...(r.signalCfg || {}), htfGate: m } } : null)]),

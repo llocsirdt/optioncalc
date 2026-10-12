@@ -1875,7 +1875,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
         // legs as if the geometry had chosen them — which is why strikes landing off-placement went
         // unnoticed. Record where it wanted to be, where it went, and what that cost.
-        out = buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying);
+        out = withOverCap(buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying), openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying);
         decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
           fromLower: plan.lower, fromUpper: plan.upper, toLower: rr.lo, toUpper: rr.hi,
           shift: rr.shift, style: rr.style, underlying,
@@ -2045,7 +2045,7 @@ function buildOpen(side, underlying, cfg, getLeg) {
   // spreadShift (default 0 = ATM) shifts the spread ITM for the $40 short-ATM geometry; capFrac is the
   // risk/reward CEILING (default 0.65 of width) and GATES the trade — it never sets the price.
   const { lower, upper } = L.spreadStrikesShifted(center, cfg.spreadWidth, cfg.spreadShift || 0, side);
-  return buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying);
+  return withOverCap(buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying), side, lower, upper, cfg, getLeg, underlying);
 }
 
 // ADAPTIVE STRIKE PLACEMENT — the live port of backtest-width.makeAdaptiveGeo.
@@ -2109,6 +2109,11 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
     // itmStrikes: how many strikes INSIDE the money the short leg sits (0 = straddle placement).
     return { ...res, itmStrikes: -k, placementsTried: tried };
   }
+  // Every placement was over the cap: with openOverCapBelow set, rest the CHEAPEST (the last one tried) below the cap.
+  if (lastDeclined && cfg.openOverCapBelow != null) {
+    const oc = withOverCap(lastDeclined, side, lastDeclined.lower, lastDeclined.upper, cfg, getLeg, underlying);
+    if (oc && !oc.error && !oc.declined) return { ...oc, placementsTried: tried, itmStrikes: null };
+  }
   return {
     declined: true, placementsTried: tried, limit: 0,
     reason: tried
@@ -2119,7 +2124,19 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
 }
 
 // Build a debit-canonical open at EXPLICIT strikes (used by leg-uniqueness to reprice a shifted spread).
-function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
+// OVER-CAP OPENS REST AT THE CAP (cfg.openOverCapBelow, 2026-10-12). User: "just because the mark of an order isn't
+// within our cap doesn't mean we shouldn't place an order, it just means we should place the order at the cap (or
+// ideally lower and walk it up to the cap)". The standing rule (opens must fill; the ceiling bounds the CHASE, it is
+// not a decline) — but every placement over the cap was declined: 2026-10-12 12:45 (shifted bear at $6.70) and 13:00
+// (cheapest bull $5.85) sent nothing on v7-10. null (default) = the historical decline. A number = rest at
+// (cap - openOverCapBelow); the open ladder walks it to the walk cap and never past it. withOverCap() applies it at
+// the END of a search (the adaptive walk still needs `declined` to move to a cheaper placement).
+function withOverCap(res, side, lower, upper, cfg, getLeg, underlying) {
+  if (!res || !res.declined || cfg.openOverCapBelow == null || lower == null || upper == null) return res;
+  return buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying, { allowOverCap: true });
+}
+
+function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying, opt = {}) {
   const legs = L.openLegs(side, lower, upper);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error };
@@ -2164,7 +2181,7 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
   // up; implausible quotes are refused above by the quote gates (saneMark, chainMonotonic, cheapOutlier).
   const belowBand = cfg.minDebitFrac > 0 && mark < cfg.minDebitFrac * cfg.spreadWidth - 1e-9 ? true : undefined;
   // RISK/REWARD CEILING — decline rather than send a sub-market limit that would never fill.
-  if (exceedsCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0 };
+  if (exceedsCap && !opt.allowOverCap) return { declined: true, reason: `mark ${mark} over ${Math.round((cfg.capFrac != null ? cfg.capFrac : 0.65) * 100)}% of $${cfg.spreadWidth} (cap ${cap})`, mark, cap, limit: 0, lower, upper };
   // CEIL TO THE TICK, NEVER ROUND DOWN. debitLimit rounds the mark to the NEAREST tick, which puts the
   // limit BELOW the mark for 40 of every 100 one-cent marks (8.22 -> 8.20). That was harmless while opens
   // booked on assumption; the moment they were price-tested it meant 40% of opens failed their own fill
@@ -2177,14 +2194,17 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
   const atOrAbove = round2(Math.ceil((mark / tick) - 1e-9) * tick);
   // SLIP OVER THE MARK (see openSlip), still bounded by the ceiling — paying up must never be a way
   // around the gate that just let this open through.
-  const limit = Math.min(round2(atOrAbove + openSlip(cfg)), cap);
+  const overCap = exceedsCap && opt.allowOverCap ? true : undefined;
+  const limit = overCap
+    ? Math.max(tick, round2(Math.floor((cap - Math.max(0, cfg.openOverCapBelow || 0)) / tick + 1e-9) * tick))   // rest below the cap; the ladder walks up
+    : Math.min(round2(atOrAbove + openSlip(cfg)), cap);
   // WALK CAP (cfg.openWalkCapFrac, default = the placement ceiling): the open ladder may concede up to this
   // to get the fill — the user's "place at 5.30, walk up to ~5.50". `cap` on the result is what the ladder
   // walks to; placementCap is the gate the strikes were chosen under.
   const walkCap = cfg.openWalkCapFrac != null ? Math.max(cap, round2(cfg.openWalkCapFrac * cfg.spreadWidth)) : cap;
   return {
     legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper),
-    mark, cap: walkCap, placementCap: cap, limit, markLimit: atMark, belowBand, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
+    mark, cap: walkCap, placementCap: cap, limit, markLimit: atMark, belowBand, overCap, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT')
   };
 }
 

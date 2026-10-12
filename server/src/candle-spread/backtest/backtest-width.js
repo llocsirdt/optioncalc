@@ -67,7 +67,13 @@ function openLimitOf(mark, slipTicks, cap, legacyRound) {
   return Math.max(TICK, cap != null ? Math.min(px, round2(cap)) : px);   // paying up never beats the ceiling
 }
 
-function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks = 0, minDebitFrac = 0 }) {
+// OVER-CAP OPENS REST AT THE CAP (overCapBelow, 2026-10-12, user: "just because the mark isn't within our cap doesn't
+// mean we shouldn't place an order — place it at the cap, or lower and walk it up to the cap"; the standing rule is
+// that the ceiling bounds the CHASE, it is not a decline). null (default) = the historical decline. A number = rest
+// the cheapest placement at (cap - overCapBelow) and let the open ladder walk it to the cap; it fills only if the
+// market comes to it. Mirrors trader.buildOpenAtStrikes({ allowOverCap }).
+const overCapLimit = (cap, below) => Math.max(TICK, Math.floor((round2(cap) - Math.max(0, below)) / TICK + 1e-9) * TICK * 100 / 100);
+function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks = 0, minDebitFrac = 0, overCapBelow = null }) {
   const cf = capFrac;
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
@@ -85,6 +91,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
     // Carry the LEGS on a decline too. Skipping is the strategy decision, but "would this have filled if
     // we had rested a bid at the ceiling instead?" is a MEASURABLE question, and it cannot be answered
     // without knowing which spread was turned down. See measure-declined-opens.js.
+    if (mark > width * cf && overCapBelow != null) return { legs, shortStrike: side === 'bull' ? hi : lo, limit: round2(overCapLimit(width * cf, overCapBelow)), fracOfWidth: mark / width, overCap: true, markOverCap: round2(mark) };
     if (mark > width * cf) return { skip: true, reason: `mark ${round2(mark)} over ${Math.round(cf * 100)}% of $${width}`, limit: 0, mark: round2(mark), legs, shortStrike: side === 'bull' ? hi : lo, restLimit: round2(width * cf) };
     // BAND FLOOR (minDebitFrac) LABELS, NEVER REFUSES (user, 2026-10-09): a cheap price is placed at its mark and
     // walked up; implausible quotes are the quote gates' job, not the band's.
@@ -121,13 +128,14 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
 // maxOtmStrikes (default 0 = never OTM, byte-identical): after straddle, allow the short leg up to N strikes
 // OUT of the money, so a band that sATM is too dear for can still be met by stepping out — on a 20-wide one
 // step is the cATM shape.
-function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0, minDebitFrac = 0, maxOtmStrikes = 0 }) {
+function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes = 3, capFlexFrac = 0, capFlexStrikes = 1, orderSlipTicks = 0, minDebitFrac = 0, maxOtmStrikes = 0, overCapBelow = null }) {
   // Least-ITM placement allowed = straddle the money (long leg ITM, short leg OTM). On a coarse grid the
   // exact straddle can be off-grid (e.g. $10 width on a 10-pt grid), in which case short-at-the-money is
   // the least-ITM placement available — still never OTM.
   const halfOnGrid = Math.floor((width / 2) / incr) * incr;
   function buildOpen(side, S, tau, iv) {
     const center = Math.floor(S / incr) * incr;
+    let cheapest = null;
     // Candidate SHORT strikes, ordered MOST ITM first. Bull: lower short strike = deeper ITM = pricier.
     for (let k = -maxItmStrikes; k <= halfOnGrid / incr + maxOtmStrikes; k++) {
       const off = k * incr;
@@ -139,6 +147,7 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
         : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
       const mark = legsMark(legs, S, tau, iv);
       if (!(mark > 0)) continue;
+      cheapest = { legs, shortStrike, mark, k };   // tried most-ITM first, so the last one seen is the cheapest
       if (mark <= maxDebitFrac * width) {
         // BAND FLOOR LABELS, NEVER REFUSES (user, 2026-10-09): the deepest placement under the ceiling is taken
         // even when it marks under the floor — placed at its mark and walked up. Was a decline.
@@ -164,7 +173,10 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
         return { legs, shortStrike, limit: openLimitOf(mark, orderSlipTicks, maxDebitFrac * width, roundTick), itmStrikes: -k, fracOfWidth: mark / width, belowBand };
       }
     }
-    // Every placement from deep-ITM through straddle is above the ceiling → decline rather than overpay.
+    // Every placement from deep-ITM through straddle is above the ceiling. overCapBelow set: rest the CHEAPEST one
+    // below the cap and walk it up (never paying past the cap); otherwise decline (historical).
+    if (overCapBelow != null && cheapest) return { legs: cheapest.legs, shortStrike: cheapest.shortStrike, limit: round2(overCapLimit(maxDebitFrac * width, overCapBelow)),
+      itmStrikes: -cheapest.k, fracOfWidth: cheapest.mark / width, overCap: true, markOverCap: round2(cheapest.mark) };
     return { skip: true, reason: 'no placement within ' + Math.round(maxDebitFrac * 100) + '% of width', limit: 0 };
   }
   const coverLegs = (side, shortStrike) => side === 'bull'

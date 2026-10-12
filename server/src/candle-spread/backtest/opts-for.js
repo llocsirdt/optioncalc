@@ -170,8 +170,9 @@ function optsFor(v, env) {
     : (env && env.orderSlipTicks != null) ? env.orderSlipTicks
     : (env && env.legacyRounding === true) ? null : 0;
   o.geo = v.adaptiveGeo
-    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0, maxOtmStrikes: v.maxOtmStrikes || 0 })
-    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0 });
+    ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0, maxOtmStrikes: v.maxOtmStrikes || 0, overCapBelow: v.openOverCapBelow != null ? v.openOverCapBelow : null })
+    : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0, overCapBelow: v.openOverCapBelow != null ? v.openOverCapBelow : null });
+  if (v.openOverCapBelow != null) o.openOverCapBelow = v.openOverCapBelow;   // consumed by the geo above (recorded for the contract check)
   o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it (null = legacy)
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
   // series (`px`) MUST be priced off it — otherwise runDay5m falls back to the SIGNAL series and the run
