@@ -77,6 +77,30 @@ function load5mDays(dir) {
   return out;
 }
 
+// 1m SUB-BARS (2026-10-11; opts.subBarFill '1m'). Attaches bars[i].sub1m = the 1m candles inside each 5m bar
+// ([dt-5m, dt): a 5m bar is stamped at its CLOSE, a 1m candle at its OPEN) from rawDir/<SYM>-<date>.json — the same
+// price series the day is priced off (NDX when the dataset carries px, else the /NQ signal series). Days without a
+// file are left alone; returns how many days got sub-bars.
+function attachSub1m(days, rawDir) {
+  let n = 0;
+  for (const d of days) {
+    const sym = d.bars.some((b) => b.px) ? 'NDX' : 'NQ';
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d.date);   // load5mDays dates are en-US "M/D/YYYY"
+    const iso = m ? `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}` : d.date;
+    let candles;
+    try { candles = JSON.parse(fs.readFileSync(path.join(rawDir, `${sym}-${iso}.json`), 'utf8')).candles; } catch (e) { continue; }
+    if (!Array.isArray(candles) || !candles.length) continue;
+    const byT = new Map(candles.map((c) => [c.datetime, c]));
+    for (const b of d.bars) {
+      const sub = [];
+      for (let k = 5; k >= 1; k--) { const c = byT.get(b.dt - k * 60000); if (c) sub.push(c); }
+      if (sub.length) b.sub1m = sub;
+    }
+    d.has1m = true; n++;
+  }
+  return n;
+}
+
 const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buildOpen, coverLegs = eng.coverLegs;
 
 // INTRADAY-IV CORRECTION (opts.intradayIV) — a time-of-day IV MULTIPLIER calibrated from the real
@@ -472,6 +496,22 @@ function runDay5m(bars, signalFn, opts = {}) {
   const asymDef = opts.coverAsymTrend || null;
   let asymPatientBars = 0, asymAggBars = 0;
   let coverSameBar = 0;   // covers booked on the bar they were placed (see opts.coverNextBar)
+  // SUB-BAR FILL MODEL (opts.subBarFill '1m' | 'path'; 2026-10-11, user: place the cover the moment the open fills
+  // and test it from the minutes AFTER that). Off = the historical end-of-bar model, byte-identical.
+  //   open: fills at the first point in the bar that reaches its limit — '1m': the first 1m candle whose favourable
+  //         extreme does; 'path': the first point of an inferred O-L-H-C (green) / O-H-L-C (red) path that does.
+  //   cover on a position whose open filled IN this bar: tested only against the part of the bar AFTER the fill
+  //         ('1m': later 1m candles — the live worker places it ~30s after the fill, so the fill minute is skipped;
+  //         'path': the remaining path points). A cover first placed for a position that filled EARLIER (live
+  //         would rest it from that fill) is tested on the whole bar only if the open filled at the previous bar's
+  //         close (the immediate model); any other newly placed cover waits for the next bar.
+  const subMode = opts.subBarFill || null;
+  let subNo1m = 0, subOpenNoFill = 0;
+  const pathPts = (bar) => {   // [O, x, y, C] in time order for the bar's own price series
+    const p = priceOf(bar), o = (bar.px || bar.analysis['5m']).open;
+    const green = !(p.close < o);
+    return green ? [o, p.low, p.high, p.close] : [o, p.high, p.low, p.close];
+  };
   const withTrend = (side) => { const d = TS.state(trendCtx, asymDef); return (d === 1 && side === 'bull') || (d === -1 && side === 'bear'); };
   let stallFires = 0;
   let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
@@ -683,6 +723,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (-floorNow() > lossMax) { const n = buyFloorOffsets(lossMax, S, tau, iv, true); if (!floorOffset) frCapCount += n; }
   }
 
+  let lastActedI = -1;
   for (let i = 0; i < bars.length; i++) {
     if (trendStep) trendCtx = trendStep(bars[i].analysis, bars[i].dt);
     // rthActionOnly: skip overnight bars entirely (no trading/fills), but they remain in `bars` so the
@@ -693,6 +734,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // overnight skip above), so the first acted bar sees the true prior. Used to measure REST-OF-DAY P&L
     // for an intraday switching rule. Unset = byte-identical.
     if (opts.actionStartMin != null && etMinute(bars[i].dt) < opts.actionStartMin) continue;
+    const prevActedI = lastActedI; lastActedI = i;   // sub-bar model: the previous bar this loop acted on
     const A = bars[i].analysis, c5 = A['5m'], px = priceOf(bars[i]), S = px.close, tau = bs.tauFromTime(bars[i].dt);
     // REPLAY STAMPS — every position records when it opened and when its cover filled, in the same shape
     // the LIVE run records use (epoch + "MM/DD HH:MM" ET). Pure bookkeeping, never read by the P&L math;
@@ -730,7 +772,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (o.belowBand) openLowBand++;
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
-          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S });
+          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i });
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
         // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
@@ -806,9 +848,24 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (next > po.limit && govOk) { po.limit = next; po.pos.limit = next; po.lastMoveMs = nowEpoch; openReprices++; markBookDirty(); }
       }
       const fav = po.side === 'bull' ? px.low : px.high;
-      if (legsMark(po.o.legs, fav, tau, iv) <= po.limit - thruOpen + 1e-9) {
+      let fillAt = null;   // sub-bar model: where in the bar the open filled
+      let opensNow = legsMark(po.o.legs, fav, tau, iv) <= po.limit - thruOpen + 1e-9;
+      if (subMode === '1m' && bars[i].sub1m) {
+        const k = bars[i].sub1m.findIndex((m) => legsMark(po.o.legs, po.side === 'bull' ? m.low : m.high, tau, iv) <= po.limit - thruOpen + 1e-9);
+        if (opensNow && k < 0) subOpenNoFill++;
+        opensNow = k >= 0; fillAt = { mode: '1m', k };
+      } else if (subMode) {
+        if (subMode === '1m') subNo1m++;
+        // the FIRST path point at which the resting open's limit is reached (a resting order fills on first touch,
+        // not at the bar's extreme — often at the bar's open)
+        const pts = pathPts(bars[i]);
+        const k = pts.findIndex((x) => legsMark(po.o.legs, x, tau, iv) <= po.limit - thruOpen + 1e-9);
+        fillAt = { mode: 'path', k: k >= 0 ? k : (po.side === 'bull' ? pts.indexOf(Math.min(pts[1], pts[2])) : pts.indexOf(Math.max(pts[1], pts[2]))) };
+      }
+      if (opensNow) {
         st.pendingOpen = null; openFilledL++; openPaidUp += round2(po.limit - po.base);
         commitOpen(po.side, { ...po.o, limit: po.limit }, null, false);
+        if (fillAt) { const np = st.positions[st.positions.length - 1]; if (np && np.openEpoch === nowEpoch) np._fillAt = fillAt; }
       } else if (opts.openRestrikeMin > 0 && po.limit >= po.cap - 1e-9
         && nowEpoch - (po.atCapMs != null ? po.atCapMs : (po.atCapMs = nowEpoch)) >= opts.openRestrikeMin * 60000) {
         // RE-STRIKE TIMEOUT — mirrors trader.resolvePendingOpen: at its cap for openRestrikeMin minutes without
@@ -1006,6 +1063,19 @@ function runDay5m(bars, signalFn, opts = {}) {
       // first tested against the NEXT bar (opens already work this way: "the order WORKS from the next bar").
       const _newCover = pos.pendingCover.placedMs === nowEpoch;
       if (_newCover && opts.coverNextBar) continue;
+      let subExt = null;   // sub-bar model: the extreme reachable AFTER this cover existed (null = whole bar)
+      if (subMode && _newCover) {
+        const fa = pos._fillAt;
+        if (pos.openEpoch === nowEpoch && fa && fa.mode === '1m') {
+          const rest = bars[i].sub1m.slice(fa.k + 1);
+          if (!rest.length) continue;
+          subExt = pos.side === 'bull' ? Math.max(...rest.map((m) => m.high)) : Math.min(...rest.map((m) => m.low));
+        } else if (pos.openEpoch === nowEpoch && fa) {
+          const rest = pathPts(bars[i]).slice(fa.k + 1);
+          if (!rest.length) continue;
+          subExt = pos.side === 'bull' ? Math.max(...rest) : Math.min(...rest);
+        } else if (!(pos.pendingCover.src === 'continuous' && pos._openI === prevActedI && !pos._fillAt)) continue;
+      }
       // FILL MODEL. A resting cover is a real order at the broker, so it fills if the underlying TRADED
       // THROUGH the level that makes the cover cheap enough — i.e. price it at the bar's most favourable
       // extreme (high for a bull, whose put-spread cover cheapens as price rises; low for a bear). That is
@@ -1015,7 +1085,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // trade N points BEYOND the fill level — the user's "skew it by a strike" robustness knob.
       const pc = pos.pendingCover;
       const _hc = opts.coverFillHaircut || 0;
-      const ext = pos.side === 'bull' ? (px.high - _hc) : (px.low + _hc);
+      const ext = subExt != null ? (pos.side === 'bull' ? subExt - _hc : subExt + _hc) : (pos.side === 'bull' ? (px.high - _hc) : (px.low + _hc));
       // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
       // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
       // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
@@ -1833,7 +1903,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
-    coverSameBar,
+    coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,
@@ -1859,7 +1929,7 @@ function runV5_15m(bars) {
 // ivMultAt/skewMultAt/etMinute are exported so ANALYSIS scripts can reprice a spread on exactly the same
 // vol surface the engine trades on. Reimplementing the lookups in a caller is how a measurement quietly
 // stops measuring the thing it claims to.
-module.exports = { runDay5m, load5mDays, ivMultAt, skewMultAt, etMinute };
+module.exports = { runDay5m, load5mDays, attachSub1m, ivMultAt, skewMultAt, etMinute };
 
 if (require.main === module) {
   const v6fn = (A, p, ctx) => v6Signal(A, p, { ...ctx, cfg: CFG });

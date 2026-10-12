@@ -62,8 +62,15 @@ const SLICE = process.argv.indexOf('--_slice') >= 0 ? Number(process.argv[proces
 const SLICE_OF = SLICE != null ? Number(process.argv[process.argv.indexOf('--_slice') + 2]) : null;
 const SLICE_OUT = process.argv.indexOf('--_out') >= 0 ? process.argv[process.argv.indexOf('--_out') + 1] : null;
 
-const allDays = load5mDays(DIR);
+let allDays = load5mDays(DIR);
 if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
+// --sub1m <rawDir>: attach 1m sub-bars (for the '1m' sub-bar fill model); --only1mDays keeps just the days that have them.
+const SUB1M = argVal('--sub1m', '');
+if (SUB1M) {
+  const n = require('../../server/src/candle-spread/backtest/backtest-v6-5m').attachSub1m(allDays, SUB1M);
+  if (process.argv.includes('--only1mDays')) allDays = allDays.filter((d) => d.has1m);
+  if (SLICE == null) console.log(`1m sub-bars attached to ${n} days${process.argv.includes('--only1mDays') ? ' (only those kept)' : ''}`);
+}
 const HAS_PX = allDays.some(d => d.bars.some(b => b.px));
 // Same tradeable-day filter as build-backtest-baselines.js: a real RTH cash session must exist.
 const etMin = ms => { const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'America/New_York' })); return d.getHours() * 60 + d.getMinutes(); };
@@ -270,6 +277,9 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
       coverAsymTrend: d, coverPatientMinLock: r.continuousCoverMinLockFrac || 0, coverPatientLossCap: r.ladderLossCapFrac || 0,
       ...(r.giveUpMaxLoss != null ? { coverPatientGiveUp: r.giveUpMaxLoss } : {}) })])),
   ['cover next bar', () => ({ coverNextBar: true })],   // remove the same-bar cover look-ahead
+  // SUB-BAR FILL (2026-10-11): cover placed on fill, tested only after it — '1m' needs --sub1m; 'path' infers the bar's path.
+  ['sub 1m', () => ({ subBarFill: '1m' })],
+  ['sub path', () => ({ subBarFill: 'path' })],
   ['give-up 40 pts', () => ({ giveUpPoints: 40 })],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
