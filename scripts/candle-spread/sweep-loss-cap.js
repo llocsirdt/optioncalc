@@ -297,6 +297,18 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // A resting cover makes a plain signal cover a no-op, so these also turn on signalCoverGiveUp (escalate to give-up).
   ...['reversal', 'always'].map((m) => [`bw cover ${m}`, (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, beWrongCover: m }, signalCoverGiveUp: 'beWrong' } : null)]),
   // Both of the user's reads together.
+  // LADDER DIRECTION + RE-STRIKE RE-PLACE (2026-10-12, trigger catalog D8/D10): ladders earn move-steps only on a move
+  // AGAINST the order (time still earns); a re-struck open is placed again on the same side at current strikes.
+  ['ladder adverse', () => ({ ladderAdverseOnly: true })],
+  ['restrike replace', () => ({ openRestrikeReplace: true })],
+  ['restrike replace x1', () => ({ openRestrikeReplace: true, openRestrikeReplaceMax: 1 })],
+  ['adverse + replace', () => ({ ladderAdverseOnly: true, openRestrikeReplace: true })],
+  // CONDOR COVERS (2026-10-12, user: spread the tents so they don't share a short strike — the profit plateau of the
+  // wide widths with the risk of 10W — and minLock 0.10 is too high for it). coverGeometry 'offsetN' puts the cover's
+  // short N strikes past the open's short on the profit side; 'halfway' is v1's (anchored to the underlying).
+  ['minLock 0.05', () => ({ continuousCoverMinLockFrac: 0.05 })],
+  ...['offset1', 'offset2', 'halfway'].flatMap((g) => [['', null], [' ml 0.05', 0.05], [' ml 0.02', 0.02]].map(([n, ml]) =>
+    [`geo ${g}${n}`, () => ({ coverGeometry: g, ...(ml != null ? { continuousCoverMinLockFrac: ml } : {}) })])),
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
   // side) now actually gets the wrong-way position off at the give-up price.
@@ -503,6 +515,7 @@ function measure(job) {
     giveUpsPerDay: Math.round(res.reduce((a, r) => a + (r.giveUps || 0), 0) / days.length * 100) / 100,
     nakedPerDay: Math.round(res.reduce((a, r) => a + (r.naked || 0), 0) / days.length * 100) / 100,
     skipPendingPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.skipPending || 0), 0) / days.length * 100) / 100 : null,
+    restrikeReplacedPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restrikeReplaced || 0), 0) / days.length * 100) / 100 : null,
     restruckPerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.restruck || 0), 0) / days.length * 100) / 100 : null,
     stalePerDay: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + (r.openLadder.stale || 0), 0) / days.length * 100) / 100 : null,
     openFillRate: res[0] && res[0].openLadder ? Math.round(res.reduce((a, r) => a + r.openLadder.filled, 0) / Math.max(1, res.reduce((a, r) => a + r.openLadder.placed, 0)) * 1000) / 10 : null,

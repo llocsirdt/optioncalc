@@ -69,6 +69,199 @@ pre-2026-10-05 one.
 
 ---
 
+## Trigger catalog — every rule that can put an ORDER on the live engine
+
+**Read from the code at `7629c4e` (2026-10-12), not from comments or memory.** Where a comment, this README or a
+memory note disagrees, the code is described and the disagreement is under *Discrepancies found* at the end.
+
+**v7-10 (the armed real-money variant) — what can open a position.** Signal = `v7Signal` with
+`signalCfg { fiveMin: true, beWrong: true }` and nothing else (`index.js:212`). At each 15m close, in this order:
+**trend-flip** (O7), **be-wrong** (O9), **overextension reversal** (O2), **grind reversal** (O3), **trend
+continuation** (O5). Between 15m closes: the **5m+15m flip** (O8), only while a side is held. **OFF on v7-10 (and on
+every variant):** green-breaks-high `breakOpen`, the hourly band gate `htfGate`, `beWrongCover`, `centerlineCross`,
+`openGate5m`, candle-at-confluence, `fastCover5m`, `revTrendGate`, trend-floor opens, over-cap rest
+(`openOverCapBelow`) — none is set by the roster and none has an env switch.
+
+**Can "a green 15m candle that breaks the prior candle's high" open v7-10 on its own? No.** Rule O11
+(`breakOpen`) is the only rule that would, and it is off. The same candle opens a bull on v7-10 only when one
+of these also holds: **(a)** the 15m close is ABOVE the 15m Bollinger midline (20-SMA) AND the 15m 9EMA is at or
+above the midline, no uncovered bear is held, and no ≥3-timeframe line cluster sits within 8 pts above the close
+(O5 trend-cont, with its pause); or **(b)** an uncovered bear is held AND the candle is also a bullish reversal
+formation (hammer / bullish engulfing / green doji) (O9 be-wrong — any band position); or **(c)** independent of
+the break, its low reached the 5m lower band (O2) or the grind-bottom rule fires (O3, needs close BELOW the 15m
+midline); or **(d)** an uncovered bear is held and the 15m trend is up (O7). Below the 15m midline with no bear
+held, the break alone never opens. (Note the code tests the candle's HIGH breaking the prior high, not its
+CLOSE — `candle-patterns.js:66`, `classic-signal.js:20`.)
+
+**Conventions used below.** *15m trend up* = 15m close > 15m BB midline AND 15m 9EMA ≥ midline (`trendTf`
+default `'15m'`, `v7-signals.js:74-79`; `v5-signals.js:49-50`). All candles are COMPLETED /NQ 24h candles
+(`analysis-builder.js:56-59`); *prior 15m* = the previous completed 15m candle. *Held*: v0-v6 and v8 pass
+`heldDir = st.direction`, a STANCE set by every open (`trader.js:753`) and cleared only by a signal cover
+(`trader.js:1834`); v7/v9 pass per-side `heldBull/heldBear` = a filled position of that side whose cover has not
+FILLED (a resting cover still counts as held) (`trader.js:1666-1667`). *Bullish reversal candle* = lower wick ≥50%
+of range with body ≤40% and close in the upper half, OR bullish engulfing, OR a green doji (body <25% of range)
+(`candle-patterns.js:31-54`). *Cluster* = `confluence.strongestClusterNear(..., minTf: 3)`. Signals run at every
+5m mark 09:35-15:55 ET (`index.js:1392-1393`); a mark is a 15m close when minute % 15 = 0 (`index.js:1425`);
+v0-v5 are wrapped in `at15`, so between 15m closes their signal is empty (`index.js:95`, `:201-206`). The 30 s
+sub-bar worker reads no signal (`index.js:2306-2372`).
+
+### 1. OPEN triggers
+
+| # | Trigger (decision `reason`) | Exact condition | Flag · default | ON in the live roster | Where |
+|---|---|---|---|---|---|
+| O1 | Classic breakout (`classicSignal`) | 15m close: green (close ≥ open) AND 15m high > prior 15m high → bull; red AND low < prior low → bear. No band or midline condition. | family signal | v0 v1 v2 v3 | `classic-signal.js:17-22`; `index.js:201-204` |
+| O2 | `overext-bottom` / `overext-top` | (5m BB lower − 15m low) / 5m band width ≥ `reversalFrac` AND 15m close > 5m BB lower → bull (mirror → bear). With −0.15 the low only has to come within 0.15 band-widths of the band. Also covers the held opposite side. | `reversalFrac` −0.15; `revTrendGate` off | v4-v9 | `v4-signals.js:48-57`; `v5:79-90`; `v6:129-140`; `v7:162-171` |
+| O3 | `grind-bottom` / `grind-top` | max(1m band beyond the 5m band, beyond the 15m band, as a fraction of its own width) ≥ `widenFrac` AND 15m close < 15m midline AND bullish reversal candle → bull (mirror). | `widenFrac` 0.10 (see D1) | v4-v9 | `v4:63-76`; `v5:96-109`; `v6:146-159`; `v7:174-187` |
+| O4 | `candle-top/bottom @cluster` | reversal candle + ≥3-TF cluster within radius | `candleConfluenceRadius` null = OFF | none | `v4:79-89`; `v7:190-200` |
+| O5 | `trend-cont-bull` / `-bear` | 15m trend up AND 15m green AND (v4-v6/v8: stance bull or none · v7/v9: no uncovered bear) → bull. Returns NO open instead when: `htfGate` fires (off); `openGate5m` and 5m trend down (off; v6/v7 only); **pause** = a ≥3-TF cluster (searched within 25 pts) above the close by ≤ `pausePts`. Mirror for bear. | `pausePts` 8 | v4-v9 | `v4:107-121`; `v5:141-152`; `v6:195-208`; `v7:217-231` |
+| O6 | `htf-gate` (blocks O5 only) | last completed 60m candle: close (`'close'`) or high/low (`'touch'`) beyond its upper/lower band → no trend-cont that way | `htfGate` null = OFF, no env | none | `candle-patterns.js:76-81`; `v7:219,226` |
+| O7 | `trend-flip→bull/bear` | holding bull (stance on v5/v6/v8; uncovered on v7/v9) AND 15m trend down → open bear + cover bull (mirror). First rule evaluated at a 15m close. | `trendFlip` on unless `false`; `flipMomentum` off | v5-v9 (not in v4) | `v5:63-67`; `v6:113-117`; `v7:107-111` |
+| O8 | `5m+15m flip→bull/bear` (intra-15m) | at a NON-15m mark, holding X: 5m trend against X on this AND the prior 5m bar (5m close + 5m 9EMA vs 5m midline) AND 15m trend against X → open the other side + cover X. 15m not agreeing → cover only (`5m early-cover`). Never opens from flat. | `fiveMin` true; `fiveMinFlip` on unless `false` | v6-v9 | `v6:80-88`; `v7:85-93`; `index.js:211-218` |
+| O9 | `be-wrong→bull/bear` | holding an uncovered bear AND 15m high > prior 15m high AND bullish reversal candle → open bull, bear NOT covered (mirror). Evaluated after O7, before O2. | `beWrong` true; `beWrongStrong` off; `beWrongDirMin` null | v7, v9 | `v7:145-147`; `index.js:212,218` |
+| O10 | `be-wrong (centerline cross)` | close crosses the 5m/15m midline vs the prior bar against the held side | `centerlineCross` null = OFF | none | `v7:148-156` |
+| O11 | `green-breaks-high` / `red-breaks-low` | 15m green AND high > prior high → bull (`'flat'`: not while a bear is held; `'any'`: always, never covers). Reached only if NO earlier rule returned — a pause, htf-gate, 5m veto or active cover blocks it. | `breakOpen` null = OFF, no env | none (code in v4-v7 signal fns, so v8/v9 would inherit it) | `candle-patterns.js:63-69`; `v4:124-125`; `v5:155-156`; `v6:211-212`; `v7:235-236` |
+| O12 | `trend-floor-open` | trend-side floor biased → with-trend open, only when the signal has no open | `deps.trendFloor` null = OFF | none | `trader.js:1610-1682`; `index.js:1970` |
+
+**Open-trigger matrix (live roster; ✓ on, · absent from that family's signal, ✗ coded but off everywhere).**
+Shapes (`-W`, `-W-unc`, `-W-cATM`) share their family's signal (`index.js:1163,1214,1260`).
+
+| Trigger | v0 | v1 | v2 | v3 | v4 | v5 | v6 | v7 | v8 | v9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| O1 classic breakout | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
+| O2 overextension | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| O3 grind | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| O5 trend-cont (held = stance / per-side) | · | · | · | · | ✓ s | ✓ s | ✓ s | ✓ p | ✓ s | ✓ p |
+| O7 trend-flip | · | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
+| O8 5m+15m flip | · | · | · | · | · | · | ✓ | ✓ | ✓ | ✓ |
+| O9 be-wrong | · | · | · | · | · | · | · | ✓ | · | ✓ |
+| O4, O6, O10, O11, O12 | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+### 2. COVER triggers
+
+| # | Trigger (decision `action`) | Exact condition / price | Flag · default | ON in the live roster | Where |
+|---|---|---|---|---|---|
+| C1 | `continuous` at the candle | every 5m bar, each filled position with no cover covered or working: rest at `W − openCost − minLock×W` (minLock 0.10 at 10W, 0.20 at 20/40W). Skipped if that is ≤ 0. Geometry: tent, v1 halfway, v2 at the underlying. **v3:** only once book floor ≤ −0.20×lossTarget, or when the cover locks ≥ 1.0× its own cost (v3-unc: the latter only — no lossTarget). | `continuousCover` true (BASE_RUNS) | all 80 | `trader.js:1499-1556`, `:1777`; `index.js:136,176,660,944` |
+| C2 | cover on fill (30 s worker) | same function, every 30 s, as soon as a fill is booked | — | all 80 | `index.js:2359-2362` |
+| C3 | signal / reversal cover | the signal's `cover`/`coverSide`: O1-classic (held bull + red 15m + high NOT above prior high; mirror), O2/O3 against the held side, **active-cover** (held bull + close > 15m midline + ≥3-TF cluster above within `activeCoverRadius` 8 pts; mirror) v4-v9, O7 v5-v9, O8 v6-v9. Places a break-even cover ONLY on filled positions with NO cover working (`trader.js:1791`) — so after C1/C2 it places nothing except on v3's unarmed positions or where C1 failed (`cover-skip-leg`, `cover-not-sent`, broker `cover-defer-governor`). Always: cancels a working open of that side (`:1707`) and clears the stance (`:1834`). | `activeCoverRadius` 8; `beWrongCover`, `fastCover5m` OFF | all (orders mostly v3) | `trader.js:1788-1836`; `classic-signal.js:12-16`; `v7:203-213` |
+| C4 | `proactive-deep-itm` | candle close only: position marks ≥ frac×W and has no cover working → rest at break-even | `proactiveCoverFrac` | v8 0.70, v9 0.80 (all shapes) | `trader.js:1842-1852`; `index.js:215,218` |
+| C5 | `cover-to-stack` | only when `softCap` blocks an open (v8: uncovered at-risk debit + new debit > $3,000, unless every uncovered position is on the open's side): lock positions marking ≥ 0.65×W with no cover working, deepest first | `coverToStack` true; needs softCap | v8, v8-cATM (v8-unc has no softCap) | `trader.js:1948-1975`, `:373-438`; `index.js:132,215` |
+| C6 | combo lock+open | 4-leg atomic order on a cap block | `comboOrders` unset = OFF (refused under the broker) | none | `trader.js:1956`, `:443-460` |
+| C7 | `cover-reprice` (ladder) | every candle and every 30 s: limit = lock target + earned × $0.05; a step per 120 s OR per 10 NDX pts moved (either direction) since placement; capped at break-even (`ladderLossCapFrac` 0) and at the mark; never moves down | `coverLadder` on every cell (control set now empty) | all 80 | `trader.js:3545-3566`; `cover-ladder.js:84-117`; `index.js:648-650,681-692,945` |
+| C8 | `cover-giveup` (points) | NDX ≥ 20 pts back through the position's own short strike → price min(mark + 1 tick, W − openCost + allowance×W), allowance 10W 5% · 20W 7.5% · 40W 10%; never lowered; supersedes ladder and stall | `CANDLE_SPREAD_GIVEUP` default `all` | all 80 | `trader.js:3497-3524`; `index.js:1005-1016` |
+| C9 | give-up by candle / trend urgency / trend-floor cover | candle reversal kinds, trend-state against, trend-side floor | `giveUpCandle`, `giveUpTrend`, `trendFloor` null = OFF | none | `trader.js:1597-1609,1616-1680,3503-3506` |
+| C10 | `cover-stall` | ≥ 15 min since the fill AND NDX (last bar) on the losing side of the NDX at fill (`fav < stallCoverPts` = 0) → price min(break-even, mark + 1 tick), only if above the working price | `CANDLE_SPREAD_STALL_COVER` default on, 15 | all 80 | `trader.js:3531-3544`; `index.js:921-922` |
+| C11 | governor deferral (BLOCKER) | a cover whose fill lowers the floor through −lossMax: mark path declined at fill; broker: not placed, pulled every pass, pulled before an open, a ladder/give-up raise not sent | `lossMax` set | governed shapes (not -unc) | `trader.js:3713-3722`, `:254`, `:3453-3465`, `:866-881`, `:3382-3396` |
+| C12 | `cover-defer-late` (BLOCKER) | from 15:00 ET, if the governor floor at the first look ≥ 15:00 was ≥ 0: a cover fill that takes the floor below 0 is declined (mark) / pulled (broker) | `CANDLE_SPREAD_LATE_FLOOR` default on | governed shapes (the check sits inside `govOn`) | `trader.js:3723-3727`, `:833-836`, `:910-921` |
+| C13 | `cover-style-flip` | broker rejected the last cover as "not an opening transaction" → resend in the other form (same strikes) | — | broker path only (v7-10 live) | `trader.js:195-207` |
+| C14 | signal cover → give-up | a signal cover escalates resting covers to the give-up price | `signalCoverGiveUp` | **backtest only**, set by no variant | `backtest-v6-5m.js:1531-1540`; `opts-for.js:112` |
+
+### 3. HEDGE and order-working triggers
+
+| # | Trigger (decision `action`) | Exact condition | Flag · default | ON in the live roster | Where |
+|---|---|---|---|---|---|
+| H1 | `raise` (floor raise) | candle close only, ≥ 15 min since the last pass, no raise working, < 8/day; ≤ 2 structures/pass; 2σ band; priced mid + 2 ticks; `spreadFirst` at 3:1 (verticals/longs fixing a valley, scored on its outward region; else any structure incl. flies that raises the band low); negative valleys first; never takes a floor ≥ 0 below 0; never past −lossMax (governed) nor below the late-floor limit; no budget cap set | `CANDLE_SPREAD_FLOOR_RAISE` default `all` | all 80, v7-10 included | `trader.js:1329-1478`, `:2025`; `floor-raise.js:312-321`; `index.js:862-876` |
+| H2 | `offset` (floor offsets) | candle close only: floor < −lossTarget (0.7×lossMax) → far-side 20/40/60-wide at ≥ 3:1, ≤ 6/day; floor < −lossMax → must-fix at ≥ 1:1, ≤ 18/day | `floorOffset` true (BASE_RUNS) | governed shapes (-unc: false) | `trader.js:2006-2015`, `:964-1100`; `index.js:132` |
+| H3 | `wing` (peak → floor) | candle close only: book peak > 0 and the planner finds a wing at ≥ 3:1, budget 10% of peak, ≤ 6/day, 1.5σ, naked longs allowed, mid ± $0.25/leg; no governor or late gate | `WINGS` | all 80 | `trader.js:1103-1212`, `:2020`; `index.js:254-255` |
+| H4 | `fly` (valley repair) | — | `FLY_LIVE` EMPTY since 2026-10-09 | none | `trader.js:1214-1216`; `index.js:588-595` |
+| H5 | raise-cap / raise-wing (repair fold) | — | `CANDLE_SPREAD_FLOOR_FOLD` default off | none | `index.js:894-905` |
+| H6 | floor ratchet / trend-floor | — | `RATCHET_LEVELS` all null; `trendFloor` null | none | `index.js:1090`; `trader.js:1616` |
+| H7 | risk-harvest | live: OBSERVER only, records lopsidedness, never sends; `trader` uses its candidate search for H2 only | — | observer on all | `index.js:2206-2232`; `trader.js:21,1023` |
+| M1 | `open-reprice` (open ladder) | every candle and 30 s: placement + earned × $0.05 (120 s or 10 NDX pts, either direction), ≤ walk cap, ≤ the debit mark; refused if it pushes the floor through lossMax; frozen under no-open/halt | follows `coverLadder` | all 80 | `trader.js:3234-3330`, `:3229-3233` |
+| M2 | `open-restrike` | open at its walk cap ≥ 10 min without a fill → CANCEL. It does not re-open: the next bar opens only if its signal fires again. | `openRestrikeMin` 10 | all 80 | `trader.js:3208-3227`; `index.js:851-852` |
+| M3 | `open-stale` (orphan) | no fill and no reprice 90 min → cancel | 90 min | all (mark: trader; broker: order-manager) | `trader.js:3189-3201`; `order-manager.js:420,566` |
+| M4 | `cancel-open` (reversal) | signal open side ≠ the working open's side, or the signal covers its side | — | all 80 | `trader.js:1700-1740` |
+| M5 | pull covers before an open | covers this open would turn into a governor breach are cancelled first | — | broker path | `trader.js:665`, `:866-881` |
+| M6 | hedge TTL | raise/offset/wing order unfilled 10 min → cancel (broker) / expire (mark); never repriced | `hedgeWorkMinutes` 10 | all | `trader.js:3031-3121` |
+| M7 | over-cap rest | every placement over the cap → rest at cap − x and walk up | `openOverCapBelow` null = OFF, no env | none | `trader.js:2140-2143,2161-2164,2224-2226` |
+
+### 4. BLOCKERS on an open (checked in this order, `trader.js:1867-1977`)
+
+| Gate | Effect | Applies to | Where |
+|---|---|---|---|
+| Tradability | no evidence of a market → the whole tick is skipped | all | `index.js:2140-2156` |
+| Control `halt` / `no-open` | halt: nothing reaches the broker; both: `open-skip-control`, working open's ladder frozen; covers/hedges keep running | per variant (S3 file) | `index.js:1534-1546,1889`; `trader.js:1867-1870,3229` |
+| Stance conflict | open opposite a non-`none` stance → `open-skip-conflict` | v0-v6, v8 (v7/v9 bidirectional bypass) | `trader.js:1871-1872` |
+| Leg uniqueness | no unique placement / twin credit unquotable → `open-skip-leg` | all | `trader.js:1886-1918`, `:676-687` |
+| Ceiling | every placement over capFrac → `open-skip-ceiling` (G: 0.55 / 0.575 / 0.5875 × W; cATM 0.65); quote gates send the walk to the next placement | all | `trader.js:2113-2152,2187-2211`; `index.js:289-302` |
+| Governor | projected floor with the open < −lossMax → `open-skip-governor` | governed shapes | `trader.js:1926-1931` |
+| Late-day | from 15:00, if the 15:00 floor was ≥ 0, an open that takes it below 0 → `open-skip-late`; a 15:00 floor < 0 sets no limit | ALL shapes incl. -unc (D7) | `trader.js:1932-1936,910-921`; `index.js:928-931` |
+| Ratchet | — | none (off) | `trader.js:1937-1947` |
+| softCap | → cover-to-stack, else `open-skip-cap` | v8, v8-cATM | `trader.js:1948-1975` |
+| One working open | a second open while one rests → `open-skip-pending` | all | `trader.js:656-663` |
+
+### Backtest differences (only where it differs from live)
+
+- **Governor-block locking.** The backtest locks deep winners (≥ 0.65×W) when the governor blocks an open
+  (`coverToStackVsRisk`, `opts-for.js:62`; `backtest-v6-5m.js:1655-1664`) and when the floor passes −lossTarget
+  (`reduceRisk` step 1, `:719`). Live does neither (C5 is softCap-only). Both skip positions with a cover working
+  (`:548`), so they are inert where C1 placed one.
+- **Backtest-only switches, set by no variant:** `signalCoverGiveUp`, `giveUpTrigger` rev5/rev5c/rev15/rev15c/
+  signal/beWrong, `openCutoffMin`, `openFloorGate`, `openTrendBlock`, `decayStop`, `coverPriorOnOpen`,
+  `coverLockGate`, `riskHarvest` (a trading overlay there; observer-only live) (`backtest-v6-5m.js:474-480,
+  1109-1135,1173,1519-1540,1595-1598`).
+- **Reversal-cover geometry:** tent unless `coverGeometryOnReversal` (set by nothing) (`backtest-v6-5m.js:1556-1561`);
+  live reversal covers honour v1/v2 geometry.
+- **`directionality`:** the backtest passes `directionalityAt(i)` to the signal (`backtest-v6-5m.js:1518`); live
+  forwards `deps.directionality`, which `index.js` never sets (`trader.js:1670`). Latent — see D14.
+
+### Discrepancies found
+
+Cited above as D1-D17.
+
+1. **"Signals (2)-(4) are OFF unless their cfg gate is set"** (`v4-signals.js:24`, `v5:26`, `v6:31`, `v7:31`).
+   Code: grind (2) defaults to `widenFrac` 0.10 and active-cover (4) to 8 pts, both ON for v4-v9. Because each is
+   read as `cfg.x != null ? cfg.x : default`, setting it to `null` does NOT turn it off — only a value that can
+   never fire would. Only (3) candle-at-confluence is off by default.
+2. `v6-signals.js:60` says trendTf `'5m'` is the DEFAULT; the code defaults to `'15m'` (`:63`).
+3. `v7-signals.js:2-33` header is a copy of v6's ("v6 = v5 + a FASTER trend read") and does not describe be-wrong.
+4. **"Held" is a stance on v0-v6/v8, not exposure.** `st.direction` is set by every open even before it fills
+   (`trader.js:753`) and cleared only by a signal cover (`:1834`) — never by covers filling. On a fully covered
+   book v4-v6/v8 still "hold" the last side: trend-cont the other way is refused (held must be the same or none),
+   trend-flip / active-cover / O2-cover fire against nothing, and the conflict guard (`:1871`) refuses an
+   opposite classic/v4-v6/v8 open until a signal cover clears the stance. The v5/v6 comments ("when we hold
+   AGAINST a now-confirmed opposite structural trend") read as exposure. v7/v9 use positions, but a position
+   whose cover is resting-not-filled still counts as held (`:1666-1667`). The backtest uses the same stance
+   (`backtest-v6-5m.js:1516-1518,1567`), so this is parity-consistent, not a live-only bug.
+5. **Signal covers place (almost) no orders.** C1 runs before the signal cover each bar (`trader.js:1777`) and the
+   30 s worker now places it within 30 s of a fill (`index.js:2359-2362`); C3, C4 (proactive) and C5
+   (cover-to-stack) all skip a position with a cover working (`trader.js:1791,1844,405`). On every family but v3
+   the signal's cover changes nothing but (a) cancelling a working open and (b) clearing the stance. The
+   Comparison table's "Cover signal" column and the v8/v9 "proactive" row describe triggers that are starved.
+6. **The breakout rules test the HIGH, not the close.** Both the classic rule and `breakOpen` fire on green +
+   high > prior high (`classic-signal.js:20`, `candle-patterns.js:66`), not on a close above the prior high.
+   `breakOpen` is also unreachable whenever an earlier rule returned (pause, htf-gate, 5m veto, active cover,
+   any intra-15m bar); in v4-v6/v8 its `'flat'` test reads the stance (D4), not open positions.
+7. **Late-day guard scope.** `index.js:923` says "on every governed variant"; `applyLateFloor` (`:928-931`) sets
+   it on every variant including -unc, where it gates opens (`trader.js:1932`) and floor raises (`:1411`) but not
+   covers (that check is inside `govOn`, `:3713-3727`). It binds only when the 15:00 floor was ≥ 0
+   (`lateFloorGiveW` null → no limit otherwise, `:918-919`).
+8. **Re-strike does not re-strike.** `index.js:847-848` "cancelled so the next bar can re-place it at current
+   strikes and prices"; the code only cancels (`trader.js:3208-3227`). A new open needs that bar's signal to
+   fire again; between 15m closes v0-v5 have no signal, and v6-v9 only O8 (which needs a held side).
+9. **Stall cover = currently losing, not "no favourable move".** It fires when, at any check ≥ 15 min after the
+   fill, the last-bar NDX is on the losing side of the fill-time NDX (`fav < 0`, `trader.js:3533-3534`); a
+   position that rallied and came back to +0 never fires, one that is 1 pt adverse at minute 40 does.
+10. **Ladders step on movement in EITHER direction.** `stepsEarned` uses `Math.abs(move)` (`cover-ladder.js:87`),
+    so a favourable 10-pt move raises a resting open's bid and a cover's price exactly as an adverse one does;
+    the open-ladder comment (`trader.js:3176-3177`) speaks of a price that "runs AWAY".
+11. `trader.js:1513`: the minLock ramp "ships ON for v7-10" — no variant sets `minLockRamp`.
+12. `trader.js:3243`: open-ladder step "$0.25 (and $0.10 at W=40)"; every variant runs $0.05 (`index.js:691`).
+13. `index.js:1010`: "TRIGGER stays 10 points"; the code sets 20 (`:1014`).
+14. **Latent parity trap:** v7 `beWrongDirMin` reads `ctx.directionality`, which live never supplies — if the flag
+    were ever set, live would suppress EVERY be-wrong open (`v7-signals.js:126`) while the backtest would not.
+15. **Classic path comment is dead.** `trader.js:1583-1590` says v0-v3 decide via `spread-logic.classifyOpen /
+    shouldCover` (with a Bollinger override); every roster family has a `signalFn`, so `ported` is always true
+    (`:1577`) and v0-v3 run `classicSignal`, which has no Bollinger gate. `classifyOpen` (`:1679`) is unreachable.
+16. **This README's own "Shared machinery" section is stale against the code:** give-up is 20 pts, not 10
+    (`index.js:1014`); `FLY_LIVE` is empty — no variant runs stand-alone flies (`:588-595`); the no-ladder
+    control cells are empty — v1-10/v2-10/v6-10 run the ladder (`:648-650`); placement G caps and walk caps are
+    10W $5.50 / 20W $11.50 / 40W $23.50 with the 0.45×W floor only labelling, never declining (`:289-302`,
+    `trader.js:2209`); v7-10's cap is $2,000 (`index.js:782`); the floor-offset must-fix needs ≥ 1:1, it does not
+    drop the ratio (`trader.js:969-974`); continuous covers go on within 30 s of a fill, not at the next candle.
+17. `index.js:216`: v9 "on top of the $20k backstop" — no such cap exists; v9-10's lossMax is $2,000.
+
+---
+
 ## Shared machinery (read this before any family file)
 
 ### The variant axes — NOT families

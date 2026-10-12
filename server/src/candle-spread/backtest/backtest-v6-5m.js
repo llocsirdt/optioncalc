@@ -521,7 +521,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   const coverAtLimit = opts.simFillAtLimit === true;
   const thruCover = ((opts.fillThroughTicksCover != null ? opts.fillThroughTicksCover : opts.fillThroughTicks) || 0) * TICK;
   const openWalk = opts.openLadder != null ? opts.openLadder === true : opts.coverLadder === true;
-  let openRestruck = 0;
+  let openRestruck = 0, restrikeReplaced = 0;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
   let openMissed = 0, openTried = 0, openWalkGov = 0;   // openFillModel 'resting': how often a placed open never filled
@@ -831,7 +831,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (openLadderModel && st.pendingOpen) {
       const po = st.pendingOpen;
       if (openWalk) {
-        const earned = LAD.stepsEarned(nowEpoch - po.placedMs, S - po.placedUnder,
+        // opts.ladderAdverseOnly: only a move AWAY from the open's fill (up for a bull, down for a bear) earns steps.
+        const earned = LAD.stepsEarned(nowEpoch - po.placedMs, LAD.ladderMove(S - po.placedUnder, po.side === 'bull' ? 1 : -1, opts.ladderAdverseOnly),
           { stepSeconds: ladderOpts.stepSeconds, stepPoints: ladderOpts.stepPoints, steps: 1000 });
         const stepD = opts.openLadderStepDollars != null ? opts.openLadderStepDollars
           : (opts.ladderStepDollars != null ? opts.ladderStepDollars : 0.25);
@@ -872,6 +873,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         // RE-STRIKE TIMEOUT — mirrors trader.resolvePendingOpen: at its cap for openRestrikeMin minutes without
         // a fill, the open is cancelled so the next bar can re-place at current strikes and prices.
         st.pendingOpen = null; openRestruck++; markBookDirty();
+        // opts.openRestrikeReplace: re-place the SAME side at the next open decision (this bar's), at current strikes.
+        if (opts.openRestrikeReplace) st.restrike = { side: po.side, n: (po.restrikeN || 0) + 1 };
       } else if (nowEpoch - po.lastMoveMs >= 90 * 60000) {
         // live's orphan backstop (order-manager staleOpenCancelMs): no movement for 90 minutes -> cancelled
         st.pendingOpen = null; openStale++; markBookDirty();
@@ -1202,7 +1205,8 @@ function runDay5m(bars, signalFn, opts = {}) {
           spreadWidth: G.WIDTH, openCost: pc.openCost,
           minLock: patient && opts.coverPatientMinLock != null ? opts.coverPatientMinLock * G.WIDTH : (pc.minLock || 0),
           restingMs: pc.placedMs != null ? (nowEpoch - pc.placedMs) : 0,
-          underlyingMove: pc.placedUnder != null ? (S - pc.placedUnder) : 0,
+          // opts.ladderAdverseOnly: only a move against the COVERED position (down for a bull) earns steps.
+          underlyingMove: pc.placedUnder != null ? LAD.ladderMove(S - pc.placedUnder, pos.side === 'bull' ? -1 : 1, opts.ladderAdverseOnly) : 0,
           mark: legsMark(pc.legs, S, tau, iv),
           tick: 0.05,
         }, patient && opts.coverPatientLossCap != null ? { ...ladderOpts, lossCapFrac: opts.coverPatientLossCap } : ladderOpts).limit;
@@ -1574,6 +1578,15 @@ function runDay5m(bars, signalFn, opts = {}) {
         st.pendingOpen = null; openCanceled++; markBookDirty();
       } else if (sig.openSide) { openSkipPending++; sig.openSide = null; }
     }
+    // RE-STRIKE RE-PLACE (opts.openRestrikeReplace): an open cancelled at its cap is placed again on the same side at
+    // current strikes, when nothing else wants the slot and the signal is not covering that side. Bounded per chain.
+    let restrikeN = 0;
+    if (st.restrike) {
+      const r = st.restrike; st.restrike = null;
+      if (!sig.openSide && !st.pendingOpen && !coverSet.includes(r.side) && r.n <= (opts.openRestrikeReplaceMax || 2)) {
+        sig = { ...sig, openSide: r.side, reason: `${sig.reason || ''} [re-strike ${r.n}]` }; restrikeN = r.n; restrikeReplaced++;
+      }
+    }
     const dirOk = bidir || st.dir === 'none' || st.dir === sig.openSide;
 
     // STOP-OPENING GATES. Two competing answers to the same measured leak: books build a good floor by
@@ -1743,7 +1756,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             // little more to get the fill — the user's "place at 5.30, walk up to ~5.50".
             cap: opts.openWalkCapFrac != null ? round2(G.WIDTH * Math.max(opts.openWalkCapFrac, G.capFrac || 0))
               : (G.capFrac != null ? round2(G.WIDTH * G.capFrac) : o.limit),
-            placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch,
+            placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch, restrikeN,
             pos: { legs: o.legs, limit: o.limit, covered: false, coverLegs: null, coverLimit: null } };
           if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }
           st.dir = sig.openSide;
@@ -1860,7 +1873,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   return {
     floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openLowBand,
     bestCase, worstCase, avgTerminalPotential,
-    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, walkGovBlocked: openWalkGov,
+    openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, restrikeReplaced, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
       paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?

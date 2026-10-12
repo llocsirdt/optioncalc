@@ -133,7 +133,10 @@ function optsFor(v, env) {
   if (v.openLadder != null) o.openLadder = v.openLadder;
   if (v.openLadderStepDollars != null) o.openLadderStepDollars = v.openLadderStepDollars;
   if (v.openWalkCapFrac != null) o.openWalkCapFrac = v.openWalkCapFrac;   // ladder walk limit, above the placement ceiling
-  if (v.openRestrikeMin != null) o.openRestrikeMin = v.openRestrikeMin;   // re-strike timeout at the cap (minutes)
+  if (v.openRestrikeMin != null) o.openRestrikeMin = v.openRestrikeMin;
+  if (v.openRestrikeReplace != null) o.openRestrikeReplace = v.openRestrikeReplace;           // re-place a re-struck open
+  if (v.openRestrikeReplaceMax != null) o.openRestrikeReplaceMax = v.openRestrikeReplaceMax;
+  if (v.ladderAdverseOnly != null) o.ladderAdverseOnly = v.ladderAdverseOnly;                 // ladders step on adverse moves only   // re-strike timeout at the cap (minutes)
   if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
   for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',

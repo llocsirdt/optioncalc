@@ -1952,6 +1952,7 @@ function buildEngineDeps(run, live) {
       // OPEN LADDER — separate from coverLadder so working an OPEN toward the market can be switched on
       // and measured on its own. Unset means "follow coverLadder", which is today's behaviour.
       openLadder: run.openLadder, openLadderStepDollars: run.openLadderStepDollars,
+      ladderAdverseOnly: run.ladderAdverseOnly, openRestrikeReplace: run.openRestrikeReplace, openRestrikeReplaceMax: run.openRestrikeReplaceMax,
       // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
       // here or the flag is silently dropped live while the backtest measures a gain.
       flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,

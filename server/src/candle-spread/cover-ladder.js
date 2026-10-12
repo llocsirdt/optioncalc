@@ -156,4 +156,12 @@ function shouldReprice(currentLimit, nextLimit, tick, opts) {
   return Math.abs(nextLimit - currentLimit) >= minMove - 1e-9;
 }
 
-module.exports = { limitNow, band, stepsEarned, shouldReprice, DEFAULTS };
+// THE MOVE A LADDER MAY EARN STEPS ON (2026-10-12). stepsEarned counts |move|, so a move TOWARD our price
+// (one that makes the order easier to fill on its own) raised it exactly as a move away did. With adverseOnly,
+// only a move in `adverseDir` (+1 = up, -1 = down) counts; a favourable move earns nothing (time still does).
+function ladderMove(move, adverseDir, adverseOnly) {
+  const m = Number(move) || 0;
+  return adverseOnly ? Math.max(0, m * adverseDir) : m;
+}
+
+module.exports = { limitNow, band, stepsEarned, shouldReprice, ladderMove, DEFAULTS };

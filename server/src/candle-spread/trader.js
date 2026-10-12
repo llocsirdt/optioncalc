@@ -741,8 +741,10 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     ladderBase: res.limit,
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
-    sentNet, sentLimit, sentLegs   // exactly what hit the broker, debit or credit
+    sentNet, sentLimit, sentLegs,   // exactly what hit the broker, debit or credit
+    ...(st._restrikeN ? { restrikeN: st._restrikeN } : {})   // a re-strike re-place: its place in the chain
   };
+  st._restrikeN = 0;
   st.positions.push(pos);
   if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(sentLegs);   // record the actual played legs
   st.pendingOpenId = pos.id;
@@ -1680,6 +1682,21 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   }
   // The trend-side floor's open takes the candle's open slot when the signal has none (every gate still applies).
   if (tfOpenSide && !openSide) openSide = tfOpenSide;
+  // RE-STRIKE RE-PLACE (deps.openRestrikeReplace, 2026-10-12). The re-strike used to cancel and stop: a new open
+  // needed the signal to fire again, and between 15m closes most families have none. Now the cancelled side is
+  // placed again at THIS close, at current strikes and price, through every normal gate — unless the signal wants
+  // the slot, is covering that side, or the cancelled order turned out to fill. Bounded per chain (default 2).
+  let restrikeN = 0;
+  st._restrikeN = 0;
+  if (st.restrike) {
+    const r = st.restrike; st.restrike = null;
+    const old = st.positions.find((p) => p && p.id === r.of);
+    const fresh = !(r.at > 0) || (deps.nowMs != null ? deps.nowMs : Date.now()) - r.at <= 15 * 60000;
+    if (!openSide && fresh && !(old && old.filled) && !coverSet.includes(r.side) && r.n <= (deps.openRestrikeReplaceMax || 2)) {
+      openSide = r.side; restrikeN = r.n; st._restrikeN = r.n;
+      decisions.push({ action: 'open-restrike-replace', side: r.side, n: r.n, of: r.of });
+    }
+  }
 
   // SIGNAL vs PRICING split: `candle` is the SIGNAL instrument (e.g. NQ futures) that drives
   // direction / Bollinger gates / reversal detection; `underlying` is the PRICING instrument's
@@ -3222,6 +3239,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
           note: `at its cap for ${cfg.openRestrikeMin} min without a fill — cancelled so the next bar can re-strike` });
         if (broker) pos.cancelRequestedAt = nowR;
         if (st.pendingOpenId === pos.id) st.pendingOpenId = null;
+        // deps.openRestrikeReplace: the next candle close re-places this side at current strikes (processCandleClose).
+        if (deps.openRestrikeReplace) st.restrike = { side: pos.side, n: (pos.restrikeN || 0) + 1, of: pos.id, at: nowR };
         return 0;
       }
     }
@@ -3271,7 +3290,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   }
   if (pos.ladderBase == null) pos.ladderBase = pos.limit;
   const earned = LAD.stepsEarned(nowMs - pos.placedEpoch,
-    (pos.placedUnder != null && deps.underlying != null) ? (deps.underlying - pos.placedUnder) : 0,
+    // deps.ladderAdverseOnly: only a move AWAY from the open (up for a bull, down for a bear) earns steps.
+    (pos.placedUnder != null && deps.underlying != null) ? LAD.ladderMove(deps.underlying - pos.placedUnder, pos.side === 'bull' ? 1 : -1, deps.ladderAdverseOnly) : 0,
     { stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints, steps: 1000 });
   // Snapped DOWN to the tick: the cover ladder snaps its limit, and an off-nickel mark must neither reach
   // the broker nor be paid through.
@@ -3546,7 +3566,9 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     const next = LAD.limitNow({
       spreadWidth: W, openCost: pc.openCost != null ? pc.openCost : pos.limit, minLock: pc.minLock || 0,
       restingMs: pc.placedEpoch ? (Date.now() - pc.placedEpoch) : 0,
-      underlyingMove: (pc.placedUnder != null && deps.underlying != null) ? (deps.underlying - pc.placedUnder) : 0,
+      // deps.ladderAdverseOnly: only a move against the COVERED position (down for a bull) earns steps.
+      underlyingMove: (pc.placedUnder != null && deps.underlying != null)
+        ? LAD.ladderMove(deps.underlying - pc.placedUnder, pos.side === 'bull' ? -1 : 1, deps.ladderAdverseOnly) : 0,
       mark, tick,
     }, opts);
     // Gate on the ladder ESCALATING, not on any price wiggle. Bounds this to at most `steps` replaces

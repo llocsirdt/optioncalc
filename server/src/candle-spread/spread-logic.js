@@ -188,6 +188,15 @@ function coverShortFor(geometry, coveredSide, posShortStrike, underlying, incr) 
   let s;
   if (geometry === 'underlying') s = grid(underlying);
   else if (geometry === 'halfway') s = grid((posShortStrike + underlying) / 2);
+  // 'offsetN' (2026-10-12, user): a CONDOR at a FIXED distance — the cover's short N strikes beyond the
+  // position's short on the profit side, wherever the underlying is. Not anchored to the underlying, so a
+  // cover placed the moment the open fills (when the underlying sits near the short) still spreads the tent:
+  // a plateau N strikes wide instead of a butterfly peak. The floor stays W (the two spreads together are
+  // worth >= W at every price); the cover just needs the market to move ~N strikes to reach its lock price.
+  else if (/^offset\d+$/.test(geometry || '')) {
+    const n = Number(geometry.slice(6));
+    return coveredSide === 'bull' ? posShortStrike + n * incr : posShortStrike - n * incr;
+  }
   else return posShortStrike;                        // 'tent' (default)
   return coveredSide === 'bull' ? Math.max(posShortStrike, s) : Math.min(posShortStrike, s);
 }
