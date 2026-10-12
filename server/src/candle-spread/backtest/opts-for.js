@@ -110,6 +110,7 @@ function optsFor(v, env) {
   // OPEN FILL MODEL — 'ladder' models the live resting open (one working order, walked like the cover
   // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster, until baselines adopt it.
   if (env && env.openFillModel) o.openFillModel = env.openFillModel;
+  if (v.signalCoverGiveUp != null) o.signalCoverGiveUp = v.signalCoverGiveUp;   // backtest-only: a signal cover escalates resting covers to give-up
   if (env && env.subBarFill) o.subBarFill = env.subBarFill;   // a build/sweep-wide sub-bar fill model (the baseline default since 2026-10-12)
   // FILL-THROUGH. The roster's coverFillThroughTicks (live mark path: a simulated cover needs the market a
   // tick THROUGH its price) is the backtest's fillThroughTicksCover — same rule, both engines. A caller's

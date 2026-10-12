@@ -193,12 +193,14 @@ function v6Signal(A, prior, ctx = {}) {
   //     counter-turn opens (8/14's afternoon bears into the rally) WITHOUT destabilising the flip.
   const openGate5m = cfg.openGate5m === true;
   if (up && green && (held === 'bull' || held === 'none')) {
+    if (pat.htfOverextended(A, 'bull', cfg.htfGate)) return { openSide: null, cover: false, reason: 'htf-gate (60m above the upper band)' };
     if (openGate5m && t5.down) return { openSide: null, cover: false, reason: 'open-veto (5m turned down)' };
     const res = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });   // strong overhead zone within reach
     if (res && res.mid > close && res.mid - close <= pausePts) return { openSide: null, cover: false, reason: `pause-into-resistance @${res.mid}` };
     return { openSide: 'bull', cover: false, reason: 'trend-cont-bull' };
   }
   if (down && !green && (held === 'bear' || held === 'none')) {
+    if (pat.htfOverextended(A, 'bear', cfg.htfGate)) return { openSide: null, cover: false, reason: 'htf-gate (60m below the lower band)' };
     if (openGate5m && t5.up) return { openSide: null, cover: false, reason: 'open-veto (5m turned up)' };
     const sup = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });
     if (sup && sup.mid < close && close - sup.mid <= pausePts) return { openSide: null, cover: false, reason: `pause-into-support @${sup.mid}` };

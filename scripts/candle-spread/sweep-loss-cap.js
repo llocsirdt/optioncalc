@@ -286,6 +286,18 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   // GREEN-BREAKS-HIGH (2026-10-12, user): the v0-v3 open rule as an extra, last-priority 15m trigger on the v4 lineage
   // (v4-v9). 'flat' = only with nothing held against it; 'any' = even then (never covers). null = not a v4+ variant.
   ...['flat', 'any'].map((m) => [`break open ${m}`, (r) => (/^v[4-9]-/.test(r.variant) ? { signalCfg: { ...(r.signalCfg || {}), breakOpen: m } } : null)]),
+  // HOURLY BAND GATE (2026-10-12, user): no trend-continuation open in the direction the last completed hour closed
+  // ('close') / reached ('touch') beyond its Bollinger band. v4 lineage only.
+  ...['close', 'touch'].map((m) => [`htf gate ${m}`, (r) => (/^v[4-9]-/.test(r.variant) ? { signalCfg: { ...(r.signalCfg || {}), htfGate: m } } : null)]),
+  // BE-WRONG COVER (2026-10-12, user): when v7/v9 open the reversal, also cover the wrong-way side — only when the bar is
+  // an overextension/grind reversal too ('reversal'), or on every be-wrong ('always'). be-wrong variants only.
+  // A resting cover makes a plain signal cover a no-op, so these also turn on signalCoverGiveUp (escalate to give-up).
+  ...['reversal', 'always'].map((m) => [`bw cover ${m}`, (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, beWrongCover: m }, signalCoverGiveUp: 'beWrong' } : null)]),
+  // Both of the user's reads together.
+  ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
+  // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
+  // side) now actually gets the wrong-way position off at the give-up price.
+  ['signal cover give-up', (r) => (/^v[4-9]-/.test(r.variant) ? { signalCoverGiveUp: true } : null)],
   ...['break', 'bbIn', 'ema', 'mid'].flatMap((k) => [
     [`candle ${k} +pts`, () => ({ giveUpCandle: k })],
     [`candle ${k} only`, () => ({ giveUpCandle: k, giveUpPointsBackstop: false })],
@@ -474,6 +486,7 @@ function measure(job) {
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,
+    sigCoverGiveUpsPerDay: Math.round(res.reduce((a, r) => a + (r.sigCoverGiveUps || 0), 0) / days.length * 100) / 100,
     closedBelow15Pct: Math.round(1000 * res.filter((r) => r.floorAt15 != null && r.terminal < r.floorAt15).length / days.length) / 10,
     closedBelow14Pct: Math.round(1000 * res.filter((r) => r.floorAt14 != null && r.terminal < r.floorAt14).length / days.length) / 10,
     shortfallVs15Avg: Math.round(res.reduce((a, r) => a + (r.floorAt15 != null ? Math.min(0, r.terminal - r.floorAt15) : 0), 0) / days.length),

@@ -68,4 +68,16 @@ function breakOpen(c15, prior15, mode, heldBull, heldBear) {
   return null;
 }
 
-module.exports = { breakOpen, parts, isDoji, isTopRejection, isBottomRejection, isBearishEngulfing, isBullishEngulfing, bearishReversalCandle, bullishReversalCandle };
+// HOURLY BAND GATE (2026-10-12, v4-v7 cfg.htfGate, OFF by default) — the user's read: a 15m trend-continuation open in
+// the direction the HOUR has already overextended is more likely to meet a reversal than continue. A['60m'] is the
+// last COMPLETED hour (analysis-builder completedAsOf). 'close' = that hour closed beyond its band; 'touch' = its
+// wick reached beyond. Example 2026-10-12 11:30: the 10:00-11:00 hour closed 30,918.75 vs a lower band of 30,952.5 —
+// the gate would have blocked v7-10's trend-cont-bear, which NDX then rallied ~70 pts against.
+function htfOverextended(A, side, mode) {
+  const c = mode && A && A['60m'];
+  if (!c || c.bbupper == null || c.bblower == null) return false;
+  if (side === 'bull') return (mode === 'touch' ? c.high : c.close) > c.bbupper;
+  return (mode === 'touch' ? c.low : c.close) < c.bblower;
+}
+
+module.exports = { htfOverextended, breakOpen, parts, isDoji, isTopRejection, isBottomRejection, isBearishEngulfing, isBullishEngulfing, bearishReversalCandle, bullishReversalCandle };

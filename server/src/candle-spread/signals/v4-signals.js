@@ -108,11 +108,13 @@ function v4Signal(A, prior, ctx = {}) {
   const up = close > mid && ema != null && ema >= mid;
   const down = close < mid && ema != null && ema <= mid;
   if (up && green && (held === 'bull' || held === 'none')) {
+    if (pat.htfOverextended(A, 'bull', cfg.htfGate)) return { openSide: null, cover: false, reason: 'htf-gate (60m above the upper band)' };
     const res = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });   // strong overhead zone within reach
     if (res && res.mid > close && res.mid - close <= pausePts) return { openSide: null, cover: false, reason: `pause-into-resistance @${res.mid}` };
     return { openSide: 'bull', cover: false, reason: 'trend-cont-bull' };
   }
   if (down && !green && (held === 'bear' || held === 'none')) {
+    if (pat.htfOverextended(A, 'bear', cfg.htfGate)) return { openSide: null, cover: false, reason: 'htf-gate (60m below the lower band)' };
     const sup = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });
     if (sup && sup.mid < close && close - sup.mid <= pausePts) return { openSide: null, cover: false, reason: `pause-into-support @${sup.mid}` };
     return { openSide: 'bear', cover: false, reason: 'trend-cont-bear' };

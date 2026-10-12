@@ -472,6 +472,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let frWorking = [], frPlaced = 0, frExpired = 0, frNearCapPasses = 0;
   // GIVE-UP TRIGGER: 'points' (default — N points past the short strike) or a trend-reversal candle break.
   const guTrigger = opts.giveUpTrigger || 'points';
+  let sigCoverGiveUps = 0;   // opts.signalCoverGiveUp escalations (result: sigCoverGiveUps)
   let guPrev15 = null;
   // CANDLE GIVE-UP (opts.giveUpCandle 'break'|'bbIn'|'ema'|'mid'; see giveup-candle.js). giveUpPointsBackstop
   // false = the candle rule ALONE; otherwise it runs alongside the points trigger (whichever fires first).
@@ -1105,6 +1106,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       let giveUp = false;
       if (opts.coverGiveUp && pos._guCandle) giveUp = true;
       if (pos._trendCover) giveUp = true;   // trend-side floor chose to cover this one (priced as a give-up)
+      if (pos._sigCover) giveUp = true;     // the signal asked to cover this side while its cover was already resting (opts.signalCoverGiveUp)
       if (opts.coverGiveUp && pos.shortStrike != null && guTrigger === 'points' && guPointsOn) {
         const pts = opts.giveUpPoints != null ? opts.giveUpPoints : 10;
         // bull loses as price FALLS below its short strike; bear loses as price RISES above it
@@ -1526,6 +1528,16 @@ function runDay5m(bars, signalFn, opts = {}) {
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
     //     sig.cover (bool) covers all. Place resting covers on the targeted uncovered positions.
     const coverSet = sig.coverSide ? (sig.coverSide === 'both' ? ['bull', 'bear'] : [sig.coverSide]) : (sig.cover ? ['bull', 'bear'] : []);
+    // SIGNAL COVER -> GIVE-UP (opts.signalCoverGiveUp, 2026-10-12, backtest-only until adopted). Under continuous
+    // covering every filled position already has a resting cover, so the signal's cover below skips it and the
+    // reversal changes nothing. With this on, a signal that covers a side escalates that side's RESTING covers to
+    // the give-up price (break-even + allowance, at most the mark + a tick) from the next look — the user's
+    // 2026-10-12 11:45 play: take the reversal and get the wrong-way position off, not leave it working at minLock.
+    // signalCoverGiveUp true = every signal cover escalates; 'beWrong' = only a be-wrong reversal's (beWrongCover).
+    if (opts.signalCoverGiveUp && opts.coverGiveUp && coverSet.length
+      && (opts.signalCoverGiveUp !== 'beWrong' || /^be-wrong/.test(String(sig.reason || '')))) {
+      for (const p of st.positions) if (!p.covered && p.pendingCover && coverSet.includes(p.side) && !p._sigCover) { p._sigCover = true; sigCoverGiveUps++; }
+    }
     if (coverSet.length) {
       const toCover = st.positions.filter(p => !p.covered && !p.pendingCover && coverSet.includes(p.side));
       let plans = null;
@@ -1903,7 +1915,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
-    coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
+    sigCoverGiveUps, coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,

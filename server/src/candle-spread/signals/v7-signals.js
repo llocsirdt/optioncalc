@@ -124,17 +124,35 @@ function v7Signal(A, prior, ctx = {}) {
   //   recent window is CHOPPY — directionality (net move / range, from the engine) below the threshold.
   //   Targets be-wrong's chop-day bleed (−$207k) while leaving trend days (high directionality) alone.
   const dirOkBW = cfg.beWrongDirMin == null || (ctx.directionality != null && ctx.directionality >= cfg.beWrongDirMin);
+  // BE-WRONG COVER (2026-10-12, cfg.beWrongCover 'reversal'|'always', OFF by default) — the user's play: take the
+  //   reversal AND cover the wrong-way side, instead of leaving it uncovered as a hedge. 'reversal' covers only when
+  //   the bar ALSO qualifies as an overextension or grind reversal toward the new side (the (1)/(2) rules below,
+  //   which would have covered it had be-wrong not fired first — 2026-10-12 11:45); 'always' covers on every be-wrong.
+  const revQual = (side) => {
+    if (bw5 > 0) {
+      if (side === 'bull' && (c5.bblower - low) / bw5 >= revFrac && close > c5.bblower) return true;
+      if (side === 'bear' && (high - c5.bbupper) / bw5 >= revFrac && close < c5.bbupper) return true;
+    }
+    const wf = cfg.widenFrac != null ? cfg.widenFrac : 0.10;
+    if (wf == null) return false;
+    const ext = conf.bandExtension(A);
+    const pct = (o, tf) => (o[tf] && o[tf].pctOfOneWidth != null) ? o[tf].pctOfOneWidth / 100 : -Infinity;
+    if (side === 'bull') return Math.max(pct(ext.lower, '5m'), pct(ext.lower, '15m')) >= wf && close < mid && pat.bullishReversalCandle(c15, prior15);
+    return Math.max(pct(ext.upper, '5m'), pct(ext.upper, '15m')) >= wf && close > mid && pat.bearishReversalCandle(c15, prior15);
+  };
+  const bwCover = (side) => (cfg.beWrongCover === 'always' || (cfg.beWrongCover === 'reversal' && revQual(side)))
+    ? (side === 'bull' ? 'bear' : 'bull') : null;
   if (cfg.beWrong && anyHeld && dirOkBW) {
-    if (heldBull && lowerLow && pat.bearishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close < c5mid))) return { openSide: 'bear', coverSide: null, reason: 'be-wrong→bear (breaking lows + bearish candle)' };
-    if (heldBear && higherHigh && pat.bullishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close > c5mid))) return { openSide: 'bull', coverSide: null, reason: 'be-wrong→bull (breaking highs + bullish candle)' };
+    if (heldBull && lowerLow && pat.bearishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close < c5mid))) return { openSide: 'bear', coverSide: bwCover('bear'), reason: 'be-wrong→bear (breaking lows + bearish candle)' };
+    if (heldBear && higherHigh && pat.bullishReversalCandle(c15, prior15) && (!bwStrong || (c5mid != null && close > c5mid))) return { openSide: 'bull', coverSide: bwCover('bull'), reason: 'be-wrong→bull (breaking highs + bullish candle)' };
     const clx = cfg.centerlineCross;
     if (clx) {
       const p5 = prior && prior['5m'];
       const dn5 = crossedDown(c5, p5), dn15 = crossedDown(c15, prior15), up5c = crossedUp(c5, p5), up15c = crossedUp(c15, prior15);
       const bearCross = clx === '5m' ? dn5 : clx === '15m' ? dn15 : clx === 'both' ? (dn5 && dn15) : (dn5 || dn15);
       const bullCross = clx === '5m' ? up5c : clx === '15m' ? up15c : clx === 'both' ? (up5c && up15c) : (up5c || up15c);
-      if (heldBull && bearCross) return { openSide: 'bear', coverSide: null, reason: `be-wrong→bear (centerline cross ${clx})` };
-      if (heldBear && bullCross) return { openSide: 'bull', coverSide: null, reason: `be-wrong→bull (centerline cross ${clx})` };
+      if (heldBull && bearCross) return { openSide: 'bear', coverSide: bwCover('bear'), reason: `be-wrong→bear (centerline cross ${clx})` };
+      if (heldBear && bullCross) return { openSide: 'bull', coverSide: bwCover('bull'), reason: `be-wrong→bull (centerline cross ${clx})` };
     }
   }
 
@@ -198,12 +216,14 @@ function v7Signal(A, prior, ctx = {}) {
   //     (that's the flip/be-wrong's job) or paused into a strong opposing cluster / 5m open-veto.
   const openGate5m = cfg.openGate5m === true;
   if (up && green && !heldBear) {
+    if (pat.htfOverextended(A, 'bull', cfg.htfGate)) return { openSide: null, coverSide: null, reason: 'htf-gate (60m above the upper band)' };
     if (openGate5m && t5.down) return { openSide: null, coverSide: null, reason: 'open-veto (5m turned down)' };
     const res = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });
     if (res && res.mid > close && res.mid - close <= pausePts) return { openSide: null, coverSide: null, reason: `pause-into-resistance @${res.mid}` };
     return { openSide: 'bull', coverSide: null, reason: 'trend-cont-bull' };
   }
   if (down && !green && !heldBull) {
+    if (pat.htfOverextended(A, 'bear', cfg.htfGate)) return { openSide: null, coverSide: null, reason: 'htf-gate (60m below the lower band)' };
     if (openGate5m && t5.up) return { openSide: null, coverSide: null, reason: 'open-veto (5m turned up)' };
     const sup = conf.strongestClusterNear(A, close, { radius: 25, minTf: 3 });
     if (sup && sup.mid < close && close - sup.mid <= pausePts) return { openSide: null, coverSide: null, reason: `pause-into-support @${sup.mid}` };
