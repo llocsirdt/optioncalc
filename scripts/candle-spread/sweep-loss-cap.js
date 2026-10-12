@@ -66,6 +66,8 @@ let allDays = load5mDays(DIR);
 if (!allDays.length) { console.error('no days loaded from', DIR); process.exit(1); }
 // --sub1m <rawDir>: attach 1m sub-bars (for the '1m' sub-bar fill model); --only1mDays keeps just the days that have them.
 const SUB1M = argVal('--sub1m', '');
+// --subBarFill 1m|path: run EVERY job under the sub-bar fill model (cover placed on the open's fill, tested after it).
+const SUB_FILL = argVal('--subBarFill', '') || null;
 if (SUB1M) {
   const n = require('../../server/src/candle-spread/backtest/backtest-v6-5m').attachSub1m(allDays, SUB1M);
   if (process.argv.includes('--only1mDays')) allDays = allDays.filter((d) => d.has1m);
@@ -384,7 +386,8 @@ for (const run of RUNS) {
 
 function measure(job) {
   const run = RUNS.find(r => r.variant === job.variant);
-  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}), ...(job.over || {}) };
+  const cfg = { ...run, lossMax: job.lossMax, lossTarget: job.lossTarget, ...(job.capFrac != null ? { capFrac: job.capFrac } : {}), ...(job.over || {}),
+    ...(SUB_FILL ? { subBarFill: SUB_FILL } : {}) };
   const fn = (A, p, ctx) => cfg.signalFn(A, p, { ...ctx, cfg: cfg.signalCfg || {} });
   const o = optsFor(cfg, { intradayIV: true, hasPx: HAS_PX, where: 'sweep-loss-cap', openFillModel: OPEN_FILL, fillThroughTicks: FILL_THRU,
     fillThroughTicksOpen: FILL_THRU_OPEN, fillThroughTicksCover: FILL_THRU_COVER });
