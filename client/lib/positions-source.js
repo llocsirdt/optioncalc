@@ -77,6 +77,7 @@
     if (box && !box.checked) { window.NQChart.setTrades([]); return; }
     const trades = [];
     for (const p of positions || []) {
+      if (p.filled === false) continue;   // a working order is not a trade on the tape
       if (p.openEpoch) trades.push({ epoch: p.openEpoch, side: p.side, type: 'open' });
       if (p.covered && p.coverEpoch) trades.push({ epoch: p.coverEpoch, side: p.side, type: 'cover' });
     }
@@ -92,7 +93,13 @@
     const evs = [];
     (positions || []).forEach((p) => {
       const q = p.quantity || 1;
-      evs.push({ id: p.id, type: 'open', side: p.side, time: p.openTime, epoch: p.openEpoch || 0, legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * q), net: p.openNet || 'DEBIT' });
+      // A WORKING OPEN (resting at the broker, not filled): its own dimmed row, so the table lists every order
+      // working at the broker — the 2026-10-12 13:50 bear sat at Schwab while this table showed nothing for it.
+      // It is an order, not a holding: no position number's cover, no part of the risk curve (the curve is
+      // built from the filled-only pull).
+      const working = p.filled === false;
+      evs.push({ id: p.id, type: 'open', working, side: p.side, time: p.openTime, epoch: p.openEpoch || 0, legs: p.openLegs || '', cost: Math.round((p.openLimit || 0) * 100 * q), net: p.openNet || 'DEBIT' });
+      if (working) return;
       if (p.coverLegs) evs.push({ id: p.id, type: 'cover', side: p.side, time: p.coverTime, epoch: p.coverEpoch || 0, legs: p.coverLegs, cost: Math.round((p.coverLimit || 0) * 100 * q), net: p.coverNet || 'DEBIT' });
       // A resting cover order that was placed but never filled: shown as a dimmed row so every order the
       // engine sent to the broker is visible (matches the broker's rejected/working orders 1:1).
@@ -116,7 +123,8 @@
       : e.type === 'open' ? (e.side === 'bull' ? '▲' : '▼') : '◇';
     const coveredIds = new Set(evs.filter(e => e.type === 'cover' && !e.unfilled).map(e => e.id));   // FILLED covers only
     const isHedge = (e) => /^off-|^wing-|^fly-|^raise-/.test(e.id);
-    const opens = evs.filter(e => e.type === 'open' && !isHedge(e)).length;
+    const opens = evs.filter(e => e.type === 'open' && !isHedge(e) && !e.working).length;
+    const workingOpens = evs.filter(e => e.type === 'open' && e.working).length;
     const hedges = evs.filter(e => e.type === 'open' && isHedge(e)).length;
     const covers = evs.filter(e => e.type === 'cover').length;
     const unfilled = evs.filter(e => e.type === 'cover' && e.unfilled).length;
@@ -132,15 +140,15 @@
       // block was written to fix for offsets and wings, repeated when flies were added.
       // RAISE = a floor-raise hedge (floor-raise.js, id raise-*): same rule as the others, never a strategy open.
       const hedge = /^off-/.test(e.id) ? 'OFFSET' : /^wing-/.test(e.id) ? 'WING' : /^fly-/.test(e.id) ? 'FLY' : /^raise-/.test(e.id) ? 'RAISE' : null;
-      const isUncov = open && !hedge && !coveredIds.has(e.id);   // an open with no FILLED cover = still exposed
+      const isUncov = open && !hedge && !e.working && !coveredIds.has(e.id);   // a FILLED open with no FILLED cover = still exposed
       const label = hedge ? hedge
-        : open ? (isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
+        : open ? (e.working ? 'OPEN (working)' : isUncov ? 'OPEN*' : 'OPEN') : (e.unfilled ? 'COVER**' : 'COVER');
       const cr = e.net === 'CREDIT';
       const costStr = (cr ? `+${usd(e.cost)}` : usd(e.cost))   // credit = cash received → leading +
         // WALKED price: show only the current price plus a ↑ marker; the original lives in the tooltip. The old
         // inline "(sent $305)" roughly doubled the column's width on every laddered row.
         + (e.placedCost != null ? `<sup class="td-walked" title="walked up by the cover ladder from ${usd(e.placedCost)} (originally sent) to ${usd(e.cost)}">↑</sup>` : '');
-      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.id}">`
+      return `<tr class="td-${e.type}${isUncov ? ' td-uncovered' : ''}${e.unfilled || e.working ? ' td-unfilled' : ''}${hedge ? ' td-hedge' : ''}" title="${e.working ? 'working at the broker, not filled — ' : ''}${e.id}">`
         + `<td class="td-time">${e.time || '—'}</td>`
         + `<td>#${seq.get(e.id) || '?'}</td>`
         // A hedge's event text takes the row's PURPLE, not the side colour. The inline style wins over
@@ -150,7 +158,7 @@
         + `<td class="td-legs">${e.legs}</td>`
         + `<td class="td-cost">${costStr} <span class="net-tag ${cr ? 'net-cr' : 'net-dr'}">${cr ? 'CR' : 'DB'}</span></td></tr>`;
     }).join('');
-    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}${hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : ''}</span></h4>`
+    box.innerHTML = `<h4>Strategy Trades <span class="ps-muted">${opens} opens${workingOpens ? ` (+${workingOpens} working)` : ''} · ${covers} covers${unfilled ? ` (${unfilled} unfilled)` : ''}${hedges ? ` · ${hedges} hedge${hedges === 1 ? '' : 's'}` : ''}</span></h4>`
       + `<div class="trade-detail-scroll"><table class="trade-detail-table"><thead><tr><th>Time</th><th>Pos</th><th class="th-ev">Event</th><th class="th-legs">Legs</th><th>Cost</th></tr></thead>`
       + `<tbody>${rows}</tbody></table></div>`;
   }
@@ -333,9 +341,14 @@
         if (typeof processInput === 'function') processInput();
       }
       if (result.count) {
-        saveStrategyMeta(symbol, expiration, variant, result.positions, Date.now());
-        applyTradesToChart(result.positions, doFocus);
-        renderStrategyTradeDetails(result.positions);
+        // The TABLE also lists opens still WORKING at the broker; the curve/optionArray above stay filled-only.
+        // Dead never-filled opens (cancelled/expired) are not working orders and stay out.
+        const DEAD = /^(cancel|expired|rejected|stale|dead)/i;
+        const withWorking = run ? strategyRunToOptionArray(run.record || run, { includeUnfilled: true }).positions
+          .filter((p) => p.filled !== false || !DEAD.test(String(p.orderStatus || ''))) : result.positions;
+        saveStrategyMeta(symbol, expiration, variant, withWorking, Date.now());
+        applyTradesToChart(withWorking, doFocus);
+        renderStrategyTradeDetails(withWorking);
       }
       const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       if (fromAccount) {
