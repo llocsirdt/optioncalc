@@ -8,6 +8,7 @@
 <script src="shared/run-completeness.js"></script>
 <!-- Live-engine status: brings the TRADABILITY banner (market closed / stale feed) onto this page too.
      The banner self-injects, so no markup is needed here. -->
+<script src="client/lib/divergence-banner.js"></script>
 <script src="client/lib/candle-spread-status.js"></script>
 <style>
   :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb;
@@ -248,7 +249,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.7</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.8</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>

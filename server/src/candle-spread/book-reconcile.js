@@ -225,11 +225,18 @@ function engineLegs(record) {
     // sent the credit twin, the account holds the other option type at the same strikes. Comparing the
     // canonical legs reported every healthy credit open and cover as 'missing' + 'unmanaged', so the one
     // check that can see an untracked real position sat permanently DIVERGENT. Same rule as book-value.js.
+    // The broker's own filled order first (openOrder/coverOrder, stamped at the fill), then what was sent,
+    // and only for runs older than both the parity twin derived from the canonical record.
     const oCredit = p.sentNet === 'CREDIT' && p.sentLegs && p.sentLegs.length;
-    for (const l of (oCredit ? p.sentLegs : p.legs) || []) add(l, q);
+    const oLegs = (p.openOrder && p.openOrder.legs && p.openOrder.legs.length) ? p.openOrder.legs : (oCredit ? p.sentLegs : p.legs);
+    for (const l of oLegs || []) add(l, q);
     if (p.covered) {
-      const flip = p.coverSentNet === 'CREDIT';
-      for (const l of p.coverLegs || []) add(flip ? { ...l, type: l.type === 'C' ? 'P' : 'C' } : l, q);
+      if (p.coverOrder && p.coverOrder.legs && p.coverOrder.legs.length) { for (const l of p.coverOrder.legs) add(l, q); }
+      else if (p.coverSentLegs && p.coverSentLegs.length) { for (const l of p.coverSentLegs) add(l, q); }
+      else {
+        const flip = p.coverSentNet === 'CREDIT';
+        for (const l of p.coverLegs || []) add(flip ? { ...l, type: l.type === 'C' ? 'P' : 'C' } : l, q);
+      }
     }
   }
   return net;
@@ -317,6 +324,26 @@ function reconcilePositions(record, details) {
   };
 }
 
-module.exports = { reconcileBook, engineBook, brokerBook, positionDiffs,
+// SEED THE LEG LEDGER FROM WHAT THE ACCOUNT HOLDS (live only). Every non-zero leg in this expiration sets
+// its side in the ledger: the broker refuses to SELL_TO_OPEN a leg the account is long (and the reverse),
+// so the ledger has to know every such leg, however it got there. Returns the legs the engine had wrong
+// and the legs it was missing. Mutates `backing` (record.state.legLedger).
+function seedLedgerFromAccount(backing, details, expiration) {
+  const LL = require('./leg-ledger');
+  const led = LL.makeLegLedger(backing);
+  const { net } = brokerLegs(details, expiration);
+  const corrected = [], added = [];
+  for (const [k, q] of net) {
+    if (!q) continue;
+    const type = k[0], strike = Number(k.slice(1)), side = q > 0 ? 'long' : 'short';
+    const had = led.sideOf(type, strike);
+    const was = led.force(type, strike, side);
+    if (was) corrected.push({ leg: k, engine: was, account: side });
+    else if (!had) added.push({ leg: k, account: side });
+  }
+  return { corrected, added };
+}
+
+module.exports = { seedLedgerFromAccount, reconcileBook, engineBook, brokerBook, positionDiffs,
   // the POSITION loop (report-only; response shape unvalidated — see the note above)
   reconcilePositions, legDiffs, engineLegs, brokerLegs, parseOccSymbol, occDate };

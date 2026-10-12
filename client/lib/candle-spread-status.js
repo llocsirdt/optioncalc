@@ -460,7 +460,11 @@
     const c = el();
     try {
       const r = await fetch(`${apiBase()}/api/v1/candle-spread/status`, { cache: 'no-store' });
-      if (r.ok) { const s = await r.json(); lastStatus = s; renderBanner(s); render(s); window.CandleSpreadStatus._emit(s); }
+      if (r.ok) {
+        const s = await r.json(); lastStatus = s; renderBanner(s); render(s); window.CandleSpreadStatus._emit(s);
+        // LOUD when a live run disagrees with Schwab or Schwab keeps rejecting its orders (divergence-banner.js).
+        if (window.showDivergenceBanner && window.alertsFromStatus) window.showDivergenceBanner(window.alertsFromStatus(s));
+      }
       else if (c) c.innerHTML = `<span style="font:11px monospace;color:#c0392b">engine status ${r.status}</span>`;
     } catch (e) {
       if (c) c.innerHTML = `<span style="font:11px monospace;color:#999">engine status: offline</span>`;

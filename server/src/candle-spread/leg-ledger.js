@@ -24,6 +24,9 @@ function makeLegLedger(backing) {
     },
     record(legs) { for (const l of legs) { const k = key(l.type, l.strike); if (!(k in sides)) sides[k] = l.side; } },
     sideOf(type, strike) { return sides[key(type, strike)] || null; },
+    // THE ACCOUNT WINS. A leg the broker holds has a side whatever the engine recorded: set it, and return
+    // the side it replaced (null when it agreed or was absent) so the caller can report the disagreement.
+    force(type, strike, side) { const k = key(type, strike); const was = sides[k] || null; sides[k] = side; return was && was !== side ? was : null; },
     size() { return Object.keys(sides).length; },
   };
 }

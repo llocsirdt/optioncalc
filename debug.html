@@ -8,6 +8,7 @@
 <script src="shared/portfolio-risk.js"></script>
 <script src="client/lib/risk-curve-cell.js"></script>
 <script src="client/lib/strategy-positions.js"></script>
+<script src="client/lib/divergence-banner.js"></script>
 <link rel="stylesheet" href="client/nq-chart.css">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="client/lib/nq-chart.js"></script>
@@ -171,7 +172,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.10.7</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.10.8</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -376,6 +377,8 @@ async function load() {
     $('curve').innerHTML = ''; $('curveMeta').textContent = ''; $('ordMeta').textContent = '';
     $('cmpPanel').style.display = 'none'; $('ordSrcWrap').style.display = 'none'; return;
   }
+  // LOUD when this LIVE run disagrees with the Schwab account or Schwab keeps rejecting its orders.
+  if (window.showDivergenceBanner) window.showDivergenceBanner(isBt ? [] : window.divergenceAlerts(record));
   // Render the live side FIRST and let the backtest arrive after: the engine run is fast but the dataset
   // parse on a cold server is not, and the page must never sit blank waiting on an optional overlay.
   render();
@@ -1004,9 +1007,11 @@ function buildCell(pos, se, dom, rec, underAt) {
     const qty = p.quantity || 1;
     // The OPEN can be a credit too (capitalRecapture alternates debit/credit opens to reclaim cash), in
     // which case the real order is pos.sentLegs at pos.sentLimit and the cash flows IN, not out.
-    const oCredit = p.sentNet === 'CREDIT' && p.sentLegs && p.sentLegs.length;
-    const oLegs = oCredit ? p.sentLegs : (p.legs || []);
-    const oCost = oCredit ? -(p.sentLimit || 0) : (p.limit || 0);
+    // The broker's filled order first (p.openOrder, exact legs/net/price), then the sent fields for older runs.
+    const oo = p.openOrder && p.openOrder.legs && p.openOrder.legs.length && p.openOrder.price != null ? p.openOrder : null;
+    const oCredit = oo ? oo.net === 'CREDIT' : !!(p.sentNet === 'CREDIT' && p.sentLegs && p.sentLegs.length);
+    const oLegs = oo ? oo.legs : (oCredit ? p.sentLegs : (p.legs || []));
+    const oCost = oo ? (oCredit ? -oo.price : oo.price) : (oCredit ? -(p.sentLimit || 0) : (p.limit || 0));
     for (const l of oLegs) legs.push({ ...l, quantity: qty, cost: p.limit });
     cost += oCost * 100 * qty;
     if (p.covered) {
@@ -1024,11 +1029,15 @@ function buildCell(pos, se, dom, rec, underAt) {
       // move the curve); CASH is not, and a credit cover genuinely brings money in.
       const ck0 = (p.coverLegs || []).map((l) => l.strike);
       const cw = ck0.length ? Math.max(...ck0) - Math.min(...ck0) : 0;
-      const cCred = p.coverSentNet === 'CREDIT';
-      const cl = cCred ? (p.coverLegs || []).map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' })) : (p.coverLegs || []);
+      const co = p.coverOrder && p.coverOrder.legs && p.coverOrder.legs.length && p.coverOrder.price != null ? p.coverOrder : null;
+      const cCred = co ? co.net === 'CREDIT' : p.coverSentNet === 'CREDIT';
+      const cl = co ? co.legs
+        : (p.coverSentLegs && p.coverSentLegs.length) ? p.coverSentLegs
+        : cCred ? (p.coverLegs || []).map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' })) : (p.coverLegs || []);
       // The FILL translated, not the ask: coverLimit is what was received, coverSentCredit only what was
       // asked, and mixing the two across representations breaks parity.
-      const climit = cCred ? -Math.round((cw - (p.coverLimit || 0)) * 100) / 100 : (p.coverLimit || 0);
+      const climit = co ? (cCred ? -co.price : co.price)
+        : cCred ? -Math.round((cw - (p.coverLimit || 0)) * 100) / 100 : (p.coverLimit || 0);
       for (const l of cl) legs.push({ ...l, quantity: qty, cost: climit });
       cost += climit * 100 * qty;
     }

@@ -2348,6 +2348,7 @@ async function runRestingWork() {
       const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying,
         placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record),
         cancelOrder: makeCancelOrder(run, record) });
+      trader.attachLedger(st, deps);   // the worker places covers too; it must see and record the same ledger
       try {
         // Consume broker fills here too, not only at the candle close: the poller runs on its own timer,
         // and a fill should become a position within ~30s rather than waiting up to five minutes for the
@@ -2546,6 +2547,19 @@ async function runOrderPollInner() {
     if (acctDetails) {
       try {
         const pr = BR.reconcilePositions(record, acctDetails);
+        // THE ACCOUNT SEEDS THE LEDGER (2026-10-12, user: "the schwab 'real' positions need to take priority").
+        // Live only: a simulated or test run's account rows belong to someone else.
+        if (record.config && record.config.dryRun === false && record.state) {
+          if (!record.state.legLedger) record.state.legLedger = {};
+          const sd = BR.seedLedgerFromAccount(record.state.legLedger, acctDetails, record.config.expiration);
+          if (sd.corrected.length || sd.added.length) {
+            store.appendEvent(record, { type: 'ledger_seeded_from_account', corrected: sd.corrected, added: sd.added,
+              note: `the leg ledger disagreed with the account on ${sd.corrected.length} leg(s) and lacked ${sd.added.length}; the account's sides now rule` });
+            console.error(`[candle-spread] LEDGER SEEDED FROM ACCOUNT (${run.variant}): `
+              + sd.corrected.map((c) => `${c.leg} ${c.engine}->${c.account}`).concat(sd.added.map((a) => `+${a.leg} ${a.account}`)).join(', '));
+            store.writeRun(record);
+          }
+        }
         // Same persistence bug as the book loop above, same fix. This summary is what confirms the account
         // response shape — brokerRoots should read NDXP, unparsedSymbols should be empty — and it never
         // reached disk, because a test-mode run is always 'expected'.
@@ -2556,7 +2570,7 @@ async function runOrderPollInner() {
           record.state.positionReconcile = { severity: pr.severity, byKind: pr.byKind, diffs: pr.diffs.length,
             engineLegCount: pr.engineLegCount, brokerRows: pr.brokerRows, brokerRoots: pr.brokerRoots,
             unparsedSymbols: pr.unparsedSymbols, at: new Date().toISOString() };
-          if (pr.severity === 'expected' || pr.severity === 'clean') store.writeRun(record);
+          store.writeRun(record);   // a DIVERGENT summary too: the UI's banner reads it from the run
         }
         if (pr.severity !== 'expected' && pr.severity !== 'clean' && psig !== record.state.positionReconcileEventSig) {
           record.state.positionReconcileEventSig = psig;

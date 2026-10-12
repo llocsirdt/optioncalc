@@ -546,6 +546,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   winner.covered = true; winner.coverId = nextId('cov'); winner.coverLegs = coverBookLegs; winner.coverLimit = coverLimit;
   winner.coverStatus = 'filled'; winner.coverTime = st.lastCandleTime || null; winner.coverEpoch = st.lastCandleEpoch || null;
   winner.coverSentNet = coverSide;
+  winner.coverSentLegs = coverSentLegs;   // exactly the cover legs inside the combo order
   if (coverSide === 'CREDIT') winner.coverSentCredit = round2(Math.abs(coverPart));
   winner.viaCombo = true;
   const floor = round2((W - winner.limit - coverLimit) * 100 * (winner.quantity || qty));
@@ -740,7 +741,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     ladderBase: res.limit,
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
-    sentNet, sentLimit, sentLegs: sentNet === 'CREDIT' ? sentLegs : undefined   // what actually hit the broker
+    sentNet, sentLimit, sentLegs   // exactly what hit the broker, debit or credit
   };
   st.positions.push(pos);
   if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(sentLegs);   // record the actual played legs
@@ -1485,7 +1486,18 @@ function etMinutesOf(candleTime) {
 // calls it right after a broker fill books the open (2026-10-11, user: "It should be placed immediately after the
 // open fill confirmation" — the 5m close left a filled open uncovered for up to five minutes). Idempotent: a position
 // that already has a pendingCover is skipped, so both call sites are correct, never double.
+// THE LEDGER IS PART OF THE DEPS, ON EVERY PATH THAT PLACES AN ORDER. It used to be attached only inside
+// processCandleClose, so the 30s worker (cover on fill, 2026-10-11) placed covers with no ledger at all: no
+// conflict check and nothing recorded. On 2026-10-12 v7-10's 14:25 bear was covered that way (sell P30650 /
+// buy P30640 at 14:28); the ledger never learned the account was long P30640, and the 15:15 bear's cover then
+// tried to SELL P30640 to open — rejected by Schwab ~40 times, the position uncovered into the close.
+function attachLedger(st, deps) {
+  if (deps && deps.enforceLegUniqueness && !deps._ledger) { if (!st.legLedger) st.legLedger = {}; deps._ledger = LL.makeLegLedger(st.legLedger); }
+  return deps && deps._ledger;
+}
+
 async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying) {
+  attachLedger(st, deps);
   // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
   // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
   // compute the identical target for the identical bar.
@@ -1555,7 +1567,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   st.lastCandleEpoch = (typeof candle.datetime === 'number') ? candle.datetime : null;   // 5m-mark epoch, matches /chartseries
   // LEG-UNIQUENESS (deps.enforceLegUniqueness): a per-day ledger of each leg's traded side, persisted on
   // run state (this run record IS one trade day) so a leg is never both bought- and sold-to-open.
-  if (deps.enforceLegUniqueness) { if (!st.legLedger) st.legLedger = {}; deps._ledger = LL.makeLegLedger(st.legLedger); }
+  attachLedger(st, deps);
   // BEFORE ANY SIGNAL READS THE BOOK. The poller has been writing fills onto the order rows between
   // candles; this is where they become positions, cash and locked floors. Inert unless fillSource is
   // 'broker' (see applyBrokerFills), so simulated variants and every backtest are untouched.
@@ -2504,6 +2516,15 @@ function unbookedFill(o, why, pos, decisions) {
     + `${pos ? ` (position ${pos.id})` : ''} — the account and the book disagree`);
 }
 
+// THE ORDER EXACTLY AS THE BROKER FILLED IT (2026-10-12, user: "any order sent needs to be captured exactly by
+// the engine/ledger and displayed exactly in the UI"). The position's own legs/limit stay debit-canonical for
+// the floor arithmetic; this is the separate, literal record — the legs that went to Schwab (option type,
+// side, strike), its net and the broker's fill price — and it is what every table displays.
+function filledOrder(o, px) {
+  return { orderId: o.orderId, kind: o.kind || null, net: o.net ? String(o.net).replace(/^NET_/, '') : null,
+    price: px, legs: (o.legs || []).map((l) => ({ side: l.side, type: l.type, strike: l.strike })), at: Date.now() };
+}
+
 function applyBrokerFills(st, cfg, deps, decisions) {
   if (!deps || deps.fillSource !== 'broker') return 0;
   const los = (st && st.liveOrders) || [];
@@ -2556,6 +2577,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       else { pos.limit = round2(px); }
       pos.filled = true; pos.orderStatus = 'filled';
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
+      pos.openOrder = filledOrder(o, px);
       // when and where it filled — the stall-cover clock (workRestingCovers) starts here
       pos.fillEpoch = Date.now(); pos.fillUnder = (deps && deps.underlying > 0) ? deps.underlying : (st.lastUnderlying || null);
       noteCash(st, (credit ? -px : px) * 100 * qty);
@@ -2582,10 +2604,12 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       pos.coverLegs = pc.legs; pos.coverLimit = bookLimit;
       pos.coverGeometry = pc.geometry; pos.coverStatus = 'filled';
       pos.coverSentNet = pc.sentNet || 'DEBIT';
+      pos.coverSentLegs = pc.sentLegs || pc.legs;   // the instrument that rested (and filled) at the broker
       if (credit) pos.coverSentCredit = round2(px);
       pos.coverTime = st.lastCandleTime || null; pos.coverEpoch = st.lastCandleEpoch || null;
       pos.coverFilledAt = Date.now();
       pos.brokerCoverFill = { price: px, side: o.fillSide || null, orderId: o.orderId };
+      pos.coverOrder = filledOrder(o, px);
       pos.pendingCover = null;
       // THE FLOOR IS min(openWidth, coverWidth) MINUS WHAT BOTH COST — the same rule the mark path uses,
       // because a wider cover does not raise the guarantee.
@@ -2616,6 +2640,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       if (!ph) { unbookedFill(o, 'no-pending-hedge', pos, decisions); continue; }
       pos.filled = true; pos.orderStatus = 'filled'; pos.limit = round2(px); pos.pendingHedge = null;
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
+      pos.openOrder = filledOrder(o, px);
       // A HEDGE IS ALWAYS A DEBIT — it pays, and the ledger must see it. Spend is counted at the FILL, not
       // at placement, so the budget is consumed by hedges we actually own.
       const spent = px * 100 * qty;
@@ -3756,6 +3781,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       : fill * 100 * q;
     noteCash(st, cashDelta);
     pos.coverSentNet = pc.sentNet;
+    pos.coverSentLegs = pc.sentLegs || pc.legs;
     // PERSIST THE CREDIT ACTUALLY ASKED. The cover books and tests entirely in DEBIT-canonical space,
     // which is only equivalent to the credit order really resting while sentCredit == W - target. On
     // 2026-09-17 that equivalence broke on the OPEN side (40 of 60 twins differed, and 18 of 60 booked
@@ -3788,6 +3814,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
+  attachLedger,           // the leg ledger on deps — every order-placing path, candle close and worker
   placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)
   lateFloorLimit,                // LATE-DAY FLOOR GUARD
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly

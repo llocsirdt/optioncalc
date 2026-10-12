@@ -124,9 +124,12 @@
       // Emit each spread AS ACTUALLY SENT: a CREDIT order → its real credit-twin legs + a NEGATIVE cost
       // (cash received); a DEBIT → the debit legs + positive cost. So the optionArray total NETS the
       // recapture credits instead of summing gross debit-canonical costs (which overstates capital used).
-      const oCredit = pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLegs.length;
-      const oLegs = oCredit ? pos.sentLegs : pos.legs;
-      const oAmt = oCredit ? (pos.sentLimit || 0) : (pos.limit || 0);
+      // EXACTLY WHAT THE BROKER FILLED, when the engine has it (pos.openOrder, stamped from the filled order row
+      // since 2026-10-12): its legs, its net, its fill price. Older records fall back to the sent fields.
+      const oo = pos.openOrder && pos.openOrder.legs && pos.openOrder.legs.length && pos.openOrder.price != null ? pos.openOrder : null;
+      const oCredit = oo ? oo.net === 'CREDIT' : !!(pos.sentNet === 'CREDIT' && pos.sentLegs && pos.sentLegs.length);
+      const oLegs = oo ? oo.legs : (oCredit ? pos.sentLegs : pos.legs);
+      const oAmt = oo ? oo.price : (oCredit ? (pos.sentLimit || 0) : (pos.limit || 0));
       const legs = spreadToLegs(oLegs, oCredit ? -oAmt : oAmt, qty);
       const openLegCount = legs.length;         // everything after this index is cover
       let cLegs = null, cAmt = 0, cCredit = false, cEpoch = null;
@@ -149,18 +152,23 @@
         // "Total Cost" read $13,385 for v7-10 on 2026-09-17 where the real cash was ~$4,485, and showed
         // 8 of 48 orders as credits instead of 22 — because every cover rendered as a debit.
         const cw = (() => { const k = pos.coverLegs.map((l) => l.strike); return Math.max(...k) - Math.min(...k); })();
-        cCredit = pos.coverSentNet === 'CREDIT';
-        if (cCredit) {
+        const co = pos.coverOrder && pos.coverOrder.legs && pos.coverOrder.legs.length && pos.coverOrder.price != null ? pos.coverOrder : null;
+        cCredit = co ? co.net === 'CREDIT' : pos.coverSentNet === 'CREDIT';
+        if (co) {
+          // The broker's filled cover order, literally: legs, net, price. Nothing derived.
+          cLegs = co.legs; cAmt = co.price;
+        } else if (cCredit) {
           // Same strikes and sides, opposite option type. coverSentCredit is authoritative where the run
           // recorded it; before that field existed the parity equivalent is exact once the twin is priced
           // as W - debit, which is what the engine now does.
-          cLegs = pos.coverLegs.map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' }));
+          cLegs = (pos.coverSentLegs && pos.coverSentLegs.length) ? pos.coverSentLegs
+            : pos.coverLegs.map((l) => ({ ...l, type: l.type === 'C' ? 'P' : 'C' }));
           // THE FILL, TRANSLATED — not coverSentCredit, which is what was ASKED. coverLimit is what was
           // RECEIVED, and a cover can fill through its ask; mixing ask and fill across the two
           // representations breaks the parity the debit-canonical record depends on.
           cAmt = Math.round((cw - (pos.coverLimit || 0)) * 100) / 100;
         } else {
-          cLegs = pos.coverLegs;
+          cLegs = (pos.coverSentLegs && pos.coverSentLegs.length) ? pos.coverSentLegs : pos.coverLegs;
           cAmt = pos.coverLimit != null ? pos.coverLimit : 0;
         }
         // When the cover booked. coverEpoch is authoritative; older runs lack it, so fall back to the
@@ -175,7 +183,8 @@
       if (!pos.covered) {
         const uc = coverByPos.get(pos.id);
         if (uc && uc.legs && uc.legs.length) {
-          const cNet = uc.net === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+          const restNet = (pos.pendingCover && pos.pendingCover.sentNet) || uc.net;   // what rests NOW (a style flip changes it)
+          const cNet = restNet === 'CREDIT' ? 'CREDIT' : 'DEBIT';
           // THE PRICE IT IS WORKING AT, NOT THE PRICE IT WAS PLACED AT. The order log records the
           // placement; the cover ladder then walks `pendingCover.target` for the rest of the day
           // (cover-reprice fired 6,125 times on 2026-09-17) and logs no new order event, so the log's
@@ -195,7 +204,10 @@
           const working = cNet === 'CREDIT'
             ? (pc2 && pc2.sentCredit != null ? pc2.sentCredit : null)
             : (pc2 && pc2.target != null ? pc2.target : null);
-          unfilledCover = { legs: fmtSpread(uc.legs, qty), net: cNet,
+          // The legs RESTING at the broker now (pendingCover.sentLegs — a style flip or re-send changes them),
+          // not the first send's log entry.
+          const restingLegs = pc2 && pc2.sentLegs && pc2.sentLegs.length ? pc2.sentLegs : uc.legs;
+          unfilledCover = { legs: fmtSpread(restingLegs, qty), net: cNet,
             limit: working != null ? working : (uc.limit || 0),
             // Kept so the row can say what it was originally sent at — the ladder's concession is
             // information, and hiding it would trade one missing truth for another.
