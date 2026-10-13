@@ -913,15 +913,18 @@ function applyFloorRaise(v) {
   // (v7-10 55.4% vs 47.9% under B) — measured and recorded; the user chose B for all strategies.
   v.floorRaiseObjective = 'spreadFirst';
   // RAISE DISCIPLINE (user, 2026-10-13, after v7-10 bought C30580/30590 three times on its locked high side, against
-  // a falling market, filling at the top of its range):
+  // a falling market, filling at the top of its range; then could not place the 30520/30530/30540/30550 condor):
   //   LockedLift — once the floor is >= 0, a raise must lift the floor itself at the required ratio (floor-raise.js).
-  //   Trend AHH  — no raise may lower the floor on the side the trend is heading (15m + hourly + hourly HH/LL agree);
-  //                the 2026-10-08 sweep's best guard: v7-10 locked days 44.6 -> 46.9%, P&L -4.5%.
   //   Far ratio  — required ratio climbs from 3:1 at the money to 6:1 two expected moves out.
   //   Walk       — orders start at 0.4 x mid and step $0.05 / 20 s up to the approved price (live only; the backtest
   //                still prices a raise at mid + slip, so it cannot see this saving).
+  //   IronMix    — a fly/condor whose legs the leg ledger refuses is placed as its put/call (iron) twin when that is
+  //                legal (live only; sent as a credit, booked at its debit-equivalent).
+  //   Trend AHH  — OFF by measurement (raise-discipline-2026-10-13: closing floor worse on 4 of 5 variants with it on:
+  //                v7-10 -613 -> -717, v7-20 -484 -> -560, v9-20 -483 -> -500, v4-20 -423 -> -485; v7-40 -1,149 ->
+  //                -1,138). Set floorRaiseTrend = 'AHH' to turn it back on.
   if (v.floorRaiseLockedLift == null) v.floorRaiseLockedLift = true;
-  if (v.floorRaiseTrend == null) v.floorRaiseTrend = 'AHH';
+  if (v.floorRaiseIronMix == null) v.floorRaiseIronMix = true;
   if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 6;
   if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
 }

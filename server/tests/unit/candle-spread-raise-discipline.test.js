@@ -73,6 +73,57 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
     ok(st.positions[0].pendingHedge.limit === 0.6, 'a raise placed without a walk is not touched');
   }
 
+  // ── 3. put/call (iron) mix ──────────────────────────────────────────────────────────────────────────
+  // v7-10 at 14:20: a -$244 valley at 30530-30540 with NDX at 30531, and the ledger holding C30520 short, C30540 short,
+  // C30550 long, P30520 long, P30540 long — every all-call / all-put condor over the valley conflicts; the iron
+  // P30520/P30530/C30540/C30550 (the user's hand order) does not.
+  {
+    const bs = require('../../src/candle-spread/bs-pricer');
+    const spot = 30531, nowMs = Date.parse('2026-10-13T18:20:00Z');
+    const tau = bs.tauFromTime(nowMs), vol = 0.16;
+    const getLeg = (type, strike) => { const m = Math.round(bs.bsPrice(type, spot, strike, tau, vol) * 100) / 100;
+      return { mid: m, bid: Math.max(0, m - 0.1), ask: m + 0.1, symbol: `NDX_${type}${strike}` }; };
+    // Two filled spreads whose sum dips at 30530-30540: long P30540/short P30530 (5.00) + long C30540/short C30550 (5.00)
+    // are NOT what the ledger holds — the curve is built from these, the ledger is set to the live account's sides.
+    const book = [
+      { id: 'a', side: 'bear', filled: true, covered: false, quantity: 1, limit: 4.9, legs: [{ side: 'long', type: 'P', strike: 30530 }, { side: 'short', type: 'P', strike: 30520 }] },
+      { id: 'b', side: 'bull', filled: true, covered: false, quantity: 1, limit: 4.9, legs: [{ side: 'long', type: 'C', strike: 30540 }, { side: 'short', type: 'C', strike: 30550 }] }];
+    const ledger = { C30520: 'short', C30540: 'short', C30550: 'long', P30520: 'long', P30540: 'long', C30530: 'short', P30530: 'short' };
+    const A = { '15m': { bbupper: spot * 1.004, bblower: spot * 0.996, close: spot } };
+    const run = async (iron) => {
+      const st = { positions: JSON.parse(JSON.stringify(book)), legLedger: { ...ledger }, realizedPnl: 0, cashDeployed: 0 };
+      const d = [], sent = [];
+      const LL = require('../../src/candle-spread/leg-ledger');
+      const deps = { getLeg, underlying: spot, A, nowMs, strikeIncrement: 10, enforceLegUniqueness: true, _ledger: LL.makeLegLedger(st.legLedger),
+        placeOrder: async (payload, meta) => { sent.push({ payload, meta }); return { orderId: `o${sent.length}` }; } };
+      await trader.raiseFloor(st, { floorRaise: true, floorRaiseMinRatio: 3, floorRaiseObjective: 'spreadFirst', floorRaiseIronMix: iron,
+        spreadWidth: 10, strikeIncrement: 10, tickIncrement: 0.05, quantity: 1 }, deps, d, '10/13 14:20');
+      return { st, d, sent };
+    };
+    const off = await run(false);
+    ok(!off.d.some((x) => x.action === 'raise' && x.legs.some((l) => l.strike === 30530) && x.legs.some((l) => l.strike === 30540)),
+      'without the mix: no condor over 30530-30540 (every all-call / all-put one conflicts)');
+    const on = await run(true);
+    const r = on.d.find((x) => x.action === 'raise' && x.sentNet === 'CREDIT');
+    const tagL = (legs) => legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
+    if (process.env.SHOW) console.log(on.d.filter((x) => x.action === 'raise').map((x) => [tagL(x.legs), tagL(x.sentLegs || []), x.limit, x.ratio, x.floorNow]));
+    ok(r, `with the mix: an iron raise is placed (${on.d.filter((x) => x.action === 'raise').map((x) => tagL(x.sentLegs || x.legs)).join(' | ') || 'none'})`);
+    if (r) {
+      const s0 = on.sent.find((x) => x.meta.net === 'CREDIT');
+      ok(s0 && s0.payload.orderType === 'NET_CREDIT' && s0.payload.orderLegCollection.length === 4, 'sent as a 4-leg NET_CREDIT');
+      ok(!require('../../src/candle-spread/leg-ledger').makeLegLedger({ ...ledger }).conflicts(r.sentLegs), 'every sent leg respects the ledger');
+      ok(Math.abs(r.ironOffset - 10) < 1e-9 && Math.abs(s0.payload.price - (r.ironOffset - r.limit)) < 0.011,
+        `credit = offset - debit-equivalent (${s0.payload.price} = ${r.ironOffset} - ${r.limit})`);
+      // Broker fills the credit: booked at the debit-equivalent, cash in.
+      const pos = on.st.positions.find((p) => p.id === r.id);
+      on.st.liveOrders = [{ orderId: pos.pendingHedge.orderId, kind: 'raise', status: 'filled', fillPrice: s0.payload.price, net: 'CREDIT', legs: r.sentLegs }];
+      const cashBefore = on.st.cashDeployed || 0;
+      trader.applyBrokerFills(on.st, {}, { fillSource: 'broker' }, []);
+      ok(pos.filled === true && Math.abs(pos.limit - r.limit) < 0.011, `booked at the debit-equivalent (${pos.limit})`);
+      ok((on.st.cashDeployed || 0) < cashBefore, `a credit fill brings cash in (${cashBefore} -> ${on.st.cashDeployed})`);
+    }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

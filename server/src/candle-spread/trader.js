@@ -1388,7 +1388,42 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   const quoted = new Map();   // legs-key -> { mid, ask } for the evidence on the placed one
   const insaneQuotes = [];   // structures refused by structureQuoteSane this pass (logged once)
   const keyOf = (legs) => legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
+  // PUT/CALL MIX (cfg.floorRaiseIronMix, user 2026-10-13). Every fly/condor on the menu is all calls or all puts, and
+  // the leg ledger (a strike once bought is only bought, once sold only sold) refused all of them over v7-10's 14:20
+  // valley at 30530-30540 — while the iron version (long P30520 / short P30530 / short C30540 / long C30550, the
+  // order the user placed by hand) was legal on every leg and pays the same shape. For a fly/condor whose own legs
+  // conflict, its iron twin is used when free: scored and priced as the canonical structure (debit-equivalent =
+  // iron's net + its constant payoff offset), sent as a CREDIT on the iron legs.
+  const ledgerConflicts = (legs) => !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs));
+  const ironAlt = new Map();
+  const ironOf = (legs) => {
+    if (cfg.floorRaiseIronMix !== true || legs.length !== 4 || new Set(legs.map((l) => l.type)).size !== 1) return null;
+    const ls = legs.slice().sort((a, b) => a.strike - b.strike);
+    if (!(ls[0].side === 'long' && ls[1].side === 'short' && ls[2].side === 'short' && ls[3].side === 'long')) return null;
+    const iron = [{ side: 'long', type: 'P', strike: ls[0].strike }, { side: 'short', type: 'P', strike: ls[1].strike },
+      { side: 'short', type: 'C', strike: ls[2].strike }, { side: 'long', type: 'C', strike: ls[3].strike }];
+    const lo = ls[0].strike - 1000, hi = ls[3].strike + 1000;
+    const offLo = (FR.payoff(legs, lo, 1) - FR.payoff(iron, lo, 1)) / 100, offHi = (FR.payoff(legs, hi, 1) - FR.payoff(iron, hi, 1)) / 100;
+    if (Math.abs(offLo - offHi) > 1e-6 || !(offLo > 0)) return null;   // not a constant shift: not the same shape
+    return { legs: iron, offset: round2(offLo) };
+  };
   const price = (legs) => {
+    const alt = ironAlt.get(keyOf(legs));
+    if (alt) {
+      let net = 0, netAsk = 0;
+      for (const l of alt.legs) {
+        const q = deps.getLeg(l.type, l.strike);
+        if (!q || q.mid == null || q.bid == null || q.ask == null) return null;
+        const sgn = l.side === 'long' ? 1 : -1;
+        net += sgn * q.mid; netAsk += sgn > 0 ? q.ask : -q.bid;
+      }
+      const mid = net + alt.offset, ask = netAsk + alt.offset;
+      if (!(mid > 0)) return null;
+      const sane = FR.structureQuoteSane(legs, round2(mid), spot, { sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2) });
+      if (!sane.ok) { insaneQuotes.push({ legs: keyOf(alt.legs), mid: round2(mid), reason: sane.reason }); return null; }
+      quoted.set(keyOf(legs), { mid: round2(mid), ask: round2(ask), iron: true });
+      return { debit: tickUp(mid + slip, tick) };
+    }
     let mid = 0, ask = 0;
     for (const l of legs) {
       const q = deps.getLeg(l.type, l.strike);
@@ -1427,7 +1462,13 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
-      skip: (legs) => badQuoted.has(keyOf(legs)) || !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs)) });
+      skip: (legs) => {
+        if (badQuoted.has(keyOf(legs))) return true;
+        if (!ledgerConflicts(legs)) { ironAlt.delete(keyOf(legs)); return false; }
+        const alt = ironOf(legs);
+        if (alt && !ledgerConflicts(alt.legs)) { ironAlt.set(keyOf(legs), alt); return false; }
+        return true;
+      } });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
       note: 'refused: would push a locked profit below zero' });
     if (blockedNoLift) decisions.push({ action: 'raise-blocked-no-lift', count: blockedNoLift, floorNow: round2(gNow),
@@ -1443,8 +1484,9 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     // A PAIR objective returns a companion: both are placed (each its own order, same pass).
     let stop = false;
     for (const h of companion ? [best, companion] : [best]) {
+      const alt = ironAlt.get(keyOf(h.legs)) || null;
       const resolved = [];
-      for (const l of h.legs) {
+      for (const l of alt ? alt.legs : h.legs) {
         const q = deps.getLeg(l.type, l.strike);
         if (!q || !q.symbol) { resolved.length = 0; break; }
         resolved.push({ ...l, symbol: q.symbol, mid: q.mid });
@@ -1468,19 +1510,24 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       const walk = walkCfg(cfg);
       const ceiling = h.debit;
       const startPx = walk ? Math.min(ceiling, Math.max(tick, roundToTick((ev.mid != null ? ev.mid : ceiling) * walk.startFrac, tick))) : ceiling;
-      const payload = buildOrderPayload(resolved, startPx, qty, 'DEBIT');
-      const placed = await deps.placeOrder(payload, { kind: 'raise', legs: h.legs, net: 'DEBIT', limit: startPx });
+      const sendPx = alt ? round2(alt.offset - startPx) : startPx;
+      if (!(sendPx > 0)) { stop = true; break; }
+      const payload = buildOrderPayload(resolved, sendPx, qty, alt ? 'CREDIT' : 'DEBIT');
+      const placed = await deps.placeOrder(payload, { kind: 'raise', legs: alt ? alt.legs : h.legs, net: alt ? 'CREDIT' : 'DEBIT', limit: sendPx });
       if (!placed || placed.filled === false) { stop = true; break; }
       const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: h.legs, limit: startPx,
         markAtPlace: chk.mark, limitSent: startPx, orderId: (placed && placed.orderId) || null,
         pendingHedge: { limit: startPx, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
           placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask,
-          ...(walk ? { walkStart: startPx, ceiling, walkStepSec: walk.stepSec, walkStepDollars: walk.stepDollars } : {}) },
+          ...(walk ? { walkStart: startPx, ceiling, walkStepSec: walk.stepSec, walkStepDollars: walk.stepDollars } : {}),
+          ...(alt ? { sentNet: 'CREDIT', sentLegs: alt.legs, sentOffset: alt.offset, sentLimit: sendPx } : {}) },
+        ...(alt ? { sentNet: 'CREDIT', sentLegs: alt.legs, sentLimit: sendPx } : {}),
         openedAt: candleTime, openTime: candleTime, openEpoch: nowMs,
         quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
       st.positions.push(pos);
-      if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(h.legs);
-      decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: startPx, ceiling: walk ? ceiling : undefined, valley: h.valley || null, needRatio: h.need,
+      if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(alt ? alt.legs : h.legs);
+      decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: startPx,
+        ...(alt ? { sentLegs: alt.legs, sentNet: 'CREDIT', sentCredit: sendPx, ironOffset: alt.offset } : {}), ceiling: walk ? ceiling : undefined, valley: h.valley || null, needRatio: h.need,
         nearCap: capR.nearCap || undefined,
         cost: Math.round(h.cost), lift: Math.round(h.lift), ratio: round2(h.ratio), floorNow: round2(gNow),
         quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
@@ -1527,10 +1574,15 @@ async function walkRaiseOrders(st, cfg, deps, decisions) {
     if (!(target > ph.limit + 1e-9)) continue;
     const from = ph.limit;
     if (deps.replaceOrder && ph.orderId) {
-      const rl = resolveLegs(pos.legs, deps.getLeg);
+      // A put/call-mix raise rests as a CREDIT on its sent legs: walking the debit-equivalent UP walks the credit DOWN.
+      const hCredit = ph.sentNet === 'CREDIT' && ph.sentOffset != null && ph.sentLegs;
+      const sendLegs = hCredit ? ph.sentLegs : pos.legs;
+      const sendPx = hCredit ? round2(ph.sentOffset - target) : target;
+      if (!(sendPx > 0)) continue;
+      const rl = resolveLegs(sendLegs, deps.getLeg);
       if (rl.error) { decisions.push({ action: 'raise-walk-not-sent', id: pos.id, from, to: target, reason: `legs unquotable (${rl.error})` }); continue; }
-      const r = await deps.replaceOrder(ph.orderId, buildOrderPayload(rl.resolved, target, pos.quantity || cfg.quantity || 1, 'DEBIT'),
-        { kind: 'raise', reprice: true, of: pos.id, fromLimit: from, legs: pos.legs, net: 'DEBIT' });
+      const r = await deps.replaceOrder(ph.orderId, buildOrderPayload(rl.resolved, sendPx, pos.quantity || cfg.quantity || 1, hCredit ? 'CREDIT' : 'DEBIT'),
+        { kind: 'raise', reprice: true, of: pos.id, fromLimit: hCredit ? round2(ph.sentOffset - from) : from, legs: sendLegs, net: hCredit ? 'CREDIT' : 'DEBIT' });
       if (!replaceTookEffect(r)) {
         decisions.push({ action: 'raise-walk-not-sent', id: pos.id, from, to: target, orderId: ph.orderId,
           reason: (r && (r.error || r.status)) || 'no result' });
@@ -1539,6 +1591,7 @@ async function walkRaiseOrders(st, cfg, deps, decisions) {
       if (r && r.orderId) { ph.orderId = r.orderId; pos.orderId = r.orderId; }
     }
     ph.limit = target; pos.limit = target; pos.limitSent = target;
+    if (ph.sentNet === 'CREDIT' && ph.sentOffset != null) { ph.sentLimit = round2(ph.sentOffset - target); pos.sentLimit = ph.sentLimit; }
     decisions.push({ action: 'raise-walk', id: pos.id, from, to: target, ceiling: ph.ceiling, orderId: ph.orderId || null });
     moved++;
   }
@@ -2823,13 +2876,18 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       if (pos.filled) { unbookedFill(o, 'already', pos, decisions); continue; }
       const ph = pos.pendingHedge;
       if (!ph) { unbookedFill(o, 'no-pending-hedge', pos, decisions); continue; }
-      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = round2(px); pos.pendingHedge = null;
+      // A PUT/CALL-MIX RAISE (iron fly/condor, 2026-10-13) went out as a CREDIT on its sent legs: book it at the
+      // debit-equivalent of its canonical legs (offset - credit), the same translation a credit cover gets, so
+      // the curve and floor arithmetic stay canonical. Cash is what actually moved: the credit came IN.
+      const hCredit = ph.sentNet === 'CREDIT' && ph.sentOffset != null;
+      const bookPx = hCredit ? round2(ph.sentOffset - px) : round2(px);
+      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = bookPx; pos.pendingHedge = null;
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
       pos.openOrder = filledOrder(o, px);
-      // A HEDGE IS ALWAYS A DEBIT — it pays, and the ledger must see it. Spend is counted at the FILL, not
-      // at placement, so the budget is consumed by hedges we actually own.
-      const spent = px * 100 * qty;
-      noteCash(st, spent);
+      // A HEDGE IS A DEBIT in payoff terms — spend is its debit-equivalent, counted at the FILL, not at placement,
+      // so the budget is consumed by hedges we actually own.
+      const spent = bookPx * 100 * qty;
+      noteCash(st, hCredit ? -px * 100 * qty : spent);
       if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
       else if (ph.kind === 'fly') { st.flyCount = (st.flyCount || 0) + 1; st.flySpent = round2((st.flySpent || 0) + spent); }
       else if (ph.kind === 'raise') { st.raiseCount = (st.raiseCount || 0) + 1; st.raiseSpent = round2((st.raiseSpent || 0) + spent); }
@@ -2837,7 +2895,8 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       o.brokerApplied = true; applied++;
       OM.clearReject(st, OM.rejectKey(o.kind, null));
       decisions.push({ action: `${ph.kind}-fill`, source: 'broker', id: pos.id, legs: pos.legs,
-        limit: ph.limit, fillPrice: round2(px), brokerPrice: px, cost: Math.round(spent),
+        ...(hCredit ? { sentLegs: ph.sentLegs, sentNet: 'CREDIT' } : {}),
+        limit: ph.limit, fillPrice: bookPx, brokerPrice: px, cost: Math.round(spent),
         cashDeployed: st.cashDeployed });
       continue;
     }
