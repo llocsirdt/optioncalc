@@ -919,7 +919,7 @@ function applyFloorRaise(v) {
   //   Walk       — orders start at 0.4 x mid and step $0.05 / 20 s up to the approved price (live only; the backtest
   //                still prices a raise at mid + slip, so it cannot see this saving).
   //   IronMix    — a fly/condor whose legs the leg ledger refuses is placed as its put/call (iron) twin when that is
-  //                legal (live only; sent as a credit, booked at its debit-equivalent).
+  //                legal (live: sent as a credit, booked at its debit-equivalent; backtest: priced off the iron legs).
   //   Trend AHH  — OFF by measurement (raise-discipline-2026-10-13: closing floor worse on 4 of 5 variants with it on:
   //                v7-10 -613 -> -717, v7-20 -484 -> -560, v9-20 -483 -> -500, v4-20 -423 -> -485; v7-40 -1,149 ->
   //                -1,138). Set floorRaiseTrend = 'AHH' to turn it back on.
@@ -2071,7 +2071,7 @@ function assertDeps(runs) {
         // fold stages (2026-10-09): read off cfg / floorRaiseCfg by trader.raiseFloor and raiseCapFixOn
         'floorRaiseCapFix', 'floorRaiseWings',
         // raise discipline (2026-10-13): read off cfg.floorRaiseCfg by raiseFloor / raiseSideGuard / walkRaiseOrders
-        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseBookRange']);
+        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseBookRange', 'floorRaiseIronMix']);
   }
 }
 

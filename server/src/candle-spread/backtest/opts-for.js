@@ -143,7 +143,7 @@ function optsFor(v, env) {
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.
   for (const k of ['floorRaise', 'floorRaiseBudgetFrac', 'floorRaiseMinRatio', 'floorRaiseSigmas', 'floorRaiseEveryBars',
     'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseAfterMin', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
-    'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseLockedLift', 'floorRaiseBookRange', 'floorRaiseNearCapFrac', 'floorRaiseNearCapRatio',
+    'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseLockedLift', 'floorRaiseBookRange', 'floorRaiseIronMix', 'floorRaiseNearCapFrac', 'floorRaiseNearCapRatio',
     // floor-repair fold stages (2026-10-09): must-fix offsets and wings run by floor raise
     'floorRaiseCapFix', 'floorRaiseWings']) if (v[k] != null) o[k] = v[k];
   if (v.coverLadder) {

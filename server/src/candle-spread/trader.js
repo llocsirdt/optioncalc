@@ -1397,17 +1397,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   const hedgeRange = cfg.floorRaiseBookRange === true ? { ...FR.realStrikeRange(st.positions), bandLo, bandHi } : null;
   const ledgerConflicts = (legs) => !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs));
   const ironAlt = new Map();
-  const ironOf = (legs) => {
-    if (cfg.floorRaiseIronMix !== true || legs.length !== 4 || new Set(legs.map((l) => l.type)).size !== 1) return null;
-    const ls = legs.slice().sort((a, b) => a.strike - b.strike);
-    if (!(ls[0].side === 'long' && ls[1].side === 'short' && ls[2].side === 'short' && ls[3].side === 'long')) return null;
-    const iron = [{ side: 'long', type: 'P', strike: ls[0].strike }, { side: 'short', type: 'P', strike: ls[1].strike },
-      { side: 'short', type: 'C', strike: ls[2].strike }, { side: 'long', type: 'C', strike: ls[3].strike }];
-    const lo = ls[0].strike - 1000, hi = ls[3].strike + 1000;
-    const offLo = (FR.payoff(legs, lo, 1) - FR.payoff(iron, lo, 1)) / 100, offHi = (FR.payoff(legs, hi, 1) - FR.payoff(iron, hi, 1)) / 100;
-    if (Math.abs(offLo - offHi) > 1e-6 || !(offLo > 0)) return null;   // not a constant shift: not the same shape
-    return { legs: iron, offset: round2(offLo) };
-  };
+  const ironOf = (legs) => (cfg.floorRaiseIronMix === true ? FR.ironTwin(legs) : null);
   const price = (legs) => {
     const alt = ironAlt.get(keyOf(legs));
     if (alt) {

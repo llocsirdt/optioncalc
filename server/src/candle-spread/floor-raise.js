@@ -133,6 +133,21 @@ function inHedgeRange(legs, { realLo, realHi, bandLo, bandHi }) {
   if (legs.length > 2) return false;
   return (bandLo == null || lo >= bandLo) && (bandHi == null || hi <= bandHi);
 }
+// PUT/CALL (IRON) TWIN of an all-call / all-put fly or condor (user, 2026-10-13): long put at the low wing, short put
+// at the low body strike, short call at the high body strike, long call at the high wing. It pays the same shape,
+// shifted down by a constant `offset` (points): debit-equivalent = the iron's net + offset. Null when the structure
+// is not a 4-leg long fly/condor or the shift is not constant. Shared by the live trader and the backtest.
+function ironTwin(legs) {
+  if (!legs || legs.length !== 4 || new Set(legs.map((l) => l.type)).size !== 1) return null;
+  const ls = legs.slice().sort((a, b) => a.strike - b.strike);
+  if (!(ls[0].side === 'long' && ls[1].side === 'short' && ls[2].side === 'short' && ls[3].side === 'long')) return null;
+  const iron = [{ side: 'long', type: 'P', strike: ls[0].strike }, { side: 'short', type: 'P', strike: ls[1].strike },
+    { side: 'short', type: 'C', strike: ls[2].strike }, { side: 'long', type: 'C', strike: ls[3].strike }];
+  const lo = ls[0].strike - 1000, hi = ls[3].strike + 1000;
+  const offLo = (payoff(legs, lo, 1) - payoff(iron, lo, 1)) / 100, offHi = (payoff(legs, hi, 1) - payoff(iron, hi, 1)) / 100;
+  if (Math.abs(offLo - offHi) > 1e-6 || !(offLo > 0)) return null;
+  return { legs: iron, offset: Math.round(offLo * 100) / 100 };
+}
 function realStrikeRange(positions) {
   let lo = Infinity, hi = -Infinity;
   for (const p of positions || []) {
@@ -401,4 +416,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { inHedgeRange, realStrikeRange, structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { ironTwin, inHedgeRange, realStrikeRange, structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };

@@ -1525,15 +1525,17 @@ function runDay5m(bars, signalFn, opts = {}) {
       const keep = [];
       for (const w of frWorking) {
         if (i <= w.bar) { keep.push(w); continue; }
-        const best = Math.min(markAt(w.h.legs, px.low), markAt(w.h.legs, S), markAt(w.h.legs, px.high));
+        // An iron-twin raise rests on its iron legs: its mark is the iron's net + the constant offset.
+        const wl = w.h.ironOffset != null ? w.h.ledgerLegs : w.h.legs, wo = w.h.ironOffset || 0;
+        const best = Math.min(markAt(wl, px.low), markAt(wl, S), markAt(wl, px.high)) + wo;
         const gOk = !(governed && Number.isFinite(lossMax)) || (() => {
           const g = floorOf({ legs: w.h.legs, limit: w.h.debit, covered: false, coverLegs: null, coverLimit: null, hedge: true });
           return !(g < -lossMax && g < floorOf(null));
         })();
-        if (best <= w.h.debit + 1e-9 && gOk && !(enforceLegs && ledger.conflicts(w.h.legs))) {
+        if (best <= w.h.debit + 1e-9 && gOk && !(enforceLegs && ledger.conflicts(w.h.ledgerLegs || w.h.legs))) {
           st.positions.push({ side: 'hedge', shortStrike: null, legs: w.h.legs, limit: w.h.debit, covered: false,
             pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
-          if (enforceLegs) ledger.record(w.h.legs);
+          if (enforceLegs) ledger.record(w.h.ledgerLegs || w.h.legs);
           frSpent += w.h.cost; frCount++; frLift += w.lift || 0; markBookDirty();
         } else if (i - w.bar >= frWorkBars) frExpired++;
         else keep.push(w);
@@ -1554,11 +1556,18 @@ function runDay5m(bars, signalFn, opts = {}) {
         const ivForF = volFn(iv);
         // The menu is re-asked each step: valley-sized condors/flies follow the curve as hedges are added.
         const candsNow = () => FR.candidatesFor(bandLo, bandHi, legIncr, xs, base);
+        // PUT/CALL MIX (opts.floorRaiseIronMix, live parity 2026-10-13): a fly/condor whose own legs the ledger refuses
+        // is taken as its iron twin when that is legal — priced off the iron legs + the constant offset, booked at the
+        // canonical legs (same payoff), and the IRON legs recorded in the ledger.
+        const frKey = (legs) => legs.map((l) => `${l.side[0]}${l.type}${l.strike}`).join(' ');
+        const ironAlt = new Map();
         const price = (legs) => {
-          let m = 0;
-          for (const l of legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike));
+          const alt = ironAlt.get(frKey(legs));
+          let m = alt ? alt.offset : 0;
+          for (const l of alt ? alt.legs : legs) m += (l.side === 'long' ? 1 : -1) * bs.bsPrice(l.type, S, l.strike, tau, ivForF(l.type, l.strike));
           return m > 0 ? { debit: roundTick(m + frSlipTicks * TICK) } : null;
         };
+        const ledgerLegsOf = (legs) => { const alt = ironAlt.get(frKey(legs)); return alt ? alt.legs : legs; };
         for (let n = 0; n < 2 && frCount < frMaxPerDay; n++) {
           const peakB = Math.max(...base.filter((v, j) => xs[j] >= bandLo && xs[j] <= bandHi));
           // Budget: a fraction of the current peak, or none at all (floorRaiseBudgetFrac null/Infinity =
@@ -1578,18 +1587,24 @@ function runDay5m(bars, signalFn, opts = {}) {
             skip: (() => {
               const hr = opts.floorRaiseBookRange === true ? { ...FR.realStrikeRange(st.positions), bandLo, bandHi } : null;
               if (!hr && !enforceLegs) return null;
-              return (legs) => (hr && !FR.inHedgeRange(legs, hr)) || (enforceLegs && ledger.conflicts(legs));
+              return (legs) => {
+                if (hr && !FR.inHedgeRange(legs, hr)) return true;
+                if (!enforceLegs || !ledger.conflicts(legs)) { ironAlt.delete(frKey(legs)); return false; }
+                const alt = opts.floorRaiseIronMix === true ? FR.ironTwin(legs) : null;
+                if (alt && !ledger.conflicts(alt.legs)) { ironAlt.set(frKey(legs), alt); return false; }
+                return true;
+              };
             })() });
           frBlockedLocked += blockedLocked;
           if (!best) break;
           if (frResting) {
-            for (const h of companion ? [best, companion] : [best]) { frWorking.push({ h, bar: i, lift: h === best ? best.lift : 0 }); frPlaced++; frThisPass++; }
+            for (const h of companion ? [best, companion] : [best]) { frWorking.push({ h: { ...h, ledgerLegs: ledgerLegsOf(h.legs), ironOffset: (ironAlt.get(frKey(h.legs)) || {}).offset }, bar: i, lift: h === best ? best.lift : 0 }); frPlaced++; frThisPass++; }
             break;   // the plan assumed these fill; re-plan only once they resolve
           }
           for (const h of companion ? [best, companion] : [best]) {
             st.positions.push({ side: 'hedge', shortStrike: null, legs: h.legs, limit: h.debit, covered: false,
               pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, floorRaise: true });
-            if (enforceLegs) ledger.record(h.legs);
+            if (enforceLegs) ledger.record(ledgerLegsOf(h.legs));
             frSpent += h.cost; frCount++; frThisPass++;
             for (let j = 0; j < xs.length; j++) base[j] += FR.payoff(h.legs, xs[j], QTY) - h.cost;
           }
