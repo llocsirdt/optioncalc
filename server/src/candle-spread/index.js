@@ -876,6 +876,20 @@ function applyCoverStrikeChoice(v) {
   }
 }
 
+// PLATEAU COVER ON v7-10 (user, 2026-10-13): live v7-10 had ~1 positive day in 7 with floors near -$1k to -$1.5k,
+// and the user wants a wide plateau, not a row of 10W peaks. The cover rests one strike beyond the tent (a 10-pt
+// condor plateau), minLock drops 0.10 -> 0.05 so it fills sooner, and a give-up moves the cover back to the tent.
+// Backtest (821 days) read this as somewhat worse than the tent (offset1 + give-up to tent: close -521 vs -492,
+// uncovered 3.7 vs 2.8) — the user's call, made because live is far below the backtest either way. After the minLock
+// fleet level (which it overrides). Set the fields before applyExperiments to override.
+const PLATEAU_COVER = new Set(['v7-10']);
+function applyPlateauCover(v) {
+  if (!PLATEAU_COVER.has(v.variant)) return;
+  if (v.coverGeometry == null || v.coverGeometry === 'tent') v.coverGeometry = 'offset1';
+  if (v.giveUpGeometry == null) v.giveUpGeometry = 'tent';
+  v.continuousCoverMinLockFrac = 0.05;
+}
+
 // FLOOR RAISE (2026-10-06) — the user's standing policy, live: always buy the best near-money floor lift per
 // dollar at 2:1 or better, never pushing a locked profit below zero (floor-raise.js, shared with the
 // backtest). 765-day sweep at 2:1: locked-profit days 33.7% -> 37.2% fleet-wide, closing floor +\$286, peak
@@ -976,6 +990,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
     v.continuousCoverMinLockFrac = ab.frac;
     if (ab.ladder) applyLadderCfg(v);
   }
+  applyPlateauCover(v);
   // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade

@@ -327,6 +327,7 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['step k2/5m p0.03', () => ({ coverRangeInside: null, coverRangeBeyond: null, coverRangePremium: 0.03, coverStartK: 2, coverStepInMin: 5 })],
   ['range p0.05 + roll 0.03', () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: 0.05, giveUpGeometry: 'inside', coverRollMaxDebit: 0.03, coverRollMaxK: 2 })],
   ['geo offset1 gu tent', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent' })],
+  ['geo offset1 gu tent ml 0.05', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent', continuousCoverMinLockFrac: 0.05 })],
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
   // side) now actually gets the wrong-way position off at the give-up price.
