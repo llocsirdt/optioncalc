@@ -433,28 +433,30 @@ function renderSignals(T) {
   $('sigMeta').textContent = `${fmtT(pick)} · ${pick.signal.isFifteen === false ? '5m bar' : '15m close'} · signal: ${pick.signal.reason || '—'}`;
   if (!tr) {
     $('sigInputs').innerHTML = '';
-    host.innerHTML = '<tr><td class="m">no trace for this candle (traced: v7 family, recorded from 2026-10-14)</td></tr>';
+    host.innerHTML = '<tr><td class="m">no trace for this candle (recorded from the next session after deploy)</td></tr>';
     return;
   }
-  const i = tr.inputs || {}, c15 = i.c15 || {}, c5 = i.c5 || {}, c60 = i.c60;
-  const pos60 = c60 ? (c60.close > c60.upper ? 'above upper band' : c60.close < c60.lower ? 'below lower band' : c60.close >= c60.mid ? 'upper half' : 'lower half') : '—';
-  $('sigInputs').innerHTML =
-    `holding: <b>${tr.held.bull ? 'bull' : ''}${tr.held.bull && tr.held.bear ? ' + ' : ''}${tr.held.bear ? 'bear' : ''}${!tr.held.bull && !tr.held.bear ? 'nothing' : ''}</b>`
-    + ` · 15m trend <b>${esc(i.trend15)}</b> · 5m trend <b>${esc(i.trend5)}</b> · 60m <b>${pos60}</b><br>`
-    + `15m O ${c15.open} H ${c15.high} L ${c15.low} C <b>${c15.close}</b> (${c15.green ? 'green' : 'red'}) · mid ${c15.mid} · 9EMA ${c15.ema} · band ${c15.lower}–${c15.upper}<br>`
-    + `5m C ${c5.close} · mid ${c5.mid} · 9EMA ${c5.ema} · band ${c5.lower}–${c5.upper}`
-    + ` · ${i.higherHigh ? '<b>higher high</b>' : 'no higher high'} · ${i.lowerLow ? '<b>lower low</b>' : 'no lower low'}`
-    + ` · candle: ${i.bearishCandle ? '<b>bearish reversal</b>' : i.bullishCandle ? '<b>bullish reversal</b>' : 'no reversal'}`
+  const i = tr.inputs || {}, c15 = i.c15 || {}, c5 = i.c5, c60 = i.c60;
+  const pos60 = c60 ? (c60.close > c60.upper ? 'above upper band' : c60.close < c60.lower ? 'below lower band' : c60.close >= c60.mid ? 'upper half' : 'lower half') : null;
+  const held = `${tr.held.bull ? 'bull' : ''}${tr.held.bull && tr.held.bear ? ' + ' : ''}${tr.held.bear ? 'bear' : ''}${!tr.held.bull && !tr.held.bear ? 'nothing' : ''}`;
+  $('sigInputs').innerHTML = `<b>${esc(tr.family)}</b> signal · holding: <b>${held}</b>`
+    + (i.trend15 ? ` · 15m trend <b>${esc(i.trend15)}</b>` : '') + (i.trend5 ? ` · 5m trend <b>${esc(i.trend5)}</b>` : '')
+    + (pos60 ? ` · 60m <b>${pos60}</b>` : '')
+    + (c15.close != null ? `<br>15m O ${c15.open} H ${c15.high} L ${c15.low} C <b>${c15.close}</b> (${c15.green ? 'green' : 'red'}) · mid ${c15.mid} · 9EMA ${c15.ema} · band ${c15.lower}–${c15.upper}` : '')
+    + (i.prior15 ? ` · prior 15m H ${i.prior15.high} L ${i.prior15.low}` : '')
+    + (c5 ? `<br>5m C ${c5.close} · mid ${c5.mid} · 9EMA ${c5.ema} · band ${c5.lower}–${c5.upper} · ` : '<br>')
+    + (c15.close != null ? `${i.higherHigh ? '<b>higher high</b>' : 'no higher high'} · ${i.lowerLow ? '<b>lower low</b>' : 'no lower low'}` : '')
+    + (i.bearishCandle != null ? ` · candle: ${i.bearishCandle ? '<b>bearish reversal</b>' : i.bullishCandle ? '<b>bullish reversal</b>' : 'no reversal'}` : '')
     + (tr.note ? `<br><i>${esc(tr.note)}</i>` : '');
-  const firedIdx = tr.triggers.findIndex((t) => t.id === tr.fired);
+  const firedSet = new Set(tr.firedAll || (tr.fired ? [tr.fired] : []));
   host.innerHTML = tr.triggers.map((t, k) => {
     const chip = !t.enabled ? '<span class="chip off">off</span>'
-      : t.id === tr.fired ? (t.blockedBy ? '<span class="chip blocked">held</span>' : '<span class="chip fired">FIRED</span>')
+      : firedSet.has(t.id) ? (t.blockedBy ? '<span class="chip blocked">held</span>' : '<span class="chip fired">FIRED</span>')
       : t.active ? '<span class="chip met">met (lower priority)</span>' : '<span class="chip no">not met</span>';
     const what = [t.side ? `open ${t.side}` : null, t.cover ? `cover ${t.cover}` : null].filter(Boolean).join(' + ') || 'hold';
     const parts = (t.parts || []).map((p) => `<span class="part ${p.ok ? 'ok' : 'bad'}">${p.ok ? '✓' : '✗'} ${esc(p.name)}${p.value != null ? ` <b>${esc(String(p.value))}</b>` : ''}</span>`).join('');
     return `<tr class="${t.enabled ? '' : 'sig-off'}"><td class="st">${chip}</td><td><b>${esc(t.label)}</b> <span class="m">→ ${what}</span>`
-      + (t.blockedBy && t.id === tr.fired ? ` <span class="m">— blocked by <b>${esc(t.blockedBy)}</b></span>` : '')
+      + (t.blockedBy && firedSet.has(t.id) ? ` <span class="m">— blocked by <b>${esc(t.blockedBy)}</b></span>` : '')
       + `<br>${parts}</td></tr>`;
   }).join('') || '<tr><td class="m">no triggers</td></tr>';
 }

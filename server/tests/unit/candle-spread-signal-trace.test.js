@@ -7,7 +7,14 @@
 const fs = require('fs');
 const path = require('path');
 const { v7Signal } = require('../../src/candle-spread/signals/v7-signals');
-const { v7Trace, traceFor } = require('../../src/candle-spread/signals/signal-trace');
+const { v6Signal } = require('../../src/candle-spread/signals/v6-signals');
+const { v5Signal } = require('../../src/candle-spread/signals/v5-signals');
+const { v4Signal } = require('../../src/candle-spread/signals/v4-signals');
+const { classicSignal } = require('../../src/candle-spread/signals/classic-signal');
+const ST = require('../../src/candle-spread/signals/signal-trace');
+const { v7Trace, traceFor } = ST;
+// index.js's at15 wrapper: v0-v5 do nothing between 15m closes.
+const at15 = (fn) => (A, p, ctx) => (ctx.isFifteen === false ? { openSide: null, cover: false } : fn(A, p, ctx));
 
 let pass = 0, fail = 0; const fails = [];
 const ok = (c, m) => { if (c) pass++; else { fail++; if (fails.length < 10) fails.push(m); } };
@@ -61,9 +68,44 @@ for (const f of pick) {
     }
   }
 }
-ok(bars > 1000, `ran on real bars (${bars} evaluations over ${pick.length} days)`);
-ok(firedSeen.size >= 8, `many different triggers exercised (${[...firedSeen].sort().join(', ')})`);
-ok(traceFor('v7-10') === v7Trace && traceFor('v6-10') === null, 'traceFor: v7 only so far');
+ok(bars > 1000, `v7: ran on real bars (${bars} evaluations over ${pick.length} days)`);
+ok(firedSeen.size >= 8, `v7: many different triggers exercised (${[...firedSeen].sort().join(', ')})`);
+
+// ── v4 / v5 / v6 (single held direction) and classic ────────────────────────────────────────────────────
+const FAMS = [['v6', v6Signal, ST.v6Trace], ['v5', at15(v5Signal), ST.v5Trace], ['v4', at15(v4Signal), ST.v4Trace]];
+const cfgs6 = [{ fiveMin: true }, { fiveMin: true, fastCover5m: 'trend', trendTf: 'both', openGate5m: true, htfGate: 'close', breakOpen: 'any', candleConfluenceRadius: 10, revTrendGate: true },
+  { flipMomentum: true, trendTf: '5m', fastCover5m: 'ema' }];
+const famSeen = {};
+let n2 = 0, nc = 0, classicSeen = new Set();
+for (const f of pick) {
+  const arr = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+  for (let i = 1; i < arr.length; i++) {
+    const A = arr[i].analysis, prior = arr[i - 1].analysis;
+    const isFifteen = new Date(arr[i].datetime).getMinutes() % 15 === 0;
+    for (const heldDir of ['none', 'bull', 'bear']) {
+      for (const [fam, sigFn, trFn] of FAMS) for (const cfg of cfgs6) {
+        // The live caller passes per-side flags too; a v4-v6 trace must ignore them, as the signal does.
+        const ctx = { heldDir, heldBull: true, heldBear: true, isFifteen, cfg };
+        const sig = sigFn(A, prior, ctx) || {}, tr = trFn(A, prior, ctx);
+        const want = sig.reason == null ? null : idOf(sig.reason);
+        ok(tr.fired === want, `${fam} ${f} #${i} ${JSON.stringify(cfg)} held ${heldDir}: signal "${sig.reason}" (${want}) vs trace ${tr.fired}`);
+        if (tr.fired) (famSeen[fam] = famSeen[fam] || new Set()).add(tr.fired);
+        n2++;
+      }
+      const sig = at15(classicSignal)(A, prior, { heldDir, isFifteen }), tr = ST.classicTrace(A, prior, { heldDir, isFifteen });
+      const open = tr.firedAll.find((x) => /^classic-open-/.test(x)), cov = tr.firedAll.some((x) => /^classic-cover-/.test(x));
+      ok((open ? open.replace('classic-open-', '') : null) === (sig.openSide || null) && cov === !!sig.cover,
+        `classic ${f} #${i} held ${heldDir}: signal open ${sig.openSide} cover ${sig.cover} vs trace ${tr.firedAll.join(',')}`);
+      for (const x of tr.firedAll) classicSeen.add(x);
+      nc++;
+    }
+  }
+}
+ok(n2 > 1000 && nc > 300, `v4-v6 + classic ran on real bars (${n2} + ${nc} evaluations)`);
+for (const [fam] of FAMS) ok(famSeen[fam] && famSeen[fam].size >= 5, `${fam}: many triggers exercised (${famSeen[fam] ? [...famSeen[fam]].sort().join(', ') : 'none'})`);
+ok(classicSeen.size === 4, `classic: all four triggers exercised (${[...classicSeen].join(', ')})`);
+ok(traceFor('v7-10') === v7Trace && traceFor('v9-20') === v7Trace && traceFor('v8-40-cATM') === ST.v6Trace
+  && traceFor('v2-20') === ST.classicTrace && traceFor('v4-10-unc') === ST.v4Trace, 'traceFor maps every family (v8 -> v6, v9 -> v7)');
 
 if (fails.length) console.log(fails.join('\n'));
 console.log(`\n${pass} passed, ${fail} failed`);
