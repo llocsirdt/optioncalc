@@ -198,7 +198,10 @@ function runDay5m(bars, signalFn, opts = {}) {
   // options only trade 9:30-16:00. Overnight bars stay in the loop purely for prior continuity. Default
   // OFF = the legacy 24h-action behavior (the pure-NQ signal validation).
   const rthOnly = opts.rthActionOnly === true;
-  const inRth = ms => { const m = etMinute(ms); return m >= 575 && m <= 955; };   // 9:35 .. 15:55 action window
+  // Action window 09:30 .. 15:55 (opts.firstActionMin, minutes ET; 2026-10-13: the live engine acts at 09:30 on the
+  // completed 09:15-09:30 /NQ bar, priced off NDX's first 1-minute close). 575 reproduces the old 09:35 start.
+  const firstActMin = opts.firstActionMin != null ? opts.firstActionMin : 570;
+  const inRth = ms => { const m = etMinute(ms); return m >= firstActMin && m <= 955; };
   // coverSelector (v1/v2/v3): pick the cover GEOMETRY via the server's pure selectors (greedy/joint/
   // fixed-mark) using a BS getLeg, instead of the fixed tent. undefined = fixed tent (v0/default).
   const coverSel = opts.coverSelector || null;
@@ -212,7 +215,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     return Math.abs(bars[i].analysis['5m'].close - bars[j0].analysis['5m'].close) / rng;
   };
   // GEOMETRY (opts.geo) — spread WIDTH + strike selection + tent covers. Default = the $20 ATM geometry.
-  const G = { WIDTH: (opts.geo && opts.geo.WIDTH) || WIDTH, buildOpen: (opts.geo && opts.geo.buildOpen) || buildOpen, coverLegs: (opts.geo && opts.geo.coverLegs) || coverLegs, capFrac: (opts.geo && opts.geo.capFrac != null) ? opts.geo.capFrac : null };
+  const G = { WIDTH: (opts.geo && opts.geo.WIDTH) || WIDTH, buildOpen: (opts.geo && opts.geo.buildOpen) || buildOpen, coverLegs: (opts.geo && opts.geo.coverLegs) || coverLegs, capFrac: (opts.geo && opts.geo.capFrac != null) ? opts.geo.capFrac : null,
+    minDebitFrac: (opts.geo && opts.geo.minDebitFrac != null) ? opts.geo.minDebitFrac : null };
   const st = { dir: 'none', positions: [], pendingOpen: null };
   const ivOf = A => bs.ivFromRelBandWidth((A['15m'].bbupper - A['15m'].bblower) / A['15m'].close);
   const uncoveredRisk = () => st.positions.reduce((s, p) => s + (p.covered ? 0 : p.limit * 100 * QTY), 0);
@@ -484,6 +488,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // backtest instead of only in a day's live record.
   const coverBySrc = { continuous: 0, reversal: 0, lock: 0, proactive: 0, stack: 0, ladder: 0 };
   const coverPicks = [];   // { pos, short, side, legs } — for the cross-geometry identical-legs check
+  let openFallbacks = 0;   // opens placed by the opening fallback (opts.openFallbackUntilMin)
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let openLowBand = 0;   // opens booked under the band floor (placed at the mark and walked; the floor no longer refuses)
   // OPEN LADDER MODEL (opts.openFillModel 'ladder') — the live resting open: one working order, walked like
@@ -1757,6 +1762,23 @@ function runDay5m(bars, signalFn, opts = {}) {
 
     if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
+      // OPENING FALLBACK (opts.openFallbackUntilMin, live parity — trader.buildOpenFallback): a declined open at the
+      // open is placed anyway at the short strike nearest S, limit at the low end of the known range, walk cap at its
+      // high end.
+      if (o && o.skip && opts.openFallbackUntilMin != null && etMinute(bars[i].dt) <= opts.openFallbackUntilMin) {
+        const W = G.WIDTH, sk = Math.round(S / legIncr) * legIncr;
+        const atOpen = etMinute(bars[i].dt) <= (opts.openFallbackOpenUntilMin != null ? opts.openFallbackOpenUntilMin : 570);
+        const capF = G.capFrac != null ? G.capFrac : 0.55, dayHi = opts.openWalkCapFrac != null ? Math.max(opts.openWalkCapFrac, capF) : capF;
+        const [flo, fhi] = atOpen
+          ? (sig.openSide === 'bull' ? (opts.openFallbackBull || [0.50, 0.55]) : (opts.openFallbackBear || [0.47, 0.52]))
+          : [Math.min(G.minDebitFrac || 0.45, dayHi), dayHi];
+        const lo = sig.openSide === 'bull' ? sk - W : sk, hi = sig.openSide === 'bull' ? sk : sk + W;
+        const legs = sig.openSide === 'bull'
+          ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
+          : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
+        o = { legs, shortStrike: sk, limit: roundTick(flo * W), capOverride: roundTick(fhi * W), fallback: true };
+        openFallbacks++;
+      }
       // ADAPTIVE geometry can DECLINE: every placement from deep-ITM through straddle priced above the
       // risk/reward ceiling. Skipping is the correct answer — the alternative (buying anyway, or booking a
       // capped sub-market price) is exactly the artifact this geometry exists to avoid.
@@ -1897,7 +1919,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             // WALK CAP: how far the ladder may walk the price, separately settable from the PLACEMENT ceiling
             // (opts.openWalkCapFrac). Placement picks the strikes under capFrac; the walk may then concede a
             // little more to get the fill — the user's "place at 5.30, walk up to ~5.50".
-            cap: opts.openWalkCapFrac != null ? round2(G.WIDTH * Math.max(opts.openWalkCapFrac, G.capFrac || 0))
+            cap: o.capOverride != null ? o.capOverride : opts.openWalkCapFrac != null ? round2(G.WIDTH * Math.max(opts.openWalkCapFrac, G.capFrac || 0))
               : (G.capFrac != null ? round2(G.WIDTH * G.capFrac) : o.limit),
             placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch, restrikeN,
             pos: { legs: o.legs, limit: o.limit, covered: false, coverLegs: null, coverLimit: null } };
@@ -2015,7 +2037,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openLowBand,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openFallbacks, openLowBand,
     bestCase, worstCase, avgTerminalPotential,
     openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, restrikeReplaced, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,

@@ -29,6 +29,7 @@ const SQ = require('./spread-quote');
 const GC = require('./giveup-candle');
 const TF = require('./trend-floor');    // trend-side floor, shared with the backtest   // candle give-up trigger, shared with the backtest
 const TS = require('./trend-state');   // never fight the trend: 15m + hourly state, shared with the backtest
+const ST = require('./signals/signal-trace');   // what the signal saw: every trigger, for the debug page (observation only)
 const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
@@ -1712,7 +1713,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   //     live `A` object (deps.A / deps.priorA from analysis-builder). Mirrors backtest-v6-5m.runDay5m:
   //     per-side held state in, { openSide, cover | coverSide } out. Everything below (open/cover/
   //     resting-fill machinery) is SHARED. See [[project_candle_spread_live_order_wiring]].
-  let openSide = null, coverSet = [], portedSig = null;
+  let openSide = null, coverSet = [], portedSig = null, portedTrace = null;
   // The trend context is computed once per candle (index.js, from the signal series) and KEPT on the state:
   // the 30s sub-bar worker has no `A`, and give-up urgency must read the same trend between candles.
   if (deps && deps.trendCtx) st.trendCtx = deps.trendCtx;
@@ -1791,11 +1792,14 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (ported) {
     const heldBull = st.positions.some(p => p.filled && p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.filled && p.side === 'bear' && !p.covered);
-    portedSig = deps.signalFn(deps.A, deps.priorA, {
-      heldDir: st.direction, heldBull, heldBear,
+    const sigCtx = { heldDir: st.direction, heldBull, heldBear,
       isFifteen: deps.isFifteen !== false, directionality: deps.directionality,
-      cfg: deps.signalCfg || {}
-    }) || {};
+      cfg: deps.signalCfg || {} };
+    portedSig = deps.signalFn(deps.A, deps.priorA, sigCtx) || {};
+    // SIGNAL TRACE (signal-trace.js): every trigger this family can fire on, evaluated on the same inputs, recorded on
+    // the candle so the debug page can show what the engine saw. Observation only — never feeds a decision.
+    const traceFn = ST.traceFor(cfg.variant);
+    if (traceFn) { try { portedTrace = traceFn(deps.A, deps.priorA, sigCtx); } catch (e) { portedTrace = { error: e.message }; } }
     openSide = portedSig.openSide || null;
     // coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy cover:true = both.
     coverSet = portedSig.coverSide
@@ -2017,6 +2021,17 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     let res = cfg.adaptiveGeo
       ? buildOpenAdaptive(openSide, underlying, cfg, deps.getLeg)
       : buildOpen(openSide, underlying, cfg, deps.getLeg);
+    // OPENING FALLBACK (cfg.openFallback*, user 2026-10-13): at the open the quotes are chaotic, but a realistic price
+    // is known. If no placement could be priced (every one over the cap, or quotes refused), place the order anyway:
+    // short strike nearest the underlying, limit at the low end of the known range, walked up to its high end.
+    if ((res.declined || res.error) && openFallbackApplies(cfg, candleTime)) {
+      const fb = buildOpenFallback(openSide, underlying, cfg, deps.getLeg, etMinutesOf(candleTime));
+      if (!fb.error) {
+        decisions.push({ action: 'open-fallback', side: openSide, why: res.declined ? 'over-cap' : 'quotes', from: res.reason || res.error,
+          shortStrike: fb.shortStrike, mark: fb.mark, limit: fb.limit, cap: fb.cap });
+        res = fb;
+      }
+    }
     // LEG-UNIQUENESS: resolve strikes + style BEFORE the caps/send so a shifted spread is capped
     // correctly. ideal → parity twin (same strikes) → shift → skip. legStyle drives the actual send.
     //
@@ -2193,7 +2208,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     coverContext,
     classification: { simpleDir, openSide, firstOfDay },
     // Ported (v4-v9) provenance: which signal fired and the 5m/15m cadence flag.
-    signal: ported ? { variant: cfg.variant, reason: portedSig.reason, isFifteen: deps.isFifteen !== false, directionality: deps.directionality } : null,
+    signal: ported ? { variant: cfg.variant, reason: portedSig.reason, isFifteen: deps.isFifteen !== false, directionality: deps.directionality,
+      ...(portedTrace ? { trace: portedTrace } : {}) } : null,
     direction: st.direction,
     realizedPnl: st.realizedPnl,
     decisions,
@@ -2300,6 +2316,38 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
 // (cheapest bull $5.85) sent nothing on v7-10. null (default) = the historical decline. A number = rest at
 // (cap - openOverCapBelow); the open ladder walks it to the walk cap and never past it. withOverCap() applies it at
 // the END of a search (the adaptive walk still needs `declined` to move to a cheaper placement).
+// OPENING FALLBACK. Applies through cfg.openFallbackUntilMin (minute ET; e.g. 570 = only the 09:30 decision).
+function openFallbackApplies(cfg, candleTime) {
+  if (cfg.openFallbackUntilMin == null) return false;
+  const m = etMinutesOf(candleTime);
+  return m != null && m <= cfg.openFallbackUntilMin;
+}
+// Strikes from the underlying alone (short strike = the strike NEAREST the underlying), priced at a known-good range
+// as a fraction of width. At the open (minute <= openFallbackOpenUntilMin, 09:30): bull openFallbackBull (0.50-0.55),
+// bear openFallbackBear (0.47-0.52). The rest of the day: the variant's own band, minDebitFrac -> the walk cap
+// (10W 0.45 -> 0.55). Placed at the low end, the open ladder walks to the high end (pos.cap) — never past it. The
+// real mark is recorded, not used. (User, 2026-10-13: "when we have a signal, we should always place an order".)
+function buildOpenFallback(side, underlying, cfg, getLeg, minuteET) {
+  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, tick = cfg.tickIncrement || 0.05;
+  if (!(underlying > 0)) return { error: 'no underlying' };
+  const shortStrike = Math.round(underlying / incr) * incr;
+  const lower = side === 'bull' ? shortStrike - W : shortStrike;
+  const upper = side === 'bull' ? shortStrike : shortStrike + W;
+  const legs = L.openLegs(side, lower, upper);
+  const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
+  if (error) return { error };
+  const atOpen = minuteET == null || minuteET <= (cfg.openFallbackOpenUntilMin != null ? cfg.openFallbackOpenUntilMin : 570);
+  const dayHi = cfg.openWalkCapFrac != null ? Math.max(cfg.openWalkCapFrac, cfg.capFrac || 0) : (cfg.capFrac != null ? cfg.capFrac : 0.55);
+  const [lo, hi] = atOpen
+    ? (side === 'bull' ? (cfg.openFallbackBull || [0.50, 0.55]) : (cfg.openFallbackBear || [0.47, 0.52]))
+    : [Math.min(cfg.minDebitFrac || 0.45, dayHi), dayHi];
+  const toTick = (x) => round2(Math.round(x / tick) * tick);
+  const limit = toTick(lo * W), cap = toTick(hi * W);
+  const mark = longMid != null && shortMid != null ? round2(longMid - shortMid) : null;
+  return { legs, lower, upper, shortStrike: L.shortStrikeOf(side, lower, upper), mark, cap, placementCap: cap, limit, fallback: true,
+    payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT') };
+}
+
 function withOverCap(res, side, lower, upper, cfg, getLeg, underlying) {
   if (!res || !res.declined || cfg.openOverCapBelow == null || lower == null || upper == null) return res;
   return buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying, { allowOverCap: true });
@@ -4086,7 +4134,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 }
 
 module.exports = {
-  walkRaiseOrders,
+  walkRaiseOrders, buildOpenFallback, openFallbackApplies,
   noteCash,
   tickUp,                // hedge prices rounded UP to the tick
   govFloor,              // the governor's floor: the booked book + every open that can still fill

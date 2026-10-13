@@ -101,7 +101,7 @@ function makeGeo({ width, incr = 10, shift = 0, capFrac = 0.65, orderSlipTicks =
   const coverLegs = (side, shortStrike) => side === 'bull'
     ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
     : [{ side: 'short', type: 'C', strike: shortStrike }, { side: 'long', type: 'C', strike: shortStrike - width }];
-  return { WIDTH: width, buildOpen, coverLegs, capFrac: cf };
+  return { WIDTH: width, buildOpen, coverLegs, capFrac: cf, minDebitFrac };
 }
 
 // ── ADAPTIVE (time-of-day) STRIKE PLACEMENT ─────────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
   const coverLegs = (side, shortStrike) => side === 'bull'
     ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
     : [{ side: 'short', type: 'C', strike: shortStrike }, { side: 'long', type: 'C', strike: shortStrike - width }];
-  return { WIDTH: width, buildOpen, coverLegs, adaptive: true, capFrac: maxDebitFrac };
+  return { WIDTH: width, buildOpen, coverLegs, adaptive: true, capFrac: maxDebitFrac, minDebitFrac };
 }
 
 const di = process.argv.indexOf('--dataDir');

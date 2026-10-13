@@ -855,6 +855,16 @@ const SIM_FILL_LEGACY = String(process.env.CANDLE_SPREAD_SIM_FILL || '').toLower
 // unchanged; v7-10 1,113 -> 1,190. 10 over 5: two bars at the cap, and real opens have taken 15+ min to fill.
 const OPEN_RESTRIKE_MIN = 10;
 function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = OPEN_RESTRIKE_MIN; }
+// ALWAYS PLACE ON A SIGNAL (user, 2026-10-13), every variant, all day: if no placement can be priced (every one over
+// the cap, or the quotes refused), place the order anyway — short strike nearest the underlying, at a known-good price,
+// placed at the low end and walked to the high end: "place the order at the favorable price and let it sit and work
+// toward the price we're willing to pay within our rules". At 09:30: bull 0.50-0.55 x W (10W $5.00-5.50), bear
+// 0.47-0.52 x W ($4.70-5.20). After: the variant's own band, minDebitFrac -> walk cap (10W $4.50 -> $5.50).
+function applyOpenFallback(v) {
+  if (v.openFallbackUntilMin == null) v.openFallbackUntilMin = 15 * 60 + 55;
+  if (v.openFallbackBull == null) v.openFallbackBull = [0.50, 0.55];
+  if (v.openFallbackBear == null) v.openFallbackBear = [0.47, 0.52];
+}
 
 // COVER STRIKE CHOICE (2026-10-13, user: "configure your recommendation so far"), every variant by width.
 // 821 days, data/sweeps/cover-strike-2026-10-12, scored on the closing floor and positions uncovered at the close:
@@ -994,6 +1004,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
   applyLateFloor(v);
   applyPlacementG(v);
   applyRestrike(v);
+  applyOpenFallback(v);
   applyCoverStrikeChoice(v);
   applyFloorRaise(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
@@ -1449,12 +1460,22 @@ function etStampNow(date = new Date()) {
 
 const RTH_WEEKDAYS = new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
 const STEP_MS = 5 * 60 * 1000;           // the engine now steps every 5m (v6/v7 act intra-15m)
-const FIRST_ACTION_MIN = 9 * 60 + 35;   // 9:35 close of the first (9:30-9:35) 5m candle
+// FIRST ACTION AT 09:30 (user, 2026-10-13: "a timeframe alignment, not a strategy change"). The /NQ signal series runs
+// 24h, so at 09:30 the 09:15-09:30 15m bar (and 09:25-09:30 5m bar) is already COMPLETE — v6/v7 open only on 15m
+// closes, so waiting for 09:35 meant the first open was 09:45 (21 of 27 archived v7-10 days), missing the first 15
+// minutes, where many moves happen. At 09:30 NDX has no completed bar yet, so the 09:30 tick prices off NDX's FIRST
+// 1-MINUTE CLOSE (09:30-09:31), retried until it exists (see openPriceBar). Set CANDLE_SPREAD_FIRST_ACTION=935 to go back.
+const FIRST_ACTION_MIN = (() => {
+  const v = String(process.env.CANDLE_SPREAD_FIRST_ACTION || '930');
+  const m = /^(\d{1,2}):?(\d{2})$/.exec(v);
+  return m ? (+m[1]) * 60 + (+m[2]) : 9 * 60 + 30;
+})();
+const SESSION_OPEN_MIN = 9 * 60 + 30;
 const LAST_ACTION_MIN = 15 * 60 + 55;   // 15:55 last normal action before the 16:00 settle
 const EOD_MIN = 16 * 60;                 // 16:00 close -> EOD settlement + summary
 
 // Classify a 5-min boundary (by its ET wall-clock). Returns 'action' | 'first' | 'eod' | null.
-// 'first' (9:35) is the day's first action bar → priorA=null (no intra-day prior yet).
+// 'first' (FIRST_ACTION_MIN, 09:30) is the day's first action bar.
 function classifyBoundary(date) {
   const { weekday, hour, minute } = etParts(date);
   if (!RTH_WEEKDAYS.has(weekday)) return null;
@@ -1900,6 +1921,21 @@ function makePlaceOrder(run, record) {
 // Find the just-closed candle (and its prior) from newest-first candles of the given period.
 // A candle is "closed" when its open time + periodMs <= now. NOTE: assumes candle.datetime is the
 // candle's OPEN time in epoch ms — verify against live Schwab data when enabling.
+// ET minute-of-day of a mark epoch.
+function etMinOfMark(ms) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return ((+p.hour) % 24) * 60 + (+p.minute);
+}
+// NDX's first COMPLETED 1-minute bar of the session that opens at mark T (labelled T, closed at T + 60 s), or null.
+async function openPriceBar(priceSymbol, T, now = Date.now()) {
+  if (now < T + 60000) return null;
+  let bars;
+  try { bars = await DEPS.getRaw1m(priceSymbol, { days: 1, rth: true }); } catch (e) { return null; }
+  const b = (bars || []).find((c) => c && c.datetime === T);
+  return b && b.close > 0 ? b : null;
+}
+
 function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
   for (let i = 0; i < candles.length; i++) {
     const dt = typeof candles[i].datetime === 'number' ? candles[i].datetime : null;
@@ -2065,6 +2101,7 @@ function assertDeps(runs) {
     VC.assertForwarded(run, keys, 'live deps (buildEngineDeps)',
       ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew',
         'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin',
+        'openFallbackUntilMin', 'openFallbackBull', 'openFallbackBear', 'openFallbackOpenUntilMin',   // open fallback, read off cfg
         // floor raise: read straight off cfg by trader.raiseFloor
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
         'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
@@ -2180,7 +2217,15 @@ async function processGroup(runs, kind) {
   // The 09:30-09:35 bar is NOT skipped: FIRST_ACTION_MIN is its CLOSE and the engine acts on it. Only the
   // record was lossy. Purely additive — nothing reads priceBar yet, so no decision changes.
   let priceBar = A['5m'] ? { open: A['5m'].open, high: A['5m'].high, low: A['5m'].low, close: A['5m'].close } : null;
-  if (signalSymbol !== priceSymbol) {
+  // THE 09:30 TICK: NDX has no completed 5m bar yet (pickJustClosed would hand back YESTERDAY's 15:55 close), so it
+  // prices off NDX's first completed 1-minute bar of today. Not there yet -> pending, and attemptTick retries every
+  // 5 s (~1 min), so the open's order goes out at ~09:31 on the 09:30 signal.
+  if (signalSymbol !== priceSymbol && etMinOfMark(T) === SESSION_OPEN_MIN) {
+    const ob = await openPriceBar(priceSymbol, T);
+    if (!ob) return { pending: 'open-price-not-yet' };
+    underlying = ob.close;
+    priceBar = { open: ob.open, high: ob.high, low: ob.low, close: ob.close, from: 'first-1m' };
+  } else if (signalSymbol !== priceSymbol) {
     try {
       const pxAnalysis = await DEPS.analyzeCandles(priceSymbol, { timeframe: '5m' });
       const px = pickJustClosed(pxAnalysis?.candleData?.['5m']?.candles || [], STEP_MS);

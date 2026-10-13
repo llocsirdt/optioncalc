@@ -140,6 +140,18 @@
   .net { font:600 9px system-ui,sans-serif; padding:0 3px; border-radius:2px; }
   .net.cr { background:#e6f5f2; color:#1c7f72; } .net.dr { background:#f1f1f1; color:#666; }
   .p { color:var(--profit); } .l { color:var(--loss); } .m { color:var(--muted); }
+  .sig-last { font:12px ui-monospace,monospace; margin:2px 0 6px; }
+  .sig-inputs { font:11px ui-monospace,monospace; color:var(--muted); margin-bottom:6px; line-height:1.5; }
+  .sig-inputs b { color:var(--fg); font-weight:600; }
+  table.sig { width:100%; border-collapse:collapse; font:11px ui-monospace,monospace; }
+  table.sig td { padding:3px 6px; border-bottom:1px solid var(--grid); vertical-align:top; }
+  table.sig td.st { white-space:nowrap; width:1%; }
+  .chip { display:inline-block; padding:0 6px; border-radius:8px; font-size:10px; font-weight:600; }
+  .chip.fired { background:var(--profit); color:#fff; } .chip.blocked { background:#e0a040; color:#fff; }
+  .chip.met { background:#cfe8e5; color:#1b6b63; } .chip.no { background:var(--grid); color:var(--muted); }
+  .chip.off { background:transparent; color:var(--muted); border:1px dashed var(--grid); }
+  .part { margin-right:10px; white-space:nowrap; } .part.ok { color:var(--profit); } .part.bad { color:var(--muted); }
+  tr.sig-off td { opacity:.55; }
   /* Same encoding the risk curve uses: a floor above zero is LOCKED (violet), not merely a smaller loss. */
   .lk { color:var(--locked); } .z { color:var(--zero); }
   /* The values carry the colour; the labels around them stay muted so the numbers lead. */
@@ -172,7 +184,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.10.8</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.10.9</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -255,6 +267,15 @@
       <div class="panel" id="mechPanel" style="margin-top:10px">
         <h2>Mechanisms <span class="meta" id="mechMeta"></span></h2>
         <div class="kv" id="mech"></div>
+      </div>
+      <!-- WHAT THE SIGNAL SAW (2026-10-13): every trigger the strategy can open or cover on, at the candle under the
+           time slider (or the latest), with each condition and its value — so the operator can check the engine reads
+           the candles and averages the way they do. Recorded by the engine on each candle (signal.trace). -->
+      <div class="panel" id="sigPanel" style="margin-top:10px">
+        <h2>Signals <span class="meta" id="sigMeta"></span></h2>
+        <div id="sigLast" class="sig-last"></div>
+        <div id="sigInputs" class="sig-inputs"></div>
+        <table class="sig" id="sigTable"></table>
       </div>
     </div>
   </div>
@@ -391,6 +412,53 @@ function settleEvent() {
   return (record.events || []).filter((e) => e.type === 'eod_settlement').pop() || null;
 }
 
+const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// ---- SIGNALS: the trace recorded on the candle at (or just before) time T, or the latest candle.
+function signalEvents() {
+  return (record.events || []).filter((e) => e.type === 'candle_close' && e.signal);
+}
+function renderSignals(T) {
+  const host = $('sigTable'); if (!host) return;
+  const evs = signalEvents();
+  const pick = T == null ? evs[evs.length - 1] : [...evs].reverse().find((e) => Date.parse(e.time) <= T);
+  const fmtT = (e) => (e && e.candle && e.candle.time) || (e ? e.time : '');
+  // LAST TRIGGER TODAY: the most recent candle (at or before T) whose signal opened, covered or flipped.
+  const upto = evs.filter((e) => T == null || Date.parse(e.time) <= T);
+  const lastActive = [...upto].reverse().find((e) => e.signal.reason && !/^(neutral|intra-5m hold|no-15m)$/.test(e.signal.reason));
+  $('sigLast').innerHTML = lastActive
+    ? `last trigger: <b>${esc(lastActive.signal.reason)}</b> at ${esc(fmtT(lastActive))}`
+    : '<span class="m">no trigger yet today</span>';
+  if (!pick) { $('sigMeta').textContent = ''; $('sigInputs').innerHTML = ''; host.innerHTML = '<tr><td class="m">no candles recorded</td></tr>'; return; }
+  const tr = pick.signal.trace;
+  $('sigMeta').textContent = `${fmtT(pick)} · ${pick.signal.isFifteen === false ? '5m bar' : '15m close'} · signal: ${pick.signal.reason || '—'}`;
+  if (!tr) {
+    $('sigInputs').innerHTML = '';
+    host.innerHTML = '<tr><td class="m">no trace for this candle (traced: v7 family, recorded from 2026-10-14)</td></tr>';
+    return;
+  }
+  const i = tr.inputs || {}, c15 = i.c15 || {}, c5 = i.c5 || {}, c60 = i.c60;
+  const pos60 = c60 ? (c60.close > c60.upper ? 'above upper band' : c60.close < c60.lower ? 'below lower band' : c60.close >= c60.mid ? 'upper half' : 'lower half') : '—';
+  $('sigInputs').innerHTML =
+    `holding: <b>${tr.held.bull ? 'bull' : ''}${tr.held.bull && tr.held.bear ? ' + ' : ''}${tr.held.bear ? 'bear' : ''}${!tr.held.bull && !tr.held.bear ? 'nothing' : ''}</b>`
+    + ` · 15m trend <b>${esc(i.trend15)}</b> · 5m trend <b>${esc(i.trend5)}</b> · 60m <b>${pos60}</b><br>`
+    + `15m O ${c15.open} H ${c15.high} L ${c15.low} C <b>${c15.close}</b> (${c15.green ? 'green' : 'red'}) · mid ${c15.mid} · 9EMA ${c15.ema} · band ${c15.lower}–${c15.upper}<br>`
+    + `5m C ${c5.close} · mid ${c5.mid} · 9EMA ${c5.ema} · band ${c5.lower}–${c5.upper}`
+    + ` · ${i.higherHigh ? '<b>higher high</b>' : 'no higher high'} · ${i.lowerLow ? '<b>lower low</b>' : 'no lower low'}`
+    + ` · candle: ${i.bearishCandle ? '<b>bearish reversal</b>' : i.bullishCandle ? '<b>bullish reversal</b>' : 'no reversal'}`
+    + (tr.note ? `<br><i>${esc(tr.note)}</i>` : '');
+  const firedIdx = tr.triggers.findIndex((t) => t.id === tr.fired);
+  host.innerHTML = tr.triggers.map((t, k) => {
+    const chip = !t.enabled ? '<span class="chip off">off</span>'
+      : t.id === tr.fired ? (t.blockedBy ? '<span class="chip blocked">held</span>' : '<span class="chip fired">FIRED</span>')
+      : t.active ? '<span class="chip met">met (lower priority)</span>' : '<span class="chip no">not met</span>';
+    const what = [t.side ? `open ${t.side}` : null, t.cover ? `cover ${t.cover}` : null].filter(Boolean).join(' + ') || 'hold';
+    const parts = (t.parts || []).map((p) => `<span class="part ${p.ok ? 'ok' : 'bad'}">${p.ok ? '✓' : '✗'} ${esc(p.name)}${p.value != null ? ` <b>${esc(String(p.value))}</b>` : ''}</span>`).join('');
+    return `<tr class="${t.enabled ? '' : 'sig-off'}"><td class="st">${chip}</td><td><b>${esc(t.label)}</b> <span class="m">→ ${what}</span>`
+      + (t.blockedBy && t.id === tr.fired ? ` <span class="m">— blocked by <b>${esc(t.blockedBy)}</b></span>` : '')
+      + `<br>${parts}</td></tr>`;
+  }).join('') || '<tr><td class="m">no triggers</td></tr>';
+}
+
 function render() {
   const st = record.state || {}, cfg = record.config || {};
   const se = settleEvent();
@@ -489,6 +557,7 @@ function render() {
   setupSlider();
   renderCmp();
   renderOrders();
+  renderSignals(currentT());
   renderCurve(pos, se, null);
   syncNQ();
 }
@@ -1317,6 +1386,7 @@ function renderCurve(pos, se, T) {
     const T = currentT();
     sliderLabel(T);
     renderCurve((record.state || {}).positions || [], settleEvent(), T);
+    renderSignals(T);
   });
 })();
 </script>

@@ -87,7 +87,9 @@ for (const date of dates) {
         bbupper: slot.bbUpper, bbmiddle: slot.bbMiddle, bblower: slot.bbLower, ema: slot.ema9 };
     }
     if (!ok) { skippedCold++; continue; }
-    const px = byT.get(T);
+    // THE 09:30 MARK (2026-10-13): no NDX bar has closed yet, so it is priced off NDX's FIRST 1-MINUTE bar — exactly what
+    // the live engine waits for before acting at the open (index.js openPriceBar).
+    const px = byT.get(T) || (T === ndx[0].datetime ? ndx[0] : null);
     if (!px) { skippedNoPx++; continue; }
     // analysis = NQ (the signal), px = NDX (what the options are priced and settled on)
     out.push({ datetime: T, analysis, px: { open: px.open, high: px.high, low: px.low, close: px.close } });

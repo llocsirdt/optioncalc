@@ -332,6 +332,10 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['raise no lockedLift', () => ({ floorRaiseLockedLift: false })],
   ['raise no trend', () => ({ floorRaiseTrend: false })],
   ['raise no bookRange', () => ({ floorRaiseBookRange: false })],
+  // FIRST ACTION (2026-10-13): roster acts at 09:30 on the completed 09:15-09:30 /NQ bar; this arm restores 09:35.
+  ['first 0935', () => ({ firstActionMin: 575, openFallbackUntilMin: null })],
+  ['first 0930 no fallback', () => ({ openFallbackUntilMin: null })],
+  ['first 0930 fallback open only', () => ({ openFallbackUntilMin: 570 })],
   ['geo offset1 gu tent ml 0.05', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent', continuousCoverMinLockFrac: 0.05 })],
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
