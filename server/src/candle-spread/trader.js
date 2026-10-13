@@ -344,7 +344,8 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     // the ladder resumes where the re-struck order was, not from scratch
     const c = rg.carry;
     if (c) { if (c.placedEpoch != null) pending.placedEpoch = c.placedEpoch; if (c.placedUnder != null) pending.placedUnder = c.placedUnder;
-      if (c.ladderStep != null) pending.ladderStep = c.ladderStep; if (c.giveUp) pending.restruckForGiveUp = true; }
+      if (c.ladderStep != null) pending.ladderStep = c.ladderStep; if (c.giveUp) pending.restruckForGiveUp = true;
+      if (c.kSince != null) pending.kSince = c.kSince; }
     delete pos.coverCarry;
   }
   pos.pendingCover.orderId = restOrderId;
@@ -1554,9 +1555,9 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
     const carry = pos.coverCarry || null;
     if (!carry && round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
     let plan;
-    if (carry || (coverRangeOn(deps) && pos.shortStrike != null)) {
+    if (carry || ((coverStepOn(deps) || coverRangeOn(deps)) && pos.shortStrike != null)) {
       const eq = carry && carry.eqTarget != null ? carry.eqTarget : round2(cfg.spreadWidth - pos.limit - minLock);
-      const k = carry && carry.k != null ? carry.k : pickCoverK(pos, eq, cfg, deps);
+      const k = carry && carry.k != null ? carry.k : coverStepOn(deps) ? deps.coverStartK : pickCoverK(pos, eq, cfg, deps);
       if (k == null) continue;
       plan = planCoverAtK(pos, k, cfg, deps.getLeg);
       if (!plan.error) plan.range = { k, prem: coverRangePrem(deps, cfg), eqTarget: eq, carry };
@@ -2403,7 +2404,13 @@ function coverKOf(pos, legs, cfg) {
   return sh && pos.shortStrike != null ? Math.round((sh.strike - pos.shortStrike) / cfg.strikeIncrement) * kDirOf(pos.side) : 0;
 }
 const coverRangeOn = (deps) => !!deps && (deps.coverRangeInside != null || deps.coverRangeBeyond != null);
-const coverRangePrem = (deps, cfg) => (coverRangeOn(deps) ? (deps.coverRangePremium || 0) * cfg.spreadWidth : 0);
+const coverRangePrem = (deps, cfg) => ((deps && deps.coverRangePremium) || 0) * cfg.spreadWidth;
+// STRIKE LADDER (deps.coverStartK / coverStepInMin / coverStepInTo, 2026-10-13, user): rest the cover k strikes
+// beyond the tent — the condor — and step it one strike in every coverStepInMin minutes without a fill, down to
+// coverStepInTo (0 = the tent; negative = inside the open spread). Starting at the tent fills before the market
+// has moved far enough for the wider plateau to come into play.
+const coverStepOn = (deps) => !!deps && deps.coverStartK != null && deps.coverStepInMin > 0;
+const coverStepTo = (deps, cfg) => Math.max(-coverKInsideMax(cfg), (deps && deps.coverStepInTo) || 0);
 function giveUpKFor(deps, cfg) {
   const g = deps && deps.giveUpGeometry;
   if (g === 'tent') return 0;
@@ -3677,9 +3684,20 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         }
       }
     }
+    // STEP IN (deps.coverStartK / coverStepInMin): no fill for coverStepInMin at this strike — move one strike
+    // closer to the tent (or inside, to coverStepInTo), at that strike's price.
+    if (coverStepOn(deps) && !pc.gaveUp && pos.shortStrike != null && kNow > coverStepTo(deps, cfg)) {
+      const nowS = deps.nowMs != null ? deps.nowMs : Date.now();
+      const since = pc.kSince != null ? pc.kSince : (pc.placedEpoch != null ? pc.placedEpoch : nowS);
+      if (nowS - since >= deps.coverStepInMin * 60000) {
+        await restrikeCover(st, pos, cfg, deps, decisions, { k: kNow - 1, eqTarget: round2(pc.target - kNow * kPrem), kSince: nowS,
+          placedEpoch: pc.placedEpoch, placedUnder: pc.placedUnder, ladderStep: pc.ladderStep }, 'step-in');
+        continue;
+      }
+    }
     // RANGE RE-STRIKE (deps.coverRange*): once per 5 minutes — the backtest re-judges at each bar close — re-rest
     // the cover on whichever candidate strike is now closest to filling at its own price.
-    if (rangeOn && !pc.gaveUp && pos.shortStrike != null) {
+    if (rangeOn && !coverStepOn(deps) && !pc.gaveUp && pos.shortStrike != null) {
       const nowR = deps.nowMs != null ? deps.nowMs : Date.now();
       const last = pc.rangeCheckedAt != null ? pc.rangeCheckedAt : (pc.placedEpoch || 0);
       if (nowR - last >= 5 * 60000) {

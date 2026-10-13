@@ -1979,7 +1979,7 @@ function buildEngineDeps(run, live) {
       ladderAdverseOnly: run.ladderAdverseOnly, openRestrikeReplace: run.openRestrikeReplace, openRestrikeReplaceMax: run.openRestrikeReplaceMax,
       // cover strike choice (applyCoverStrikeChoice)
       coverRangeInside: run.coverRangeInside, coverRangeBeyond: run.coverRangeBeyond, coverRangePremium: run.coverRangePremium,
-      giveUpGeometry: run.giveUpGeometry,
+      giveUpGeometry: run.giveUpGeometry, coverStartK: run.coverStartK, coverStepInMin: run.coverStepInMin, coverStepInTo: run.coverStepInTo,
       // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
       // here or the flag is silently dropped live while the backtest measures a gain.
       flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,

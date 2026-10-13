@@ -124,6 +124,27 @@ const markOf = (legs, g) => r2(legs.reduce((a, l) => a + (l.side === 'long' ? 1 
     ok(rp && rp.to > r2(8.5 + 0.6), 'and it does walk');
   }
 
+  // ── 5. strike ladder: start wide, step in while unfilled ─────────────────────────────────────────
+  {
+    const S = 30603, g = chainAt(S), pos = bull20();
+    const st = { positions: [pos], realizedPnl: 0, cashDeployed: 0, lastCandleTime: '10/13 12:00', legLedger: {} };
+    const deps = { getLeg: g, placeOrder, cancelOrder, dryRun: true, underlying: S, continuousCoverMinLockFrac: 0.1,
+      coverStartK: 2, coverStepInMin: 5, coverGiveUp: true, giveUpPoints: 10 };
+    await T.placeContinuousCovers(st, cfg20, deps, [], '10/13 12:00', S);
+    ok(pos.pendingCover && pos.pendingCover.k === 2 && has(pos.pendingCover.legs, 'short', 'P', 30620), 'placed two strikes beyond the tent (the condor)');
+    pos.pendingCover.placedEpoch = 0;
+    const dec = [];
+    await T.workRestingCovers(st, cfg20, dec, { ...deps, nowMs: 4 * 60000 }, S);
+    ok(pos.pendingCover.k === 2, 'not before coverStepInMin');
+    await T.workRestingCovers(st, cfg20, dec, { ...deps, nowMs: 5 * 60000 }, S);
+    ok(pos.pendingCover.k === 1 && pos.pendingCover.kSince === 5 * 60000 && pos.pendingCover.placedEpoch === 0,
+      `steps one strike in, keeping the ladder clock (${pos.pendingCover.k})`);
+    await T.workRestingCovers(st, cfg20, dec, { ...deps, nowMs: 10 * 60000 }, S);
+    await T.workRestingCovers(st, cfg20, dec, { ...deps, nowMs: 15 * 60000 }, S);
+    ok(pos.pendingCover.k === 0, `and stops at the tent (${pos.pendingCover.k})`);
+    ok(dec.filter((d) => d.action === 'cover-restrike' && d.why === 'step-in').length === 2, 'two step-ins recorded');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

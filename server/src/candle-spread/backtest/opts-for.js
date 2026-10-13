@@ -137,7 +137,7 @@ function optsFor(v, env) {
   if (v.openRestrikeReplace != null) o.openRestrikeReplace = v.openRestrikeReplace;           // re-place a re-struck open
   if (v.openRestrikeReplaceMax != null) o.openRestrikeReplaceMax = v.openRestrikeReplaceMax;
   // cover strike choice / give-up re-strike / roll (2026-10-12; backtest-v6-5m COVER STRIKE CHOICE)
-  for (const k of ['coverRangeInside', 'coverRangeBeyond', 'coverRangePremium', 'giveUpGeometry', 'coverRollMaxDebit', 'coverRollMaxK']) if (v[k] != null) o[k] = v[k];
+  for (const k of ['coverRangeInside', 'coverRangeBeyond', 'coverRangePremium', 'giveUpGeometry', 'coverRollMaxDebit', 'coverRollMaxK', 'coverStartK', 'coverStepInMin', 'coverStepInTo']) if (v[k] != null) o[k] = v[k];
   if (v.ladderAdverseOnly != null) o.ladderAdverseOnly = v.ladderAdverseOnly;                 // ladders step on adverse moves only   // re-strike timeout at the cap (minutes)
   if (env && env.openRestrikeMin != null) o.openRestrikeMin = env.openRestrikeMin;
   // FLOOR RAISE (backtest-v6-5m.js, opts.floorRaise): always-on near-money floor lifting.

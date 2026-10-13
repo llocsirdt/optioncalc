@@ -317,6 +317,14 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ...[0.03, 0.06].map((rd) => [`roll ${rd}`, () => ({ coverRollMaxDebit: rd, coverRollMaxK: 2 })]),
   ...[0.01, 0.02].map((pr) => [`range p${pr}`, () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: pr, giveUpGeometry: 'inside' })]),
   ...[0.02, 0.03].map((pr) => [`range p${pr} + roll 0.03`, () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: pr, giveUpGeometry: 'inside', coverRollMaxDebit: 0.03, coverRollMaxK: 2 })]),
+  // STRIKE LADDER (2026-10-13, user): start the cover k strikes beyond the tent (condor), step one strike in every N
+  // minutes without a fill, down to the tent ('in' = down to one strike inside the open's long leg; 20/40W only).
+  // Range is switched OFF in these arms so the strike ladder alone decides where the cover rests.
+  ...[[1, 5], [1, 10], [2, 5], [2, 10]].map(([k, m]) => [`step k${k}/${m}m`, () => ({ coverRangeInside: null, coverRangeBeyond: null,
+    coverRangePremium: null, coverStartK: k, coverStepInMin: m })]),
+  ['step k2/5m in', (r) => (r.spreadWidth > 10 ? { coverRangeInside: null, coverRangeBeyond: null, coverRangePremium: null,
+    coverStartK: 2, coverStepInMin: 5, coverStepInTo: -9 } : null)],
+  ['step k2/5m p0.03', () => ({ coverRangeInside: null, coverRangeBeyond: null, coverRangePremium: 0.03, coverStartK: 2, coverStepInMin: 5 })],
   ['range p0.05 + roll 0.03', () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: 0.05, giveUpGeometry: 'inside', coverRollMaxDebit: 0.03, coverRollMaxK: 2 })],
   ['geo offset1 gu tent', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent' })],
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
@@ -510,6 +518,7 @@ function measure(job) {
         coverSameBarPerDay: Math.round(t.reduce((a, r) => a + (r.coverSameBar || 0), 0) / n * 100) / 100,
         rangeRestrikesPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rangeRestrikes) || 0), 0) / n * 10) / 10,
         guRestrikesPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.guRestrikes) || 0), 0) / n * 10) / 10,
+        stepInsPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.stepIns) || 0), 0) / n * 10) / 10,
         rollsPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rolls) || 0), 0) / n * 10) / 10,
         rollSpentPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rollSpent) || 0), 0) / n),
         // TIME TO COVER + FLOOR WHEN FLAT (2026-10-12, user): how fast opens get covered, and what the floor is

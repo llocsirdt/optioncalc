@@ -283,7 +283,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   const guK = opts.giveUpGeometry === 'tent' ? 0 : opts.giveUpGeometry === 'inside' ? -kInsideMax
     : /^inside\d+$/.test(opts.giveUpGeometry || '') ? -Math.min(kInsideMax, Number(opts.giveUpGeometry.slice(6))) : null;
   const rollOn = opts.coverRollMaxDebit != null;
-  let rangeRestrikes = 0, guRestrikes = 0, rolls = 0, rollSpent = 0;
+  // STRIKE LADDER (2026-10-13, user: "start with the wider strikes for the ideal condor and move it in to a tent if
+  // it's not filling — if you start with the tent it'll likely fill before the underlying moves enough for the wider
+  // trade to come into play"). opts.coverStartK: the cover rests k strikes beyond the tent; every
+  // opts.coverStepInMin minutes without a fill it steps one strike in, down to opts.coverStepInTo (0 = the tent,
+  // negative = inside the open spread, clamped to one strike inside the open's long leg). The price ladder keeps
+  // walking the tent-equivalent price; each strike rests at that + k x coverRangePremium x W.
+  const stepOn = opts.coverStartK != null && opts.coverStepInMin > 0;
+  const stepTo = Math.max(-kInsideMax, opts.coverStepInTo || 0);
+  let rangeRestrikes = 0, guRestrikes = 0, rolls = 0, rollSpent = 0, stepIns = 0;
   // The candidate closest to filling at its own price (ties -> the wider plateau). eqPx = the tent-equivalent price.
   const pickK = (pos, eqPx, Sx, tau, iv) => {
     let best = null;
@@ -1015,7 +1023,8 @@ function runDay5m(bars, signalFn, opts = {}) {
           ? SL.coverLegsAtShort(pos.side, SL.coverShortFor(opts.coverGeometry, pos.side, pos.shortStrike, S, legIncr), G.WIDTH)
           : G.coverLegs(pos.side, pos.shortStrike);
         let _k0 = null;
-        if (rangeOn) { _k0 = pickK(pos, tgt, S, tau, iv); legs = legsAtK(pos, _k0); }
+        if (stepOn) { _k0 = opts.coverStartK; legs = legsAtK(pos, _k0); }
+        else if (rangeOn) { _k0 = pickK(pos, tgt, S, tau, iv); legs = legsAtK(pos, _k0); }
         if (!armedByRisk) {
           // Not armed by book risk — take it only if the cover is cheap enough to be worth it on its own.
           if (oppRatio == null) continue;
@@ -1238,7 +1247,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (giveUp && guK != null && kOf(pos, pc.legs) !== guK) {
         pc.legs = legsAtK(pos, guK); pc.k = guK; pc._resting = undefined; pc._working = undefined; guRestrikes++;
       }
-      const _kc = rangeOn && !giveUp ? (pc.k != null ? pc.k : kOf(pos, pc.legs)) : 0;
+      const _kc = (rangeOn || stepOn) && !giveUp ? (pc.k != null ? pc.k : kOf(pos, pc.legs)) : 0;
       if (giveUp) {
         const guFrac = patient && opts.coverPatientGiveUp != null ? opts.coverPatientGiveUp : opts.giveUpMaxLoss;
         const cap = (guFrac != null ? guFrac : 0.15) * G.WIDTH;
@@ -1310,7 +1319,12 @@ function runDay5m(bars, signalFn, opts = {}) {
       const _fills = legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= fillAt - thruCover + 1e-9;
       // RANGE RE-STRIKE (opts.coverRange*): no fill this bar, so at the close re-rest the cover on whichever candidate
       // strike is now closest to filling at its own price (the same tent-equivalent ladder price + k x premium).
-      if (!_fills && rangeOn && !giveUp && !decayed) {
+      if (!_fills && stepOn && !giveUp && !decayed && _kc > stepTo
+        && nowEpoch - (pc.kSince != null ? pc.kSince : pc.placedMs) >= opts.coverStepInMin * 60000) {
+        // STEP IN: no fill for coverStepInMin at this strike — re-rest one strike closer, at that strike's price.
+        const eq = round2(workingTarget - _kc * rangePrem), k2 = _kc - 1, px = round2(eq + k2 * rangePrem);
+        pc.legs = legsAtK(pos, k2); pc.k = k2; pc.kSince = nowEpoch; pc.target = px; pc._resting = px; pc._working = undefined; stepIns++;
+      } else if (!_fills && rangeOn && !stepOn && !giveUp && !decayed) {
         const eq = round2(workingTarget - _kc * rangePrem);
         const k2 = pickK(pos, eq, S, tau, iv);
         if (k2 !== _kc) {
@@ -2046,7 +2060,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     intradayFloorAvg: ifBars ? Math.round(ifSum / ifBars) : null, intradayFloorNonNegPct: ifBars ? Math.round(1000 * ifNonNeg / ifBars) / 10 : null,
     tents: st.positions.filter((p) => p.covered && !p.hedge).length,
     flatFloors,
-    coverRange: rangeOn || guK != null || rollOn ? { rangeRestrikes, guRestrikes, rolls, rollSpent: Math.round(rollSpent * 100 * QTY) } : undefined,
+    coverRange: rangeOn || guK != null || rollOn || stepOn ? { rangeRestrikes, guRestrikes, stepIns, rolls, rollSpent: Math.round(rollSpent * 100 * QTY) } : undefined,
     // TIME TO COVER (2026-10-12, user: "how quickly opens are covered"): minutes from the open's fill bar to its
     // cover's fill bar (5m bar resolution; 0 = same bar), split by whether the cover was a give-up. Positions
     // still uncovered at the close are counted, not timed.
