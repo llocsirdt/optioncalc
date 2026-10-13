@@ -185,7 +185,7 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
 //         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
 //   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard, globalRatio }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard, globalRatio, lockedMustLift }) {
   const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
@@ -285,7 +285,16 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
     room.sort((a, b) => b.ratio - a.ratio);
     return { best: room[0] || null, blockedLocked, blockedFloor };
   }
+  let blockedNoLift = 0;
   for (const c of ok) {
+    // LOCKED BOOK: LIFT THE REAL FLOOR OR DO NOTHING (lockedMustLift, user 2026-10-13). Once the floor is >= 0 the
+    // valley pass may target ANY valley, so v7-10 bought the same C30580/30590 three times (13:00 x2, 13:45) on ground
+    // already +$1,331 / +$2,171 while the true floor sat at +$331 / +$171 — each premium LOWERED the floor it exists to
+    // raise. With this on, a locked book's raise must lift the global floor itself, at the valley's own required ratio.
+    if (lockedMustLift && gNow >= 0) {
+      const g = globalFloorWith(c.legs, c.debit);
+      if (!(g > gNow) || (g - gNow) / c.cost < (c.need != null ? c.need : minRatio)) { blockedNoLift++; continue; }
+    }
     // Two hard rules on the GLOBAL floor: never put a locked profit at risk (the user's rule), and never push
     // the book past the day-loss cap (floorMin = -lossMax) — a floor-raising hedge is still an order the
     // governor bounds. Spreads-first fixes one valley at a time and its premium lowers the rest of the curve;
@@ -293,9 +302,9 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
     const g = (gNow >= 0 || floorMin != null) ? globalFloorWith(c.legs, c.debit) : null;
     if (gNow >= 0 && g < 0) { blockedLocked++; continue; }
     if (floorMin != null && g < floorMin && g < gNow) { blockedFloor++; continue; }
-    return { best: c, blockedLocked, blockedFloor };
+    return { best: c, blockedLocked, blockedFloor, blockedNoLift };
   }
-  return { best: null, blockedLocked, blockedFloor };
+  return { best: null, blockedLocked, blockedFloor, blockedNoLift };
 }
 
 // MULTI-STEP OBJECTIVES (the user, 2026-10-06: "it's usually not a single hedge that achieves the desired
@@ -317,7 +326,8 @@ function pickBestMulti(args) {
     const r1 = pickBest({ ...args, cands: spreads, objective: 'valley', liftMetric: 'min' });
     if (r1.best) return r1;
     const r2 = pickBest({ ...args, objective: 'band' });
-    return { best: r2.best, blockedLocked: r1.blockedLocked + r2.blockedLocked, blockedFloor: (r1.blockedFloor || 0) + (r2.blockedFloor || 0) };
+    return { best: r2.best, blockedLocked: r1.blockedLocked + r2.blockedLocked, blockedFloor: (r1.blockedFloor || 0) + (r2.blockedFloor || 0),
+      blockedNoLift: (r1.blockedNoLift || 0) + (r2.blockedNoLift || 0) };
   }
   if (obj !== 'pair') return pickBest(args);
   const { xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, bandLo, bandHi } = args;

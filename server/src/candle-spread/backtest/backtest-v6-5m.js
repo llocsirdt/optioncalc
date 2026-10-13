@@ -1572,6 +1572,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (capR.nearCap) frNearCapPasses++;
           const { best, companion, blockedLocked } = FR.pickBestMulti({ xs, base, cands: candsNow(), price, qty: QTY, minRatio: capR.minRatio, budget, gNow, objective: frObjective, spot: S, bandLo, bandHi,
             minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: (() => { const _ll = lateFloorLimit(etMinute(bars[i].dt)); return _ll == null ? capR.floorMin : capR.floorMin == null ? _ll : Math.max(capR.floorMin, _ll); })(), globalRatio: capR.globalRatio,
+            lockedMustLift: opts.floorRaiseLockedLift === true,
             sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });

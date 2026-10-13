@@ -1418,18 +1418,20 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     const capR = FR.capAwareRatio({ minRatio: cfg.floorRaiseMinRatio != null ? cfg.floorRaiseMinRatio : 2,
       floorMin: govOn(deps) && deps.lossMax != null ? -deps.lossMax : null, gNow, lossMax: govOn(deps) ? deps.lossMax : null,
       width: cfg.spreadWidth, nearCapFrac: cfg.floorRaiseNearCapFrac, nearCapRatio: cfg.floorRaiseNearCapRatio });
-    const { best, companion, blockedLocked, blockedFloor } = FR.pickBestMulti({ xs, base, cands: FR.candidatesFor(bandLo, bandHi, incr, xs, base), bandLo, bandHi,
+    const { best, companion, blockedLocked, blockedFloor, blockedNoLift } = FR.pickBestMulti({ xs, base, cands: FR.candidatesFor(bandLo, bandHi, incr, xs, base), bandLo, bandHi,
       price, qty, minRatio: capR.minRatio, budget: budget - spentNow, gNow,
       objective: cfg.floorRaiseObjective || 'valley', spot,
       minRatioFar: cfg.floorRaiseMinRatioFar, farSigmas: cfg.floorRaiseFarSigmas, liftMetric: cfg.floorRaiseLiftMetric,
       floorMin: (() => { const ll = lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth); return ll == null ? capR.floorMin : capR.floorMin == null ? ll : Math.max(capR.floorMin, ll); })(),
-      globalRatio: capR.globalRatio,
+      globalRatio: capR.globalRatio, lockedMustLift: cfg.floorRaiseLockedLift === true,
       sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: (legs) => badQuoted.has(keyOf(legs)) || !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs)) });
     if (blockedLocked) decisions.push({ action: 'raise-blocked-locked', count: blockedLocked, floorNow: round2(gNow),
       note: 'refused: would push a locked profit below zero' });
+    if (blockedNoLift) decisions.push({ action: 'raise-blocked-no-lift', count: blockedNoLift, floorNow: round2(gNow),
+      note: 'refused: the floor is locked and this would not lift it (it only adds to ground already above the floor)' });
     if (blockedFloor) decisions.push({ action: 'raise-blocked-floor', count: blockedFloor, floorNow: round2(gNow), nearCap: capR.nearCap || undefined,
       note: capR.nearCap ? 'refused: near the cap a hedge may not lower the book floor at all' : 'refused: would push the floor past the day-loss cap' });
     if (!best) {
@@ -1459,18 +1461,26 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
         stop = !retry; break;
       }
       const ev = quoted.get(keyOf(h.legs)) || {};
-      const payload = buildOrderPayload(resolved, h.debit, qty, 'DEBIT');
-      const placed = await deps.placeOrder(payload, { kind: 'raise', legs: h.legs, net: 'DEBIT', limit: h.debit });
+      // WALK UP FROM LOW (cfg.floorRaiseWalk, user 2026-10-13): send at a fraction of the mid and step toward the
+      // most we will pay (h.debit = mid + slip, the price the ratio was judged at). Sent at that ceiling outright,
+      // v7-10's 13:45 C30580/30590 filled in 6 seconds at 1.65 — the market took the top of our range. Any lower
+      // fill only improves the ratio the plan was approved on.
+      const walk = walkCfg(cfg);
+      const ceiling = h.debit;
+      const startPx = walk ? Math.min(ceiling, Math.max(tick, roundToTick((ev.mid != null ? ev.mid : ceiling) * walk.startFrac, tick))) : ceiling;
+      const payload = buildOrderPayload(resolved, startPx, qty, 'DEBIT');
+      const placed = await deps.placeOrder(payload, { kind: 'raise', legs: h.legs, net: 'DEBIT', limit: startPx });
       if (!placed || placed.filled === false) { stop = true; break; }
-      const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: h.legs, limit: h.debit,
-        markAtPlace: chk.mark, limitSent: h.debit, orderId: (placed && placed.orderId) || null,
-        pendingHedge: { limit: h.debit, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
-          placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask },
+      const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: h.legs, limit: startPx,
+        markAtPlace: chk.mark, limitSent: startPx, orderId: (placed && placed.orderId) || null,
+        pendingHedge: { limit: startPx, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
+          placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask,
+          ...(walk ? { walkStart: startPx, ceiling, walkStepSec: walk.stepSec, walkStepDollars: walk.stepDollars } : {}) },
         openedAt: candleTime, openTime: candleTime, openEpoch: nowMs,
         quantity: qty, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, hedge: true, raise: true };
       st.positions.push(pos);
       if (deps.enforceLegUniqueness && deps._ledger) deps._ledger.record(h.legs);
-      decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: h.debit, valley: h.valley || null, needRatio: h.need,
+      decisions.push({ action: 'raise', id: pos.id, structure: h.kind, legs: h.legs, limit: startPx, ceiling: walk ? ceiling : undefined, valley: h.valley || null, needRatio: h.need,
         nearCap: capR.nearCap || undefined,
         cost: Math.round(h.cost), lift: Math.round(h.lift), ratio: round2(h.ratio), floorNow: round2(gNow),
         quotedMid: ev.mid, quotedAsk: ev.ask, band: Math.round(band), spentToday: st.raiseSpent });
@@ -1488,6 +1498,51 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   // the peak with the wing planner (upside term kept, the user's choice 2026-10-09). Same 15-min pass.
   if (!placedN && cfg.floorRaiseWings === true) placedN += await convertWings(st, cfg, deps, decisions, candleTime, true);
   return placedN;
+}
+
+// RAISE WALK settings (cfg.floorRaiseWalk). Start at startFrac x the quoted mid, step stepDollars every stepSec,
+// never past the ceiling the plan was approved at. 0.40 / $0.05 / 20 s: a $1.55 mid starts at $0.60 and reaches
+// $1.65 in about 7 minutes, inside the 10-minute hedge TTL.
+function walkCfg(cfg) {
+  if (!cfg || cfg.floorRaiseWalk !== true) return null;
+  return { startFrac: cfg.floorRaiseWalkStartFrac != null ? cfg.floorRaiseWalkStartFrac : 0.4,
+    stepSec: cfg.floorRaiseWalkStepSec != null ? cfg.floorRaiseWalkStepSec : 20,
+    stepDollars: cfg.floorRaiseWalkStepDollars != null ? cfg.floorRaiseWalkStepDollars : 0.05 };
+}
+function roundToTick(x, tick) { const t = tick || 0.05; return Math.round(Math.round(x / t) * t * 100) / 100; }
+
+// WORK A WALKING RAISE: raise its limit by one step per stepSec elapsed, capped at its ceiling, and tell the broker
+// (same replace path and same "did it take effect" rule as the open ladder). Called before resolvePendingHedges at
+// the candle close and on every 30 s sub-bar pass. A raise whose cancel is under way is left alone.
+async function walkRaiseOrders(st, cfg, deps, decisions) {
+  const now = deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now());
+  const tick = cfg.tickIncrement || 0.05;
+  let moved = 0;
+  for (const pos of st.positions || []) {
+    const ph = pos && pos.filled === false && pos.pendingHedge;
+    if (!ph || ph.kind !== 'raise' || ph.ceiling == null || ph.walkStart == null || ph.placedEpoch == null) continue;
+    if (pos.expired || cancelUnderWay(st, ph.orderId, ph)) continue;
+    const steps = Math.floor(Math.max(0, now - ph.placedEpoch) / 1000 / (ph.walkStepSec || 20));
+    const target = Math.min(ph.ceiling, roundToTick(ph.walkStart + steps * (ph.walkStepDollars || 0.05), tick));
+    if (!(target > ph.limit + 1e-9)) continue;
+    const from = ph.limit;
+    if (deps.replaceOrder && ph.orderId) {
+      const rl = resolveLegs(pos.legs, deps.getLeg);
+      if (rl.error) { decisions.push({ action: 'raise-walk-not-sent', id: pos.id, from, to: target, reason: `legs unquotable (${rl.error})` }); continue; }
+      const r = await deps.replaceOrder(ph.orderId, buildOrderPayload(rl.resolved, target, pos.quantity || cfg.quantity || 1, 'DEBIT'),
+        { kind: 'raise', reprice: true, of: pos.id, fromLimit: from, legs: pos.legs, net: 'DEBIT' });
+      if (!replaceTookEffect(r)) {
+        decisions.push({ action: 'raise-walk-not-sent', id: pos.id, from, to: target, orderId: ph.orderId,
+          reason: (r && (r.error || r.status)) || 'no result' });
+        continue;
+      }
+      if (r && r.orderId) { ph.orderId = r.orderId; pos.orderId = r.orderId; }
+    }
+    ph.limit = target; pos.limit = target; pos.limitSent = target;
+    decisions.push({ action: 'raise-walk', id: pos.id, from, to: target, ceiling: ph.ceiling, orderId: ph.orderId || null });
+    moved++;
+  }
+  return moved;
 }
 
 // "MM/DD HH:MM" -> minutes from ET midnight, for the wing time gate.
@@ -2034,6 +2089,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
   // the 30s sub-bar pass and by every later candle until it fills or expires.
+  await walkRaiseOrders(st, deps && deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg, deps, decisions);
   resolvePendingHedges(st, cfg, deps, decisions);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
@@ -3977,6 +4033,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 }
 
 module.exports = {
+  walkRaiseOrders,
   noteCash,
   tickUp,                // hedge prices rounded UP to the tick
   govFloor,              // the governor's floor: the booked book + every open that can still fill

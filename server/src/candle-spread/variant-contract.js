@@ -25,6 +25,7 @@ const NOT_ENGINE_OPTS = new Set([
   'strikeIncrement', 'tickIncrement', 'snapshotStrikes', 'captureChain', 'coverStyle', 'coverFillModel',
   'spreadWidth', 'spreadShift', 'capFrac', 'adaptiveGeo', 'maxItmStrikes',   // consumed by the geo builder
   'comboOrders', 'comboSlip',                       // live order shape, no backtest equivalent
+  'floorRaiseWalk',                                 // live order working (raise walk-up); the backtest prices raises at mid + slip
   // A MARKER, NOT A CAPABILITY. lossMaxFloored records that a cap was raised to the 1.5x-width floor, so a
   // floored value is never mistaken on the record for a tuned one. The BEHAVIOUR it describes travels as
   // lossMax/lossTarget, which every consumer already forwards, so there is nothing here for an engine to act

@@ -912,6 +912,18 @@ function applyFloorRaise(v) {
   // -1,293 -> -932 (best of all arms); best on 20W/40W. On 10W the lowest-point rule locked more days
   // (v7-10 55.4% vs 47.9% under B) — measured and recorded; the user chose B for all strategies.
   v.floorRaiseObjective = 'spreadFirst';
+  // RAISE DISCIPLINE (user, 2026-10-13, after v7-10 bought C30580/30590 three times on its locked high side, against
+  // a falling market, filling at the top of its range):
+  //   LockedLift — once the floor is >= 0, a raise must lift the floor itself at the required ratio (floor-raise.js).
+  //   Trend AHH  — no raise may lower the floor on the side the trend is heading (15m + hourly + hourly HH/LL agree);
+  //                the 2026-10-08 sweep's best guard: v7-10 locked days 44.6 -> 46.9%, P&L -4.5%.
+  //   Far ratio  — required ratio climbs from 3:1 at the money to 6:1 two expected moves out.
+  //   Walk       — orders start at 0.4 x mid and step $0.05 / 20 s up to the approved price (live only; the backtest
+  //                still prices a raise at mid + slip, so it cannot see this saving).
+  if (v.floorRaiseLockedLift == null) v.floorRaiseLockedLift = true;
+  if (v.floorRaiseTrend == null) v.floorRaiseTrend = 'AHH';
+  if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 6;
+  if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
 }
 // FLOOR REPAIR FOLD (user, 2026-10-09): wings, floor offsets and fly/condor repair were all built to do what
 // floor raise now does — lift the low points of the risk curve — and ran beside it as separate hedgers with
@@ -2050,7 +2062,9 @@ function assertDeps(runs) {
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
         'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
         // fold stages (2026-10-09): read off cfg / floorRaiseCfg by trader.raiseFloor and raiseCapFixOn
-        'floorRaiseCapFix', 'floorRaiseWings']);
+        'floorRaiseCapFix', 'floorRaiseWings',
+        // raise discipline (2026-10-13): read off cfg.floorRaiseCfg by raiseFloor / raiseSideGuard / walkRaiseOrders
+        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit']);
   }
 }
 
@@ -2400,6 +2414,7 @@ async function runRestingWork() {
         // next bar. Idempotent (each order applies once), so both call sites is correct, not double.
         trader.applyBrokerFills(st, cfg, deps, decisions);
         await trader.resolvePendingOpen(st, cfg, deps, decisions);
+        await trader.walkRaiseOrders(st, deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg, deps, decisions);
         trader.resolvePendingHedges(st, cfg, deps, decisions);
         // COVER ON FILL (2026-10-11, user): place the continuous cover the moment the open's fill is confirmed, not
         // at the next 5m close (up to five minutes uncovered). Same function and rules as the candle close's step 2b.
