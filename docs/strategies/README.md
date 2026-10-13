@@ -156,7 +156,6 @@ Shapes (`-W`, `-W-unc`, `-W-cATM`) share their family's signal (`index.js:1163,1
 | C14 | signal cover → give-up | a signal cover escalates resting covers to the give-up price | `signalCoverGiveUp` | **backtest only**, set by no variant | `backtest-v6-5m.js:1531-1540`; `opts-for.js:112` |
 | C15 | `cover-restrike` (range) | 20W/40W: every 5 min a resting cover moves to the candidate strike (one inside the open's long leg … 2 beyond the tent) closest to filling at tent-equivalent price + k × 0.03 × W; broker: cancel first, re-place after Schwab confirms | `coverRangeInside/Beyond/Premium` (`applyCoverStrikeChoice`) | all 20W/40W | `trader.js` workRestingCovers / pickCoverK / restrikeCover |
 | C16 | `cover-restrike` (give-up) | 20W/40W: when give-up fires, the cover first moves inside the open spread (cheapest legal cover), then takes the give-up price | `giveUpGeometry: 'inside'` | all 20W/40W | `trader.js` workRestingCovers |
-| C17 | `cover-roll` | 10W: a covered position whose market is past the next strike rolls its cover a strike wider when that costs ≤ 0.03 × W (≤ 2 beyond the tent); floor drops by the cost. Simulated/paper only — broker runs log `cover-roll-not-sent` | `coverRollMaxDebit/MaxK` | all 10W (v7-10 live: not sent) | `trader.js` rollCovers |
 
 ### 3. HEDGE and order-working triggers
 

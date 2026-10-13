@@ -861,9 +861,9 @@ function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = O
 //   20W / 40W — the resting cover floats between one strike inside the open's long leg and 2 beyond the tent,
 //     conceding 0.03 x W of lock per strike of plateau, and a give-up re-strikes inside. Best arm on both
 //     metrics for every 20W/40W variant (v7-20 -1,834/6.1 -> -674/3.6; v7-40 -2,623/6.4 -> -1,281/1.8).
-//   10W — no inside strikes (range = roster); the cover rolls a strike wider when that costs <= 0.03 x W, up to
-//     2 beyond the tent (v7-10 -492 -> -444 closing floor, uncovered unchanged). Rolls are simulated / paper
-//     only for now: under the broker (v7-10 live) a roll is recorded as wanted and nothing is sent.
+//   10W — no inside strikes, so nothing changes. (The backtest's cover ROLL was rejected by the user 2026-10-13:
+//     a filled cover is done; rolling it is a butterfly bought on top of a covered tent, paid for with the
+//     premium the first cover locked.)
 // Set any of the fields before applyExperiments to override.
 function applyCoverStrikeChoice(v) {
   if (v.spreadWidth >= 20) {
@@ -871,9 +871,6 @@ function applyCoverStrikeChoice(v) {
     if (v.coverRangeBeyond == null) v.coverRangeBeyond = 2;
     if (v.coverRangePremium == null) v.coverRangePremium = 0.03;
     if (v.giveUpGeometry == null) v.giveUpGeometry = 'inside';
-  } else {
-    if (v.coverRollMaxDebit == null) v.coverRollMaxDebit = 0.03;
-    if (v.coverRollMaxK == null) v.coverRollMaxK = 2;
   }
 }
 
@@ -1982,7 +1979,7 @@ function buildEngineDeps(run, live) {
       ladderAdverseOnly: run.ladderAdverseOnly, openRestrikeReplace: run.openRestrikeReplace, openRestrikeReplaceMax: run.openRestrikeReplaceMax,
       // cover strike choice (applyCoverStrikeChoice)
       coverRangeInside: run.coverRangeInside, coverRangeBeyond: run.coverRangeBeyond, coverRangePremium: run.coverRangePremium,
-      giveUpGeometry: run.giveUpGeometry, coverRollMaxDebit: run.coverRollMaxDebit, coverRollMaxK: run.coverRollMaxK,
+      giveUpGeometry: run.giveUpGeometry,
       // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
       // here or the flag is silently dropped live while the backtest measures a gain.
       flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,

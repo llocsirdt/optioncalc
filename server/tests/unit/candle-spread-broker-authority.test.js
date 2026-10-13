@@ -103,7 +103,6 @@ const EXPECTED = [
   'resolvePendingHedges',      // gated 40b1c53: <kind>-mark-fillable
   'resolvePendingOpen',        // gated when the closed loop shipped
   'resolveRestingCovers',      // gated when the closed loop shipped
-  'rollCovers',                // gated 2026-10-13: a broker run records cover-roll-not-sent and books nothing
   'tryComboLockAndOpen',       // gated: combo-skip-broker, INSIDE the function
 ].sort();
 const actual = [...sites.keys()].sort();

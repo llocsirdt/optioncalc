@@ -1,5 +1,6 @@
 'use strict';
-// COVER STRIKE CHOICE, LIVE (2026-10-13) — the port of backtest-v6-5m's coverRange / giveUpGeometry / coverRoll.
+// COVER STRIKE CHOICE, LIVE (2026-10-13) — the port of backtest-v6-5m's coverRange / giveUpGeometry (the roll was
+// rejected by the user and is not ported).
 // Pins:
 //   1. placement picks the candidate strike closest to filling at its own price (tent-equivalent + k x premium),
 //      the same rule as the backtest's pickK, and rests at that price
@@ -7,8 +8,6 @@
 //      is requested and the pending cover KEPT until Schwab answers, then re-placed carrying the ladder's clock
 //   3. the range re-strike runs at most every 5 minutes and moves the cover to the newly best strike
 //   4. the ladder walks the tent-equivalent price: an order k strikes out sits k x premium off it
-//   5. a covered 10W position rolls a strike wider once the market is past it and the roll costs <= the max;
-//      the floor drops by exactly the cost; a broker run sends nothing and says so
 //
 // Run: node server/tests/unit/candle-spread-cover-strike-live.test.js
 const os = require('os'), path = require('path'), fs = require('fs');
@@ -123,44 +122,6 @@ const markOf = (legs, g) => r2(legs.reduce((a, l) => a + (l.side === 'long' ? 1 
     const mark = markOf(legs1, g);
     ok(rp && rp.to <= mark + 0.05 + 1e-9, `a k=1 order may walk up to its OWN mark (${rp && rp.to} <= ${mark})`);
     ok(rp && rp.to > r2(8.5 + 0.6), 'and it does walk');
-  }
-
-  // ── 5. roll (10W) ───────────────────────────────────────────────────────────────────────────────
-  const cfg10 = { ...cfg20, spreadWidth: 10 };
-  const covered10 = () => {
-    const pos = { id: 'c10', side: 'bull', legs: [leg('long', 'C', 30590), leg('short', 'C', 30600)], quantity: 1, limit: 5.2,
-      shortStrike: 30600, filled: true, covered: true, coverTime: '10/13 10:00', pendingCover: null };
-    pos.coverLegs = T.coverLegsAtK(pos, 0, cfg10); pos.coverLimit = 3.0; pos.coverSentNet = 'DEBIT';
-    return pos;
-  };
-  {
-    const S = 30613, g = chainAt(S), pos = covered10();
-    const st = { positions: [pos], realizedPnl: r2((10 - 5.2 - 3.0) * 100), cashDeployed: 820, legLedger: {} };
-    const cost = r2(Math.round((markOf(T.coverLegsAtK(pos, 1, cfg10), g) - markOf(pos.coverLegs, g) + 0.05) / 0.05) * 0.05);
-    const dec = [], n0 = sends.length;
-    const deps = { getLeg: g, placeOrder, dryRun: true, coverRollMaxDebit: Math.max(0.03, (cost + 0.05) / 10), coverRollMaxK: 2,
-      enforceLegUniqueness: true };
-    await T.rollCovers(st, cfg10, deps, dec, '10/13 10:20', S);
-    ok(T.coverKOf(pos, pos.coverLegs, cfg10) === 1 && has(pos.coverLegs, 'short', 'P', 30610), `rolled to k=1 (${JSON.stringify(pos.coverLegs)})`);
-    ok(Math.abs(pos.coverLimit - r2(3.0 + cost)) < 1e-9, `cover cost grows by the roll (${pos.coverLimit} = 3.00 + ${cost})`);
-    ok(Math.abs(st.realizedPnl - r2((10 - 5.2 - 3.0 - cost) * 100)) < 1e-6, `the locked floor drops by exactly the cost (${st.realizedPnl})`);
-    ok(sends.length === n0 + 1 && sends[sends.length - 1].kind === 'cover-roll', 'the roll is logged as an order');
-    ok(has(pos.coverSentLegs, 'short', 'C', 30610) || has(pos.coverSentLegs, 'short', 'P', 30610), 'with the new cover\'s sent legs');
-    ok(dec.some((d) => d.action === 'cover-roll' && d.fromK === 0 && d.toK === 1), 'and a decision');
-    await T.rollCovers(st, cfg10, deps, dec, '10/13 10:25', S);
-    ok(T.coverKOf(pos, pos.coverLegs, cfg10) === 1, 'not past the next strike (30620) — no second roll');
-  }
-  {
-    const S = 30613, g = chainAt(S), pos = covered10();
-    const st = { positions: [pos], realizedPnl: 160, cashDeployed: 820 };
-    await T.rollCovers(st, cfg10, { getLeg: g, placeOrder, dryRun: true, coverRollMaxDebit: 0.0001, coverRollMaxK: 2 }, [], '10/13 10:20', S);
-    ok(T.coverKOf(pos, pos.coverLegs, cfg10) === 0, 'a roll dearer than the max does not happen');
-    await T.rollCovers(st, cfg10, { getLeg: chainAt(30605), placeOrder, dryRun: true, coverRollMaxDebit: 1, coverRollMaxK: 2 }, [], '10/13 10:20', 30605);
-    ok(T.coverKOf(pos, pos.coverLegs, cfg10) === 0, 'nor before the market is past the next strike');
-    const dec = [], n0 = sends.length;
-    await T.rollCovers(st, cfg10, { getLeg: g, placeOrder, dryRun: false, fillSource: 'broker', coverRollMaxDebit: 1, coverRollMaxK: 2 }, dec, '10/13 10:20', S);
-    ok(T.coverKOf(pos, pos.coverLegs, cfg10) === 0 && sends.length === n0 && dec.some((d) => d.action === 'cover-roll-not-sent'),
-      'a broker run sends nothing and records that it would have rolled');
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

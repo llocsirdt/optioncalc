@@ -2031,8 +2031,6 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (cfg.coverFillModel === 'resting') governRestingCovers(st, cfg, deps, decisions);
   if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
-  // COVER ROLL (deps.coverRollMaxDebit): at the candle close, as the backtest rolls at each bar close.
-  await rollCovers(st, cfg, deps, decisions, candleTime, underlying);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
   // the 30s sub-bar pass and by every later candle until it fills or expires.
   resolvePendingHedges(st, cfg, deps, decisions);
@@ -2390,12 +2388,11 @@ function selectCoverGeometric(pos, cfg, getLeg, underlying) {
 }
 
 // ── COVER STRIKE CHOICE (2026-10-12/13) — the live port of backtest-v6-5m's coverRange / giveUpGeometry /
-// coverRoll (same names on deps). A cover is named by k = strikes from the position's own short strike toward
+// (same names on deps). The backtest's coverRoll is NOT ported — rejected by the user 2026-10-13. A cover is named by k = strikes from the position's own short strike toward
 // its profit side: k = 0 the tent, k > 0 a condor, k < 0 inside the open spread (down to one strike inside the
 // open's long leg — every such k keeps the pair's floor at W, so the lock stays W - open - cover). 10W has no
 // inside. Measured over 821 days (data/sweeps/cover-strike-2026-10-12): on 20W/40W the range with a 0.03 x W
-// premium roughly halves the closing floor loss and cuts positions uncovered at the close 2-5x; on 10W a roll
-// at <= 0.03 x W lifts the closing floor.
+// premium roughly halves the closing floor loss and cuts positions uncovered at the close 2-5x.
 const kDirOf = (side) => (side === 'bull' ? 1 : -1);
 function coverKInsideMax(cfg) { return Math.max(0, Math.round(cfg.spreadWidth / cfg.strikeIncrement) - 1); }
 function coverLegsAtK(pos, k, cfg) {
@@ -2471,84 +2468,6 @@ async function restrikeCover(st, pos, cfg, deps, decisions, carry, why) {
   releaseCoverLegs(st, pc.sentLegs || pc.legs);
   await placeContinuousCovers(st, cfg, deps, decisions, st.lastCandleTime || null, deps.underlying != null ? deps.underlying : st.lastUnderlying, [pos]);
   return true;
-}
-
-// ROLL A COVER ONE STRIKE WIDER (deps.coverRollMaxDebit x W, up to deps.coverRollMaxK beyond the tent): a covered
-// position whose market has carried past the next strike sells its cover and buys the next one out, when that
-// costs no more than the max. The pair's floor drops by exactly the roll's cost; the plateau widens a strike.
-// Once per 5m candle (processCandleClose), as the backtest does at each bar close.
-// SIMULATED AND PAPER RUNS ONLY. Under the broker a roll is a four-leg closing+opening order with its own fill
-// booking, account reconcile and display — not built yet, so a broker run records that it would have rolled
-// and sends nothing.
-async function rollCovers(st, cfg, deps, decisions, candleTime, underlying) {
-  if (!deps || deps.coverRollMaxDebit == null || !(underlying > 0)) return 0;
-  const W = cfg.spreadWidth, tick = cfg.tickIncrement, qty = cfg.quantity || 1;
-  const maxK = deps.coverRollMaxK != null ? deps.coverRollMaxK : 1;
-  const maxDebit = deps.coverRollMaxDebit * W;
-  attachLedger(st, deps);
-  let rolled = 0;
-  for (const pos of st.positions || []) {
-    if (!pos.filled || !pos.covered || pos.hedge || !pos.coverLegs || pos.shortStrike == null) continue;
-    if (candleTime && pos.coverTime === candleTime) continue;           // booked this bar
-    const k = coverKOf(pos, pos.coverLegs, cfg);
-    if (k >= maxK) continue;
-    const newLegs = coverLegsAtK(pos, k + 1, cfg);
-    const newShort = newLegs.find((l) => l.side === 'short').strike;
-    if (pos.side === 'bull' ? underlying < newShort : underlying > newShort) continue;
-    const mNew = coverMarkNow(newLegs, deps.getLeg), mOld = coverMarkNow(pos.coverLegs, deps.getLeg);
-    if (mNew == null || mOld == null) continue;
-    const cost = round2(L.roundToTick(round2(mNew - mOld + tick), tick));
-    if (cost > maxDebit + 1e-9) continue;
-    if (deps.fillSource === 'broker') {
-      if (!pos.rollWanted) decisions.push({ action: 'cover-roll-not-sent', positionId: pos.id, fromK: k, toK: k + 1, cost,
-        note: 'rolls are not built for real broker orders yet — nothing sent' });
-      pos.rollWanted = true;
-      continue;
-    }
-    // the new cover in whichever style the ledger allows (the old cover is closed whole, so no leg flips side)
-    const st0 = pos.coverSentNet === 'CREDIT' ? 'credit' : 'debit';
-    let sentLegs = newLegs, style = 'debit';
-    if (deps.enforceLegUniqueness && deps._ledger) {
-      sentLegs = null;
-      for (const sty of [st0, st0 === 'credit' ? 'debit' : 'credit']) {
-        const Lg = CL.coverLegsFor(pos.side, newShort, W, sty);
-        if (!deps._ledger.conflicts(Lg)) { sentLegs = Lg; style = sty; break; }
-      }
-      if (!sentLegs) continue;
-    }
-    if (govOn(deps) && cost > 0) {
-      const f0 = govFloor(st, deps);
-      const f1 = govFloor(st, deps, null, [pos, { ...pos, coverLegs: newLegs, coverLimit: round2(pos.coverLimit + cost) }]);
-      if (f1 < f0 && -f1 > deps.lossMax) continue;
-    }
-    const oldSent = pos.coverSentLegs || pos.coverLegs;
-    // the order as one net trade: close the old cover, open the new one (logged for simulated runs; a paper run
-    // records it without sending — closing legs it never held would only be rejected)
-    const rollLegs = oldSent.map((l) => ({ ...l, side: l.side === 'long' ? 'short' : 'long', close: true })).concat(sentLegs);
-    if (deps.dryRun === true && deps.placeOrder) {
-      const rl = resolveLegs(rollLegs, deps.getLeg);
-      if (!rl.error) await deps.placeOrder({ orderType: cost >= 0 ? 'NET_DEBIT' : 'NET_CREDIT', session: 'NORMAL', price: Math.abs(cost),
-        duration: 'DAY', orderStrategyType: 'SINGLE', complexOrderStrategyType: 'CUSTOM',
-        orderLegCollection: rl.resolved.map((l) => ({ instruction: `${l.side === 'long' ? 'BUY' : 'SELL'}_TO_${l.close ? 'CLOSE' : 'OPEN'}`,
-          quantity: qty, instrument: { symbol: l.symbol, assetType: 'OPTION' } })) },
-        { kind: 'cover-roll', of: pos.id, legs: rollLegs, limit: cost, net: cost >= 0 ? 'DEBIT' : 'CREDIT' });
-    }
-    if (deps._ledger) deps._ledger.record(sentLegs);
-    const from = { legs: pos.coverLegs, limit: pos.coverLimit, sentLegs: oldSent, sentNet: pos.coverSentNet || 'DEBIT' };
-    pos.coverLegs = newLegs;
-    pos.coverLimit = round2(pos.coverLimit + cost);
-    pos.coverSentLegs = sentLegs;
-    pos.coverSentNet = style === 'credit' ? 'CREDIT' : 'DEBIT';
-    pos.coverSentCredit = style === 'credit' ? round2(W - pos.coverLimit) : undefined;
-    pos.coverK = k + 1;
-    (pos.coverRolls = pos.coverRolls || []).push({ at: candleTime, fromK: k, toK: k + 1, cost, legs: rollLegs, from });
-    st.realizedPnl = round2(st.realizedPnl - cost * 100 * qty);
-    noteCash(st, cost * 100 * qty);
-    decisions.push({ action: 'cover-roll', positionId: pos.id, fromK: k, toK: k + 1, cost, legs: rollLegs,
-      sentNet: pos.coverSentNet, underlying, lockedFloor: round2((W - pos.limit - pos.coverLimit) * 100 * qty) });
-    rolled++;
-  }
-  return rolled;
 }
 
 // Weight on retained upside vs guaranteed floor; scaled up when the reversal is high-conviction
@@ -4050,7 +3969,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
-  rollCovers, pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / give-up re-strike / roll)
+  pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / give-up re-strike / roll)
   attachLedger,           // the leg ledger on deps — every order-placing path, candle close and worker
   placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)
   lateFloorLimit,                // LATE-DAY FLOOR GUARD
