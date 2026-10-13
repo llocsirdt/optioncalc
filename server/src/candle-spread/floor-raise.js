@@ -121,6 +121,28 @@ function structureQuoteSane(legs, mid, spot, { sigmaPts, minFrac = 0.35 } = {}) 
   return { ok: true };
 }
 
+// STRIKE RANGE FOR HEDGES (user, 2026-10-13). A fly or condor out past the book only moves the risk point beyond its
+// own strikes — it is for raising the floor INSIDE the curve we already hold. So a structure of more than two legs
+// must sit entirely within the strike range of the REAL positions (opens and covers, not hedges). Out past that
+// range only a clean vertical or single long may go (the wing concept), and only inside the expected-move band.
+// realLo/realHi null (no real positions) -> no fly/condor at all.
+function inHedgeRange(legs, { realLo, realHi, bandLo, bandHi }) {
+  const ks = legs.map((l) => l.strike);
+  const lo = Math.min(...ks), hi = Math.max(...ks);
+  if (realLo != null && realHi != null && lo >= realLo && hi <= realHi) return true;
+  if (legs.length > 2) return false;
+  return (bandLo == null || lo >= bandLo) && (bandHi == null || hi <= bandHi);
+}
+function realStrikeRange(positions) {
+  let lo = Infinity, hi = -Infinity;
+  for (const p of positions || []) {
+    if (!p || p.hedge || p.raise || p.wing || p.fly || p.offset || p.filled === false) continue;
+    for (const l of p.legs || []) { lo = Math.min(lo, l.strike); hi = Math.max(hi, l.strike); }
+    if (p.covered) for (const l of p.coverLegs || []) { lo = Math.min(lo, l.strike); hi = Math.max(hi, l.strike); }
+  }
+  return Number.isFinite(lo) ? { realLo: lo, realHi: hi } : { realLo: null, realHi: null };
+}
+
 // The full menu for one planning step: the fixed structures plus the ones sized to today's valleys.
 function candidatesFor(lo, hi, incr, xs, base) { return candidates(lo, hi, incr).concat(valleyCandidates(xs, base, incr, lo, hi)); }
 
@@ -379,4 +401,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { inHedgeRange, realStrikeRange, structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };

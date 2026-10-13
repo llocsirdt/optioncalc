@@ -331,6 +331,7 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['raise old rules', () => ({ floorRaiseLockedLift: false, floorRaiseTrend: false, floorRaiseMinRatioFar: null })],
   ['raise no lockedLift', () => ({ floorRaiseLockedLift: false })],
   ['raise no trend', () => ({ floorRaiseTrend: false })],
+  ['raise no bookRange', () => ({ floorRaiseBookRange: false })],
   ['geo offset1 gu tent ml 0.05', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent', continuousCoverMinLockFrac: 0.05 })],
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held

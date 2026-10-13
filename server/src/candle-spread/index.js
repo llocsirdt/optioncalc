@@ -923,7 +923,11 @@ function applyFloorRaise(v) {
   //   Trend AHH  — OFF by measurement (raise-discipline-2026-10-13: closing floor worse on 4 of 5 variants with it on:
   //                v7-10 -613 -> -717, v7-20 -484 -> -560, v9-20 -483 -> -500, v4-20 -423 -> -485; v7-40 -1,149 ->
   //                -1,138). Set floorRaiseTrend = 'AHH' to turn it back on.
+  //   BookRange  — a fly/condor may only use strikes inside the range of the real positions (opens + covers); outside
+  //                it only a 2-leg vertical or single long, inside the expected-move band (user, 2026-10-13: far
+  //                flies/condors just move the risk point beyond their strikes).
   if (v.floorRaiseLockedLift == null) v.floorRaiseLockedLift = true;
+  if (v.floorRaiseBookRange == null) v.floorRaiseBookRange = true;
   if (v.floorRaiseIronMix == null) v.floorRaiseIronMix = true;
   if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 6;
   if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
@@ -2067,7 +2071,7 @@ function assertDeps(runs) {
         // fold stages (2026-10-09): read off cfg / floorRaiseCfg by trader.raiseFloor and raiseCapFixOn
         'floorRaiseCapFix', 'floorRaiseWings',
         // raise discipline (2026-10-13): read off cfg.floorRaiseCfg by raiseFloor / raiseSideGuard / walkRaiseOrders
-        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit']);
+        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseBookRange']);
   }
 }
 

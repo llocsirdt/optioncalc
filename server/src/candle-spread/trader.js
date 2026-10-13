@@ -1394,6 +1394,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   // order the user placed by hand) was legal on every leg and pays the same shape. For a fly/condor whose own legs
   // conflict, its iron twin is used when free: scored and priced as the canonical structure (debit-equivalent =
   // iron's net + its constant payoff offset), sent as a CREDIT on the iron legs.
+  const hedgeRange = cfg.floorRaiseBookRange === true ? { ...FR.realStrikeRange(st.positions), bandLo, bandHi } : null;
   const ledgerConflicts = (legs) => !!(deps.enforceLegUniqueness && deps._ledger && deps._ledger.conflicts(legs));
   const ironAlt = new Map();
   const ironOf = (legs) => {
@@ -1464,6 +1465,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: (legs) => {
         if (badQuoted.has(keyOf(legs))) return true;
+        if (hedgeRange && !FR.inHedgeRange(legs, hedgeRange)) return true;
         if (!ledgerConflicts(legs)) { ironAlt.delete(keyOf(legs)); return false; }
         const alt = ironOf(legs);
         if (alt && !ledgerConflicts(alt.legs)) { ironAlt.set(keyOf(legs), alt); return false; }
@@ -1508,7 +1510,9 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       // v7-10's 13:45 C30580/30590 filled in 6 seconds at 1.65 — the market took the top of our range. Any lower
       // fill only improves the ratio the plan was approved on.
       const walk = walkCfg(cfg);
-      const ceiling = h.debit;
+      // A walking raise never goes above the quoted MID (user, 2026-10-13: "we don't put in hedge orders too high"); the
+      // plan's ratio was judged at mid + slip, so any price at or under the mid only improves it.
+      const ceiling = walk && ev.mid != null ? Math.min(h.debit, roundToTick(ev.mid, tick)) : h.debit;
       const startPx = walk ? Math.min(ceiling, Math.max(tick, roundToTick((ev.mid != null ? ev.mid : ceiling) * walk.startFrac, tick))) : ceiling;
       const sendPx = alt ? round2(alt.offset - startPx) : startPx;
       if (!(sendPx > 0)) { stop = true; break; }

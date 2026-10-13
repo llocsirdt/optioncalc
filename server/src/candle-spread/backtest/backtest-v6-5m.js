@@ -1575,7 +1575,11 @@ function runDay5m(bars, signalFn, opts = {}) {
             lockedMustLift: opts.floorRaiseLockedLift === true,
             sideGuard: frSideGuard(S),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
-            skip: enforceLegs ? (legs) => ledger.conflicts(legs) : null });
+            skip: (() => {
+              const hr = opts.floorRaiseBookRange === true ? { ...FR.realStrikeRange(st.positions), bandLo, bandHi } : null;
+              if (!hr && !enforceLegs) return null;
+              return (legs) => (hr && !FR.inHedgeRange(legs, hr)) || (enforceLegs && ledger.conflicts(legs));
+            })() });
           frBlockedLocked += blockedLocked;
           if (!best) break;
           if (frResting) {

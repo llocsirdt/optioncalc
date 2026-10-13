@@ -124,6 +124,25 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
     }
   }
 
+  // ── 4. hedge strike range ───────────────────────────────────────────────────────────────────────────
+  {
+    const real = [{ filled: true, legs: [{ side: 'long', type: 'C', strike: 30500 }, { side: 'short', type: 'C', strike: 30510 }] },
+      { filled: true, covered: true, legs: [{ side: 'long', type: 'P', strike: 30600 }, { side: 'short', type: 'P', strike: 30590 }],
+        coverLegs: [{ side: 'long', type: 'C', strike: 30560 }, { side: 'short', type: 'C', strike: 30570 }] },
+      { filled: true, hedge: true, raise: true, legs: [{ side: 'long', type: 'P', strike: 30170 }, { side: 'short', type: 'P', strike: 30160 }] }];
+    const r = FR.realStrikeRange(real);
+    ok(r.realLo === 30500 && r.realHi === 30600, `real range = opens + covers, hedges excluded (${r.realLo}-${r.realHi})`);
+    const hr = { ...r, bandLo: 30400, bandHi: 30700 };
+    const L = (spec) => spec.split(' ').map((t) => ({ side: t[0] === 'l' ? 'long' : 'short', type: t[1], strike: +t.slice(2) }));
+    ok(FR.inHedgeRange(L('lP30520 sP30530 sC30540 lC30550'), hr), 'a condor inside the real range: allowed');
+    ok(!FR.inHedgeRange(L('lP30160 sP30170 sP30180 lP30190'), hr), 'a condor far out at 30170: refused');
+    ok(!FR.inHedgeRange(L('lC30580 sC30600 sC30600 lC30620'), hr), 'a fly reaching past the real range: refused');
+    ok(FR.inHedgeRange(L('lP30440 sP30430'), hr), 'a 2-leg vertical outside the range but inside the band: allowed (wing)');
+    ok(!FR.inHedgeRange(L('lP30180 sP30170'), hr), 'a 2-leg vertical outside the band: refused');
+    ok(!FR.inHedgeRange(L('lP30520 sP30530 sC30540 lC30550'), { realLo: null, realHi: null, bandLo: 30400, bandHi: 30700 }),
+      'no real positions: no fly/condor at all');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
