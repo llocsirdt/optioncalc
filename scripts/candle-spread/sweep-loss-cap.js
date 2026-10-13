@@ -309,6 +309,16 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['minLock 0.05', () => ({ continuousCoverMinLockFrac: 0.05 })],
   ...['offset1', 'offset2', 'halfway'].flatMap((g) => [['', null], [' ml 0.05', 0.05], [' ml 0.02', 0.02]].map(([n, ml]) =>
     [`geo ${g}${n}`, () => ({ coverGeometry: g, ...(ml != null ? { continuousCoverMinLockFrac: ml } : {}) })])),
+  // COVER STRIKE CHOICE (2026-10-12, user): give-up re-strikes inside the open spread (20/40W; on 10W inside = the
+  // tent, so no job); the resting cover re-strikes across [furthest inside .. 2 beyond], conceding `p` x W of lock per
+  // strike of plateau; a covered position rolls its cover a strike wider while that costs <= r x W (up to 2 beyond).
+  ['gu inside', (r) => (r.spreadWidth > 10 ? { giveUpGeometry: 'inside' } : null)],
+  ...[0.03, 0.05, 0.08].map((pr) => [`range p${pr}`, () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: pr, giveUpGeometry: 'inside' })]),
+  ...[0.03, 0.06].map((rd) => [`roll ${rd}`, () => ({ coverRollMaxDebit: rd, coverRollMaxK: 2 })]),
+  ...[0.01, 0.02].map((pr) => [`range p${pr}`, () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: pr, giveUpGeometry: 'inside' })]),
+  ...[0.02, 0.03].map((pr) => [`range p${pr} + roll 0.03`, () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: pr, giveUpGeometry: 'inside', coverRollMaxDebit: 0.03, coverRollMaxK: 2 })]),
+  ['range p0.05 + roll 0.03', () => ({ coverRangeInside: 9, coverRangeBeyond: 2, coverRangePremium: 0.05, giveUpGeometry: 'inside', coverRollMaxDebit: 0.03, coverRollMaxK: 2 })],
+  ['geo offset1 gu tent', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent' })],
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
   // side) now actually gets the wrong-way position off at the give-up price.
@@ -498,6 +508,24 @@ function measure(job) {
         intradayNonNegPct: Math.round(t.reduce((a, r) => a + (r.intradayFloorNonNegPct || 0), 0) / n * 10) / 10,
         tentsPerDay: Math.round(t.reduce((a, r) => a + (r.tents || 0), 0) / n * 10) / 10,
         coverSameBarPerDay: Math.round(t.reduce((a, r) => a + (r.coverSameBar || 0), 0) / n * 100) / 100,
+        rangeRestrikesPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rangeRestrikes) || 0), 0) / n * 10) / 10,
+        guRestrikesPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.guRestrikes) || 0), 0) / n * 10) / 10,
+        rollsPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rolls) || 0), 0) / n * 10) / 10,
+        rollSpentPerDay: Math.round(t.reduce((a, r) => a + ((r.coverRange && r.coverRange.rollSpent) || 0), 0) / n),
+        // TIME TO COVER + FLOOR WHEN FLAT (2026-10-12, user): how fast opens get covered, and what the floor is
+        // each time the whole book is covered (>= 0 = covering at small profits).
+        ...(() => {
+          const cat = (k) => t.reduce((a, r) => a.concat(r[k] || []), []).sort((x, y) => x - y);
+          const med = (a) => (a.length ? a[Math.floor(a.length / 2)] : null);
+          const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);
+          const cm = cat('coverMins'), gm = cat('giveUpMins'), ff = cat('flatFloors');
+          return {
+            coverMinAvg: avg(cm), coverMinMedian: med(cm), giveUpMinAvg: avg(gm), giveUpShare: Math.round(1000 * gm.length / Math.max(1, gm.length + cm.length)) / 10,
+            uncoveredEodPerDay: Math.round(t.reduce((a, r) => a + (r.uncoveredEod || 0), 0) / n * 100) / 100,
+            flatEventsPerDay: Math.round(ff.length / n * 10) / 10, flatFloorAvg: avg(ff), flatFloorMedian: med(ff),
+            flatNonNegPct: ff.length ? Math.round(1000 * ff.filter((x) => x >= 0).length / ff.length) / 10 : null,
+          };
+        })(),
       };
     })(),
     giveUpPosPerDay: Math.round(res.reduce((a, r) => a + (r.giveUpPos || 0), 0) / days.length * 100) / 100,

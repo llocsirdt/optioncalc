@@ -76,6 +76,8 @@ const RESTRICTS = ['no-open', 'halt'];
 // Cache + provenance. `sticky` is the point: a read failure must never change behaviour in either direction.
 const state = {
   loadedAt: null,          // when we last successfully parsed a file
+  armed: null,             // the file's armed selection, normalised (null = the environment's CANDLE_SPREAD_ARMED)
+  armedRejected: null,
   checkedAt: null,         // when we last tried
   etag: null,
   raw: null,               // the parsed file, as read
@@ -168,7 +170,34 @@ function normalise(file, knownVariants, opts = {}) {
     }
     out.variants[name] = { mode: effective, requestedMode: mode, restrict, note: entry.note || null, until };
   }
+  // THE ARMED SELECTION (2026-10-12, user: "change/set the live strategy via the control page"). WHICH variant
+  // holds the environment's ceiling (CANDLE_SPREAD_ARMED_MODE) — not the ceiling itself, and not the master switch
+  // (CANDLE_SPREAD_LIVE): both stay in the environment, so this cannot create real-money capability the env has
+  // not granted; it can only point the one armed slot at another strategy. Absent = the env's CANDLE_SPREAD_ARMED.
+  //   armed: { variant, from?: YYYY-MM-DD (ET; before it `prev` applies), prev?, note?, by?, at? }
+  const a = file && file.armed;
+  if (a != null) {
+    const v = a && typeof a === 'object' ? a.variant : a;
+    const from = a && a.from ? String(a.from).slice(0, 10) : null;
+    if (!v || typeof v !== 'string') out.armedRejected = 'armed.variant is missing';
+    else if (known && !known.has(v)) out.armedRejected = `armed variant ${v} is not on the roster`;
+    else if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) out.armedRejected = `armed.from is not YYYY-MM-DD: ${JSON.stringify(a.from)}`;
+    else if (a.prev && known && !known.has(a.prev)) out.armedRejected = `armed.prev ${a.prev} is not on the roster`;
+    else out.armed = { variant: v, from, prev: (a && a.prev) || null, note: (a && a.note) || null, by: (a && a.by) || null, at: (a && a.at) || null };
+  }
   return out;
+}
+
+/**
+ * The armed variant on `dateET`: the control file's selection once its `from` date has arrived, the selection it
+ * replaced before then, and the environment's choice when the file says nothing. A rejected selection is ignored
+ * (the env applies), never guessed at.
+ */
+function armedVariant(dateET, envDefault) {
+  const a = state.armed;
+  if (!a) return envDefault;
+  if (a.from && (dateET || todayET()) < a.from) return a.prev || envDefault;
+  return a.variant;
 }
 
 /**
@@ -221,7 +250,7 @@ async function refresh(deps = {}) {
     else if (r && r.missing) {
       // No file at all: every variant simulates. Say it once, not every poll.
       if (state.source !== 'absent') log('[candle-spread] no strategy-control file in S3 — every variant is in simulation.');
-      state.source = 'absent'; state.variants = {}; state.raw = null;
+      state.source = 'absent'; state.variants = {}; state.raw = null; state.armed = null; state.armedRejected = null;
       state.unknownVariants = []; state.error = null;
       return state;
     } else {
@@ -252,11 +281,14 @@ async function refresh(deps = {}) {
   }
 
   const n = normalise(file, deps.knownVariants, { liveAllowed: !!deps.liveAllowed, baseline: state.baseline });
-  const before = JSON.stringify(state.variants);
-  const after = JSON.stringify(n.variants);
+  const before = JSON.stringify([state.variants, state.armed]);
+  const after = JSON.stringify([n.variants, n.armed || null]);
   state.reads++;
   state.raw = file;
   state.variants = n.variants;
+  state.armed = n.armed || null;
+  state.armedRejected = n.armedRejected || null;
+  if (n.armedRejected) warn(`[candle-spread] strategy-control armed selection IGNORED — ${n.armedRejected}`);
   state.unknownVariants = n.unknown;
   state.rejected = n.rejected;
   state.expired = n.expired;
@@ -269,8 +301,9 @@ async function refresh(deps = {}) {
 
   if (before !== after) {
     state.changes++;
-    const summary = Object.entries(n.variants)
-      .map(([k, v]) => `${k}=${v.mode}${v.restrict ? '/' + v.restrict : ''}`).join(' ') || '(all simulate)';
+    const summary = (Object.entries(n.variants)
+      .map(([k, v]) => `${k}=${v.mode}${v.restrict ? '/' + v.restrict : ''}`).join(' ') || '(all simulate)')
+      + (n.armed ? `  armed=${n.armed.variant}${n.armed.from ? ' from ' + n.armed.from : ''}` : '');
     log(`[candle-spread] strategy-control CHANGED -> ${summary}`
       + (file.updatedBy ? `  (by ${file.updatedBy}${file.updatedAt ? ' at ' + file.updatedAt : ''})` : ''));
   }
@@ -301,6 +334,19 @@ function forVariant(variant) {
   }
   return { mode: e.mode, requestedMode: e.requestedMode, restrict: e.restrict, note: e.note,
     until: e.until, listed: true, source: 'control' };
+}
+
+/**
+ * Re-apply the last file read against the CURRENT baseline, without a network read. The armed slot moving
+ * changes the roster ceilings, and an entry clamped against the old ceilings must be re-judged now, not 20 s
+ * later.
+ */
+function renormalise(knownVariants, liveAllowed) {
+  if (!state.raw) return state;
+  const n = normalise(state.raw, knownVariants, { liveAllowed: !!liveAllowed, baseline: state.baseline });
+  Object.assign(state, { variants: n.variants, unknownVariants: n.unknown, rejected: n.rejected, expired: n.expired,
+    downgraded: n.downgraded, armed: n.armed || null, armedRejected: n.armedRejected || null });
+  return state;
 }
 
 /** variant -> mode, from the engine's dryRun vocabulary. Exported so callers do not restate the mapping. */
@@ -350,6 +396,7 @@ function health() {
     rejected: state.rejected || [],
     expired: state.expired || [],
     downgraded: state.downgraded || [],
+    armedSelection: state.armed, armedRejected: state.armedRejected || null,
   };
 }
 
@@ -392,7 +439,13 @@ async function applyPatch(patch, deps = {}) {
   if (!file.variants || typeof file.variants !== 'object') file.variants = {};
 
   const next = { ...file, variants: { ...file.variants } };
-  if (patch && patch.variants && typeof patch.variants === 'object') {
+  if (patch && patch.armed !== undefined) {
+    // { armed: {variant, from?, prev?, note?}, removeVariants?: [...] } — or armed: null to hand the slot back to
+    // the environment. removeVariants drops control entries the move makes meaningless (the old armed variant's).
+    if (patch.armed === null) delete next.armed;
+    else next.armed = { ...patch.armed, by: patch.by || patch.updatedBy || 'api', at: new Date().toISOString() };
+    for (const v of patch.removeVariants || []) delete next.variants[v];
+  } else if (patch && patch.variants && typeof patch.variants === 'object') {
     next.variants = { ...patch.variants };
   } else if (patch && patch.variant) {
     if (known && !known.has(patch.variant)) {
@@ -416,6 +469,7 @@ async function applyPatch(patch, deps = {}) {
   // liveAllowed true here on purpose — we store an INTENT; the clamp against the roster and the environment
   // both happen at read time, against the environment the engine is actually running in.
   const check = normalise(next, deps.knownVariants, { liveAllowed: true, baseline: state.baseline });
+  if (check.armedRejected) return { ok: false, status: 400, error: check.armedRejected };
   if (check.unknown.length || check.rejected.length) {
     return { ok: false, status: 400,
       error: 'the resulting file would contain entries that do nothing',
@@ -438,8 +492,8 @@ async function applyPatch(patch, deps = {}) {
 function _reset() {
   Object.assign(state, { loadedAt: null, checkedAt: null, etag: null, raw: null, variants: {},
     updatedAt: null, updatedBy: null, source: 'none', error: null, errorAt: null, unknownVariants: [],
-    rejected: [], expired: [], downgraded: [], reads: 0, readFails: 0, changes: 0 });
+    rejected: [], expired: [], downgraded: [], reads: 0, readFails: 0, changes: 0, armed: null, armedRejected: null });
 }
 
-module.exports = { refresh, applyPatch, forVariant, modeFromDryRun, seedBaseline, hasBaseline, clampMode, canOpen, canSendOrders, dryRunFor, health, normalise,
+module.exports = { refresh, applyPatch, forVariant, armedVariant, renormalise, modeFromDryRun, seedBaseline, hasBaseline, clampMode, canOpen, canSendOrders, dryRunFor, health, normalise,
   controlKey, todayET, REQUIRED_MODES, RESTRICTS, _state: state, _reset };

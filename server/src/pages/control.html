@@ -24,6 +24,7 @@
   button[disabled]{opacity:.45}
   .b-stop{background:var(--stop)} .b-warn{background:var(--warn)}
   .b-ok{background:var(--ok)} .b-live{background:var(--live)} .b-dim{background:#343a4a;font-size:15px}
+  select{width:100%;padding:12px;font-size:17px;background:#0d0f15;color:var(--txt);border:1px solid var(--line);border-radius:10px}
   input{width:100%;padding:12px;font-size:16px;background:#0d0f15;color:var(--txt);
         border:1px solid var(--line);border-radius:10px}
   .msg{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:14px;display:none;white-space:pre-wrap}
@@ -63,6 +64,21 @@
   <div class="msg" id="msg"></div>
 </div>
 
+<!-- THE ARMED STRATEGY. Which variant holds the armed slot; the environment still decides whether that slot can
+     trade real money (CANDLE_SPREAD_LIVE) and at what ceiling (CANDLE_SPREAD_ARMED_MODE). The server validates the
+     choice (on the roster, loss-capped, NDX) and refuses "now" once either session has started. -->
+<div class="card">
+  <div class="lbl">Armed strategy</div>
+  <div class="state" id="armed" style="font-size:22px">…</div>
+  <div class="sub" id="armeddetail"></div>
+  <div style="margin-top:10px"><select id="armsel"></select></div>
+  <div class="row">
+    <button class="b-dim" id="armnow">SET NOW</button>
+    <button class="b-dim" id="armnext">FROM NEXT SESSION</button>
+  </div>
+  <div class="msg" id="armmsg"></div>
+</div>
+
 <div class="card">
   <div class="lbl">Token</div>
   <input id="tok" type="password" inputmode="text" autocomplete="off"
@@ -73,7 +89,7 @@
 
 <div class="foot">
   Served from the API origin, so no CORS.<br>
-  Token is kept in this browser's localStorage only.
+  Token is kept in this browser's localStorage only.<br>control v2
 </div>
 
 <script>
@@ -85,8 +101,8 @@
   var $ = function(id){ return document.getElementById(id); };
   var busy = false;
 
-  function show(text, bad){
-    var m = $('msg');
+  function show(text, bad, id){
+    var m = $(id || 'msg');
     m.textContent = text;
     m.className = 'msg show ' + (bad ? 'm-err' : 'm-ok');
   }
@@ -107,7 +123,9 @@
       $('detail').textContent = 'every variant is simulating — nothing armed by the environment or the control file';
       return;
     }
-    var v = eff[0];
+    // The ARMED variant's state first — it is the one the presets act on.
+    var av = c.armed && c.armed.variant, v = eff[0];
+    for (var i = 0; i < eff.length; i++) if (eff[i].variant === av) { v = eff[i]; break; }
     $('state').textContent = (v.mode + (v.restrict ? ' / ' + v.restrict : '')).toUpperCase();
     var bits = [v.variant];
     // Say WHERE the state came from: an env arming behaves differently from a control-file entry, because only
@@ -121,10 +139,50 @@
     $('detail').textContent = bits.join(' · ');
   }
 
+  function renderArmed(c){
+    var a = c && c.armed;
+    if (!a) { $('armed').textContent = '?'; return; }
+    $('armed').textContent = a.variant;
+    var bits = [a.variant === a.envDefault ? 'the environment default' : 'set here (env default ' + a.envDefault + ')'];
+    if (a.pending) bits.push('switching to ' + a.pending.variant + ' from ' + a.pending.from);
+    if (c.armedRejected) bits.push('IGNORED selection: ' + c.armedRejected);
+    $('armeddetail').textContent = bits.join(' · ');
+    var sel = $('armsel'), keep = sel.value;
+    var opts = a.armableVariants || [];
+    if (sel.options.length !== opts.length) {
+      sel.innerHTML = '';
+      opts.forEach(function(v){ var o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+    }
+    sel.value = keep && opts.indexOf(keep) >= 0 ? keep : a.variant;
+  }
+
+  function arm(when){
+    var tok = localStorage.getItem(KEY) || '';
+    if (!tok) { show('No token saved on this device.', true, 'armmsg'); return; }
+    var v = $('armsel').value;
+    if (!v) return;
+    if (!confirm('Arm ' + v + (when === 'now' ? ' NOW' : ' from the next session') + '?')) return;
+    if (busy) return;
+    busy = true;
+    fetch(API + '/arm', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'content-type':'application/json', 'x-control-token': tok },
+      body: JSON.stringify({ token: tok, by: 'control-ui', variant: v, when: when })
+    })
+    .then(function(r){ return r.json().then(function(j){ return { s:r.status, j:j }; }); })
+    .then(function(o){
+      busy = false;
+      if (o.s === 200) show(o.j.from ? (v + ' armed from ' + o.j.from + '; today stays on ' + o.j.armedNow) : ('Armed now: ' + o.j.armedNow + ' (' + String(o.j.effective || '').toUpperCase() + ')'), false, 'armmsg');
+      else show('HTTP ' + o.s + ' — ' + (o.j && o.j.error ? o.j.error : 'failed'), true, 'armmsg');
+      refresh();
+    })
+    .catch(function(e){ busy = false; show('Request failed: ' + e, true, 'armmsg'); });
+  }
+
   function refresh(){
     fetch(API, { cache:'no-store' })
       .then(function(r){ return r.json(); })
-      .then(function(j){ render(j.control || {}); })
+      .then(function(j){ render(j.control || {}); renderArmed(j.control || {}); })
       .catch(function(e){ $('state').textContent = 'UNREACHABLE'; $('detail').textContent = String(e); });
   }
 
@@ -166,6 +224,8 @@
       send(p);
     });
   });
+  $('armnow').addEventListener('click', function(){ arm('now'); });
+  $('armnext').addEventListener('click', function(){ arm('next-session'); });
   $('save').addEventListener('click', function(){
     var v = $('tok').value.trim();
     if (!v) { localStorage.removeItem(KEY); show('Token cleared from this device.'); }

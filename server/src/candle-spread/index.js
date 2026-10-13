@@ -329,6 +329,11 @@ function applyPlacementG(v) {
 // suffered in the mid-Feb chop stretch, and it trades ~35/day against v6-20's 26 — more order flow
 // through the pipe, which is what a paper session should be stressing.
 const ARMED_VARIANT = process.env.CANDLE_SPREAD_ARMED || 'v7-10';
+// THE ARMED VARIANT NOW, which the control page can move (strategy-control `armed`, 2026-10-12). ARMED_VARIANT is
+// the environment's choice and the default; it still seeds the roster at boot. Only WHICH variant holds the armed
+// slot can change remotely — the slot's ceiling (CANDLE_SPREAD_ARMED_MODE) and the master switch
+// (CANDLE_SPREAD_LIVE) stay in the environment.
+function armedVariant() { return SC.armedVariant(todayEST(), ARMED_VARIANT); }
 // LIVE EXPERIMENTS, 2026-09-10. Two mechanisms, each on one of a correlated PAIR so the twin is a
 // matched control running the same signal without the feature.
 //
@@ -851,6 +856,27 @@ const SIM_FILL_LEGACY = String(process.env.CANDLE_SPREAD_SIM_FILL || '').toLower
 const OPEN_RESTRIKE_MIN = 10;
 function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = OPEN_RESTRIKE_MIN; }
 
+// COVER STRIKE CHOICE (2026-10-13, user: "configure your recommendation so far"), every variant by width.
+// 821 days, data/sweeps/cover-strike-2026-10-12, scored on the closing floor and positions uncovered at the close:
+//   20W / 40W — the resting cover floats between one strike inside the open's long leg and 2 beyond the tent,
+//     conceding 0.03 x W of lock per strike of plateau, and a give-up re-strikes inside. Best arm on both
+//     metrics for every 20W/40W variant (v7-20 -1,834/6.1 -> -674/3.6; v7-40 -2,623/6.4 -> -1,281/1.8).
+//   10W — no inside strikes (range = roster); the cover rolls a strike wider when that costs <= 0.03 x W, up to
+//     2 beyond the tent (v7-10 -492 -> -444 closing floor, uncovered unchanged). Rolls are simulated / paper
+//     only for now: under the broker (v7-10 live) a roll is recorded as wanted and nothing is sent.
+// Set any of the fields before applyExperiments to override.
+function applyCoverStrikeChoice(v) {
+  if (v.spreadWidth >= 20) {
+    if (v.coverRangeInside == null) v.coverRangeInside = 9;
+    if (v.coverRangeBeyond == null) v.coverRangeBeyond = 2;
+    if (v.coverRangePremium == null) v.coverRangePremium = 0.03;
+    if (v.giveUpGeometry == null) v.giveUpGeometry = 'inside';
+  } else {
+    if (v.coverRollMaxDebit == null) v.coverRollMaxDebit = 0.03;
+    if (v.coverRollMaxK == null) v.coverRollMaxK = 2;
+  }
+}
+
 // FLOOR RAISE (2026-10-06) — the user's standing policy, live: always buy the best near-money floor lift per
 // dollar at 2:1 or better, never pushing a locked profit below zero (floor-raise.js, shared with the
 // backtest). 765-day sweep at 2:1: locked-profit days 33.7% -> 37.2% fleet-wide, closing floor +\$286, peak
@@ -936,6 +962,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
   applyLateFloor(v);
   applyPlacementG(v);
   applyRestrike(v);
+  applyCoverStrikeChoice(v);
   applyFloorRaise(v);
   // FLEET DEFAULT first — ladder + the cell's minLock level, unless this is a control cell.
   const cell = cellOf(v.variant);
@@ -1953,6 +1980,9 @@ function buildEngineDeps(run, live) {
       // and measured on its own. Unset means "follow coverLadder", which is today's behaviour.
       openLadder: run.openLadder, openLadderStepDollars: run.openLadderStepDollars,
       ladderAdverseOnly: run.ladderAdverseOnly, openRestrikeReplace: run.openRestrikeReplace, openRestrikeReplaceMax: run.openRestrikeReplaceMax,
+      // cover strike choice (applyCoverStrikeChoice)
+      coverRangeInside: run.coverRangeInside, coverRangeBeyond: run.coverRangeBeyond, coverRangePremium: run.coverRangePremium,
+      giveUpGeometry: run.giveUpGeometry, coverRollMaxDebit: run.coverRollMaxDebit, coverRollMaxK: run.coverRollMaxK,
       // FLY / CONDOR VALLEY REPAIR — read off `deps`, so like every other engine opt it MUST be listed
       // here or the flag is silently dropped live while the backtest measures a gain.
       flyConvert: run.flyConvert, flyMinRatio: run.flyMinRatio, flyBandSig: run.flyBandSig,
@@ -2452,6 +2482,7 @@ async function runOrderPollInner() {
   // defaulting to 'simulate' — v7-10 runs paper from the environment and the control file never mentions it.
   await SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED, baseline: rosterBaseline() })
     .catch((e) => console.error('[candle-spread] strategy-control:', e && e.message));
+  applyArmedSelection();   // a move written elsewhere, or a 'next-session' move whose day has come
   // FETCHED ONLY IF SOMETHING WILL USE IT. Eagerly calling accountPositionsIfDue() here meant the account
   // was read every 3 minutes whether or not any run had a record to compare against — all weekend, all
   // night, ~480 reads a day answering a question nobody asked. Lazy + memoised per poll: the first run that
@@ -3045,6 +3076,7 @@ function start(deps) {
   // anyway — SC keeps its seeded baseline and logs — so a broken S3 cannot wedge the engine; it is exactly as
   // safe as the 20s poll that used to do the first read.
   _controlLoaded = SC.refresh({ knownVariants: rosterVariants(), liveAllowed: LIVE_ARMED, baseline: rosterBaseline() })
+    .then(() => applyArmedSelection())
     .catch((e) => console.error('[candle-spread] strategy-control (boot):', e && e.message));
   _rehydrated = rehydrateRuns().catch((e) => {
     console.error('[candle-spread] run archive rehydrate failed (continuing on local disk):', e && e.message);
@@ -3234,6 +3266,115 @@ function rosterVariants() {
   return _rosterFallback;
 }
 
+// Point the armed slot at the selected variant: it gets the environment's armed mode, every other run simulates.
+// Runs after every control read. Only ever moves while both variants' sessions are untouched (handleControlArm
+// enforces that, or defers the move to the next session with `from`), because a session's config is sealed
+// once its first candle lands (refreshUntouchedConfig) and a live book cannot change hands mid-day.
+function applyArmedSelection() {
+  if (!RUNS || !RUNS.length) return null;
+  const want = armedVariant();
+  const moved = [];
+  for (const r of RUNS) {
+    const d = r.variant === want ? ARMED_MODE : true;
+    if (r.dryRun !== d) { moved.push(`${r.variant}: ${JSON.stringify(r.dryRun)} -> ${JSON.stringify(d)}`); r.dryRun = d; }
+  }
+  if (moved.length) {
+    SC.seedBaseline(rosterBaseline());
+    SC.renormalise(rosterVariants(), LIVE_ARMED);
+    console.warn(`[candle-spread] ARMED SLOT -> ${want} (${moved.join(', ')})`);
+  }
+  return want;
+}
+
+// The armed slot may only be pointed at a GOVERNED NDX variant: one with a finite loss cap. An uncapped twin
+// ('-c') can lose without bound, which the daily risk tolerance rules out for real money.
+function armableReason(variant) {
+  const run = RUNS.find((r) => r.variant === variant) || buildRuns().find((r) => r.variant === variant);
+  if (!run) return `${variant} is not on the roster`;
+  if (!(Number.isFinite(run.lossMax) && run.lossMax > 0)) return `${variant} has no loss cap (lossMax ${run.lossMax}) — only governed variants can trade real money`;
+  if (String(run.symbol || '').toUpperCase() !== 'NDX') return `${variant} trades ${run.symbol}, not NDX`;
+  return null;
+}
+
+// What today's session holds for a variant: has it started (sealed config), and is anything at the broker
+// (working orders, filled positions not covered)? The move is refused while either variant is under way.
+function sessionExposure(variant) {
+  const run = RUNS.find((r) => r.variant === variant);
+  if (!run) return { started: false, open: [] };
+  const d = todayEST();
+  const rec = store.readRun(store.makeRunId(run.symbol, run.expiration || d, d, run.variant));
+  const st = (rec && rec.state) || {};
+  const pos = st.positions || [];
+  const open = [];
+  const uncovered = pos.filter((p) => p.filled === true && !p.covered && !p.hedge).length;
+  const working = (st.liveOrders || []).filter((o) => o.status === 'working').length;
+  if (st.pendingOpenId) open.push('an open order working');
+  if (uncovered) open.push(`${uncovered} uncovered position(s)`);
+  if (working) open.push(`${working} order(s) working at Schwab`);
+  return { started: !!(rec && ((rec.events || []).length || pos.length)), open };
+}
+
+function nextDateET() {
+  const [y, m, dd] = todayEST().split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * POST /api/v1/candle-spread/control/arm  { variant, when: 'now' | 'next-session', note? }
+ * Move the armed slot to another strategy. Validated: on the roster, governed, NDX, not already armed. 'now' only
+ * while neither the outgoing nor the incoming variant's session has started (pre-market, or a day with no
+ * session); otherwise 'next-session' records the move with from = tomorrow (ET), and today finishes as it began.
+ */
+async function handleControlArm(req) {
+  const auth = controlAuthOk(req);
+  if (!auth.ok) {
+    console.warn(`[candle-spread] control arm REFUSED (${auth.error})`);
+    return { status: auth.status, body: { ok: false, error: auth.error } };
+  }
+  const b = req.body || {};
+  const variant = String(b.variant || '').trim();
+  const when = String(b.when || 'now').toLowerCase();
+  if (!variant) return { status: 400, body: { ok: false, error: 'variant is required' } };
+  if (!['now', 'next-session'].includes(when)) return { status: 400, body: { ok: false, error: `when must be 'now' or 'next-session'` } };
+  const why = armableReason(variant);
+  if (why) return { status: 400, body: { ok: false, error: why } };
+  const cur = armedVariant();
+  const pending = SC.health().armedSelection;
+  const hasPending = !!(pending && pending.from && pending.from > todayEST());
+  if (variant === cur && !hasPending) {
+    return { status: 400, body: { ok: false, error: `${variant} is already the armed strategy` } };
+  }
+  let armed;
+  if (variant === cur) {
+    armed = { variant, note: b.note || 'cancelled the scheduled move' };   // cancels a pending move; today is unchanged
+  } else if (when === 'now') {
+    const blockers = [];
+    for (const v of [...new Set([cur, variant])]) {
+      const x = sessionExposure(v);
+      if (x.open.length) blockers.push(`${v} has ${x.open.join(', ')}`);
+      else if (x.started) blockers.push(`${v}'s session has already started (its config is sealed for today)`);
+    }
+    if (blockers.length) {
+      return { status: 409, body: { ok: false, error: `cannot move the armed slot now: ${blockers.join('; ')}. `
+        + `Use "next session" — today finishes on ${cur}, ${variant} trades from tomorrow.`, blockers } };
+    }
+    armed = { variant, note: b.note || null };
+  } else {
+    armed = { variant, from: nextDateET(), prev: cur, note: b.note || null };
+  }
+  // The outgoing variant's control entry (e.g. a LIVE press) governs nothing once it is unarmed; drop it with the
+  // move. A 'next-session' move keeps it — the outgoing variant is still armed for the rest of today.
+  const removeVariants = when === 'now' && cur !== variant ? [cur] : [];
+  const r = await SC.applyPatch({ armed, removeVariants, by: b.by || 'control-ui' }, { knownVariants: rosterVariants(),
+    liveAllowed: LIVE_ARMED, log: (m) => console.log(m), warn: (m) => console.warn(m) });
+  if (!r.ok) return { status: r.status || 400, body: { ok: false, error: r.error } };
+  const now = applyArmedSelection();
+  const eff = SC.forVariant(variant);
+  console.log(`[candle-spread] control ARM ${variant} (${when}) by ${b.by || 'control-ui'}; armed now ${now}`);
+  return { status: 200, body: { ok: true, variant, when, armedNow: now,
+    from: armed.from || null, effective: `${eff.mode}${eff.restrict ? '/' + eff.restrict : ''}`, state: r.state } };
+}
+
 function controlAuthOk(req) {
   if (!CONTROL_TOKEN) return { ok: false, status: 503, error: 'control API is disabled (CANDLE_SPREAD_CONTROL_TOKEN is not set)' };
   // HEADER OR BODY, NEVER A QUERY STRING.
@@ -3334,7 +3475,7 @@ async function handleControlPreset(req) {
     return { status: 400, body: { ok: false, error: `unknown preset ${JSON.stringify(name)}`,
       presets: Object.keys(CONTROL_PRESETS) } };
   }
-  const variant = (req.query && req.query.variant) || (req.body && req.body.variant) || ARMED_VARIANT;
+  const variant = (req.query && req.query.variant) || (req.body && req.body.variant) || armedVariant();
   if (!rosterVariants().includes(variant)) {
     return { status: 400, body: { ok: false, error: `${variant} is not on the roster` } };
   }
@@ -3374,7 +3515,16 @@ async function handleControlPreset(req) {
  */
 function controlState() {
   if (!SC.hasBaseline()) SC.seedBaseline(rosterBaseline());
-  return SC.health();
+  const h = SC.health();
+  // The armed slot, for the control page: who holds it now, the env default, any move scheduled for a later
+  // session, and the strategies it may be moved to (governed NDX variants only).
+  const sel = h.armedSelection;
+  h.armed = {
+    variant: armedVariant(), envDefault: ARMED_VARIANT,
+    pending: sel && sel.from && sel.from > todayEST() ? { variant: sel.variant, from: sel.from } : null,
+    armableVariants: rosterVariants().filter((v) => !armableReason(v)),
+  };
+  return h;
 }
 
 function status() {
@@ -3385,16 +3535,17 @@ function status() {
     hasAccountHash: !!(DEPS && DEPS.accountHash),
     // Which variant the env SELECTED, and whether that name actually exists — so a typo (which arms
     // nothing) is visible in /status instead of only in the startup log.
-    armedSelection: ARMED_VARIANT,
+    armedSelection: armedVariant(),
+    armedEnvDefault: ARMED_VARIANT,
     armedMode: ARMED_MODE === false ? 'live (real fillable orders)' : 'test (unfillable + auto-cancel)',
-    armedSelectionValid: RUNS.some(r => r.variant === ARMED_VARIANT),
+    armedSelectionValid: RUNS.some(r => r.variant === armedVariant()),
     // REMOTE CONTROL. Shown under gates because it is one: the control file can restrict any variant, and a
     // `halt` nobody remembers setting looks exactly like a broken engine unless it is visible here.
     strategyControl: SC.health(),
     // WHO DECIDES A FILL, for the armed variant specifically — it is derived per run (see fillSourceFor),
     // so there is no global value to report. 'mark' means the engine's own read of the chain, which is
     // correct for a simulated or test run and a phantom for one whose orders can really fill.
-    fillSource: fillSourceFor(RUNS.find((r) => r.variant === ARMED_VARIANT) || {})
+    fillSource: fillSourceFor(RUNS.find((r) => r.variant === armedVariant()) || {})
   };
   // EFFECTIVE, NOT ROSTER. This headline is the first thing an operator reads, so it has to say what the
   // engine will actually DO. Pre-ebdde67 it reported the roster, which is how prod came to display
@@ -3578,6 +3729,7 @@ module.exports = {
   buildRuns,
   handleControlWrite,
   handleControlPreset,
+  handleControlArm,
   CONTROL_PRESETS,
   controlState,
   VARIANTS,
@@ -3594,6 +3746,8 @@ module.exports = {
   fillSourceFor,
   effectiveDryRun,
   _setDeps: (d) => { DEPS = d; },
+  _setRuns: (r) => { RUNS = r; },
+  applyArmedSelection, armedVariant,
   _liveArmed: () => LIVE_ARMED,
   tallyRun,
   classifyBoundary,

@@ -1148,6 +1148,18 @@ app.get('/api/v1/candle-spread/control', (req, res) => {
   catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
 });
 
+// MOVE THE ARMED SLOT to another strategy ({ variant, when: 'now' | 'next-session' }). Registered BEFORE the
+// :preset route, which would otherwise capture 'arm' as a preset name.
+app.post('/api/v1/candle-spread/control/arm', async (req, res) => {
+  try {
+    const out = await candleSpread.handleControlArm(req);
+    res.status(out.status).json(out.body);
+  } catch (e) {
+    console.error('[candle-spread] control arm error:', e && e.message);
+    res.status(500).json({ ok: false, error: 'control arm failed' });
+  }
+});
+
 // ONE-WORD PRESETS — URL plus one header, no body, so stopping is a single tap from a phone. POST only: a GET
 // that mutates can be fired by a link preview or a prefetcher, and this one can stop trading.
 app.post('/api/v1/candle-spread/control/:preset', async (req, res) => {

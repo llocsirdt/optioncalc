@@ -237,7 +237,10 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   //            but still off the mark. This is the user's rule, 2026-09-09.
   const markMode = deps.coverPriceMode === 'mark';
   const slip = (deps.coverSlipTicks != null ? deps.coverSlipTicks : 1) * tick;
-  const lockTarget = round2(W - pos.limit - ML);
+  // RANGE: the tent-equivalent price (fresh: W - open - minLock; re-struck: the ladder's price carried across
+  // the move) plus k x premium — the concession for a wider plateau, or the extra lock asked of an inside cover.
+  const rg = plan.range || null;
+  const lockTarget = rg ? round2(rg.eqTarget + rg.k * rg.prem) : round2(W - pos.limit - ML);
   // Lock mode always rests at the profit-lock price. It used to fall back to the cover's own mark whenever
   // the legs had been shifted, which is how a resolver-shifted cover came to be BOUGHT AT MARK and lock a
   // guaranteed loss; with a constant-width slide there is no wider instrument to price off, so the lock
@@ -295,7 +298,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       const m = mrl.error ? null : saneMark(markLegs, round2(mrl.longMid - mrl.shortMid));
       if (m != null) debitPrice = round2(L.roundToTick(Math.max(tick, round2(m + slip)), tick));
     } else {
-      debitPrice = round2(L.roundToTick(round2(W - pos.limit - ML), tick));   // round2 AFTER, as the credit path does
+      debitPrice = round2(L.roundToTick(lockTarget, tick));   // round2 AFTER, as the credit path does
     }
     if (style === 'credit') {
       // Receive exactly what the debit twin would have paid away: credit = W - debit. The credit twin
@@ -336,6 +339,14 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   if (ledgerLegs && deps._ledger) deps._ledger.record(ledgerLegs);
   pos.pendingCover = pending;
   pos.coverStatus = 'resting';
+  if (rg) {
+    pending.k = rg.k; pending.rangePrem = rg.prem;
+    // the ladder resumes where the re-struck order was, not from scratch
+    const c = rg.carry;
+    if (c) { if (c.placedEpoch != null) pending.placedEpoch = c.placedEpoch; if (c.placedUnder != null) pending.placedUnder = c.placedUnder;
+      if (c.ladderStep != null) pending.ladderStep = c.ladderStep; if (c.giveUp) pending.restruckForGiveUp = true; }
+    delete pos.coverCarry;
+  }
   pos.pendingCover.orderId = restOrderId;
   pos.pendingCover.sentNet = sentNet;                   // what really rests at the broker
   pos.pendingCover.sentCredit = sentNet === 'CREDIT' ? sentCredit : null;
@@ -1498,7 +1509,7 @@ function attachLedger(st, deps) {
   return deps && deps._ledger;
 }
 
-async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying) {
+async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying, only) {
   attachLedger(st, deps);
   // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
   // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
@@ -1536,12 +1547,22 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
   const armFrac = deps.continuousCoverArmFrac, oppRatio = deps.continuousCoverOppRatio;
   const armedByRisk = armFrac == null
     || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
-  for (const pos of st.positions) {
+  for (const pos of only || st.positions) {
     if (!pos.filled || pos.covered || pos.pendingCover) continue;
-    if (round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
-    const plan = selectCoverGeometric(pos, cfg, deps.getLeg, underlying);
+    // A RE-STRUCK cover (range or give-up, see restrikeCover) is re-placed at its chosen strike carrying the
+    // ladder's price; it was already working, so the underwater refusal below does not apply to it.
+    const carry = pos.coverCarry || null;
+    if (!carry && round2(cfg.spreadWidth - pos.limit - minLock) <= 0) continue;   // target underwater → no order
+    let plan;
+    if (carry || (coverRangeOn(deps) && pos.shortStrike != null)) {
+      const eq = carry && carry.eqTarget != null ? carry.eqTarget : round2(cfg.spreadWidth - pos.limit - minLock);
+      const k = carry && carry.k != null ? carry.k : pickCoverK(pos, eq, cfg, deps);
+      if (k == null) continue;
+      plan = planCoverAtK(pos, k, cfg, deps.getLeg);
+      if (!plan.error) plan.range = { k, prem: coverRangePrem(deps, cfg), eqTarget: eq, carry };
+    } else plan = selectCoverGeometric(pos, cfg, deps.getLeg, underlying);
     if (plan.error) continue;
-    if (!armedByRisk) {
+    if (!armedByRisk && !carry) {
       // Not armed by book risk — take it only if it stands on its own as a trade.
       if (oppRatio == null) continue;
       const cost = plan.mark;
@@ -1550,7 +1571,7 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
       decisions.push({ action: 'cover-arm-opportunity', positionId: pos.id, cost, locked: round2(locked),
         ratio: round2(locked / cost), geometry: plan.geometry });
     }
-    await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'continuous', minLock, st);
+    await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, carry ? 'restrike' : 'continuous', minLock, st);
   }
 }
 
@@ -2010,6 +2031,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (cfg.coverFillModel === 'resting') governRestingCovers(st, cfg, deps, decisions);
   if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
+  // COVER ROLL (deps.coverRollMaxDebit): at the candle close, as the backtest rolls at each bar close.
+  await rollCovers(st, cfg, deps, decisions, candleTime, underlying);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
   // the 30s sub-bar pass and by every later candle until it fills or expires.
   resolvePendingHedges(st, cfg, deps, decisions);
@@ -2366,6 +2389,168 @@ function selectCoverGeometric(pos, cfg, getLeg, underlying) {
   return plan;
 }
 
+// ── COVER STRIKE CHOICE (2026-10-12/13) — the live port of backtest-v6-5m's coverRange / giveUpGeometry /
+// coverRoll (same names on deps). A cover is named by k = strikes from the position's own short strike toward
+// its profit side: k = 0 the tent, k > 0 a condor, k < 0 inside the open spread (down to one strike inside the
+// open's long leg — every such k keeps the pair's floor at W, so the lock stays W - open - cover). 10W has no
+// inside. Measured over 821 days (data/sweeps/cover-strike-2026-10-12): on 20W/40W the range with a 0.03 x W
+// premium roughly halves the closing floor loss and cuts positions uncovered at the close 2-5x; on 10W a roll
+// at <= 0.03 x W lifts the closing floor.
+const kDirOf = (side) => (side === 'bull' ? 1 : -1);
+function coverKInsideMax(cfg) { return Math.max(0, Math.round(cfg.spreadWidth / cfg.strikeIncrement) - 1); }
+function coverLegsAtK(pos, k, cfg) {
+  return L.coverLegsAtShort(pos.side, pos.shortStrike + kDirOf(pos.side) * k * cfg.strikeIncrement, cfg.spreadWidth);
+}
+function coverKOf(pos, legs, cfg) {
+  const sh = (legs || []).find((l) => l.side === 'short');
+  return sh && pos.shortStrike != null ? Math.round((sh.strike - pos.shortStrike) / cfg.strikeIncrement) * kDirOf(pos.side) : 0;
+}
+const coverRangeOn = (deps) => !!deps && (deps.coverRangeInside != null || deps.coverRangeBeyond != null);
+const coverRangePrem = (deps, cfg) => (coverRangeOn(deps) ? (deps.coverRangePremium || 0) * cfg.spreadWidth : 0);
+function giveUpKFor(deps, cfg) {
+  const g = deps && deps.giveUpGeometry;
+  if (g === 'tent') return 0;
+  if (g === 'inside') return -coverKInsideMax(cfg);
+  if (/^inside\d+$/.test(g || '')) return -Math.min(coverKInsideMax(cfg), Number(g.slice(6)));
+  return null;
+}
+// The candidate closest to filling at its own price — tent-equivalent price eqPx + k x premium — ties to the
+// wider plateau. Candidates whose quote is missing or impossible are skipped; null when none is quotable.
+function pickCoverK(pos, eqPx, cfg, deps) {
+  const lo = -Math.min(coverKInsideMax(cfg), deps.coverRangeInside || 0), hi = deps.coverRangeBeyond || 0;
+  const prem = coverRangePrem(deps, cfg);
+  let best = null;
+  for (let k = hi; k >= lo; k--) {
+    const m = coverMarkNow(coverLegsAtK(pos, k, cfg), deps.getLeg);
+    if (m == null) continue;
+    const gap = m - (eqPx + k * prem);
+    if (best == null || gap < best.gap - 1e-9) best = { k, gap };
+  }
+  return best ? best.k : null;
+}
+// A cover plan at a chosen k, priced like every other candidate.
+function planCoverAtK(pos, k, cfg, getLeg) {
+  const short = pos.shortStrike + kDirOf(pos.side) * k * cfg.strikeIncrement;
+  const longStrike = pos.side === 'bull' ? short + cfg.spreadWidth : short - cfg.spreadWidth;
+  const plan = priceCoverCandidate(pos.side, pos, longStrike, cfg, getLeg);
+  if (plan.error) return plan;
+  plan.payload = buildOrderPayload(plan.resolved, plan.limit, cfg.quantity, 'DEBIT');
+  plan.k = k;
+  return plan;
+}
+// Release ledger strikes a cancelled cover had reserved and nothing else in the book uses (simulation only — a
+// live run's ledger is seeded from the account, which never held a cancelled order's legs anyway).
+function releaseCoverLegs(st, legs) {
+  if (!st || !st.legLedger || !legs) return;
+  const key = (l) => `${String(l.type).toUpperCase()}${l.strike}`;
+  const used = new Set();
+  for (const p of st.positions || []) {
+    for (const l of (p.openOrder && p.openOrder.legs) || p.sentLegs || p.legs || []) used.add(key(l));
+    if (p.covered) for (const l of p.coverSentLegs || p.coverLegs || []) used.add(key(l));
+    if (p.pendingCover) for (const l of p.pendingCover.sentLegs || p.pendingCover.legs || []) used.add(key(l));
+  }
+  for (const l of legs) if (!used.has(key(l))) delete st.legLedger[key(l)];
+}
+// MOVE A RESTING COVER TO ANOTHER STRIKE. Under the broker: ask for the cancel and keep the pending cover until
+// Schwab answers — a fill that beats the cancel books the OLD cover exactly as sent (account truth), a confirmed
+// cancel clears it (order-manager.clearDeadOrderState) and placeContinuousCovers re-places at `carry` on the next
+// pass. Simulated / paper: cleared and re-placed now. `carry` keeps the ladder's progress across the move.
+async function restrikeCover(st, pos, cfg, deps, decisions, carry, why) {
+  const pc = pos.pendingCover;
+  pos.coverCarry = carry;
+  const fromK = pc.k != null ? pc.k : coverKOf(pos, pc.legs, cfg);
+  decisions.push({ action: 'cover-restrike', positionId: pos.id, why, fromK, toK: carry.k, orderId: pc.orderId || null,
+    target: pc.target, eqTarget: carry.eqTarget != null ? carry.eqTarget : undefined });
+  if (deps.fillSource === 'broker' && pc.orderId && deps.cancelOrder) {
+    PULLING.add(pc);
+    await Promise.resolve(deps.cancelOrder(pc.orderId, { kind: 'cancel-cover', of: pos.id, reason: `restrike:${why}` })).catch(() => {});
+    return false;
+  }
+  if (deps.cancelOrder && pc.orderId) Promise.resolve(deps.cancelOrder(pc.orderId, { kind: 'cancel-cover', of: pos.id, reason: `restrike:${why}` })).catch(() => {});
+  pos.pendingCover = null; pos.coverStatus = null;
+  releaseCoverLegs(st, pc.sentLegs || pc.legs);
+  await placeContinuousCovers(st, cfg, deps, decisions, st.lastCandleTime || null, deps.underlying != null ? deps.underlying : st.lastUnderlying, [pos]);
+  return true;
+}
+
+// ROLL A COVER ONE STRIKE WIDER (deps.coverRollMaxDebit x W, up to deps.coverRollMaxK beyond the tent): a covered
+// position whose market has carried past the next strike sells its cover and buys the next one out, when that
+// costs no more than the max. The pair's floor drops by exactly the roll's cost; the plateau widens a strike.
+// Once per 5m candle (processCandleClose), as the backtest does at each bar close.
+// SIMULATED AND PAPER RUNS ONLY. Under the broker a roll is a four-leg closing+opening order with its own fill
+// booking, account reconcile and display — not built yet, so a broker run records that it would have rolled
+// and sends nothing.
+async function rollCovers(st, cfg, deps, decisions, candleTime, underlying) {
+  if (!deps || deps.coverRollMaxDebit == null || !(underlying > 0)) return 0;
+  const W = cfg.spreadWidth, tick = cfg.tickIncrement, qty = cfg.quantity || 1;
+  const maxK = deps.coverRollMaxK != null ? deps.coverRollMaxK : 1;
+  const maxDebit = deps.coverRollMaxDebit * W;
+  attachLedger(st, deps);
+  let rolled = 0;
+  for (const pos of st.positions || []) {
+    if (!pos.filled || !pos.covered || pos.hedge || !pos.coverLegs || pos.shortStrike == null) continue;
+    if (candleTime && pos.coverTime === candleTime) continue;           // booked this bar
+    const k = coverKOf(pos, pos.coverLegs, cfg);
+    if (k >= maxK) continue;
+    const newLegs = coverLegsAtK(pos, k + 1, cfg);
+    const newShort = newLegs.find((l) => l.side === 'short').strike;
+    if (pos.side === 'bull' ? underlying < newShort : underlying > newShort) continue;
+    const mNew = coverMarkNow(newLegs, deps.getLeg), mOld = coverMarkNow(pos.coverLegs, deps.getLeg);
+    if (mNew == null || mOld == null) continue;
+    const cost = round2(L.roundToTick(round2(mNew - mOld + tick), tick));
+    if (cost > maxDebit + 1e-9) continue;
+    if (deps.fillSource === 'broker') {
+      if (!pos.rollWanted) decisions.push({ action: 'cover-roll-not-sent', positionId: pos.id, fromK: k, toK: k + 1, cost,
+        note: 'rolls are not built for real broker orders yet — nothing sent' });
+      pos.rollWanted = true;
+      continue;
+    }
+    // the new cover in whichever style the ledger allows (the old cover is closed whole, so no leg flips side)
+    const st0 = pos.coverSentNet === 'CREDIT' ? 'credit' : 'debit';
+    let sentLegs = newLegs, style = 'debit';
+    if (deps.enforceLegUniqueness && deps._ledger) {
+      sentLegs = null;
+      for (const sty of [st0, st0 === 'credit' ? 'debit' : 'credit']) {
+        const Lg = CL.coverLegsFor(pos.side, newShort, W, sty);
+        if (!deps._ledger.conflicts(Lg)) { sentLegs = Lg; style = sty; break; }
+      }
+      if (!sentLegs) continue;
+    }
+    if (govOn(deps) && cost > 0) {
+      const f0 = govFloor(st, deps);
+      const f1 = govFloor(st, deps, null, [pos, { ...pos, coverLegs: newLegs, coverLimit: round2(pos.coverLimit + cost) }]);
+      if (f1 < f0 && -f1 > deps.lossMax) continue;
+    }
+    const oldSent = pos.coverSentLegs || pos.coverLegs;
+    // the order as one net trade: close the old cover, open the new one (logged for simulated runs; a paper run
+    // records it without sending — closing legs it never held would only be rejected)
+    const rollLegs = oldSent.map((l) => ({ ...l, side: l.side === 'long' ? 'short' : 'long', close: true })).concat(sentLegs);
+    if (deps.dryRun === true && deps.placeOrder) {
+      const rl = resolveLegs(rollLegs, deps.getLeg);
+      if (!rl.error) await deps.placeOrder({ orderType: cost >= 0 ? 'NET_DEBIT' : 'NET_CREDIT', session: 'NORMAL', price: Math.abs(cost),
+        duration: 'DAY', orderStrategyType: 'SINGLE', complexOrderStrategyType: 'CUSTOM',
+        orderLegCollection: rl.resolved.map((l) => ({ instruction: `${l.side === 'long' ? 'BUY' : 'SELL'}_TO_${l.close ? 'CLOSE' : 'OPEN'}`,
+          quantity: qty, instrument: { symbol: l.symbol, assetType: 'OPTION' } })) },
+        { kind: 'cover-roll', of: pos.id, legs: rollLegs, limit: cost, net: cost >= 0 ? 'DEBIT' : 'CREDIT' });
+    }
+    if (deps._ledger) deps._ledger.record(sentLegs);
+    const from = { legs: pos.coverLegs, limit: pos.coverLimit, sentLegs: oldSent, sentNet: pos.coverSentNet || 'DEBIT' };
+    pos.coverLegs = newLegs;
+    pos.coverLimit = round2(pos.coverLimit + cost);
+    pos.coverSentLegs = sentLegs;
+    pos.coverSentNet = style === 'credit' ? 'CREDIT' : 'DEBIT';
+    pos.coverSentCredit = style === 'credit' ? round2(W - pos.coverLimit) : undefined;
+    pos.coverK = k + 1;
+    (pos.coverRolls = pos.coverRolls || []).push({ at: candleTime, fromK: k, toK: k + 1, cost, legs: rollLegs, from });
+    st.realizedPnl = round2(st.realizedPnl - cost * 100 * qty);
+    noteCash(st, cost * 100 * qty);
+    decisions.push({ action: 'cover-roll', positionId: pos.id, fromK: k, toK: k + 1, cost, legs: rollLegs,
+      sentNet: pos.coverSentNet, underlying, lockedFloor: round2((W - pos.limit - pos.coverLimit) * 100 * qty) });
+    rolled++;
+  }
+  return rolled;
+}
+
 // Weight on retained upside vs guaranteed floor; scaled up when the reversal is high-conviction
 // (prior candle closed outside its Bollinger band).
 function upsideLambda(cfg, ctx) {
@@ -2628,6 +2813,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       pos.brokerCoverFill = { price: px, side: o.fillSide || null, orderId: o.orderId };
       pos.coverOrder = filledOrder(o, px);
       pos.pendingCover = null;
+      delete pos.coverCarry;   // a re-strike's cancel lost the race: the old cover filled, exactly as sent
       // THE FLOOR IS min(openWidth, coverWidth) MINUS WHAT BOTH COST — the same rule the mark path uses,
       // because a wider cover does not raise the guarantee.
       const floorW = Math.min(W, cw);
@@ -3489,6 +3675,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   // position turning. They compose — give-up supersedes the ladder for a position it fires on.
   if (!deps.coverLadder && !deps.coverGiveUp) return;
   const tick = cfg.tickIncrement, W = cfg.spreadWidth;
+  const guK = giveUpKFor(deps, cfg), rangeOn = coverRangeOn(deps), prem = coverRangePrem(deps, cfg);
   const opts = {
     stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
     steps: deps.ladderSteps, lossCapFrac: deps.ladderLossCapFrac,
@@ -3500,6 +3687,8 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
     // Being pulled (governRestingCovers): do not walk a price toward an order we have asked to cancel.
     if (cancelUnderWay(st, pc.orderId, pc)) continue;
     const mark = coverMarkNow(pc.legs, deps.getLeg);
+    const kNow = pc.k != null ? pc.k : coverKOf(pos, pc.legs, cfg);
+    const kPrem = pc.rangePrem != null ? pc.rangePrem : prem;
 
     // GIVE-UP RULE (deps.coverGiveUp) — "better to fill at a small locked profit or even a small loss
     // than to let an open position expire worthless" (user, 2026-09-10).
@@ -3525,6 +3714,13 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       const pointsFire = deps.giveUpPointsBackstop !== false && through >= pts;
       const candleFire = pos.guCandle === true || pos.trendCover === true;   // candle give-up, or the trend-side floor
       if (pointsFire || trendAgainst || candleFire) {
+        // GIVE-UP RE-STRIKE (deps.giveUpGeometry): the position has turned, so its cover goes back to the tent
+        // (or inside the open spread on a wider width) — the cheapest legal cover — before the give-up price.
+        if (guK != null && kNow !== guK) {
+          await restrikeCover(st, pos, cfg, deps, decisions, { k: guK, giveUp: true, eqTarget: round2(pc.target - kNow * kPrem),
+            placedEpoch: pc.placedEpoch, placedUnder: pc.placedUnder, ladderStep: pc.ladderStep }, 'give-up');
+          continue;   // the give-up price goes on the re-placed order next pass
+        }
         const cap = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
         const openCost = pc.openCost != null ? pc.openCost : pos.limit;
         const give = round2(L.roundToTick(Math.min(round2(mark + tick), round2(W - openCost + cap)), tick));   // round2 AFTER, as every other send site
@@ -3562,15 +3758,33 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         }
       }
     }
+    // RANGE RE-STRIKE (deps.coverRange*): once per 5 minutes — the backtest re-judges at each bar close — re-rest
+    // the cover on whichever candidate strike is now closest to filling at its own price.
+    if (rangeOn && !pc.gaveUp && pos.shortStrike != null) {
+      const nowR = deps.nowMs != null ? deps.nowMs : Date.now();
+      const last = pc.rangeCheckedAt != null ? pc.rangeCheckedAt : (pc.placedEpoch || 0);
+      if (nowR - last >= 5 * 60000) {
+        pc.rangeCheckedAt = nowR;
+        const eq = round2(pc.target - kNow * kPrem);
+        const k2 = pickCoverK(pos, eq, cfg, deps);
+        if (k2 != null && k2 !== kNow) {
+          await restrikeCover(st, pos, cfg, deps, decisions, { k: k2, eqTarget: eq, placedEpoch: pc.placedEpoch,
+            placedUnder: pc.placedUnder, ladderStep: pc.ladderStep }, 'range');
+          continue;
+        }
+      }
+    }
     if (!deps.coverLadder) continue;   // ladder is opt-in separately from give-up
+    const kShift = kNow * kPrem;   // the ladder walks the tent-equivalent price; this order sits k x premium off it
     const next = LAD.limitNow({
       spreadWidth: W, openCost: pc.openCost != null ? pc.openCost : pos.limit, minLock: pc.minLock || 0,
       restingMs: pc.placedEpoch ? (Date.now() - pc.placedEpoch) : 0,
       // deps.ladderAdverseOnly: only a move against the COVERED position (down for a bull) earns steps.
       underlyingMove: (pc.placedUnder != null && deps.underlying != null)
         ? LAD.ladderMove(deps.underlying - pc.placedUnder, pos.side === 'bull' ? -1 : 1, deps.ladderAdverseOnly) : 0,
-      mark, tick,
+      mark: mark != null && kShift ? round2(mark - kShift) : mark, tick,
     }, opts);
+    if (kShift) next.limit = round2(next.limit + kShift);
     // Gate on the ladder ESCALATING, not on any price wiggle. Bounds this to at most `steps` replaces
     // per order per day; the minMove guard below covers the pinned-to-mark case.
     // NEVER WALK A COVER DOWN. The ladder only ever concedes price; a cover already above the ladder's own
@@ -3836,6 +4050,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
+  rollCovers, pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / give-up re-strike / roll)
   attachLedger,           // the leg ledger on deps — every order-placing path, candle close and worker
   placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)
   lateFloorLimit,                // LATE-DAY FLOOR GUARD

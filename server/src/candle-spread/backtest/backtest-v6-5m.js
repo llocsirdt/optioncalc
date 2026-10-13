@@ -260,6 +260,39 @@ function runDay5m(bars, signalFn, opts = {}) {
   // (every altEvery opens), so opens spread across both option ladders → fewer leg conflicts / shifts.
   const recapAlt = opts.recaptureAlternate === true;
   const ledger = LL.makeLegLedger();
+  // COVER STRIKE CHOICE (2026-10-12, user: "on a 40 wide spread the cover short leg can be anywhere from just a
+  // single strike inside the open's long leg, out to the same short leg, or beyond to widen the plateau").
+  // A cover is named by k = strikes from the position's own short strike toward its profit side: k = 0 the tent
+  // (butterfly), k > 0 a condor (plateau between the two shorts), k < 0 inside the open spread (cheaper cover,
+  // bigger lock, lower trapezoid peak). Every k from -(W/incr - 1) up keeps the pair's floor at W, so the lock
+  // is always W - open - cover. k = -(W/incr) would be a box.
+  //   opts.coverRangeInside / coverRangeBeyond — the range the resting cover may be re-struck across (strikes).
+  //   opts.coverRangePremium — lock (fraction of W) conceded per strike of plateau: candidate k's price is the
+  //     ladder's tent-equivalent price + k x premium. 0 = the cheapest-relative-to-target wins (usually inside).
+  //   opts.giveUpGeometry — 'tent' | 'inside' (furthest legal inside) | 'insideN': a give-up re-strikes there.
+  //   opts.coverRollMaxDebit (fraction of W) + coverRollMaxK — once covered, roll the cover one strike wider
+  //     (toward the profit side) whenever the roll's net cost is <= the max, up to k = coverRollMaxK.
+  const kDir = (side) => (side === 'bull' ? 1 : -1);
+  const kInsideMax = Math.max(0, Math.round(G.WIDTH / legIncr) - 1);
+  const legsAtK = (pos, k) => SL.coverLegsAtShort(pos.side, pos.shortStrike + kDir(pos.side) * k * legIncr, G.WIDTH);
+  const shortOf = (legs) => { const l = (legs || []).find((x) => x.side === 'short'); return l ? l.strike : null; };
+  const kOf = (pos, legs) => { const sh = shortOf(legs); return sh == null ? 0 : Math.round((sh - pos.shortStrike) / legIncr) * kDir(pos.side); };
+  const rangeOn = opts.coverRangeInside != null || opts.coverRangeBeyond != null;
+  const rangeLo = -Math.min(kInsideMax, opts.coverRangeInside || 0), rangeHi = opts.coverRangeBeyond || 0;
+  const rangePrem = (opts.coverRangePremium || 0) * G.WIDTH;
+  const guK = opts.giveUpGeometry === 'tent' ? 0 : opts.giveUpGeometry === 'inside' ? -kInsideMax
+    : /^inside\d+$/.test(opts.giveUpGeometry || '') ? -Math.min(kInsideMax, Number(opts.giveUpGeometry.slice(6))) : null;
+  const rollOn = opts.coverRollMaxDebit != null;
+  let rangeRestrikes = 0, guRestrikes = 0, rolls = 0, rollSpent = 0;
+  // The candidate closest to filling at its own price (ties -> the wider plateau). eqPx = the tent-equivalent price.
+  const pickK = (pos, eqPx, Sx, tau, iv) => {
+    let best = null;
+    for (let k = rangeHi; k >= rangeLo; k--) {
+      const gap = legsMark(legsAtK(pos, k), Sx, tau, iv) - (eqPx + k * rangePrem);
+      if (best == null || gap < best.gap - 1e-9) best = { k, gap };
+    }
+    return best.k;
+  };
   let legIdeal = 0, legTwin = 0, legShift = 0, legSkip = 0, legCoverTwin = 0, legCoverWing = 0, legCoverSkip = 0, shiftSum = 0, legOpenN = 0;
   // RISK-HARVEST (opts.riskHarvest): spend a sliver of the profit peak on far-side hedges to negate the
   // reachable loss zone when a ≥ratio hedge is available (ratio-gated, not clock-gated). Off by default.
@@ -385,6 +418,17 @@ function runDay5m(bars, signalFn, opts = {}) {
   // INTRADAY FLOOR (2026-10-11, the user's governing metric: "keep a high floor every day from open to close"): the
   // book floor sampled at every acted bar once a book exists — its average, and the share of bars it was >= 0.
   let ifSum = 0, ifBars = 0, ifNonNeg = 0;
+  // FLOOR WHEN FLAT (2026-10-12, user: "what the average floor is when all positions are covered — do covers
+  // happen regularly at small profits, or are we constantly covering at small losses"): the book floor each
+  // time the book BECOMES fully covered (every non-hedge position covered, no open working), one sample per
+  // event, taken at the start of the bar after the cover filled. A long flat stretch counts once.
+  const flatFloors = []; let wasFlat = false;
+  const flatCheck = () => {
+    const opn = st.positions.filter((p) => !p.hedge);
+    const flat = opn.length > 0 && !st.pendingOpen && opn.every((p) => p.covered);
+    if (flat && !wasFlat) flatFloors.push(Math.round(floorNow()));
+    wasFlat = flat;
+  };
   const lateFloorLimit = (nowMin) => {
     if (lateAfter == null || !(nowMin >= lateAfter)) return null;
     if (lateRef == null) lateRef = floorOf(null, openLadderModel);
@@ -745,6 +789,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // afternoon floor?"), and the late-guard reference, both taken BEFORE this bar acts.
     { const _m = etMinute(bars[i].dt);
       if (st.positions.length) { const _f = floorNow(); ifSum += _f; ifBars++; if (_f >= 0) ifNonNeg++; }
+      flatCheck();
       if (floorAt14 == null && _m >= 14 * 60) floorAt14 = st.positions.length ? Math.round(floorNow()) : 0;
       if (floorAt15 == null && _m >= 15 * 60) floorAt15 = st.positions.length ? Math.round(floorNow()) : 0;
       // counted the governor's way (design B: a working open is counted as filled), so an open placed before the
@@ -966,9 +1011,11 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (!ladderOn && tgt <= 0) continue;
         // GEOMETRY: where the offsetting spread sits. 'tent' (default) shares the position's short strike
         // and reproduces the original legs exactly; 'halfway'/'underlying' walk it toward the money.
-        const legs = opts.coverGeometry && opts.coverGeometry !== 'tent'
+        let legs = opts.coverGeometry && opts.coverGeometry !== 'tent'
           ? SL.coverLegsAtShort(pos.side, SL.coverShortFor(opts.coverGeometry, pos.side, pos.shortStrike, S, legIncr), G.WIDTH)
           : G.coverLegs(pos.side, pos.shortStrike);
+        let _k0 = null;
+        if (rangeOn) { _k0 = pickK(pos, tgt, S, tau, iv); legs = legsAtK(pos, _k0); }
         if (!armedByRisk) {
           // Not armed by book risk — take it only if the cover is cheap enough to be worth it on its own.
           if (oppRatio == null) continue;
@@ -986,8 +1033,9 @@ function runDay5m(bars, signalFn, opts = {}) {
           if (!(cost > 0) || (G.WIDTH - pos.limit - cost) < minLock) continue;
         }
         // Stamp what the ladder needs to walk this order: when it was placed and where the underlying was.
-        pos.pendingCover = { legs, target: coverTarget(opts, legs, S, tau, iv, tgt), openCost: pos.limit, minLock, src: 'continuous',
+        pos.pendingCover = { legs, target: coverTarget(opts, legs, S, tau, iv, _k0 != null ? round2(tgt + _k0 * rangePrem) : tgt), openCost: pos.limit, minLock, src: 'continuous',
           placedMs: nowEpoch, placedUnder: S, placedET: nowET };
+        if (_k0 != null) pos.pendingCover.k = _k0;
       }
     }
     // Record newly-placed covers once, at the moment they appear, tagged with the trigger that made them.
@@ -1184,6 +1232,13 @@ function runDay5m(bars, signalFn, opts = {}) {
       // the two-feature arm byte-identical to ladder-only and hid give-up entirely.
       const patient = asymDef ? withTrend(pos.side) : false;
       if (asymDef) { if (patient) asymPatientBars++; else asymAggBars++; }
+      // GIVE-UP RE-STRIKE (opts.giveUpGeometry): the position has turned, so the cover goes back to the tent (or
+      // inside the open spread on a wider width) — the cheapest legal cover, not the plateau the resting order
+      // was waiting for. A new order: its resting price restarts at the give-up price below.
+      if (giveUp && guK != null && kOf(pos, pc.legs) !== guK) {
+        pc.legs = legsAtK(pos, guK); pc.k = guK; pc._resting = undefined; pc._working = undefined; guRestrikes++;
+      }
+      const _kc = rangeOn && !giveUp ? (pc.k != null ? pc.k : kOf(pos, pc.legs)) : 0;
       if (giveUp) {
         const guFrac = patient && opts.coverPatientGiveUp != null ? opts.coverPatientGiveUp : opts.giveUpMaxLoss;
         const cap = (guFrac != null ? guFrac : 0.15) * G.WIDTH;
@@ -1207,9 +1262,10 @@ function runDay5m(bars, signalFn, opts = {}) {
           restingMs: pc.placedMs != null ? (nowEpoch - pc.placedMs) : 0,
           // opts.ladderAdverseOnly: only a move against the COVERED position (down for a bull) earns steps.
           underlyingMove: pc.placedUnder != null ? LAD.ladderMove(S - pc.placedUnder, pos.side === 'bull' ? -1 : 1, opts.ladderAdverseOnly) : 0,
-          mark: legsMark(pc.legs, S, tau, iv),
+          mark: legsMark(pc.legs, S, tau, iv) - _kc * rangePrem,   // tent-equivalent (= the mark when range is off)
           tick: 0.05,
         }, patient && opts.coverPatientLossCap != null ? { ...ladderOpts, lossCapFrac: opts.coverPatientLossCap } : ladderOpts).limit;
+        if (_kc) workingTarget = round2(workingTarget + _kc * rangePrem);
       }
       // STALL COVER (opts.stallCoverMin, backtest-only study, 2026-10-07): a position that has NOT moved in our favour
       // by stallCoverPts within stallCoverMin minutes of filling stops waiting for its minLock target — its cover goes
@@ -1251,7 +1307,18 @@ function runDay5m(bars, signalFn, opts = {}) {
         fillAt = Math.max(resting, workingTarget);
         pc._resting = workingTarget;
       }
-      if (legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= fillAt - thruCover + 1e-9) {
+      const _fills = legsMark(pc.legs, coverAtClose ? S : ext, tau, iv) <= fillAt - thruCover + 1e-9;
+      // RANGE RE-STRIKE (opts.coverRange*): no fill this bar, so at the close re-rest the cover on whichever candidate
+      // strike is now closest to filling at its own price (the same tent-equivalent ladder price + k x premium).
+      if (!_fills && rangeOn && !giveUp && !decayed) {
+        const eq = round2(workingTarget - _kc * rangePrem);
+        const k2 = pickK(pos, eq, S, tau, iv);
+        if (k2 !== _kc) {
+          const px = round2(eq + k2 * rangePrem);
+          pc.legs = legsAtK(pos, k2); pc.k = k2; pc.target = px; pc._resting = px; pc._working = undefined; rangeRestrikes++;
+        }
+      }
+      if (_fills) {
         // GOVERNOR — DEFER A CAP-BREAKING COVER. Booking a cover lifts THAT position's own floor to its
         // locked value, but a naked OPPOSITE-side position is the stack's natural tail hedge: locking it
         // removes the offset and can push the BOOK floor down (the 2026-02-21 mechanism). Since we own the
@@ -1271,7 +1338,9 @@ function runDay5m(bars, signalFn, opts = {}) {
         const coverPx = (legs) => coverAtLimit ? roundTick(fillAt) : roundTick(Math.min(fillAt, legsMark(legs, S, tau, iv) + TICK));
         let cLegs = pc.legs, cLimit = coverPx(pc.legs), rc = null;
         if (enforceLegs) {
-          rc = LL.resolveCover(pos.side, pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
+          // anchored at the cover ACTUALLY being booked (its own short strike) — a non-tent cover used to be checked
+          // and recorded at the tent's strikes while its own legs were booked (fixed 2026-10-12)
+          rc = LL.resolveCover(pos.side, shortOf(pc.legs) != null ? shortOf(pc.legs) : pos.shortStrike, G.WIDTH, ledger, { preferStyle: 'debit', incr: legIncr, maxWingShift: opts.legMaxWing || 8 });
           if (rc.resolution === 'skip') { legCoverSkip++; pos.pendingCover = null; continue; }   // can't lock — stays uncovered
           if (rc.shift) {
             // SLID cover (same width, deeper ITM): P&L uses the ACTUAL legs, but the price rule is
@@ -1298,6 +1367,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
         pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null;
         pos.coverEpoch = nowEpoch; pos.coverTime = nowET; markBookDirty();
+        pos.coverStyle = rc ? rc.style : 'debit';
         if (_newCover) coverSameBar++;
         if (rc && rc.wing !== G.WIDTH) continue;   // anchor cover: legacy skips the capital accounting below
         if (trackCap) {
@@ -1316,6 +1386,45 @@ function runDay5m(bars, signalFn, opts = {}) {
           const covLegsR = itm ? CL.coverLegsFor(pos.side, pos.shortStrike, G.WIDTH, 'credit') : pos.coverLegs;
           depR += CL.entryMark(covLegsR, capMark) * 100 * QTY; peakR = Math.max(peakR, depR);
         }
+      }
+    }
+    // (a2) COVER ROLL (opts.coverRollMaxDebit, 2026-10-12, user): a covered position whose market has carried past
+    // the next strike rolls its cover one strike wider (toward the profit side) — sell the cover, buy the next one
+    // out, one net order at the bar close (mid + a tick) — when that costs <= coverRollMaxDebit x W. The pair's floor
+    // stays W - open - cover - roll (it drops by exactly the roll's cost); the plateau widens by a strike. Never
+    // rolls a cover booked this bar; up to coverRollMaxK strikes beyond the tent.
+    if (rollOn) {
+      const maxK = opts.coverRollMaxK != null ? opts.coverRollMaxK : 1;
+      const maxDebit = opts.coverRollMaxDebit * G.WIDTH;
+      for (const pos of st.positions) {
+        if (!pos.covered || pos.hedge || !pos.coverLegs || pos.coverEpoch === nowEpoch || pos.shortStrike == null) continue;
+        const k = kOf(pos, pos.coverLegs);
+        if (k >= maxK) continue;
+        const newLegs = legsAtK(pos, k + 1), newShort = shortOf(newLegs);
+        if (pos.side === 'bull' ? S < newShort : S > newShort) continue;
+        const cost = roundTick(legsMark(newLegs, S, tau, iv) - legsMark(pos.coverLegs, S, tau, iv) + TICK);
+        if (cost > maxDebit + 1e-9) continue;
+        // the new cover is sent in whichever style the ledger allows (the old cover is closed whole, so no leg flips)
+        let rl = null, rs = null;
+        if (enforceLegs) {
+          const st0 = pos.coverStyle || 'debit';
+          for (const style of [st0, st0 === 'credit' ? 'debit' : 'credit']) {
+            const L = CL.coverLegsFor(pos.side, newShort, G.WIDTH, style);
+            if (!ledger.conflicts(L)) { rl = L; rs = style; break; }
+          }
+          if (!rl) continue;
+        }
+        if (governed && cost > 0) {
+          const f0 = floorNow();
+          const sv = { legs: pos.coverLegs, lim: pos.coverLimit };
+          pos.coverLegs = newLegs; pos.coverLimit = round2(sv.lim + cost);
+          const f1 = floorOf(null, openLadderModel);
+          pos.coverLegs = sv.legs; pos.coverLimit = sv.lim;
+          if (f1 < f0 && -f1 > lossMax) continue;
+        }
+        if (rl) { ledger.record(rl); pos.coverStyle = rs; }
+        pos.coverLegs = newLegs; pos.coverLimit = round2(pos.coverLimit + cost); markBookDirty();
+        rolls++; rollSpent += cost;
       }
     }
     if (trackCap) peakUncov = Math.max(peakUncov, uncoveredRisk());   // margin view: at-risk uncovered $ right now
@@ -1800,6 +1909,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // Settle: the 0DTE options settle at the 16:00 RTH close. For rthOnly, use the last bar at/through
   // 16:00 (not the 23:59 overnight close); otherwise (24h mode) the last bar of the day.
   if (openLadderModel && st.pendingOpen) { openExpired++; st.pendingOpen = null; }   // a DAY order that never filled
+  flatCheck();   // a cover on the last bar that left the book flat
   let settleBar = bars[bars.length - 1];
   if (rthOnly) { for (let k = bars.length - 1; k >= 0; k--) { const m = etMinute(bars[k].dt); if (m >= 575 && m <= 960) { settleBar = bars[k]; break; } } }
   // THE LAST BAR IS NOT THE CLOSE. 0DTE options settle on the OFFICIAL index close at 16:00, but the last
@@ -1935,6 +2045,14 @@ function runDay5m(bars, signalFn, opts = {}) {
     floorAt14, floorAt15,
     intradayFloorAvg: ifBars ? Math.round(ifSum / ifBars) : null, intradayFloorNonNegPct: ifBars ? Math.round(1000 * ifNonNeg / ifBars) / 10 : null,
     tents: st.positions.filter((p) => p.covered && !p.hedge).length,
+    flatFloors,
+    coverRange: rangeOn || guK != null || rollOn ? { rangeRestrikes, guRestrikes, rolls, rollSpent: Math.round(rollSpent * 100 * QTY) } : undefined,
+    // TIME TO COVER (2026-10-12, user: "how quickly opens are covered"): minutes from the open's fill bar to its
+    // cover's fill bar (5m bar resolution; 0 = same bar), split by whether the cover was a give-up. Positions
+    // still uncovered at the close are counted, not timed.
+    coverMins: st.positions.filter((p) => !p.hedge && p.covered && !p._gu && p.coverEpoch != null).map((p) => Math.round((p.coverEpoch - p.openEpoch) / 60000)),
+    giveUpMins: st.positions.filter((p) => !p.hedge && p.covered && p._gu && p.coverEpoch != null).map((p) => Math.round((p.coverEpoch - p.openEpoch) / 60000)),
+    uncoveredEod: st.positions.filter((p) => !p.hedge && !p.covered).length,
     governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
