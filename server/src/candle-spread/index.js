@@ -859,7 +859,9 @@ function applyRestrike(v) { if (v.openRestrikeMin == null) v.openRestrikeMin = O
 // COVER STRIKE CHOICE (2026-10-13, user: "configure your recommendation so far"), every variant by width.
 // 821 days, data/sweeps/cover-strike-2026-10-12, scored on the closing floor and positions uncovered at the close:
 //   20W / 40W — the resting cover floats between one strike inside the open's long leg and 2 beyond the tent,
-//     conceding 0.03 x W of lock per strike of plateau, and a give-up re-strikes inside. Best arm on both
+//     conceding 0.02 x W of lock per strike of plateau, and a give-up re-strikes inside. (0.01-0.03 are within
+//     tens of dollars of each other; all roughly halve the closing loss.) The STRIKE LADDER (start at the condor,
+//     step in while unfilled; coverStartK) lost to this on every variant, both metrics — strike-ladder-2026-10-13. Best arm on both
 //     metrics for every 20W/40W variant (v7-20 -1,834/6.1 -> -674/3.6; v7-40 -2,623/6.4 -> -1,281/1.8).
 //   10W — no inside strikes, so nothing changes. (The backtest's cover ROLL was rejected by the user 2026-10-13:
 //     a filled cover is done; rolling it is a butterfly bought on top of a covered tent, paid for with the
@@ -869,7 +871,7 @@ function applyCoverStrikeChoice(v) {
   if (v.spreadWidth >= 20) {
     if (v.coverRangeInside == null) v.coverRangeInside = 9;
     if (v.coverRangeBeyond == null) v.coverRangeBeyond = 2;
-    if (v.coverRangePremium == null) v.coverRangePremium = 0.03;
+    if (v.coverRangePremium == null) v.coverRangePremium = 0.02;   // 0.03 -> 0.02 2026-10-13 (cover-strike-2: ahead on 10/16 rows, fewer uncovered)
     if (v.giveUpGeometry == null) v.giveUpGeometry = 'inside';
   }
 }
