@@ -78,7 +78,7 @@
      horizontally inside .wrap when there are more columns than fit. */
   table.grid { border-collapse:separate; border-spacing:6px; table-layout:fixed; width:min-content; }
   table.grid th { width:200px; font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
-  table.grid th.rowh { width:50px; text-align:right; padding-right:6px; font-size:12px; color:var(--fg); }
+  table.grid th.rowh { width:20px; text-align:right; padding:2px 3px 2px 0; white-space:normal; font-size:12px; color:var(--fg); }
   /* FIXED SIZE, not min-height. Every row of a cell is now reserved whether or not it has content (see
      the stateBar / lift / cmp placeholders), so the height is the same at every slider position and the
      grid stops resizing while scrubbing. box-sizing keeps the border and padding inside the number.
@@ -252,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.9</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.10</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
