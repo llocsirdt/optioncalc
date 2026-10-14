@@ -2117,7 +2117,9 @@ function assertDeps(runs) {
         // fold stages (2026-10-09): read off cfg / floorRaiseCfg by trader.raiseFloor and raiseCapFixOn
         'floorRaiseCapFix', 'floorRaiseWings',
         // raise discipline (2026-10-13): read off cfg.floorRaiseCfg by raiseFloor / raiseSideGuard / walkRaiseOrders
-        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseBookRange', 'floorRaiseIronMix']);
+        'floorRaiseLockedLift', 'floorRaiseTrend', 'floorRaiseTrendPermit', 'floorRaiseBookRange', 'floorRaiseIronMix',
+        // trend-sided ratio (2026-10-14): read off cfg.floorRaiseCfg by raiseTrendRatio
+        'floorRaiseRatioTrend', 'floorRaiseMinRatioWith', 'floorRaiseMinRatioFarWith', 'floorRaiseMinRatioAgainst', 'floorRaiseMinRatioFarAgainst']);
   }
 }
 

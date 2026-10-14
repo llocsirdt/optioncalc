@@ -332,6 +332,14 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['raise no lockedLift', () => ({ floorRaiseLockedLift: false })],
   ['raise no trend', () => ({ floorRaiseTrend: false })],
   ['raise no bookRange', () => ({ floorRaiseBookRange: false })],
+  // TREND-SIDED RAISE RATIO (2026-10-14): roster = plain 4:1 -> 8:1. Arms: yesterday's plain 3 -> 6, and with-trend /
+  // against-trend pairs (near -> far, 2 expected moves) under trend 'A' (15m + completed hourly), plus '15m' and 'AHH'.
+  ['ratio plain 3/6', () => ({ floorRaiseMinRatio: 3, floorRaiseMinRatioFar: 6 })],
+  ...[[3, 6, 5, 10], [3, 6, 4, 8], [4, 8, 5, 10], [4, 8, 6, 12], [3, 6, 6, 12], [2, 4, 5, 10]].map(([wn, wf, an, af]) =>
+    [`trend A w${wn}/${wf} a${an}/${af}`, () => ({ floorRaiseRatioTrend: 'A', floorRaiseMinRatioWith: wn, floorRaiseMinRatioFarWith: wf,
+      floorRaiseMinRatioAgainst: an, floorRaiseMinRatioFarAgainst: af })]),
+  ...['15m', 'AHH'].map((d) => [`trend ${d} w3/6 a5/10`, () => ({ floorRaiseRatioTrend: d, floorRaiseMinRatioWith: 3, floorRaiseMinRatioFarWith: 6,
+    floorRaiseMinRatioAgainst: 5, floorRaiseMinRatioFarAgainst: 10 })]),
   // FIRST ACTION (2026-10-13): roster acts at 09:30 on the completed 09:15-09:30 /NQ bar; this arm restores 09:35.
   ['first 0935', () => ({ firstActionMin: 575, openFallbackUntilMin: null })],
   ['first 0930 no fallback', () => ({ openFallbackUntilMin: null })],

@@ -545,7 +545,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // ('A' = 15m + completed hourly, the user's choice; '15m', 'AHH', 'Af', 'AfBreak', 'H' = the controls).
   // The tracker sees EVERY bar, overnight included, so the hourly candles are the real continuous ones.
   const TS = require('../trend-state');
-  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.openTrendBlock || opts.trendFloor || opts.coverAsymTrend) ? TS.makeTracker() : null;
+  const trendStep = (opts.giveUpTrend || opts.floorRaiseTrend || opts.floorRaiseRatioTrend || opts.openTrendBlock || opts.trendFloor || opts.coverAsymTrend) ? TS.makeTracker() : null;
   // ASYMMETRIC COVER AGGRESSION (opts.coverAsymTrend = a trend-state definition; 2026-10-11, user: "uncovered positions
   // are just risk and only when they're biased toward the direction of the momentum is it worth being patient"). The
   // variant's own cover knobs (minLock, ladder loss cap, give-up allowance) are the AGGRESSIVE set every position gets;
@@ -1481,6 +1481,16 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (opts.floorRaiseTrendPermit === 'beWrong' && guSig && /^be-wrong/.test(String(guSig.reason || ''))) return null;
       return { dir, spot: spotNow, blocked: frTrendBlocked };
     };
+    // TREND-SIDED RAISE RATIO (opts.floorRaiseRatioTrend; mirrors trader.raiseTrendRatio): with-trend valleys need
+    // floorRaiseMinRatioWith -> ...FarWith, against-trend ...Against -> ...FarAgainst. Be-wrong / no trend = plain.
+    const frTrendRatio = () => {
+      if (!opts.floorRaiseRatioTrend || !trendCtx) return null;
+      const dir = TS.state(trendCtx, opts.floorRaiseRatioTrend);
+      if (!dir) return null;
+      if (guSig && /^be-wrong/.test(String(guSig.reason || ''))) return null;
+      return { dir, withMin: opts.floorRaiseMinRatioWith, withFar: opts.floorRaiseMinRatioFarWith,
+        againstMin: opts.floorRaiseMinRatioAgainst, againstFar: opts.floorRaiseMinRatioFarAgainst };
+    };
     // (b2) WING CONVERSION — bank peak as floor. Runs regardless of whether the floor is healthy (that is
     // the whole point); gated by time-of-day, a re-plan interval, a per-day count and a budget expressed as
     // a fraction of the CURRENT peak, so it can never spend real money chasing a small tent.
@@ -1588,6 +1598,7 @@ function runDay5m(bars, signalFn, opts = {}) {
             minRatioFar: frMinRatioFar, farSigmas: frFarSigmas, sigmaPts: bw / frSigmas, liftMetric: opts.floorRaiseLiftMetric, floorMin: (() => { const _ll = lateFloorLimit(etMinute(bars[i].dt)); return _ll == null ? capR.floorMin : capR.floorMin == null ? _ll : Math.max(capR.floorMin, _ll); })(), globalRatio: capR.globalRatio,
             lockedMustLift: opts.floorRaiseLockedLift === true,
             sideGuard: frSideGuard(S),
+            trendRatio: capR.nearCap ? null : frTrendRatio(),
             globalFloorWith: (legs, debit) => floorOf({ legs, limit: debit, covered: false, coverLegs: null, coverLimit: null, hedge: true }),
             skip: (() => {
               const hr = opts.floorRaiseBookRange === true ? { ...FR.realStrikeRange(st.positions), bandLo, bandHi } : null;

@@ -214,6 +214,19 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
   return minRatio + (minRatioFar - minRatio) * f;
 }
 
+// TREND-SIDED RATIO (user, 2026-10-14, after live v7-10 bought two OTM call raises against a falling 15m trend):
+// a valley on the side the trend is moving TOWARD is likely to come into play, so its fix may be cheaper per dollar
+// of lift; a valley on the side the market is moving AWAY from must pay more. trendRatio = { dir (+1 bull / -1 bear),
+// withMin, withFar, againstMin, againstFar }. A valley touching spot, or no trend (dir 0 / null), keeps the plain
+// minRatio / minRatioFar. Returns [min, far] for requiredRatio.
+function trendSidedRatios(trendRatio, minRatio, minRatioFar, valleyAbove, dist) {
+  if (!trendRatio || !trendRatio.dir || !(dist > 0)) return [minRatio, minRatioFar];
+  const withTrend = (trendRatio.dir > 0) === valleyAbove;
+  const mn = withTrend ? trendRatio.withMin : trendRatio.againstMin;
+  const mf = withTrend ? trendRatio.withFar : trendRatio.againstFar;
+  return [mn != null ? mn : minRatio, mf != null ? mf : minRatioFar];
+}
+
 // liftMetric (valley objective):
 //   'avg' (default, the user's preference 2026-10-06) — the RATIO is the AVERAGE lift across the valley's points
 //         per dollar: a fly is credited for most of what it pays where the valley is, not only its weakest edge
@@ -222,7 +235,7 @@ function requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts) {
 //         offset spreads (a fly there leaves the tail beyond it low) — but the ratio is judged on the average.
 //   'min' — the conservative original: the ratio is the lift of that lowest point.
 function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalFloorWith, skip, objective, spot, bandLo, bandHi,
-  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard, globalRatio, lockedMustLift }) {
+  minRatioFar, farSigmas, sigmaPts, liftMetric, floorMin, sideGuard, globalRatio, lockedMustLift, trendRatio }) {
   const avgMetric = (liftMetric || 'avg') === 'avg';
   // The 'band' objective keeps its original meaning: the lowest point INSIDE the band.
   const bandIdx = xs.map((x, j) => j).filter((j) => (bandLo == null || xs[j] >= bandLo) && (bandHi == null || xs[j] <= bandHi));
@@ -288,7 +301,8 @@ function pickBest({ xs, base, cands, price, qty, minRatio, budget, gNow, globalF
         }
         const ratio = lift / cost;
         const dist = spot == null ? 0 : (xs[v.b] < spot ? spot - xs[v.b] : xs[v.a] > spot ? xs[v.a] - spot : 0);
-        const need = requiredRatio(minRatio, minRatioFar, farSigmas, dist, sigmaPts);
+        const [mnR, mfR] = trendSidedRatios(trendRatio, minRatio, minRatioFar, spot != null && xs[v.a] > spot, dist);
+        const need = requiredRatio(mnR, mfR, farSigmas, dist, sigmaPts);
         if (ratio >= need) ok.push({ ...c, ...pr, cost, lift, ratio, valley: { from: xs[v.a], to: xs[v.b], min: Math.round(v.min) }, need: Math.round(need * 100) / 100, _vmin: v.min });
       }
     } else {
@@ -416,4 +430,4 @@ function pickBestMulti(args) {
   return { best: null, blockedLocked };
 }
 
-module.exports = { ironTwin, inHedgeRange, realStrikeRange, structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, pickBest, pickBestMulti };
+module.exports = { ironTwin, inHedgeRange, realStrikeRange, structureQuoteSane, capAwareRatio, valleyCandidates, candidatesFor, samplePoints, candidates, payoff, valleys, requiredRatio, trendSidedRatios, pickBest, pickBestMulti };

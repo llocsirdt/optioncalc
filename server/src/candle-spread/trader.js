@@ -1343,6 +1343,18 @@ function raiseSideGuard(st, cfg, sig, spot, blocked) {
   return { dir, spot, blocked };
 }
 
+// TREND-SIDED RAISE RATIO (cfg.floorRaiseRatioTrend = a trend-state definition; user 2026-10-14): with the trend the
+// raise needs floorRaiseMinRatioWith -> floorRaiseMinRatioFarWith, against it ...Against -> ...FarAgainst
+// (floor-raise.js trendSidedRatios). A be-wrong reversal candle and an unaligned trend carry no bias (plain ratios).
+function raiseTrendRatio(st, cfg, sig) {
+  if (!cfg.floorRaiseRatioTrend || !st.trendCtx) return null;
+  const dir = TS.state(st.trendCtx, cfg.floorRaiseRatioTrend);
+  if (!dir) return null;
+  if (sig && /^be-wrong/.test(String(sig.reason || ''))) return null;
+  return { dir, withMin: cfg.floorRaiseMinRatioWith, withFar: cfg.floorRaiseMinRatioFarWith,
+    againstMin: cfg.floorRaiseMinRatioAgainst, againstFar: cfg.floorRaiseMinRatioFarAgainst };
+}
+
 async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
   // LIVE SETTINGS, NOT THE SEALED RECORD (2026-10-07). A record's config is frozen at its first event, so
   // a floor-raise rollout deployed mid-session did nothing until the next day, and the
@@ -1454,6 +1466,8 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       floorMin: (() => { const ll = lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth); return ll == null ? capR.floorMin : capR.floorMin == null ? ll : Math.max(capR.floorMin, ll); })(),
       globalRatio: capR.globalRatio, lockedMustLift: cfg.floorRaiseLockedLift === true,
       sideGuard: raiseSideGuard(st, cfg, sig, spot, trendBlocked),
+      // Near the cap the cap-aware ratio governs (floor first), so the trend sides apply only away from it.
+      trendRatio: capR.nearCap ? null : raiseTrendRatio(st, cfg, sig),
       sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2),
       globalFloorWith: (legs, debit) => RC.bookFloor(bookNow, { legs, limit: debit, quantity: qty, covered: false }, 10),
       skip: (legs) => {
