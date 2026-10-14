@@ -2518,12 +2518,15 @@ async function runOrderPoll() {
   }
 }
 
-// THE POSITION LOOP runs on its own, slower clock. The order poll is every ORDER_POLL_MS because an
-// unfilled order needs working; what we HOLD changes only when something fills, so checking it every poll
-// would spend API quota to re-read the same answer. Once every few minutes catches an orphan long before it
-// matters, and the account fetch is ONE call shared by every run rather than one per run.
+// THE POSITION LOOP. It used to run on its own, slower clock (3 minutes: what we hold changes only when something
+// fills). It now runs every poll — see POS_CHECK_MS. The account fetch is ONE call shared by every run.
 let _posCheckAt = 0;
-const POS_CHECK_MS = 3 * 60 * 1000;
+// EVERY ORDER POLL (20s) since 2026-10-13 (user), was 3 minutes. The check now FEEDS the book — manual-order absorption
+// and the ledger seed — so a stale read means covers, raises and cap room planned on a book without the user's trade,
+// and strike slots that look free but are taken. Two read-only calls per poll (~6/min) against Schwab's ~120/min,
+// and only on a pass where some run has a session record, so nights and weekends still read nothing.
+// The 1s slack keeps timer jitter (a poll firing at 19.99s) from skipping every other poll.
+const POS_CHECK_MS = Number(process.env.CANDLE_SPREAD_POS_CHECK_MS) || ORDER_POLL_MS;
 async function accountPositionsIfDue() {
   // ANY RUN THAT REACHES THE BROKER AT ALL, test mode included — the same `wantsRealSend` condition the
   // order senders use.
@@ -2533,7 +2536,7 @@ async function accountPositionsIfDue() {
   // once — and the FIRST time it ran would be the day a funded account went live, on response parsing that
   // has never seen a real response. A reconciler whose code has never run is not a safety net.
   //
-  // Running it in test mode costs one read-only account read every 3 minutes and exercises the whole path
+  // Running it in test mode costs one read-only account read every POS_CHECK_MS and exercises the whole path
   // — fetch, symbol parse, netting, the roots actually returned — while nothing is at stake. A test run
   // still reports severity 'expected', so it raises no false alarm; what it produces is evidence that the
   // shape is right, visible at /status.runs[].positionReconcile.
@@ -2541,7 +2544,7 @@ async function accountPositionsIfDue() {
   if (!anyReal || !LIVE_ARMED || !(DEPS && DEPS.isProd === true && DEPS.tradingClient && DEPS.accountHash)) return null;
   if (typeof DEPS.tradingClient.accountsDetails !== 'function') return null;
   const now = Date.now();
-  if (now - _posCheckAt < POS_CHECK_MS) return null;
+  if (now - _posCheckAt < POS_CHECK_MS - 1000) return null;
   _posCheckAt = now;
   try {
     // 'positions' IS REQUIRED. Schwab omits the positions array unless fields=positions is asked for, so
@@ -2600,7 +2603,7 @@ async function runOrderPollInner() {
     if (_acct === undefined) _acct = await accountPositionsIfDue();
     return _acct;
   };
-  // MANUAL ORDER ABSORPTION inputs (manual-absorb.js) — fetched only on a pass that read the account (the 3-minute
+  // MANUAL ORDER ABSORPTION inputs (manual-absorb.js) — fetched only on a pass that read the account (the POS_CHECK_MS
   // clock), once, and shared by every live run. Known ids are EVERY real-sending run's orders, read after this
   // pass's order polling, so an adopted manual edit of an engine order is the engine's, never a manual position.
   let _manual;
