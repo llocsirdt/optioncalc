@@ -389,7 +389,9 @@ function capState(st, res, openSide, cfg, deps) {
   const isDeep = pos => deepFrac != null && !pos.covered && (coverMarkNow(pos.legs, deps.getLeg) || 0) >= deepFrac * cfg.spreadWidth;
   const uncov = st.positions.filter(p => p.filled && !p.covered && !p.stackLocked);
   let totalUncov = 0, atRisk = 0;
-  for (const p of uncov) { const d = p.limit * 100 * (p.quantity || cfg.quantity); totalUncov += d; if (!isDeep(p)) atRisk += d; }
+  // A MANUAL position (manual-absorb.js) counts against the cap at its worst settlement loss: a credit structure's
+  // `limit` is negative, and summing it as a cost would GROW the room it actually uses.
+  for (const p of uncov) { const d = (p.manual ? (p.maxLoss || 0) : p.limit) * 100 * (p.quantity || cfg.quantity); totalUncov += d; if (!isDeep(p)) atRisk += d; }
   const stacking = uncov.length > 0 && uncov.every(p => p.side === openSide);
   const softOk = (deps.exemptTrendStack && stacking) ? true : (atRisk + nd <= (deps.softCap != null ? deps.softCap : Infinity));
   const ok = (totalUncov + nd <= (deps.riskCap != null ? deps.riskCap : Infinity)) && softOk && (totalUncov + nd <= (deps.hardCap != null ? deps.hardCap : Infinity));
@@ -415,7 +417,7 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
   let locked = 0;
   while (!capState(st, res, openSide, cfg, deps).ok) {
     const cands = st.positions
-      .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked && !tried.has(p.id))
+      .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked && !p.manual && !tried.has(p.id))
       .map(p => ({ p, mark: coverMarkNow(p.legs, deps.getLeg) }))
       .filter(x => x.mark != null && x.mark >= lockMin)
       .sort((a, b) => b.mark - a.mark);              // deepest ITM first: cheapest cover, biggest lock
@@ -478,7 +480,7 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
   const mid = (type, strike) => { const q = deps.getLeg(type, strike); return q ? q.mid : null; };
   // 1) the single deepest-ITM winner that, covered ALONE, frees enough budget for this open
   const cand = st.positions
-    .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked)
+    .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked && !p.manual)
     .map(p => ({ p, m: coverMarkNow(p.legs, deps.getLeg) }))
     .filter(x => x.m != null && x.m >= lockMin)
     .sort((a, b) => b.m - a.m)[0];
@@ -1652,7 +1654,7 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
   const armedByRisk = armFrac == null
     || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
   for (const pos of only || st.positions) {
-    if (!pos.filled || pos.covered || pos.pendingCover) continue;
+    if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;   // manual: a hedge, never covered
     // A RE-STRUCK cover (range or give-up, see restrikeCover) is re-placed at its chosen strike carrying the
     // ladder's price; it was already working, so the underwater refusal below does not apply to it.
     const carry = pos.coverCarry || null;
@@ -1933,7 +1935,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (coverSignal) {
     // Exclude positions that already have a resting cover working (don't re-select them). In ported
     // mode cover ONLY the side(s) the signal targeted (v7 per-side coverSide); classic covers all.
-    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover && (!ported || coverSet.includes(p.side)));
+    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover && !p.manual && (!ported || coverSet.includes(p.side)));
     const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
     for (const plan of plans) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
@@ -1986,7 +1988,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // This locks winners and, via the cap logic below, stops them counting toward the at-risk churn cap.
   if (ported && deps.proactiveCoverFrac != null) {
     for (const pos of st.positions) {
-      if (!pos.filled || pos.covered || pos.pendingCover) continue;
+      if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;
       const m = coverMarkNow(pos.legs, deps.getLeg);
       if (m != null && m >= deps.proactiveCoverFrac * cfg.spreadWidth) {
         const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);

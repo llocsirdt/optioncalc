@@ -2554,6 +2554,32 @@ async function accountPositionsIfDue() {
   }
 }
 
+// Book the user's manual orders into one live run's record, and say what happened. Writes the record on a change.
+const MA = require('./manual-absorb');
+function absorbManual(record, mi) {
+  const res = MA.absorbManualOrders(record, mi);
+  const v = record.config && record.config.variant;
+  const legStr = (p) => p.legs.map((l) => `${l.side === 'long' ? '+' : '-'}${l.type}${l.strike}`).join(' ');
+  for (const p of res.removed) {
+    store.appendEvent(record, { type: 'manual_unabsorbed', orderId: p.orderId, positionId: p.id,
+      note: `order ${p.orderId} is now tracked by the engine (an adopted edit of its own order) — the manual copy was removed so it is not booked twice` });
+  }
+  for (const p of res.added) {
+    store.appendEvent(record, { type: 'manual_absorbed', orderId: p.orderId, positionId: p.id, legs: p.legs, quantity: p.quantity,
+      net: p.limit < 0 ? 'CREDIT' : 'DEBIT', price: Math.abs(p.limit), maxLoss: p.maxLoss, priceFrom: p.priceFrom,
+      note: `manual order ${p.orderId} (${legStr(p)} x${p.quantity} ${p.limit < 0 ? 'CREDIT' : 'DEBIT'} ${Math.abs(p.limit)}) joined the book as a hedge: it moves the risk curve, floor and cap room, and is never covered` });
+    console.warn(`[candle-spread] ${v}: absorbed manual order ${p.orderId} (${legStr(p)} x${p.quantity} @ ${p.limit})`);
+  }
+  if (res.nets.length) {
+    store.appendEvent(record, { type: 'manual_nets_engine_leg', severity: 'ALERT', legs: res.nets,
+      note: `a manual order works against ${res.nets.length} engine leg(s) — booked at the true net (what Schwab holds): `
+        + res.nets.map((n) => `${n.leg} engine ${n.engine} manual ${n.manual}`).join('; ') });
+    console.error(`[candle-spread] MANUAL ORDER NETS ENGINE LEGS (${v}): ` + res.nets.map((n) => `${n.leg} engine ${n.engine} manual ${n.manual}`).join('; '));
+  }
+  if ((res.added.length || res.removed.length) && !res.nets.length) store.writeRun(record);
+  return res;
+}
+
 async function runOrderPollInner() {
   const deps = { tradingClient: DEPS.tradingClient, accountHash: DEPS.accountHash };
   // REFRESH THE CONTROL PLANE. On the order-poll tick rather than a timer of its own: ~20s is the worst-case
@@ -2573,6 +2599,34 @@ async function runOrderPollInner() {
   const acctDetailsIfAny = async () => {
     if (_acct === undefined) _acct = await accountPositionsIfDue();
     return _acct;
+  };
+  // MANUAL ORDER ABSORPTION inputs (manual-absorb.js) — fetched only on a pass that read the account (the 3-minute
+  // clock), once, and shared by every live run. Known ids are EVERY real-sending run's orders, read after this
+  // pass's order polling, so an adopted manual edit of an engine order is the engine's, never a manual position.
+  let _manual;
+  const manualInputsIfAny = async () => {
+    if (_manual !== undefined) return _manual;
+    _manual = null;
+    try {
+      const orders = await DEPS.tradingClient.ordersByAccount(DEPS.accountHash,
+        new Date(Date.now() - 24 * 3600 * 1000).toISOString(), new Date().toISOString());
+      const knownOrderIds = new Set();
+      let adoptionPending = false;
+      for (const r of RUNS) {
+        if (!(r.dryRun === false || r.dryRun === 'test')) continue;
+        const c = { ...r, expiration: r.expiration || todayEST() };
+        const rec = store.readRun(store.makeRunId(c.symbol, c.expiration, todayEST(), c.variant));
+        for (const o of (rec && rec.state && rec.state.liveOrders) || []) {
+          if (o.orderId != null) knownOrderIds.add(String(o.orderId));
+          if (o.replacedBy != null) knownOrderIds.add(String(o.replacedBy));
+          if (o.manualReplaceSeenAt && !om.isTerminal(o)) adoptionPending = true;
+        }
+      }
+      _manual = { orders: orders || [], knownOrderIds, adoptionPending };
+    } catch (e) {
+      console.error('[candle-spread] manual-order fetch:', e && e.message);
+    }
+    return _manual;
   };
   for (const run of RUNS) {
     if (!(run.dryRun === false || run.dryRun === 'test')) continue;
@@ -2659,6 +2713,12 @@ async function runOrderPollInner() {
     const acctDetails = await acctDetailsIfAny();
     if (acctDetails) {
       try {
+        // ABSORB THE USER'S MANUAL ORDERS (live only) BEFORE the comparison below, so a just-absorbed order stops
+        // reading as 'unmanaged' in the same pass. See manual-absorb.js.
+        if (record.config && record.config.dryRun === false && record.state) {
+          const mi = await manualInputsIfAny();
+          if (mi) absorbManual(record, mi);
+        }
         const pr = BR.reconcilePositions(record, acctDetails);
         // THE ACCOUNT SEEDS THE LEDGER (2026-10-12, user: "the schwab 'real' positions need to take priority").
         // Live only: a simulated or test run's account rows belong to someone else.
