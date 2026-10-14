@@ -43,6 +43,8 @@
   label.tgl select, label.tgl input[type=date] { font:12px sans-serif; padding:0 2px; border:1px solid #ddd;
      border-radius:3px; background:#fff; height:18px; }
   #status { padding:10px 14px; color:var(--muted); }
+  /* Empty once loaded, but its padding + line box still reserved ~38px above the grid. */
+  #status:empty { display:none; }
   /* The time slider sits at the BOTTOM, stuck to the viewport: dragging a slider ABOVE the charts puts
      your hand over the very cells you are reading. Below-and-sticky keeps it reachable and out of the way. */
   /* Padding is 18px (was 8) — ~20px taller overall. At the very bottom edge of a phone screen the old
@@ -57,8 +59,9 @@
   /* padding-right on a horizontal scroller is NOT honoured at the scroll end in Chrome — scrolled fully
      right, the last column would sit flush against the screen edge. The gap has to come from the scrolled
      CONTENT, so it goes on the table as a margin. */
-  .wrap { overflow:auto; padding:8px 14px 40px; }
-  .wrap > table { margin-right:40px; }
+  /* Trimmed 2026-10-14 (was 8px 14px 40px + 40px right margin): the grid sat in ~50-80px of dead space. */
+  .wrap { overflow:auto; padding:4px 8px 12px; }
+  .wrap > table { margin-right:12px; }
   /* table-layout:fixed — EVERY COLUMN THE SAME WIDTH. `width:184px` on td.cell is only a PREFERENCE under
      the automatic table algorithm: a column can never be narrower than its content's minimum, and several
      things in a cell are deliberately unbreakable (the feature strip is flex-wrap:nowrap, the counts strip
@@ -75,7 +78,7 @@
      horizontally inside .wrap when there are more columns than fit. */
   table.grid { border-collapse:separate; border-spacing:6px; table-layout:fixed; width:min-content; }
   table.grid th { width:200px; font:11px/1.2 ui-monospace, Menlo, monospace; color:var(--muted); font-weight:600; padding:2px 4px; text-align:center; white-space:nowrap; }
-  table.grid th.rowh { width:62px; text-align:right; padding-right:8px; font-size:12px; color:var(--fg); }
+  table.grid th.rowh { width:50px; text-align:right; padding-right:6px; font-size:12px; color:var(--fg); }
   /* FIXED SIZE, not min-height. Every row of a cell is now reserved whether or not it has content (see
      the stateBar / lift / cmp placeholders), so the height is the same at every slider position and the
      grid stops resizing while scrubbing. box-sizing keeps the border and padding inside the number.
@@ -249,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.8</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.9</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
