@@ -1545,13 +1545,14 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
 }
 
 // RAISE WALK settings (cfg.floorRaiseWalk). Start at startFrac x the quoted mid, step stepDollars every stepSec,
-// never past the ceiling the plan was approved at. 0.40 / $0.05 / 20 s: a $1.55 mid starts at $0.60 and reaches
-// $1.65 in about 7 minutes, inside the 10-minute hedge TTL.
+// never past the ceiling the plan was approved at. 0.40 / $0.10 / 60 s (user 2026-10-14, was $0.05 / 20 s — "we can be
+// patient for hedges"): a $1.55 mid starts at $0.60 and reaches $1.55 in about 10 minutes, the hedge TTL; a dearer
+// raise expires below its mid and the next pass re-plans it.
 function walkCfg(cfg) {
   if (!cfg || cfg.floorRaiseWalk !== true) return null;
   return { startFrac: cfg.floorRaiseWalkStartFrac != null ? cfg.floorRaiseWalkStartFrac : 0.4,
-    stepSec: cfg.floorRaiseWalkStepSec != null ? cfg.floorRaiseWalkStepSec : 20,
-    stepDollars: cfg.floorRaiseWalkStepDollars != null ? cfg.floorRaiseWalkStepDollars : 0.05 };
+    stepSec: cfg.floorRaiseWalkStepSec != null ? cfg.floorRaiseWalkStepSec : 60,
+    stepDollars: cfg.floorRaiseWalkStepDollars != null ? cfg.floorRaiseWalkStepDollars : 0.10 };
 }
 function roundToTick(x, tick) { const t = tick || 0.05; return Math.round(Math.round(x / t) * t * 100) / 100; }
 

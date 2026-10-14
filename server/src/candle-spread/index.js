@@ -922,7 +922,8 @@ function applyFloorRaise(v) {
   v.floorRaise = true;
   // 3:1 (user, 2026-10-06): under honest fills (at-limit, resting raises) 3:1 beat 2:1 on every floor metric
   // and on P&L at every width — fleet locked days 34.6 -> 35.6%, avg/day 79.0k -> 84.5k, maxDD -35.1k -> -33.5k.
-  v.floorRaiseMinRatio = 3;
+  // 4:1 (user, 2026-10-14, was 3:1): two OTM call raises against the downtrend cost live v7-10 $460 of a -$1,177 day.
+  v.floorRaiseMinRatio = 4;
   // SPREADS FIRST (objective B) on EVERY variant — the user's choice 2026-10-06: offset spreads fix a valley
   // and lift the tail beyond it; when none qualifies, any structure (flies included) may still raise the
   // book's lowest point. 765-day sweep at 2:1: fleet locked-profit days 33.7% -> 38.0%, closing floor
@@ -932,8 +933,9 @@ function applyFloorRaise(v) {
   // RAISE DISCIPLINE (user, 2026-10-13, after v7-10 bought C30580/30590 three times on its locked high side, against
   // a falling market, filling at the top of its range; then could not place the 30520/30530/30540/30550 condor):
   //   LockedLift — once the floor is >= 0, a raise must lift the floor itself at the required ratio (floor-raise.js).
-  //   Far ratio  — required ratio climbs from 3:1 at the money to 6:1 two expected moves out.
-  //   Walk       — orders start at 0.4 x mid and step $0.05 / 20 s up to the approved price (live only; the backtest
+  //   Far ratio  — required ratio climbs from 4:1 at the money to 8:1 two expected moves out (3 -> 6 until 2026-10-14).
+  //                A graduated scheme (wider range, or tighter early in the day) is expected to replace this.
+  //   Walk       — orders start at 0.4 x mid and step $0.10 / 60 s (was $0.05 / 20 s until 2026-10-14) up to the approved price (live only; the backtest
   //                still prices a raise at mid + slip, so it cannot see this saving).
   //   IronMix    — a fly/condor whose legs the leg ledger refuses is placed as its put/call (iron) twin when that is
   //                legal (live: sent as a credit, booked at its debit-equivalent; backtest: priced off the iron legs).
@@ -946,7 +948,7 @@ function applyFloorRaise(v) {
   if (v.floorRaiseLockedLift == null) v.floorRaiseLockedLift = true;
   if (v.floorRaiseBookRange == null) v.floorRaiseBookRange = true;
   if (v.floorRaiseIronMix == null) v.floorRaiseIronMix = true;
-  if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 6;
+  if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 8;
   if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
 }
 // FLOOR REPAIR FOLD (user, 2026-10-09): wings, floor offsets and fly/condor repair were all built to do what
