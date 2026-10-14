@@ -892,9 +892,16 @@ function applyCoverStrikeChoice(v) {
 // Backtest (821 days) read this as somewhat worse than the tent (offset1 + give-up to tent: close -521 vs -492,
 // uncovered 3.7 vs 2.8) — the user's call, made because live is far below the backtest either way. After the minLock
 // fleet level (which it overrides). Set the fields before applyExperiments to override.
-const PLATEAU_COVER = new Set(['v7-10']);
+// 2026-10-14 (user): the plateau is the DEFAULT for every 10W strategy from v4 up, uncapped twins included. v0-v2
+// keep their own cover placement (tent / halfway / at-money — the pure baselines) and v3 stays tent so it differs
+// from v0 by risk arming alone.
+const PLATEAU_COVER_FROM_FAMILY = 4;
+function isPlateauCover(variant) {
+  const m = /^v(\d+)-10(?:-|$)/.exec(String(variant));
+  return !!m && Number(m[1]) >= PLATEAU_COVER_FROM_FAMILY;
+}
 function applyPlateauCover(v) {
-  if (!PLATEAU_COVER.has(v.variant)) return;
+  if (!isPlateauCover(v.variant)) return;
   if (v.coverGeometry == null || v.coverGeometry === 'tent') v.coverGeometry = 'offset1';
   if (v.giveUpGeometry == null) v.giveUpGeometry = 'tent';
   v.continuousCoverMinLockFrac = 0.05;
