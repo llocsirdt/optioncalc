@@ -1863,6 +1863,12 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   } else {
     openSide = L.classifyOpen(candle, priorCandle, bands);
   }
+  // REOPEN WINDOW (reopenAfterCover): the 15m decision a quick reopen follows, and any later cover signal against it.
+  {
+    const at = deps.nowMs != null ? deps.nowMs : Date.now();
+    if (deps.isFifteen !== false) st.lastSignal15 = { openSide: openSide || null, coverSides: coverSet.slice(), at, candleEpoch: st.lastCandleEpoch || null };
+    else if (coverSet.length && st.lastSignal15) st.lastSignal15.coverSides = [...new Set([...(st.lastSignal15.coverSides || []), ...coverSet])];
+  }
   // The trend-side floor's open takes the candle's open slot when the signal has none (every gate still applies).
   if (tfOpenSide && !openSide) openSide = tfOpenSide;
   // RE-STRIKE RE-PLACE (deps.openRestrikeReplace, 2026-10-12). The re-strike used to cancel and stop: a new open
@@ -1904,7 +1910,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     } else {
       // REVERSAL = the signal now wants the other side, or wants this side covered. Either way the order
       // was placed on a view the engine no longer holds, so it goes rather than filling into a flip.
-      const reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side);
+      // An unfilled REOPEN (reopenAfterCover) belongs to the 15m window that made it: at the next 15m close it gives way,
+      // so it never blocks that close's own open (one working open at a time).
+      const reopenExpired = !!pos.reopenOf && deps.isFifteen !== false;
+      const reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side) || reopenExpired;
       if (reversed) {
         pos.orderStatus = 'cancelled';
         // AND CANCEL IT AT THE BROKER. This deleted the position locally and left the order working at
@@ -1931,7 +1940,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         decisions.push({ action: 'cancel-open', positionId: pos.id, side: pos.side, limit: pos.limit,
           orderId: pos.orderId || null, cancelSent: !!(deps.cancelOrder && pos.orderId),
           ...(keep ? { kept: 'awaiting broker confirmation' } : {}),
-          reason: openSide && openSide !== pos.side ? `reversal → ${openSide}` : `cover signal on ${pos.side}` });
+          reason: openSide && openSide !== pos.side ? `reversal → ${openSide}` : coverSet.includes(pos.side) ? `cover signal on ${pos.side}` : 'reopen window closed (15m close)' });
         if (keep) pos.cancelRequestedAt = Date.now();
         else st.positions = st.positions.filter(p => p.id !== pos.id);
         st.pendingOpenId = null;
@@ -2204,6 +2213,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (cfg.coverFillModel === 'resting') governRestingCovers(st, cfg, deps, decisions);
   if (cfg.coverFillModel === 'resting') await workRestingCovers(st, cfg, decisions, deps, underlying);
   if (cfg.coverFillModel === 'resting') resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
+  await reopenAfterCover(st, cfg, deps, decisions);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
   // the 30s sub-bar pass and by every later candle until it fills or expires.
   await walkRaiseOrders(st, deps && deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg, deps, decisions);
@@ -2841,6 +2851,103 @@ function snapshotSpreads(getLeg, center, incr, windowStrikes) {
 // the book does not reflect: a position we lost track of, a SECOND fill for something already filled or
 // covered (a double cover, a race both orders won), or a cover/hedge whose pending state was gone.
 // Reported once per row (the row is not re-tried), as a decision and a console error.
+// SPOT FROM THE CHAIN (put-call parity at the money): the sub-bar worker has a fresh chain but only the last candle's
+// spot, up to five minutes old. 0DTE, so S ~= K + C - P at the strike where C and P are closest. null if unquoted.
+function paritySpot(getLeg, near, incr) {
+  if (!(near > 0) || !(incr > 0)) return null;
+  const k0 = Math.round(near / incr) * incr;
+  let best = null;
+  for (let k = k0 - 20 * incr; k <= k0 + 20 * incr; k += incr) {
+    const c = getLeg('C', k), p = getLeg('P', k);
+    if (!c || !p || !(c.mid >= 0) || !(p.mid >= 0)) continue;
+    const gap = Math.abs(c.mid - p.mid);
+    if (!best || gap < best.gap) best = { gap, spot: k + c.mid - p.mid };
+  }
+  return best ? round2(best.spot) : null;
+}
+
+// REOPEN AFTER A QUICK COVER (cfg.reopenOnCover, user 2026-10-14, v7-10). When an open covers inside the current 15m
+// signal window and the underlying is still between its strikes, place it again rather than wait for the next 15m
+// close — the user trades this way by hand: a fast morning tent that locks minLock in minutes is worth repeating, and
+// a covered position adds no risk however many there are.
+//   Window  — the cover filled after the latest 15m decision, the position was opened by that decision OR the decision
+//             still wants that side, and no cover signal against that side has fired since.
+//   Strikes — the same strikes at min(price paid, mark); when the mark is below what was paid, the deepest-ITM strikes
+//             (same width) that still cost no more than that, never shallower than the original.
+//   Price   — never above what was paid: the open ladder's ceiling (pos.cap) is that price.
+//   Pace    — at most cfg.reopenPer5m (default 2) per 5m bar; one working open at a time; every open gate applies.
+async function reopenAfterCover(st, cfg, deps, decisions) {
+  if (cfg.reopenOnCover !== true || !deps || !deps.getLeg || st.pendingOpenId) return 0;
+  const sig = st.lastSignal15;
+  if (!sig || !(sig.at > 0)) return 0;
+  const now = deps.nowMs != null ? deps.nowMs : Date.now();
+  const bar5 = Math.floor(now / 300000);
+  if (st.reopenBar5 !== bar5) { st.reopenBar5 = bar5; st.reopenN5 = 0; }
+  const per5 = cfg.reopenPer5m != null ? cfg.reopenPer5m : 2;
+  if (st.reopenN5 >= per5) return 0;
+  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, tick = cfg.tickIncrement || 0.05;
+  const src = st.positions.filter((p) => p && p.filled && p.covered && !p.hedge && !p.raise && !p.manual && !p.reopened
+    && (p.side === 'bull' || p.side === 'bear') && p.coverFilledAt != null && p.coverFilledAt >= sig.at
+    && !(sig.coverSides || []).includes(p.side)
+    && (sig.openSide === p.side || (p.placedEpoch != null && p.placedEpoch >= sig.at)))
+    .sort((a, b) => b.coverFilledAt - a.coverFilledAt)[0];
+  if (!src) return 0;
+  const side = src.side;
+  const strikes = src.legs.map((l) => l.strike);
+  const lo0 = Math.min(...strikes), hi0 = Math.max(...strikes);
+  const spot = paritySpot(deps.getLeg, deps.underlying != null ? deps.underlying : st.lastUnderlying, incr)
+    || deps.underlying || st.lastUnderlying;
+  const done = (why, extra) => { src.reopened = why; decisions.push({ action: 'reopen-skip', of: src.id, side, reason: why, spot, lower: lo0, upper: hi0, ...(extra || {}) }); return 0; };
+  if (!(spot > 0)) return 0;                                            // no price this pass: look again next pass
+  if (spot < lo0 || spot > hi0) return done('underlying outside the original strikes');
+  // What was paid, debit-equivalent (a credit open's fill is W - credit).
+  const bf = src.brokerFill;
+  const paid = bf && bf.price > 0 ? (bf.side === 'CREDIT' ? round2(W - bf.price) : bf.price) : src.limit;
+  if (!(paid > 0)) return done('no price paid on record');
+  const at = (lo, hi) => buildOpenAtStrikes(side, lo, hi, cfg, deps.getLeg, spot, { allowOverCap: true });
+  const base = at(lo0, hi0);
+  if (base.error || base.declined || !(base.mark > 0)) return 0;          // unquotable now: try again next pass
+  let pick = base, deeper = 0;
+  if (base.mark < paid) {
+    // Deeper ITM = lower strikes for a bull call, higher for a bear put. Walk while it still costs no more than paid.
+    for (let k = 1; k <= 20; k++) {
+      const d = side === 'bull' ? -k * incr : k * incr;
+      const r = at(lo0 + d, hi0 + d);
+      if (r.error || r.declined || !(r.mark > 0) || r.mark > paid) break;
+      pick = r; deeper = k;
+    }
+  }
+  const limit = round2(Math.min(paid, Math.max(tick, Math.ceil(pick.mark / tick - 1e-9) * tick)));
+  const rl = resolveLegs(pick.legs, deps.getLeg);
+  if (rl.error) return 0;
+  const res = { ...pick, limit, cap: paid, placementCap: paid, payload: buildOrderPayload(rl.resolved, limit, cfg.quantity, 'DEBIT') };
+  // Every open gate: governor, late floor, ratchet, cap.
+  const ex = { filled: true, legs: res.legs, limit, quantity: cfg.quantity, covered: false };
+  const nowMin = etMinNow(deps);
+  if (govOn(deps) && -govFloor(st, deps, ex) > deps.lossMax) return done('governor', { projectedFloor: round2(govFloor(st, deps, ex)) });
+  const late = lateFloorLimit(st, deps, nowMin, W);
+  if (late != null && govFloor(st, deps, ex) < late) return done('late-day floor');
+  const rat = ratchetLimit(st, deps, nowMin);
+  if (rat != null && bookFloorNow(st, ex) < rat) return done('floor ratchet');
+  if (!capState(st, res, side, cfg, deps).ok) return done('cap');
+  // Leg-uniqueness at THESE strikes (no shift: a reopen is these strikes or nothing).
+  let legStyle = null;
+  if (deps.enforceLegUniqueness && deps._ledger) {
+    const wantCredit = openFundsCredit(st, cfg, limit, creditPreferred(st, deps,
+      deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1), decisions, side);
+    const rr = LL.resolveOpen(side, res.lower, res.upper, deps._ledger, { incr, maxShift: 0, preferStyle: wantCredit ? 'credit' : 'debit' });
+    if (rr.resolution === 'skip' || rr.resolution === 'shift') return done('leg-uniqueness');
+    legStyle = rr.style;
+  }
+  src.reopened = true;
+  st.reopenN5++;
+  decisions.push({ action: 'reopen', of: src.id, side, lower: res.lower, upper: res.upper, deeper, paid, mark: pick.mark, limit, spot });
+  await openPosition(st, res, side, cfg, deps, decisions, legStyle);
+  const np = st.pendingOpenId ? st.positions.find((p) => p.id === st.pendingOpenId) : st.positions[st.positions.length - 1];
+  if (np && np !== src) { np.reopenOf = src.id; np.reopenDepth = (src.reopenDepth || 0) + 1; }
+  return 1;
+}
+
 function unbookedFill(o, why, pos, decisions) {
   o.brokerApplied = why;
   decisions.push({ action: 'broker-fill-unbooked', why, orderId: o.orderId, kind: o.kind || null,
@@ -4210,6 +4317,7 @@ module.exports = {
   openPosition,   // exported for the failed-send contract test
 
   processCandleClose,
+  reopenAfterCover, paritySpot,   // REOPEN AFTER A QUICK COVER — the candle close AND the sub-bar worker
   pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / give-up re-strike / roll)
   attachLedger,           // the leg ledger on deps — every order-placing path, candle close and worker
   placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)

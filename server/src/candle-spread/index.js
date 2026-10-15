@@ -1042,6 +1042,8 @@ function applyExperiments(v, { capPreset = true } = {}) {
     if (ab.ladder) applyLadderCfg(v);
   }
   applyPlateauCover(v);
+  // REOPEN AFTER A QUICK COVER (user, 2026-10-14): v7-10 only — the user trades it this way by hand.
+  if (v.variant === 'v7-10' && v.reopenOnCover == null) v.reopenOnCover = true;
   // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
@@ -2461,7 +2463,10 @@ async function runRestingWork() {
       const hasHedge = (st.positions || []).some(p => p.filled === false && p.pendingHedge);
       // A filled, uncovered position with no cover working yet — the worker places it (cover on fill, below).
       const hasNaked = run.continuousCover === true && (st.positions || []).some(p => p.filled && !p.covered && !p.pendingCover && !p.hedge);
-      if (hasOpen || hasCover || hasHedge || hasNaked) pending.push({ run, cfg, record });
+      // A position covered since the latest 15m decision that has not been reopened yet (trader.reopenAfterCover).
+      const hasReopen = run.reopenOnCover === true && st.lastSignal15 && (st.positions || []).some(p => p.filled && p.covered && !p.hedge
+        && !p.reopened && p.coverFilledAt != null && p.coverFilledAt >= st.lastSignal15.at);
+      if (hasOpen || hasCover || hasHedge || hasNaked || hasReopen) pending.push({ run, cfg, record });
     }
     if (!pending.length) return;
     // ONE chain read for the whole pass. The 5s freshness window in getOrFetchChainData means every
@@ -2506,6 +2511,8 @@ async function runRestingWork() {
           await trader.workRestingCovers(st, cfg, decisions, deps, st.lastUnderlying);
           trader.resolveRestingCovers(st, cfg, deps.getLeg, decisions, deps);
         }
+        // REOPEN AFTER A QUICK COVER: a cover that just filled inside the 15m window, underlying still between its strikes.
+        await trader.reopenAfterCover(st, cfg, deps, decisions);
       } catch (e) {
         console.error(`[candle-spread] resting work (${run.variant}):`, e && e.message);
         continue;
