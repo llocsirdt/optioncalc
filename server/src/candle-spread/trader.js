@@ -208,6 +208,11 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       style = flipped;
     }
   }
+  // FUNDS WAIT: a cover Schwab refused for buying power waits a minute before it is sent again (funds-guard.js).
+  {
+    const wait = FG.fundsWaitMs(st, OM.rejectKey('cover', pos.id));
+    if (wait > 0) { decisions.push({ action: 'funds-wait', kind: 'cover', positionId: pos.id, waitSec: Math.ceil(wait / 1000) }); return; }
+  }
   // FUNDS GUARD (funds-guard.js, user 2026-10-14): a buying-power rejection sends the other form next; a debit that
   // would push net spend past the risk max goes as its credit twin.
   if (cfg.fundsGuard !== false) {
@@ -687,6 +692,11 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
       return;
     }
     st.pendingOpenId = null;
+  }
+  // FUNDS WAIT: an open Schwab refused for buying power waits a minute before the next is sent (funds-guard.js).
+  {
+    const wait = FG.fundsWaitMs(st, OM.rejectKey('open', null));
+    if (wait > 0) { decisions.push({ action: 'funds-wait', kind: 'open', side: openSide, waitSec: Math.ceil(wait / 1000) }); return; }
   }
   // Pull the covers this open would turn into breaches BEFORE it goes out (see pullCoversForOpen).
   await pullCoversForOpen(st, res, cfg, deps, decisions);
@@ -1505,6 +1515,11 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     let stop = false;
     for (const h of companion ? [best, companion] : [best]) {
       let alt = ironAlt.get(keyOf(h.legs)) || null;
+      // FUNDS WAIT: a raise Schwab refused for buying power waits a minute before another is sent.
+      {
+        const wait = FG.fundsWaitMs(st, OM.rejectKey('raise', null));
+        if (wait > 0) { decisions.push({ action: 'funds-wait', kind: 'raise', waitSec: Math.ceil(wait / 1000) }); stop = true; break; }
+      }
       // FUNDS GUARD (funds-guard.js): after a buying-power rejection of a debit raise, or when this debit would push
       // net spend past the risk max, send the credit twin — the put/call swap of a vertical, the iron of a fly/condor.
       if (!alt && cfg.fundsGuard !== false) {

@@ -55,6 +55,17 @@ ok(!FG.isFundsReject(null), 'no reason is not');
   ok(FG.fundsStyle(st, cfg, { key: 'open:slot', debitDollars: 400, wantCredit: false }).credit === true, 'no recorded side: flips on an odd count');
 }
 
+// ── a funds rejection waits a minute before the next send ───────────────────────────────────────────
+{
+  const t0 = Date.parse('2026-10-14T16:41:23Z');
+  const st = { rejectStreaks: { 'cover:p1': { count: 1, lastReason: REASON, lastAt: new Date(t0).toISOString() },
+    'cover:p2': { count: 1, lastReason: 'The order is not an opening transaction', lastAt: new Date(t0).toISOString() } } };
+  ok(FG.fundsWaitMs(st, 'cover:p1', t0 + 20000) === 40000, '20 s after: 40 s still to wait');
+  ok(FG.fundsWaitMs(st, 'cover:p1', t0 + 60000) === 0, '60 s after: free to send');
+  ok(FG.fundsWaitMs(st, 'cover:p2', t0 + 1000) === 0, 'other rejections do not wait');
+  ok(FG.fundsWaitMs(st, 'cover:p3', t0) === 0, 'no rejection, no wait');
+}
+
 // ── the reject streak keeps the refused side ────────────────────────────────────────────────────────
 {
   const record = { state: {}, events: [] };

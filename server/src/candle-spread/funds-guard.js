@@ -54,6 +54,17 @@ function fundsRejected(st, key) {
   return { net: rj.net || null, count: rj.count };
 }
 
+// WAIT AFTER A FUNDS REJECTION (user, 2026-10-14): the engine rebuilt a refused order every ~20 s (cover pos-...-1938:
+// 27 rejections in 14 minutes). After a buying-power rejection the next attempt waits FUNDS_RETRY_MS from the
+// rejection. Returns the ms still to wait, 0 when free to send.
+const FUNDS_RETRY_MS = 60 * 1000;
+function fundsWaitMs(st, key, nowMs) {
+  const rj = st && st.rejectStreaks && st.rejectStreaks[key];
+  if (!rj || !isFundsReject(rj.lastReason) || !rj.lastAt) return 0;
+  const left = Date.parse(rj.lastAt) + FUNDS_RETRY_MS - (nowMs != null ? nowMs : Date.now());
+  return left > 0 ? left : 0;
+}
+
 // The send form for an order that can go either way. Returns { credit: bool, why } when the guard decides, or
 // null to leave the caller's own choice. A funds rejection flips to the form NOT last rejected (when the record
 // carries no side, it alternates on the count, as the cover style flip does); otherwise a debit that would
@@ -84,4 +95,4 @@ function verticalTwin(legs) {
     offset: r2(Math.abs(long.strike - short.strike)) };
 }
 
-module.exports = { isFundsReject, fundsBudget, netSpend, debitFits, fundsRejected, fundsStyle, verticalTwin };
+module.exports = { FUNDS_RETRY_MS, fundsWaitMs, isFundsReject, fundsBudget, netSpend, debitFits, fundsRejected, fundsStyle, verticalTwin };
