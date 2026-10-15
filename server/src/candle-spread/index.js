@@ -216,7 +216,7 @@ const FAMILIES = [
   // every other family. Flat across widths, it was ~one uncovered 40W position at a time: 10/01-10/14 v8-40 opened 2-9
   // a day vs v6-40's 6-27, and it drove most of v8's 20W/40W gap to v6. The feature stays in capState (softCap /
   // exemptTrendStack) — backlogged to revisit whether it still has a purpose.
-  { key: 'v8', label: 'proactive', signalFn: v6Signal, signalCfg: { fiveMin: true }, proactiveCoverFrac: 0.70, ...PORTED_COVER },
+  { key: 'v8', label: 'proactive', signalFn: v6Signal, signalCfg: { fiveMin: true }, proactiveCoverFrac: 0.80, ...PORTED_COVER },   // 0.70 -> 0.80 (user, 2026-10-14): same as v9
   // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the $20k backstop — the high-ceiling variant.
   // Still paper pending go/no-go ([[project_daily_risk_tolerance]]).
   { key: 'v9', label: 'be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, proactiveCoverFrac: 0.80, ...PORTED_COVER },
@@ -778,7 +778,7 @@ const TUNED_CAPS = new Map([
   ['v0-20', 4500],
   ['v7-20-cATM', 6500],
   ['v9-20-cATM', 6500],
-  ['v6-40', 8500],
+  ['v6-40', 7500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): $8,500 was already held to the $7,500 ceiling
   // LOWERED 2026-09-27 — the two places where tightening was nearly free on total and bought real
   // risk-adjusted return:
   //   v0-10  $3,000 -> $1,500   costs $30,068 (3.1% of total) for ret/DD 306.8 -> 379.9, maxDD -$2,473.
@@ -803,7 +803,7 @@ const TUNED_CAPS = new Map([
   ['v0-10', 2000],
   // W=20
   ['v3-20', 2500],
-  ['v8-20', 2500],
+  ['v8-20', 4500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $2,500 (floored to $3,000)
   ['v3-20-cATM', 3500],
   ['v0-20-cATM', 7000],
   ['v5-20', 4000],
@@ -827,15 +827,15 @@ const TUNED_CAPS = new Map([
   ['v5-20-cATM', 4500],
   ['v9-20', 4500],
   ['v6-20-cATM', 7000],
-  ['v7-20', 6500],
+  ['v7-20', 4500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $6,500
   // W=40
-  ['v7-40', 3000],
+  ['v7-40', 7500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $3,000 (floored to $6,000)
   ['v0-40', 5000],
   ['v2-40', 5500],
   ['v8-40-cATM', 5500],
   ['v1-40', 6000],
   ['v2-40-cATM', 7500],
-  ['v8-40', 4000],
+  ['v8-40', 7500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $4,000 (floored to $6,000)
   ['v4-40', 7000],
   ['v5-40', 9000],
   ['v5-40-cATM', 7500],
@@ -1046,8 +1046,9 @@ function applyExperiments(v, { capPreset = true } = {}) {
     if (ab.ladder) applyLadderCfg(v);
   }
   applyPlateauCover(v);
-  // REOPEN AFTER A QUICK COVER (user, 2026-10-14): v7-10 only — the user trades it this way by hand.
-  if (v.variant === 'v7-10' && v.reopenOnCover == null) v.reopenOnCover = true;
+  // REOPEN AFTER A QUICK COVER (user, 2026-10-14): v7-10 (live — the user trades it this way by hand) and every v8/v9
+  // variant, so v8 = v6 + proactive cover + reopen and v9 = v7 + the same: a readable comparison.
+  if ((v.variant === 'v7-10' || /^v[89]-/.test(String(v.variant))) && v.reopenOnCover == null) v.reopenOnCover = true;
   // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
