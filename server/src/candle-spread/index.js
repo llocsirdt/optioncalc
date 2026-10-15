@@ -951,13 +951,15 @@ function applyFloorRaise(v) {
   if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 8;
   if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
   // TREND-SIDED RATIO (user, 2026-10-14): under trend A, a valley on the side the trend is heading toward needs
-  // 2:1 near -> 4:1 far; a valley on the side it is leaving needs 5:1 -> 10:1. No trend / valley at spot keeps
+  // 3:1 near -> 6:1 far (the user's call over the sweep's w2/4: the engine should err cautious — a hedge it skips
+  // can be placed by hand, one it places can't be taken back; w2/4 vs w3/6 close floor differed 10-17 on 10W/20W,
+  // 65-85 on 40W); a valley on the side it is leaving needs 5:1 -> 10:1. No trend / valley at spot keeps
   // the plain 4/8 above. raise-trend-ratio-2026-10-14 (821 days): most consistent floor arm on 20W/40W (v7-20
   // close floor -434 -> -361, v9-40 -1,407 -> -1,309, v7-40 locked 30.6 -> 33.3%); on 10W second to plain 3/6
   // (v7-10 -566 vs -581) but refuses both of 10/14's live against-trend v7-10 raises.
   if (v.floorRaiseRatioTrend == null) v.floorRaiseRatioTrend = 'A';
-  if (v.floorRaiseMinRatioWith == null) v.floorRaiseMinRatioWith = 2;
-  if (v.floorRaiseMinRatioFarWith == null) v.floorRaiseMinRatioFarWith = 4;
+  if (v.floorRaiseMinRatioWith == null) v.floorRaiseMinRatioWith = 3;
+  if (v.floorRaiseMinRatioFarWith == null) v.floorRaiseMinRatioFarWith = 6;
   if (v.floorRaiseMinRatioAgainst == null) v.floorRaiseMinRatioAgainst = 5;
   if (v.floorRaiseMinRatioFarAgainst == null) v.floorRaiseMinRatioFarAgainst = 10;
 }
