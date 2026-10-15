@@ -826,26 +826,28 @@ const TUNED_CAPS = new Map([
   ['v4-20-cATM', 4500],
   ['v5-20-cATM', 4500],
   ['v9-20', 4500],
-  ['v6-20-cATM', 7000],
+  ['v6-20-cATM', 6500],   // EQUAL v6-v9 -cATM CAPS PER WIDTH (user, 2026-10-14): 20W $6,500 / 40W $7,500; was $7,000
+  ['v8-20-cATM', 6500],   // EQUAL v6-v9 -cATM CAPS PER WIDTH (user, 2026-10-14): 20W $6,500 / 40W $7,500; was the $7,000 width default
   ['v7-20', 4500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $6,500
   // W=40
   ['v7-40', 7500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $3,000 (floored to $6,000)
   ['v0-40', 5000],
   ['v2-40', 5500],
-  ['v8-40-cATM', 5500],
+  ['v8-40-cATM', 7500],   // EQUAL v6-v9 -cATM CAPS PER WIDTH (user, 2026-10-14): 20W $6,500 / 40W $7,500; was $5,500 (floored to $6,000)
   ['v1-40', 6000],
   ['v2-40-cATM', 7500],
   ['v8-40', 7500],   // EQUAL v6-v9 CAPS PER WIDTH (user, 2026-10-14): was $4,000 (floored to $6,000)
   ['v4-40', 7000],
   ['v5-40', 9000],
   ['v5-40-cATM', 7500],
-  ['v7-40-cATM', 7000],
+  ['v7-40-cATM', 7500],   // EQUAL v6-v9 -cATM CAPS PER WIDTH (user, 2026-10-14): 20W $6,500 / 40W $7,500; was $7,000
   ['v0-40-cATM', 7500],
   ['v3-40-cATM', 7500],
   ['v9-40', 7500],
   ['v9-40-cATM', 7500],
   ['v1-40-cATM', 8000],
-  ['v6-40-cATM', 8500],]);
+  ['v6-40-cATM', 7500],   // EQUAL v6-v9 -cATM CAPS PER WIDTH (user, 2026-10-14): 20W $6,500 / 40W $7,500; was $8,500 (ceiling-held)
+]);
 
 // SIMULATED-FILL REALISM (2026-10-05), every variant. Inert under the broker (v7-10's fills are Schwab's);
 // on the mark path: an open cannot fill on the look that placed it, and a cover needs the market 1 tick
