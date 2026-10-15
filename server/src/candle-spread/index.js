@@ -950,6 +950,16 @@ function applyFloorRaise(v) {
   if (v.floorRaiseIronMix == null) v.floorRaiseIronMix = true;
   if (v.floorRaiseMinRatioFar == null) v.floorRaiseMinRatioFar = 8;
   if (v.floorRaiseWalk == null) v.floorRaiseWalk = true;
+  // TREND-SIDED RATIO (user, 2026-10-14): under trend A, a valley on the side the trend is heading toward needs
+  // 2:1 near -> 4:1 far; a valley on the side it is leaving needs 5:1 -> 10:1. No trend / valley at spot keeps
+  // the plain 4/8 above. raise-trend-ratio-2026-10-14 (821 days): most consistent floor arm on 20W/40W (v7-20
+  // close floor -434 -> -361, v9-40 -1,407 -> -1,309, v7-40 locked 30.6 -> 33.3%); on 10W second to plain 3/6
+  // (v7-10 -566 vs -581) but refuses both of 10/14's live against-trend v7-10 raises.
+  if (v.floorRaiseRatioTrend == null) v.floorRaiseRatioTrend = 'A';
+  if (v.floorRaiseMinRatioWith == null) v.floorRaiseMinRatioWith = 2;
+  if (v.floorRaiseMinRatioFarWith == null) v.floorRaiseMinRatioFarWith = 4;
+  if (v.floorRaiseMinRatioAgainst == null) v.floorRaiseMinRatioAgainst = 5;
+  if (v.floorRaiseMinRatioFarAgainst == null) v.floorRaiseMinRatioFarAgainst = 10;
 }
 // FLOOR REPAIR FOLD (user, 2026-10-09): wings, floor offsets and fly/condor repair were all built to do what
 // floor raise now does — lift the low points of the risk curve — and ran beside it as separate hedgers with
