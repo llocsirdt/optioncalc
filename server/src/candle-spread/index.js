@@ -210,9 +210,13 @@ const FAMILIES = [
   // continuous-covering policy; each also gets an uncapped `-unc` twin via buildUncapped() below.
   { key: 'v6', label: '5m-harness', signalFn: v6Signal, signalCfg: { fiveMin: true }, testAtBase: true, ...PORTED_COVER },
   { key: 'v7', label: 'be-wrong',   signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
-  // v8 = v6 signal + a soft "churn" cap on at-risk debit (exempt for a same-side trend stack) + proactive
-  // deep-ITM covering, on top of the shared governor.
-  { key: 'v8', label: 'risk-capped', signalFn: v6Signal, signalCfg: { fiveMin: true }, softCap: 3000, proactiveCoverFrac: 0.70, exemptTrendStack: true, ...PORTED_COVER },
+  // v8 = v6 signal + proactive deep-ITM covering, on top of the shared governor.
+  // SOFT "CHURN" CAP OFF (user, 2026-10-14; was softCap: 3000 + exemptTrendStack). It capped the debit on uncovered,
+  // not-deep-ITM positions at a flat $3,000 — the pre-governor risk layer the day-loss governor replaced on 09-04 for
+  // every other family. Flat across widths, it was ~one uncovered 40W position at a time: 10/01-10/14 v8-40 opened 2-9
+  // a day vs v6-40's 6-27, and it drove most of v8's 20W/40W gap to v6. The feature stays in capState (softCap /
+  // exemptTrendStack) — backlogged to revisit whether it still has a purpose.
+  { key: 'v8', label: 'proactive', signalFn: v6Signal, signalCfg: { fiveMin: true }, proactiveCoverFrac: 0.70, ...PORTED_COVER },
   // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the $20k backstop — the high-ceiling variant.
   // Still paper pending go/no-go ([[project_daily_risk_tolerance]]).
   { key: 'v9', label: 'be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, proactiveCoverFrac: 0.80, ...PORTED_COVER },

@@ -23,8 +23,8 @@ const FAMILY = {
   v7: { name: 'be-wrong', what: 'v6 that can be wrong without going flat: opens the opposite side while still holding, without covering the loser.',
     open: 'v6\'s, plus a "be-wrong" opposite open on a 15m reversal candle that breaks the prior extreme.',
     cover: 'v6\'s, per side: only the wrong-way side is covered.' },
-  v8: { name: 'churn-capped', what: 'v6 signal with a fixed $3,000 at-risk "churn" cap (a same-side trend stack is exempt) and proactive covering.',
-    open: 'v6\'s (subject to the churn cap).', cover: 'v6\'s, plus a cover on any position marking >= 70% of the width.' },
+  v8: { name: 'proactive', what: 'v6 signal with proactive covering. (Its $3,000 at-risk "churn" cap was turned off 2026-10-14.)',
+    open: 'v6\'s.', cover: 'v6\'s, plus a cover on any position marking >= 70% of the width.' },
   v9: { name: 'be-wrong + proactive', what: 'v7 signal with proactive covering.',
     open: 'v7\'s.', cover: 'v7\'s, plus a cover on any position marking >= 80% of the width.' },
 };
