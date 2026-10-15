@@ -34,6 +34,7 @@ const BV = require('./book-value');   // shared book valuation — the risk curv
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
 const OM = require('./order-manager');   // isOpenKind — which order rows are an open's
+const FG = require('./funds-guard');   // net-spend budget + debit/credit flip on a buying-power rejection
 
 let nextPositionSeq = 1;
 function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`; }
@@ -205,6 +206,16 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
       if (flipped !== style) decisions.push({ action: 'cover-style-flip', positionId: pos.id, from: style, to: flipped, rejects: rj.count,
         note: 'broker rejected the last cover as closing an existing position — sending the other form' });
       style = flipped;
+    }
+  }
+  // FUNDS GUARD (funds-guard.js, user 2026-10-14): a buying-power rejection sends the other form next; a debit that
+  // would push net spend past the risk max goes as its credit twin.
+  if (cfg.fundsGuard !== false) {
+    const f = FG.fundsStyle(st, cfg, { key: OM.rejectKey('cover', pos.id), wantCredit: style === 'credit',
+      debitDollars: (plan.mark > 0 ? plan.mark : 0) * 100 * (pos.quantity || 1) });
+    if (f && f.credit !== (style === 'credit')) {
+      decisions.push({ action: 'funds-style', kind: 'cover', positionId: pos.id, from: style, to: f.credit ? 'credit' : 'debit', ...f });
+      style = f.credit ? 'credit' : 'debit';
     }
   }
   // RESOLVE now, COMMIT after the send. The resolver has to run here — its answer decides which legs we
@@ -682,8 +693,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   const altEvery = deps.openAlternateEvery || 3;
   // Send style: the leg-uniqueness resolver's choice when enforcing (it took the recapture preference but
   // may have flipped to the twin); otherwise the recapture alternation; otherwise debit.
-  const style = legStyle || (creditPreferred(st, deps,
-    deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1) ? 'credit' : 'debit');
+  const style = legStyle || (openFundsCredit(st, cfg, res.limit, creditPreferred(st, deps,
+    deps.capitalRecapture === true && Math.floor((st.openN || 0) / altEvery) % 2 === 1), decisions, openSide) ? 'credit' : 'debit');
   let payload = res.payload, sentNet = 'DEBIT', sentLegs = res.legs, sentLimit = res.limit;
   if (style === 'credit') {
     const c = buildCreditOpenOrder(openSide, res.lower, res.upper, cfg, deps.getLeg, res.mark, res.limit);
@@ -1493,7 +1504,19 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
     // A PAIR objective returns a companion: both are placed (each its own order, same pass).
     let stop = false;
     for (const h of companion ? [best, companion] : [best]) {
-      const alt = ironAlt.get(keyOf(h.legs)) || null;
+      let alt = ironAlt.get(keyOf(h.legs)) || null;
+      // FUNDS GUARD (funds-guard.js): after a buying-power rejection of a debit raise, or when this debit would push
+      // net spend past the risk max, send the credit twin — the put/call swap of a vertical, the iron of a fly/condor.
+      if (!alt && cfg.fundsGuard !== false) {
+        const f = FG.fundsStyle(st, cfg, { key: OM.rejectKey('raise', null), wantCredit: false, debitDollars: h.debit * 100 * qty });
+        if (f && f.credit) {
+          const tw = h.legs.length === 4 ? FR.ironTwin(h.legs) : FG.verticalTwin(h.legs);
+          if (tw && !ledgerConflicts(tw.legs)) {
+            alt = tw;
+            decisions.push({ action: 'funds-style', kind: 'raise', legs: h.legs, from: 'debit', to: 'credit', sentLegs: tw.legs, ...f });
+          } else decisions.push({ action: 'funds-style-none', kind: 'raise', legs: h.legs, ...f, note: 'no legal credit twin — sent as the debit' });
+        }
+      }
       const resolved = [];
       for (const l of alt ? alt.legs : h.legs) {
         const q = deps.getLeg(l.type, l.strike);
@@ -2060,8 +2083,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       if (!(deps.enforceLegUniqueness && deps._ledger) || plan.error || !(plan.limit > 0)) {
         return { res: plan, legStyle: null, skipped: false };
       }
-      const wantCredit = creditPreferred(st, deps,
-        deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1);
+      const wantCredit = openFundsCredit(st, cfg, plan.limit, creditPreferred(st, deps,
+        deps.capitalRecapture === true && Math.floor((st.openN || 0) / (deps.openAlternateEvery || 3)) % 2 === 1), decisions, openSide);
       // openNeverOtm: an initial order must not START fully out of the money. Adaptive placement already
       // guarantees it; without this the shift below rebuilt at the shifted strikes and could cross out.
       const allow = deps.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(openSide, lo, hi, underlying)) : undefined;
@@ -3035,6 +3058,16 @@ function round2(n) { return Math.round(n * 100) / 100; }
 // Reads st.cashDeployed, which books at the FILL (see noteCash), so it is capital actually deployed rather
 // than capital merely ordered. `legacy` is the existing per-site expression and is returned UNCHANGED when
 // the trigger is unset, so every variant without it behaves exactly as before.
+// FUNDS GUARD for an open (funds-guard.js): the send form after a buying-power rejection or when the debit would
+// overrun the risk max; otherwise the caller's own preference. Logged once per placement.
+function openFundsCredit(st, cfg, debit, wantCredit, decisions, side) {
+  if (!cfg || cfg.fundsGuard === false) return wantCredit;
+  const f = FG.fundsStyle(st, cfg, { key: OM.rejectKey('open', null), wantCredit,
+    debitDollars: (debit > 0 ? debit : 0) * 100 * (cfg.quantity || 1) });
+  if (!f || f.credit === !!wantCredit) return wantCredit;
+  if (decisions) decisions.push({ action: 'funds-style', kind: 'open', side, from: wantCredit ? 'credit' : 'debit', to: f.credit ? 'credit' : 'debit', ...f });
+  return f.credit;
+}
 function creditPreferred(st, deps, legacy) {
   const trig = deps && deps.creditCapitalTrigger;
   if (!(trig > 0)) return legacy;

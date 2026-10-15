@@ -250,7 +250,11 @@ function noteReject(record, key, reason, detail) {
   st.rejectStreaks = st.rejectStreaks || {};
   const r = st.rejectStreaks[key] || { count: 0 };
   r.count++; r.lastReason = reason || null; r.lastAt = new Date().toISOString();
-  if (detail) { r.kind = detail.kind || r.kind || null; r.price = detail.price != null ? detail.price : (r.price != null ? r.price : null); }
+  if (detail) {
+    r.kind = detail.kind || r.kind || null; r.price = detail.price != null ? detail.price : (r.price != null ? r.price : null);
+    // The side that was refused (DEBIT / CREDIT), so a funds rejection can send the other form (funds-guard.js).
+    if (detail.net) r.net = String(detail.net).replace(/^NET_/, '');
+  }
   st.rejectStreaks[key] = r;
   if (r.count === 3 || (r.count > 3 && (r.count - 3) % 5 === 0)) {
     store.appendEvent(record, { type: 'order_reject_streak', key, count: r.count, reason: r.lastReason, kind: r.kind, price: r.price,
@@ -539,7 +543,7 @@ async function reconcile(record, deps, opts = {}) {
       o.status = next === 'working' ? 'canceled' : next;
       // Schwab says WHY in statusDescription; it was never kept.
       if (resp && resp.statusDescription) o.statusReason = String(resp.statusDescription).slice(0, 300);
-      if (o.status === 'rejected') noteReject(record, rejectKey(o.kind, o.positionId), o.statusReason, { kind: o.kind, price: o.sentPrice });
+      if (o.status === 'rejected') noteReject(record, rejectKey(o.kind, o.positionId), o.statusReason, { kind: o.kind, price: o.sentPrice, net: o.net });
       const cleared = clearDeadOrderState(record, o);
       store.appendEvent(record, { type: 'order_dead', orderId: o.orderId, kind: o.kind, status: o.status,
         positionId: o.positionId || undefined, cleared: cleared || undefined,
