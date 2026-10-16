@@ -1109,6 +1109,10 @@ app.get('/api/v1/positions/offsetting', async (req, res) => {
   }
 });
 
+// Manual-trade review (manual-compare.html / manual-debug.html) — the user's PRIVATE E*TRADE history, read from
+// the repo-root data/manual-trades folder, which the deploy package (server/ only) never carries. Absent -> 404.
+app.use('/api/v1/manual-trades', require('./manual-trades/routes'));
+
 // Candle-spread trader — read-only status/log endpoints (NOT dev-gated, so the
 // production UI can poll them). The engine itself runs internally; these only read.
 app.get('/api/v1/candle-spread/runs', (req, res) => {

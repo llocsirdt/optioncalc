@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual Trades — Day</title>
+<script src="client/lib/risk-curve-cell.js"></script>
+<link rel="stylesheet" href="client/nq-chart.css">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+// The SAME NQ chart as index/debug (client/lib/nq-chart.js), fed this day's candles: Schwab no longer serves 2025
+// bars, so the chart runs static and the page hands the series in (NQChart.setSeries).
+window.NQ_CHART_STATIC = true;
+</script>
+<script src="client/lib/nq-chart.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; --locked:#8b5cf6; --settle:#e2a33c; --sel:#fff6d8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { border-bottom:1px solid var(--grid); padding:6px 12px; }
+  header .hrow { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+  header .hrow + .hrow { margin-top:5px; align-items:center; }
+  header h1 { font-size:13px; margin:0; font-weight:700; white-space:nowrap; }
+  header h1 .ver { font:10px ui-monospace, monospace; color:var(--muted); font-weight:400; }
+  .meta { color:var(--muted); font-size:11px; }
+  a { color:#1565c0; }
+  button, select { font:12px sans-serif; padding:3px 8px; border:1px solid #ccc; border-radius:4px; background:#f7f7f7; cursor:pointer; }
+  button.on { background:#333; color:#fff; border-color:#333; }
+  .pos { color:var(--profit); } .neg { color:var(--loss); }
+  .badge { font:10px ui-monospace, monospace; padding:0 4px; border-radius:3px; border:1px solid; }
+  .badge.T { color:#1565c0; border-color:#90caf9; background:#e3f2fd; }
+  .badge.D { color:#8d6e00; border-color:#e2c36b; background:#fff8e1; }
+  section { padding:8px 12px; border-bottom:1px solid var(--grid); }
+  section h2 { font-size:12px; margin:0 0 6px; font-weight:700; }
+  section h2 .meta { font-weight:400; margin-left:6px; }
+  .note { font-size:11px; color:#8d6e00; background:#fff8e1; border:1px solid #f0dfa6; border-radius:4px; padding:3px 7px; margin:4px 0; }
+  #status { padding:10px 14px; color:var(--muted); } #status:empty { display:none; }
+  .tblwrap { overflow:auto; max-height:360px; border:1px solid var(--grid); border-radius:4px; }
+  table.ord { border-collapse:collapse; width:100%; font:11px ui-monospace, Menlo, monospace; }
+  table.ord th { position:sticky; top:0; background:#fafafa; text-align:left; color:var(--muted); font-weight:600; padding:3px 6px; border-bottom:1px solid var(--grid); white-space:nowrap; }
+  table.ord td { padding:2px 6px; border-bottom:1px solid #f2f2f2; white-space:nowrap; vertical-align:top; }
+  table.ord td.num { text-align:right; }
+  table.ord tr.inbook { cursor:pointer; }
+  table.ord tr.inbook:hover { background:#f6f9fc; }
+  table.ord tr.done td { color:var(--fg); }
+  table.ord tr.future td { color:#aaa; }
+  table.ord tr.cur { background:var(--sel) !important; }
+  table.ord tr.out td { color:#b0b0b0; font-style:italic; }
+  .dir { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  .stepbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
+  .stepbar input[type=range] { flex:1; min-width:140px; height:24px; }
+  .stepinfo { font:11px ui-monospace, monospace; }
+  #risk svg { display:block; width:100%; height:auto; }
+  .ctl { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px; }
+  #nq-chart { height:460px; }
+  #nq-chart-container { border:0; }
+  .legend { font:10px ui-monospace, monospace; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:4px; }
+  .legend i { display:inline-block; width:14px; height:0; border-top:2px solid; vertical-align:middle; margin-right:3px; }
+  html, body { max-width:100%; overflow-x:hidden; }
+  section, header { min-width:0; max-width:100vw; }
+  .tblwrap { max-width:100%; }
+  .stepinfo { overflow-wrap:anywhere; }
+  @media (max-width:600px) { section { padding:6px 6px; } .tblwrap { max-height:280px; } header .hrow select { max-width:150px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow">
+    <h1>Manual trades — <span id="hdate">…</span> <span class="ver">v1.2.0</span></h1>
+    <span id="hbadge"></span>
+    <span id="hpnl" style="font-weight:700"></span>
+    <span class="meta" id="hmeta"></span>
+  </div>
+  <div class="hrow">
+    <a id="back" href="manual-compare.html">← all days</a>
+    <button id="prevDay">◀ prev day</button>
+    <select id="daySel"></select>
+    <button id="nextDay">next day ▶</button>
+  </div>
+</header>
+<div id="status">Loading…</div>
+
+<section id="secOrders" hidden>
+  <h2>Orders <span class="meta" id="ordMeta"></span></h2>
+  <div class="tblwrap"><table class="ord" id="ordTbl"></table></div>
+</section>
+
+<section id="secRisk" hidden>
+  <h2>Risk curve at expiry — cumulative book <span class="meta">(premium − fees; orange = official settle, gray = NDX est. at the order's time, dashed = final book)</span></h2>
+  <div class="stepbar">
+    <button id="stPrev">◀</button>
+    <input type="range" id="stRange" min="0" max="0" value="0">
+    <button id="stNext">▶</button>
+    <button id="stEnd">final</button>
+  </div>
+  <div class="stepinfo" id="stInfo"></div>
+  <div id="risk"></div>
+</section>
+
+<section id="secChart" hidden>
+  <h2>/NQ candles <span class="meta" id="chMeta"></span></h2>
+  <div id="markNote"></div>
+  <div class="ctl">
+    <label class="meta"><input type="checkbox" id="lvStrikes" checked> strikes</label>
+    <label class="meta"><input type="checkbox" id="lvSettle" checked> settle</label>
+    <label class="meta"><input type="checkbox" id="lvFit"> fit all strikes</label>
+    <span class="meta">bold = in the book at the current risk-curve step · labels are NDX (drawn at NDX + basis)</span>
+  </div>
+  <div id="nq-chart-container">
+    <div id="nq-chart-toolbar">
+      <span id="nq-chart-tf-buttons"></span>
+      <span id="nq-chart-ohlc" class="nq-chart-ohlc"></span>
+    </div>
+    <div id="nq-chart"></div>
+  </div>
+  <div class="legend">
+    <span style="color:#26a69a">▲ bull</span><span style="color:#ef5350">▼ bear</span><span style="color:#8b5cf6">◆ fly/condor/other</span>
+    <span>filled = the order made money at settle · hollow = it lost · hover a marker for the order</span>
+  </div>
+  <div class="note" id="basisNote"></div>
+</section>
+
+<script>
+'use strict';
+// One day of the user's E*TRADE manual trades: orders, the cumulative expiry risk curve after each order, and
+// the /NQ candles with BB(20,2) + 9EMA per timeframe. ALL numbers come from /api/v1/manual-trades/day/:date
+// (server-side); this page only draws. Local-only data: defaults to the local server.
+const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
+  || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
+const _q = new URLSearchParams(location.search);
+const _proxyParam = _q.get('proxy');
+const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
+const BASE = _proxyParam === 'local' ? LOCAL_BASE : _proxyParam === 'remote' ? PROD_BASE : (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
+const proxyQS = _proxyParam ? `&proxy=${_proxyParam}` : '';
+if (_proxyParam) document.getElementById('back').href = `manual-compare.html?proxy=${_proxyParam}`;
+
+const usd = (n) => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+const sgn = (n) => (n > 0 ? '+' : '') + usd(n);
+const fmtN = (n) => Number.isFinite(n) ? usd(n) : '—';
+const usdK = (n) => !Number.isFinite(n) ? '—' : Math.abs(n) >= 1000 ? (n < 0 ? '-$' : '$') + (Math.abs(n) / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1) + 'k' : usd(n);
+const f2 = (n) => n == null ? '—' : n.toFixed(2);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Marker colour by direction: bull = green, bear = red, neutral tent (fly/condor, long/short) = violet.
+const dirColor = (d) => d === 'bull' ? '#2e9d57' : d === 'bear' ? '#d9453f' : '#8b5cf6';
+const fmtLegs = (legs) => legs.map(l => `${l.side === 'long' ? '+' : '−'}${l.qty} ${l.strike}${l.type === 'call' ? 'C' : 'P'}`).join(' ');
+
+let D = null, step = 0, DAYLIST = [];
+const date = _q.get('date');
+
+// ── orders table ───────────────────────────────────────────────────────────────────────────────────────
+function renderOrders() {
+  const t = document.getElementById('ordTbl');
+  const rows = D.orders.map((o, i) => {
+    const cls = !o.inBook ? 'out' : o.step === step ? 'inbook cur done' : o.step < step ? 'inbook done' : 'inbook future';
+    const net = o.netPerUnit;
+    const when = o.carried ? `${o.date.slice(5)} ${o.timeET ? o.timeET.slice(0, 5) : ''}` : (o.timeET || '—');
+    const note = !o.inBook ? ` → exp ${o.expiry}` : o.carried ? ' (carried in)' : '';
+    return `<tr class="${cls}" data-step="${o.step == null ? '' : o.step}">
+      <td>${o.step == null ? '' : o.step + 1}</td><td>${esc(when)}</td>
+      <td><span class="dir" style="background:${dirColor(o.direction)}"></span>${esc(o.styleLabel)}${o.effect !== 'open' ? ` <span class="meta">${o.effect}</span>` : ''}${note}</td>
+      <td>${esc(fmtLegs(o.legs))}</td><td>${o.widths.join('/')}</td><td class="num">${o.qty}</td>
+      <td class="num ${net > 0 ? 'neg' : 'pos'}">${net > 0 ? 'D ' : 'C '}${Math.abs(net).toFixed(2)}</td>
+      <td class="num ${o.total < 0 ? 'neg' : 'pos'}">${sgn(o.total)}</td>
+      <td class="num">${o.underlyingNdxEst == null ? '' : f2(o.underlyingNdxEst)}</td>
+      <td class="num ${o.pnlAtSettle == null ? '' : o.pnlAtSettle > 0 ? 'pos' : 'neg'}">${o.pnlAtSettle == null ? '—' : sgn(o.pnlAtSettle)}</td></tr>`;
+  }).join('');
+  t.innerHTML = `<thead><tr><th>#</th><th>time ET</th><th>style</th><th>legs</th><th>W</th><th>qty</th><th>net/unit</th><th>$ (−fees)</th><th>NDX est</th><th>order at settle</th></tr></thead><tbody>${rows}</tbody>`;
+  t.querySelectorAll('tr.inbook').forEach(tr => tr.onclick = () => setStep(+tr.dataset.step));
+  const s = D.summary;
+  const outN = D.orders.filter(o => !o.inBook).length;
+  document.getElementById('ordMeta').textContent = `${D.steps.length} in this expiry's book`
+    + (s.carriedIn ? ` (incl. ${s.carriedIn} carried in)` : '') + (outN ? ` · ${outN} traded today for a later expiry (gray)` : '')
+    + ` · net/unit in index pts (D = debit, C = credit) · click a row to step the risk curve`;
+}
+
+// ── risk curve with step control ───────────────────────────────────────────────────────────────────────
+let svgCurve = null, CW = 800, CH = 300;
+function renderRisk() {
+  const box = document.getElementById('risk');
+  CW = Math.max(300, Math.min(1200, box.clientWidth || 800)); CH = CW < 500 ? 220 : 300;
+  const fs = CW < 500 ? 1.3 : 1.7;
+  const st = D.steps[step], fin = D.steps[D.steps.length - 1];
+  const yMin = Math.min(...D.steps.map(s => s.curve.min)), yMax = Math.max(...D.steps.map(s => s.curve.max));
+  const gA = Math.max(Math.abs(yMin), Math.abs(yMax));
+  svgCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice: () => null, CW, CH, gAbs: () => gA, fontScale: fs });
+  const c = st.curve;
+  const overlay = step < D.steps.length - 1 ? { curve: fin.curve.points, color: '#9aa4ae', labelColor: '#7b8590', dash: '4 3', label: 'final book' } : null;
+  let svg = svgCurve('s' + step, { xMin: c.xMin, xMax: c.xMax, curve: c.points, hi: c.max, lo: c.min, underlying: st.underlyingNdxEst }, yMin, yMax, null, overlay);
+  // settle marker (same mapping as RiskCurveCell: linear x, default 8% vertical pad around yMin..yMax)
+  const X = (x) => ((x - c.xMin) / (c.xMax - c.xMin || 1)) * CW;
+  const pad = (yMax - yMin) * 0.08 || 1, y0 = yMin - pad, y1 = yMax + pad;
+  const Y = (y) => CH - ((y - y0) / (y1 - y0 || 1)) * CH;
+  const sx = X(D.summary.settle), sy = Y(st.atSettle), col = st.atSettle >= 0 ? 'var(--profit)' : 'var(--loss)';
+  const right = sx > CW * 0.6, F = 10 * fs;
+  let mark = `<line x1="${sx.toFixed(1)}" y1="0" x2="${sx.toFixed(1)}" y2="${CH}" stroke="var(--settle)" stroke-width="1.5"/>`
+    + `<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${(3 * fs).toFixed(1)}" fill="${col}" stroke="#fff" stroke-width="1.2"/>`
+    + `<text x="${(sx + (right ? -5 : 5)).toFixed(1)}" y="${(2 * F + 6).toFixed(1)}" text-anchor="${right ? 'end' : 'start'}" font-size="${F.toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="${col}" stroke="#fff" stroke-width="3" paint-order="stroke">settle ${D.summary.settle.toFixed(0)}: ${usdK(st.atSettle)}</text>`;
+  // x-axis price ticks
+  const span = c.xMax - c.xMin, stepPx = span > 1500 ? 250 : span > 600 ? 100 : span > 250 ? 50 : 20;
+  for (let p = Math.ceil(c.xMin / stepPx) * stepPx; p <= c.xMax; p += stepPx) {
+    const x = X(p);
+    mark += `<line x1="${x.toFixed(1)}" y1="${CH - 4}" x2="${x.toFixed(1)}" y2="${CH}" stroke="#999"/><text x="${x.toFixed(1)}" y="${CH - 6}" text-anchor="middle" font-size="${(8 * fs).toFixed(1)}" font-family="ui-monospace,monospace" fill="#999">${p}</text>`;
+  }
+  if (st.underlyingNdxEst != null) {
+    const ux = X(st.underlyingNdxEst);
+    mark += `<text x="${(ux + 4).toFixed(1)}" y="${(F + 2).toFixed(1)}" font-size="${(8.5 * fs).toFixed(1)}" font-family="ui-monospace,monospace" fill="#666" stroke="#fff" stroke-width="2.4" paint-order="stroke">NDX≈${st.underlyingNdxEst.toFixed(0)} @ ${st.timeET ? st.timeET.slice(0, 5) : ''}</text>`;
+  }
+  box.innerHTML = svg.replace(/<\/svg>\s*$/, mark + '</svg>');
+  const o = D.orders.find(x => x.orderNo === st.orderNo);
+  document.getElementById('stInfo').innerHTML =
+    `step <b>${step + 1}/${D.steps.length}</b> · ${st.carried ? `carried in from ${o.date} · ` : ''}${st.timeET ? st.timeET + ' ET · ' : ''}<b>${esc(st.label)}</b> ${esc(fmtLegs(o.legs))} · order ${sgn(o.total)}`
+    + ` · book cash ${sgn(st.cash)} · at settle <b class="${st.atSettle >= 0 ? 'pos' : 'neg'}">${sgn(st.atSettle)}</b> · range ${usdK(c.min)} … ${usdK(c.max)}`;
+  const r = document.getElementById('stRange'); r.max = D.steps.length - 1; r.value = step;
+}
+
+function setStep(k) {
+  step = Math.max(0, Math.min(D.steps.length - 1, k));
+  renderOrders(); renderRisk(); syncLevels();
+  const cur = document.querySelector('#ordTbl tr.cur');
+  if (cur) { const w = cur.closest('.tblwrap'); const top = cur.offsetTop - w.clientHeight / 2; w.scrollTo({ top, behavior: 'smooth' }); }
+}
+
+// ── NQ chart (the shared index/debug chart) ────────────────────────────────────────────────────────────
+// Every timeframe's candles + BB/9EMA go in at once, so the chart's own TF buttons and multi-TF line toggles work as
+// they do on index/debug. One marker per order at its fill time: filled = made money at settle, hollow = lost.
+function syncNQ() {
+  if (!window.NQChart || !window.NQChart.setSeries) return;
+  window.NQChart.setSeries(D.series, { basis: D.basis, basisSource: 'NQ close − NDX close (per day)' });
+  const legsTxt = (o) => fmtLegs(o.legs);
+  const trades = D.orders.filter(o => o.ms != null).map(o => ({
+    epoch: o.ms, type: 'open',
+    side: o.direction === 'bull' || o.direction === 'bear' ? o.direction : 'neutral',
+    win: o.pnlAtSettle == null ? undefined : o.pnlAtSettle > 0,
+    title: `${o.timeET} ${o.styleLabel} ${o.widths.join('/')}W · ${legsTxt(o)} · ${o.netPerUnit > 0 ? 'debit' : 'credit'} ${Math.abs(o.netPerUnit).toFixed(2)}`
+      + (o.pnlAtSettle == null ? '' : ` · at settle ${sgn(o.pnlAtSettle)}`) + (o.inBook ? '' : ` · expires ${o.expiry}`),
+  }));
+  window.NQChart.setTrades(trades);
+  window.NQChart.jumpToDate(D.summary.date, { focusTrades: true });
+  syncLevels();
+}
+
+// Strike + settle lines (NDX levels drawn at NDX + basis on the NQ chart). Strikes in the book at the current
+// risk-curve step are bold; the rest of the day's strikes faint.
+function syncLevels() {
+  if (!window.NQChart || !window.NQChart.setLevels || !D) return;
+  const on = (id) => document.getElementById(id).checked;
+  const cur = new Set(D.steps[step].legs.map(l => l.strike));
+  const lv = [];
+  for (const l of D.levels) {
+    if (l.kind === 'settle') { if (on('lvSettle')) lv.push({ price: l.nq, label: `settle ${l.ndx.toFixed(2)}`, color: '#e2a33c', width: 1.6 }); continue; }
+    if (!on('lvStrikes')) continue;
+    const active = cur.has(l.ndx);
+    lv.push({ price: l.nq, label: String(l.ndx), color: active ? '#5e35b1' : '#b9a6dd', dash: '4 3', width: active ? 1.4 : 1, opacity: active ? 0.95 : 0.6 });
+  }
+  window.NQChart.setLevels(lv, { fit: on('lvFit') });
+}
+
+function gotoDay(d) { if (d) location.href = `manual-debug.html?date=${d}${proxyQS}`; }
+
+(async function load() {
+  const st = document.getElementById('status');
+  // day list for prev/next navigation
+  try {
+    const r = await fetch(`${BASE}/api/v1/manual-trades/days`);
+    if (r.status === 404) { st.textContent = `No manual-trades data on ${BASE}. This is local-only data — run the local server and open from file:// or with ?proxy=local.`; return; }
+    DAYLIST = (await r.json()).days.map(d => ({ date: d.date, net: d.pnl.net }));
+  } catch (e) { st.textContent = `Failed to reach ${BASE}: ${e.message}`; return; }
+  const sel = document.getElementById('daySel');
+  sel.innerHTML = DAYLIST.map(d => `<option value="${d.date}">${d.date}  ${sgn(d.net)}</option>`).join('');
+  const day = date || DAYLIST[DAYLIST.length - 1].date;
+  sel.value = day; sel.onchange = () => gotoDay(sel.value);
+  const k = DAYLIST.findIndex(d => d.date === day);
+  document.getElementById('prevDay').onclick = () => gotoDay(DAYLIST[k - 1] && DAYLIST[k - 1].date);
+  document.getElementById('nextDay').onclick = () => gotoDay(DAYLIST[k + 1] && DAYLIST[k + 1].date);
+  document.getElementById('prevDay').disabled = k <= 0;
+  document.getElementById('nextDay').disabled = k < 0 || k >= DAYLIST.length - 1;
+
+  try {
+    const r = await fetch(`${BASE}/api/v1/manual-trades/day/${day}`);
+    const j = await r.json();
+    if (!r.ok) { st.textContent = j.error || `HTTP ${r.status}`; return; }
+    D = j;
+  } catch (e) { st.textContent = `Failed to load ${day}: ${e.message}`; return; }
+  st.textContent = '';
+  const s = D.summary;
+  document.title = `Manual ${s.date}`;
+  document.getElementById('hdate').textContent = s.date;
+  document.getElementById('hbadge').innerHTML = `<span class="badge ${s.timesKnown ? 'T' : 'D'}">${s.timesKnown ? 'T timed' : 'D date-only'}</span>`;
+  document.getElementById('hpnl').innerHTML = `<span class="${s.pnl.net >= 0 ? 'pos' : 'neg'}">${sgn(s.pnl.net)}</span>`;
+  document.getElementById('hmeta').textContent = `settle ${s.settle.toFixed(2)}${s.amSettle ? ` · NDX AM settle ${s.amSettle.value} (${s.amSettle.source})` : ''} · premium ${sgn(s.pnl.premium)} · fees ${usd(s.pnl.fees)} · expiry value ${usd(s.pnl.terminal)} · ${s.orders} orders · W ${s.widthsUsed.join('/')} · reconcile ${s.reconcile}`;
+  ['secOrders', 'secRisk', 'secChart'].forEach(id => document.getElementById(id).hidden = false);
+  document.getElementById('markNote').innerHTML = D.markersNote ? `<div class="note">${esc(D.markersNote)}</div>` : '';
+  document.getElementById('basisNote').textContent = `${D.basisNote} Basis today ${D.basis == null ? 'unavailable' : D.basis.toFixed(2)}${D.basisDetail && D.basisDetail.openBasis != null ? ` (open-print cross-check ${D.basisDetail.openBasis.toFixed(2)})` : ''}.`;
+  document.getElementById('chMeta').textContent = `${D.nqSymbol || ''} · candle prices are NQ (back-adjusted); NDX ≈ NQ − ${D.basis == null ? '?' : D.basis.toFixed(0)}`;
+  syncNQ();
+  ['lvStrikes', 'lvSettle', 'lvFit'].forEach(id => document.getElementById(id).onchange = syncLevels);
+  document.getElementById('stRange').oninput = (e) => setStep(+e.target.value);
+  document.getElementById('stPrev').onclick = () => setStep(step - 1);
+  document.getElementById('stNext').onclick = () => setStep(step + 1);
+  document.getElementById('stEnd').onclick = () => setStep(D.steps.length - 1);
+  document.addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return; if (e.key === 'ArrowLeft') setStep(step - 1); if (e.key === 'ArrowRight') setStep(step + 1); });
+  step = D.steps.length - 1;
+  setStep(step);
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { renderRisk(); }, 150); });
+})();
+</script>
+</body>
+</html>

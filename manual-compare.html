@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual Trades — Risk Curves</title>
+<script src="client/lib/risk-curve-cell.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#222; --muted:#888; --grid:#e6e6e6; --profit:#26a69a; --loss:#ef5350; --zero:#bbb; --locked:#8b5cf6; --settle:#e2a33c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { background:var(--bg); border-bottom:1px solid var(--grid); padding:6px 12px; }
+  header .hrow { display:flex; flex-wrap:wrap; }
+  header .hrow-text { align-items:baseline; gap:4px 10px; }
+  header .hrow-ctl { align-items:center; gap:6px 8px; margin-top:5px; }
+  header h1 { font-size:13px; margin:0; font-weight:700; white-space:nowrap; }
+  header h1 .ver { font:10px ui-monospace, monospace; color:var(--muted); font-weight:400; }
+  header .meta { color:var(--muted); font-size:11px; }
+  button { font:12px sans-serif; padding:3px 8px; border:1px solid #ccc; border-radius:4px; background:#f7f7f7; cursor:pointer; }
+  button.on { background:#333; color:#fff; border-color:#333; }
+  #status { padding:10px 14px; color:var(--muted); }
+  #status:empty { display:none; }
+  .strip { display:flex; flex-wrap:wrap; gap:6px 18px; padding:8px 12px; border-bottom:1px solid var(--grid); font:12px ui-monospace, monospace; }
+  .strip .k { color:var(--muted); font-family:-apple-system, Segoe UI, Roboto, sans-serif; font-size:11px; margin-right:4px; }
+  .strip b.pos, .pos { color:var(--profit); } .strip b.neg, .neg { color:var(--loss); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:6px; padding:8px; }
+  .cell { border:1px solid var(--grid); border-radius:6px; padding:4px 5px 3px; cursor:pointer; text-decoration:none; color:inherit; display:block; background:#fff; }
+  .cell:hover { box-shadow:0 1px 6px rgba(0,0,0,.12); }
+  .cell.posb { border-color:#7cc6ac; border-width:2px; } .cell.negb { border-color:#e79a97; border-width:2px; }
+  .cell .top { display:flex; align-items:baseline; gap:6px; font:11px ui-monospace, monospace; }
+  .cell .top .dt { font-weight:700; }
+  .cell .top .pl { margin-left:auto; font-weight:700; font-size:12px; }
+  .badge { font:9px ui-monospace, monospace; padding:0 4px; border-radius:3px; border:1px solid; }
+  .badge.T { color:#1565c0; border-color:#90caf9; background:#e3f2fd; }
+  .badge.D { color:#8d6e00; border-color:#e2c36b; background:#fff8e1; }
+  .cell .sub { font:10px ui-monospace, monospace; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cell svg { display:block; width:100%; height:auto; }
+  .warn { color:#c0564f; }
+  @media (max-width:480px) { .grid { grid-template-columns:repeat(2, minmax(0,1fr)); gap:4px; padding:4px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow hrow-text">
+    <h1>Manual trades — expiry risk curves <span class="ver">v1.0.0</span></h1>
+    <span class="meta" id="meta"></span>
+  </div>
+  <div class="hrow hrow-ctl">
+    <span class="meta">sort:</span>
+    <button id="sDate" class="on">date</button>
+    <button id="sPnl">P&amp;L</button>
+    <span class="meta">· click a day for the order-by-order view</span>
+  </div>
+</header>
+<div class="strip" id="strip"></div>
+<div id="status">Loading…</div>
+<div class="grid" id="grid"></div>
+
+<script>
+'use strict';
+// Read-only review of the user's E*TRADE manual trades. Every number (curves, P&L, totals) comes from the
+// server (/api/v1/manual-trades); this page only draws. The data is LOCAL-ONLY (never deployed), so the page
+// defaults to the local server and says so when the backend has no such data.
+const IS_LOCAL_ORIGIN = (location.protocol === 'file:')
+  || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
+const _q = new URLSearchParams(location.search);
+const _proxyParam = _q.get('proxy');
+const LOCAL_BASE = 'http://localhost:3001', PROD_BASE = 'https://d1kbxyxn33vpw2.cloudfront.net';
+const BASE = _proxyParam === 'local' ? LOCAL_BASE : _proxyParam === 'remote' ? PROD_BASE : (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
+
+const usd = (n) => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+const sgn = (n) => (n > 0 ? '+' : '') + usd(n);
+const fmtN = (n) => Number.isFinite(n) ? usd(n) : '—';
+const usdK = (n) => !Number.isFinite(n) ? '—' : Math.abs(n) >= 1000 ? (n < 0 ? '-$' : '$') + (Math.abs(n) / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1) + 'k' : usd(n);
+const CW = 200, CH = 110;
+let gAbs = 0;
+const svgCurve = window.RiskCurveCell.make({ fmtN, usdK, pnlAtPrice: () => null, CW, CH, gAbs: () => gAbs });
+
+// Settle marker drawn on top of the shared cell: same x mapping as RiskCurveCell (linear xMin..xMax over CW)
+// and its default 8% vertical padding.
+function withSettle(svg, c, settle, atSettle) {
+  const X = (x) => ((x - c.xMin) / (c.xMax - c.xMin || 1)) * CW;
+  const pad = (c.max - c.min) * 0.08 || 1, y0 = c.min - pad, y1 = c.max + pad;
+  const Y = (y) => CH - ((y - y0) / (y1 - y0 || 1)) * CH;
+  const x = X(settle), y = Y(atSettle);
+  const col = atSettle >= 0 ? 'var(--profit)' : 'var(--loss)';
+  const right = x > CW * 0.6;
+  const mark = `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${CH}" stroke="var(--settle)" stroke-width="1.3"/>`
+    + `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${col}" stroke="#fff" stroke-width="1"/>`
+    + `<text x="${(x + (right ? -4 : 4)).toFixed(1)}" y="${Math.min(CH - 3, Math.max(10, y + 12)).toFixed(1)}" text-anchor="${right ? 'end' : 'start'}" font-size="9" font-weight="700" font-family="ui-monospace,monospace" fill="${col}" stroke="#fff" stroke-width="2.4" paint-order="stroke">${usdK(atSettle)}</text>`;
+  return svg.replace(/<\/svg>\s*$/, mark + '</svg>');
+}
+
+let DAYS = [], sortBy = 'date';
+function render() {
+  const days = [...DAYS].sort(sortBy === 'pnl' ? (a, b) => b.pnl.net - a.pnl.net : (a, b) => a.date.localeCompare(b.date));
+  const g = document.getElementById('grid');
+  const proxy = _proxyParam ? `&proxy=${_proxyParam}` : '';
+  g.innerHTML = days.map(d => {
+    const c = d.curve, net = d.pnl.net;
+    const svg = withSettle(svgCurve(d.date, { xMin: c.xMin, xMax: c.xMax, curve: c.points, hi: c.max, lo: c.min }, c.min, c.max), c, d.settle, d.curveAtSettle);
+    const extra = [d.carriedIn ? `+${d.carriedIn} carried in` : '', d.nonZeroDte ? `${d.nonZeroDte} non-0DTE` : ''].filter(Boolean).join(' · ');
+    const rec = d.reconcile && d.reconcile !== 'ok' ? ` · <span class="warn" title="E*TRADE settlement rows did not reconcile">rec: ${d.reconcile}</span>` : '';
+    return `<a class="cell ${net >= 0 ? 'posb' : 'negb'}" href="manual-debug.html?date=${d.date}${proxy}">
+      <div class="top"><span class="dt">${d.date}</span>
+        <span class="badge ${d.timesKnown ? 'T' : 'D'}" title="${d.timesKnown ? 'timed export (clock + order #)' : 'date-only export: no times, orders inferred'}">${d.timesKnown ? 'T' : 'D'}</span>
+        <span class="pl ${net >= 0 ? 'pos' : 'neg'}">${sgn(net)}</span></div>
+      ${svg}
+      <div class="sub">${d.orders} orders · settle ${d.settle.toFixed(2)}${rec}</div>
+      <div class="sub" title="widths used">W ${d.widthsUsed.join('/')}${extra ? ' · ' + extra : ''}</div>
+    </a>`;
+  }).join('');
+}
+
+function strip(t) {
+  const s = document.getElementById('strip');
+  const cls = (n) => (n >= 0 ? 'pos' : 'neg');
+  s.innerHTML = `<span><span class="k">total</span><b class="${cls(t.total)}">${sgn(t.total)}</b></span>
+    <span><span class="k">days</span>${t.days}</span>
+    <span><span class="k">winning</span><b class="pos">${t.winning}</b></span>
+    <span><span class="k">losing</span><b class="neg">${t.losing}</b></span>
+    <span><span class="k">best</span><b class="pos">${sgn(t.best.net)}</b> ${t.best.date}</span>
+    <span><span class="k">worst</span><b class="neg">${sgn(t.worst.net)}</b> ${t.worst.date}</span>
+    <span><span class="k">orders</span>${t.orders}</span>`;
+}
+
+function setSort(k) {
+  sortBy = k;
+  document.getElementById('sDate').classList.toggle('on', k === 'date');
+  document.getElementById('sPnl').classList.toggle('on', k === 'pnl');
+  try { localStorage.setItem('manualCompareSort', k); } catch (_) {}
+  render();
+}
+document.getElementById('sDate').onclick = () => setSort('date');
+document.getElementById('sPnl').onclick = () => setSort('pnl');
+
+(async function load() {
+  const st = document.getElementById('status');
+  try {
+    const r = await fetch(`${BASE}/api/v1/manual-trades/days`);
+    if (r.status === 404) { st.textContent = `No manual-trades data on ${BASE}. This is local-only data — run the local server (npm run dev) and open this page from file:// or with ?proxy=local.`; return; }
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    DAYS = j.days;
+    gAbs = Math.max(...DAYS.map(d => Math.max(Math.abs(d.curve.min), Math.abs(d.curve.max))));
+    const dates = DAYS.map(d => d.date).sort();
+    document.getElementById('meta').textContent = `${DAYS.length} days ${dates[0]} → ${dates[dates.length - 1]} · E*TRADE NDXP 0DTE · curve = final book at expiry (premium − fees), orange line = official NDX settle · source ${BASE}`;
+    strip(j.totals);
+    st.textContent = '';
+    let k = 'date'; try { k = localStorage.getItem('manualCompareSort') || 'date'; } catch (_) {}
+    setSort(k);
+  } catch (e) { st.textContent = `Failed to load from ${BASE}: ${e.message}`; }
+})();
+</script>
+</body>
+</html>

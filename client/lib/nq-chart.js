@@ -40,7 +40,13 @@
   let allData = {};                        // tf -> raw server candles (for the multi-TF overlay)
   let overlayMapped = {};                  // tf -> {bbU,bbM,bbL,ema9} arrays indexed by selected candle
   let lineTfs = new Set(['15m']);          // which timeframes' BB + 9EMA lines are drawn
-  let trades = [];                         // strategy trade markers: {epoch, side:'bull'|'bear', type:'open'|'cover'}
+  let trades = [];                         // strategy trade markers: {epoch, side:'bull'|'bear'|'neutral', type:'open'|'cover', win?, title?}
+  // STATIC SERIES (2026-10-16, manual-trades review): a host page that brings its own candles (2025 sessions are past
+  // Schwab's history) sets window.NQ_CHART_STATIC before this loads and hands them in via setSeries — no fetch, no poll.
+  const staticMode = typeof window !== 'undefined' && !!window.NQ_CHART_STATIC;
+  // Host-supplied horizontal price levels (raw NQ price): {price, label, color, dash, width, opacity}. levelsFit
+  // widens the y range to include them (e.g. every strike of a book); otherwise only the in-range ones show.
+  let levels = [], levelsFit = false;
   let showTrades = true;                   // toggle for the open/cover markers
   let ndxMode = false;                      // show values skewed to NDX terms (subtract the basis)
   let serverBasis = null;                   // { basis, source, asOf, ndx, nq } from the server
@@ -165,6 +171,7 @@
     gClip.append('path').attr('class', 'nq-bb nq-bb-lower');
     gClip.append('path').attr('class', 'nq-ema');
     gClip.append('g').attr('class', 'nq-overlay');   // multi-TF BB/EMA lines (behind candles)
+    gClip.append('g').attr('class', 'nq-levels');    // host price levels (strikes, settle) behind the candles
     gClip.append('g').attr('class', 'nq-candles');
     gClip.append('g').attr('class', 'nq-trades');    // strategy open/cover markers (on top of candles)
 
@@ -258,6 +265,7 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
     const inWindow = data.length && ymd >= etDayISO(data[0].t) && ymd <= etDayISO(data[data.length - 1].t);
     if (inWindow) { const i = indexForDay(ymd); if (i >= 0) jumpToIndex(i); return; }
+    if (staticMode) return;   // a host-supplied series has nothing beyond what it handed in
     enterHistorical(ymd);   // outside the loaded window → fetch a deep window around that date
   }
 
@@ -402,9 +410,11 @@
 
     let lo = d3.min(vis, d => Math.min(d.l, d.bbL == null ? d.l : d.bbL));
     let hi = d3.max(vis, d => Math.max(d.h, d.bbU == null ? d.h : d.bbU));
+    if (levelsFit && levels.length) { lo = Math.min(lo, d3.min(levels, l => l.price)); hi = Math.max(hi, d3.max(levels, l => l.price)); }
     const padY = (hi - lo) * 0.06 || 1; lo -= padY; hi += padY;
     const cy = (lo + hi) / 2, half = ((hi - lo) / 2) / yZoom;
     const y = d3.scaleLinear().domain([cy - half, cy + half]).range([innerH, 0]);
+    drawLevels(y, innerW, innerH);
 
     const slot = zx(1) - zx(0);
     const bw = Math.max(1, Math.min(slot * 0.7, 22));
@@ -453,6 +463,26 @@
     if (hoverIndex != null) updateCrosshair(); else showRestingTags();
   }
 
+  function drawLevels(y, innerW, innerH) {
+    const layer = els.gClip.select('.nq-levels');
+    const vis = levels.filter(l => { const yy = y(l.price); return yy >= -2 && yy <= innerH + 2; });
+    const sel = layer.selectAll('g.nq-level').data(vis, (l, i) => `${l.price}|${l.label}|${i}`);
+    sel.exit().remove();
+    const ent = sel.enter().append('g').attr('class', 'nq-level');
+    ent.append('line'); ent.append('text');
+    const all = ent.merge(sel).attr('transform', l => `translate(0,${y(l.price)})`).attr('opacity', l => l.opacity == null ? 1 : l.opacity);
+    all.select('line').attr('x1', 0).attr('x2', innerW).attr('y1', 0).attr('y2', 0)
+      .attr('stroke', l => l.color || '#7e57c2').attr('stroke-width', l => l.width || 1).attr('stroke-dasharray', l => l.dash || null);
+    all.select('text').attr('x', 3).attr('y', -2).attr('font-size', 9).attr('font-family', 'ui-monospace, Menlo, monospace')
+      .attr('fill', l => l.color || '#7e57c2').attr('stroke', '#fff').attr('stroke-width', 2.2).attr('paint-order', 'stroke')
+      .text(l => l.label || '');
+  }
+  function setLevels(list, opts) {
+    levels = Array.isArray(list) ? list.filter(l => l && typeof l.price === 'number') : [];
+    if (opts && 'fit' in opts) levelsFit = !!opts.fit;
+    if (els && data.length) render();
+  }
+
   // Strategy open/cover markers: place each trade on the NQ candle whose epoch matches its 5m mark
   // (openEpoch/coverEpoch from the run). Opens = filled triangles just outside the bar (bull ▲ below,
   // bear ▼ above); covers = hollow diamonds one notch further out. Same-candle/side/type trades are
@@ -476,28 +506,34 @@
       const idx = nearest(t.epoch);
       if (Math.abs(epochs[idx] - t.epoch) > TOL) continue;   // outside the loaded range
       if (idx < i0 - 1 || idx > i1 + 1) continue;            // offscreen
-      const key = `${idx}|${t.type}|${t.side}`;
-      const g = groups.get(key) || { key, idx, type: t.type, side: t.side, n: 0 };
-      g.n++; groups.set(key, g);
+      const key = `${idx}|${t.type}|${t.side}|${t.win == null ? '' : t.win ? 'w' : 'l'}`;
+      const g = groups.get(key) || { key, idx, type: t.type, side: t.side, win: t.win, n: 0, titles: [] };
+      g.n++; if (t.title) g.titles.push(t.title); groups.set(key, g);
     }
     const sel = layer.selectAll('g.nq-trade').data([...groups.values()], d => d.key);
     sel.exit().remove();
     const ent = sel.enter().append('g').attr('class', 'nq-trade');
     ent.append('path');
+    ent.append('title');
     ent.append('text').attr('class', 'nq-trade-n').attr('font-size', 8).attr('font-family', 'ui-monospace, Menlo, monospace').attr('text-anchor', 'middle');
+    // Outcome (t.win, optional): filled = the order made money at settle, hollow = it lost. Neutral (fly/condor) = violet
+    // diamond above the bar, stacked one notch above a bear marker on the same candle.
+    const sideCol = (d) => d.side === 'bull' ? '#26a69a' : d.side === 'neutral' ? '#8b5cf6' : '#ef5350';
     const merged = ent.merge(sel).attr('transform', (d) => {
       const c = data[d.idx];
-      const out = d.type === 'cover' ? 20 : 9;   // covers sit one notch further from the bar
+      const out = (d.type === 'cover' ? 20 : 9) + (d.side === 'neutral' ? 11 : 0) + (d.win === false ? 22 : 0);
       const yy = d.side === 'bull' ? y(c.l) + out : y(c.h) - out;
       return `translate(${zx(d.idx)},${yy})`;
     });
     merged.select('path')
       .attr('d', (d) => d.type === 'open'
-        ? (d.side === 'bull' ? 'M0,-7 L-5,1 L5,1 Z' : 'M0,7 L-5,-1 L5,-1 Z')   // filled triangle toward the bar
+        ? (d.side === 'neutral' ? 'M0,-6 L5,0 L0,6 L-5,0 Z'
+          : d.side === 'bull' ? 'M0,-7 L-5,1 L5,1 Z' : 'M0,7 L-5,-1 L5,-1 Z')   // filled triangle toward the bar
         : 'M0,-4.5 L4.5,0 L0,4.5 L-4.5,0 Z')                                    // cover diamond (hollow)
-      .attr('fill', (d) => d.type === 'cover' ? 'none' : (d.side === 'bull' ? '#26a69a' : '#ef5350'))
-      .attr('stroke', (d) => d.side === 'bull' ? '#26a69a' : '#ef5350')
-      .attr('stroke-width', (d) => d.type === 'cover' ? 1.5 : 0);
+      .attr('fill', (d) => d.type === 'cover' || d.win === false ? '#fff' : sideCol(d))
+      .attr('stroke', sideCol)
+      .attr('stroke-width', (d) => d.type === 'cover' || d.win === false ? 1.5 : 0);
+    merged.select('title').text((d) => d.titles.join('\n'));
     merged.select('text')
       .attr('y', (d) => d.side === 'bull' ? 13 : -8)
       .attr('fill', (d) => d.side === 'bull' ? '#1b8a7e' : '#c62828')
@@ -800,7 +836,7 @@
 
   async function load(resetTheView) {
     try {
-      await fetchAll();
+      if (!staticMode) await fetchAll();
       rebuildSelected();
       if (resetTheView) resetView();
       else if (seriesSig() !== lastSig) render();
@@ -860,6 +896,7 @@
     loadPrefs();                 // restore timeframe / enabled lines / zoom width before first paint
     if (!buildSkeleton()) return;
     buildToolbar();
+    if (staticMode) return;      // the host calls setSeries
     load(true);
     startRefresh();
     window.addEventListener('resize', () => render());
@@ -874,13 +911,22 @@
     if (els.dateInput) els.dateInput.value = ymd;
     const inWindow = ymd >= etDayISO(data[0].t) && ymd <= etDayISO(data[data.length - 1].t);
     if (inWindow) { const i = indexForDay(ymd); if (i >= 0) jumpToIndex(i); }
-    else await enterHistorical(ymd);   // awaited, so the focus below acts on the NEW window
+    else if (!staticMode) await enterHistorical(ymd);   // awaited, so the focus below acts on the NEW window
     // Centering on the day lands on the futures session's 18:00 ET open — hours before any RTH trade.
     // When markers are set, pan to THEM instead: the point of pinning the chart to a run's date is to see
     // the candles its orders were placed against.
     if (opts && opts.focusTrades && trades.length) focusTrades();
   }
-  window.NQChart = { init, setTimeframe, refresh: () => load(false), setTrades, setShowTrades, jumpToDate: goToDate };
+  // Host-supplied candles ({tf: [chartseries candles]}), with an optional NQ↔NDX basis for the NDX toggle.
+  function setSeries(byTf, opts) {
+    allData = byTf || {}; histMode = false; histData = {};
+    if (opts && typeof opts.basis === 'number') serverBasis = { basis: opts.basis, source: opts.basisSource || 'host' };
+    if (!els) return;
+    rebuildSelected(); lastSig = null; resetView();
+    if (data.length) updateReadout(data[data.length - 1]);
+    if (pendingDate) { const d = pendingDate; pendingDate = null; goToDate(d.ymd, d.opts); }
+  }
+  window.NQChart = { init, setTimeframe, refresh: () => load(false), setTrades, setShowTrades, jumpToDate: goToDate, setSeries, setLevels };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
