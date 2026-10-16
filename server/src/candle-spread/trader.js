@@ -2068,6 +2068,23 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // real flip only happens after a cover (which sets direction to 'none'). Ported bidirectional
   // runs (v7 "be wrong") deliberately bypass this to open the opposite side while holding.
   const bidir = ported && deps.bidirectional === true;
+  // COVER TO OPEN, WAIT (deps.coverToOpenWait; 2026-10-15, user — cover-to-stack in reverse). An open signal on a side
+  // that is already UNDERWATER (an uncovered position on it marks below what it paid) first sends those positions to
+  // the give-up path (pos.c2o, sticky; price capped as today's give-up), and this open waits until the side is clear.
+  // Opposite-side opens are unaffected. v7-10 two-week live review: 17 adds to an underwater side, 24% good, -$4,288.
+  // 821-day sweep (c2o-wait-2026-10-15): worst day, maxDD, intraday floor, floor>=0 days and uncovered all better on
+  // 10/10 variants; avg/day -25..-45% (fewer opens). Backtest parity: backtest-v6-5m coverToOpen 'same' + wait, +$0.
+  let c2oWait = null;
+  if (openSide && deps.coverToOpenWait) {
+    const uw = underwaterOnSide(st, openSide, deps.getLeg);
+    for (const x of uw) {
+      if (x.pos.pendingCover && !x.pos.c2o) {
+        x.pos.c2o = true;
+        decisions.push({ action: 'c2o-escalate', positionId: x.pos.id, side: openSide, mark: x.mark, paid: x.paid });
+      }
+    }
+    if (uw.length) c2oWait = uw;
+  }
   // REMOTE NO-OPEN (deps.blockNewOpens, set from the S3 control file — see index.buildEngineDeps). Refused HERE,
   // at the decision, not at the send: the record should show that the signal fired and what stopped it, so a
   // quiet afternoon under a restriction is distinguishable from a quiet afternoon with no setups. Everything
@@ -2077,6 +2094,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     decisions.push({ action: 'open-skip-control', side: openSide,
       restrict: deps.controlRestrict || 'no-open', mode: deps.controlMode || null,
       note: 'strategy-control is blocking new opens; existing positions are still being worked' });
+  } else if (openSide && c2oWait) {
+    decisions.push({ action: 'open-skip-c2o-wait', side: openSide,
+      underwater: c2oWait.map((x) => ({ id: x.pos.id, mark: x.mark, paid: x.paid })) });
   } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
@@ -2900,6 +2920,7 @@ async function reopenAfterCover(st, cfg, deps, decisions) {
   const done = (why, extra) => { src.reopened = why; decisions.push({ action: 'reopen-skip', of: src.id, side, reason: why, spot, lower: lo0, upper: hi0, ...(extra || {}) }); return 0; };
   if (!(spot > 0)) return 0;                                            // no price this pass: look again next pass
   if (spot < lo0 || spot > hi0) return done('underlying outside the original strikes');
+  if (deps.coverToOpenWait && underwaterOnSide(st, side, deps.getLeg).length) return done('cover-to-open wait: side underwater');
   // What was paid, debit-equivalent (a credit open's fill is W - credit).
   const bf = src.brokerFill;
   const paid = bf && bf.price > 0 ? (bf.side === 'CREDIT' ? round2(W - bf.price) : bf.price) : src.limit;
@@ -3351,6 +3372,18 @@ function spreadQuote(legs, getLeg) {
 function saneMark(legs, mark) {
   if (mark == null || !Number.isFinite(mark)) return null;
   return SQ.verticalSanity(legs, mark).ok ? mark : null;
+}
+
+// Uncovered, filled bull/bear positions on `side` whose own mark is below what they paid (cover-to-open).
+function underwaterOnSide(st, side, getLeg) {
+  const out = [];
+  for (const pos of st.positions || []) {
+    if (!pos || pos.side !== side || !pos.filled || pos.covered || pos.manual || !Array.isArray(pos.legs)) continue;
+    const paid = pos.pendingCover && pos.pendingCover.openCost != null ? pos.pendingCover.openCost : pos.limit;
+    const mark = coverMarkNow(pos.legs, getLeg);
+    if (mark != null && paid > 0 && mark < paid) out.push({ pos, mark, paid });
+  }
+  return out;
 }
 
 function coverMarkNow(legs, getLeg) {
@@ -3967,7 +4000,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
       const trendAgainst = !!deps.giveUpTrend && TS.against(pos.side, TS.state(st.trendCtx, deps.giveUpTrend));
       // giveUpPointsBackstop false = the candle rule alone decides; otherwise points and candle, whichever first.
       const pointsFire = deps.giveUpPointsBackstop !== false && through >= pts;
-      const candleFire = pos.guCandle === true || pos.trendCover === true;   // candle give-up, or the trend-side floor
+      const candleFire = pos.guCandle === true || pos.trendCover === true || pos.c2o === true;   // candle give-up, the trend-side floor, or cover-to-open
       if (pointsFire || trendAgainst || candleFire) {
         // GIVE-UP RE-STRIKE (deps.giveUpGeometry): the position has turned, so its cover goes back to the tent
         // (or inside the open spread on a wider width) — the cheapest legal cover — before the give-up price.
@@ -3987,7 +4020,7 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
         if (give > 0 && give > pc.target + tick / 2) {
           const moved = await concedeCover(pos, pc, give, pc.target, cfg, deps, decisions, 'cover-giveup', { mark,
             through: round2(through), points: pts, capFrac: deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05,
-            trigger: pointsFire ? 'points' : pos.trendCover ? 'trend-floor' : candleFire ? `candle-${deps.giveUpCandle}` : 'trend' }, st);
+            trigger: pointsFire ? 'points' : pos.trendCover ? 'trend-floor' : pos.c2o ? 'cover-to-open' : candleFire ? `candle-${deps.giveUpCandle}` : 'trend' }, st);
           if (moved) pc.gaveUp = true;
         }
         continue;   // give-up supersedes the ladder for this position; it is already at the market
@@ -4315,6 +4348,7 @@ module.exports = {
   applyBrokerFills,   // CLOSED LOOP — book the broker's fills; inert unless deps.fillSource === 'broker'
   creditPreferred,
   openPosition,   // exported for the failed-send contract test
+  underwaterOnSide,   // cover-to-open wait (2026-10-15)
 
   processCandleClose,
   reopenAfterCover, paritySpot,   // REOPEN AFTER A QUICK COVER — the candle close AND the sub-bar worker

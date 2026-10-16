@@ -1051,6 +1051,9 @@ function applyExperiments(v, { capPreset = true } = {}) {
   // REOPEN AFTER A QUICK COVER (user, 2026-10-14): v7-10 (live — the user trades it this way by hand) and every v8/v9
   // variant, so v8 = v6 + proactive cover + reopen and v9 = v7 + the same: a readable comparison.
   if ((v.variant === 'v7-10' || /^v[89]-/.test(String(v.variant))) && v.reopenOnCover == null) v.reopenOnCover = true;
+  // COVER TO OPEN, WAIT (user, 2026-10-16): v6, v7 and v8 at every width; v9 stays on today's rules as the control.
+  // An open on an underwater side escalates that side's cover to the give-up path and waits (trader.underwaterOnSide).
+  if (/^v[678]-/.test(String(v.variant)) && v.coverToOpenWait == null) v.coverToOpenWait = true;
   // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
     v.lossMax = v.spreadWidth * 100;                 // 1 x width, the tightest cap that can still trade
@@ -2025,6 +2028,7 @@ function buildEngineDeps(run, live) {
       giveUpTrend: run.giveUpTrend || null,
       // Stall cover: minutes without a favourable move before the cover goes to break-even (null = off).
       stallCoverMin: run.stallCoverMin != null ? run.stallCoverMin : null, stallCoverPts: run.stallCoverPts || 0,
+      coverToOpenWait: run.coverToOpenWait === true,
       // Late-day floor guard (trader.lateFloorLimit): from this ET minute nothing may take the floor below the limit.
       spreadWidth: run.spreadWidth,
       lateFloorAfterMin: run.lateFloorAfterMin != null ? run.lateFloorAfterMin : null,

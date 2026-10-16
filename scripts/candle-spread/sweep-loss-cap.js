@@ -345,6 +345,23 @@ const REVAL_ARMS = process.argv.includes('--revalArms') ? [
   ['first 0930 no fallback', () => ({ openFallbackUntilMin: null })],
   ['first 0930 fallback open only', () => ({ openFallbackUntilMin: 570 })],
   ['geo offset1 gu tent ml 0.05', () => ({ coverGeometry: 'offset1', giveUpGeometry: 'tent', continuousCoverMinLockFrac: 0.05 })],
+  // GIVE UP ONE OR THE OTHER (2026-10-15, user): a 10W plateau give-up both re-strikes to the tent AND pays the 5% allowance.
+  // 'keep' = no re-strike (plateau strikes, 5% allowance); 'tent ml0' = re-strike, break-even cap; 'keep ml0' = neither.
+  ['gu keep strikes', (r) => (/^v[4-9]-10$/.test(r.variant) ? { giveUpGeometry: 'keep' } : null)],
+  ['gu tent ml0', (r) => (/^v[4-9]-10$/.test(r.variant) ? { giveUpMaxLoss: 0 } : null)],
+  ['gu keep ml0', (r) => (/^v[4-9]-10$/.test(r.variant) ? { giveUpGeometry: 'keep', giveUpMaxLoss: 0 } : null)],
+  // NO ADDING TO AN UNDERWATER SIDE + LATE-OPEN CUTOFF (2026-10-15, v7-10 two-week review: 17 adds to a losing side
+  // -$4,288; 5 of 6 opens after 15:00 ended uncovered). uw N = skip while a same-side uncovered position marks > $N under paid.
+  ...[0, 0.5, 1].map((t) => [`no add uw ${t}`, () => ({ noAddUnderwater: t })]),
+  ['no add uw any', () => ({ noAddUnderwater: 'any' })],
+  ...[[1430, 870], [1445, 885], [1500, 900], [1515, 915]].map(([n, m]) => [`cutoff ${n}`, () => ({ openCutoffMin: m })]),
+  ['no add uw 0.5 + cutoff 1500', () => ({ noAddUnderwater: 0.5, openCutoffMin: 900 })],
+  // COVER TO OPEN (2026-10-15, user): an open signal escalates underwater uncovered positions' covers — same side only, or
+  // both sides — up to the give-up cap + $1 / + $2 / the market.
+  ...['same', 'both'].flatMap((side) => [[1, '+1'], [2, '+2'], ['mkt', 'mkt']].map(([x, n]) => [`c2o ${side} ${n}`, () => ({ coverToOpen: side, coverToOpenExtra: x })])),
+  // COVER TO OPEN + WAIT (2026-10-15, user): c2o 'same' escalation AND the open is skipped while a same-side uncovered
+  // position is underwater. +0 = escalate to the existing give-up price only.
+  ...[[0, '+0'], [1, '+1'], [2, '+2'], ['mkt', 'mkt']].map(([x, n]) => [`c2o wait ${n}`, () => ({ coverToOpen: 'same', coverToOpenExtra: x, coverToOpenWait: true })]),
   ['htf close + bw cover reversal', (r) => (r.signalCfg && r.signalCfg.beWrong ? { signalCfg: { ...r.signalCfg, htfGate: 'close', beWrongCover: 'reversal' }, signalCoverGiveUp: 'beWrong' } : null)],
   // The escalation alone on EVERY variant: any existing signal cover (v5/v6 trend-flip, reversals' cover of the held
   // side) now actually gets the wrong-way position off at the give-up price.
@@ -505,6 +522,11 @@ function measure(job) {
     worstHeldFloor: Math.round(Math.min(...res.map(r => r.governor.worstFloor))),
     capExceeded: daily.filter(x => x < -job.lossMax).length,
     opensBlocked: res.reduce((a, r) => a + r.governor.blocked, 0),
+    underwaterBlockedPerDay: Math.round(res.reduce((a, r) => a + (r.gateUnderwater || 0), 0) / days.length * 100) / 100,
+    c2oWaitBlockedPerDay: Math.round(res.reduce((a, r) => a + (r.gateC2oWait || 0), 0) / days.length * 100) / 100,
+    c2oFiresPerDay: Math.round(res.reduce((a, r) => a + (r.c2oFires || 0), 0) / days.length * 100) / 100,
+    cutoffBlockedPerDay: Math.round(res.reduce((a, r) => a + (r.gateCutoff || 0), 0) / days.length * 100) / 100,
+    opensPerDay: Math.round(res.reduce((a, r) => a + (r.opens || 0), 0) / days.length * 100) / 100,
     offsets: res.reduce((a, r) => a + r.governor.offsets, 0),
     floorRaisePerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.count, 0) / days.length * 100) / 100 : null,
     floorRaiseSpentPerDay: res[0] && res[0].floorRaise ? Math.round(res.reduce((a, r) => a + r.floorRaise.spent, 0) / days.length) : null,

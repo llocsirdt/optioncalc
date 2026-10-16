@@ -100,6 +100,11 @@ function optsFor(v, env) {
   if (v.coverNextBar != null) o.coverNextBar = v.coverNextBar;   // backtest-only: no same-bar cover fill (look-ahead)
   if (v.subBarFill != null) o.subBarFill = v.subBarFill;   // backtest-only: '1m' | 'path' sub-bar fill timing
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
+  if (v.noAddUnderwater != null) o.noAddUnderwater = v.noAddUnderwater;   // backtest-only (2026-10-15)
+  for (const k of ['coverToOpen', 'coverToOpenExtra', 'coverToOpenWait']) if (v[k] != null) o[k] = v[k];   // backtest-only (2026-10-15)
+  // A roster coverToOpenWait means the live rule: same side, today's give-up cap (+$0), skip the open while underwater.
+  if (v.coverToOpenWait === true && v.coverToOpen == null) { o.coverToOpen = 'same'; if (o.coverToOpenExtra == null) o.coverToOpenExtra = 0; }
+  if (v.openCutoffMin != null) o.openCutoffMin = v.openCutoffMin;   // backtest-only: no signal opens from this ET minute
   if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
   if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
   if (v.minLockCurve != null) o.minLockCurve = v.minLockCurve;          // backtest study: minLock by time of day

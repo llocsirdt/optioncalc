@@ -584,7 +584,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let openMissed = 0, openTried = 0, openWalkGov = 0;   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
-  let gateCutoff = 0, gateFloor = 0;   // opens blocked by the stop-opening gates
+  let gateCutoff = 0, gateFloor = 0, gateUnderwater = 0, gateC2oWait = 0, c2oFires = 0, c2oChasing = 0;   // opens blocked by the stop-opening gates
   let flyCount = 0, flySpent = 0;      // valley-repair structures bought
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
@@ -1206,6 +1206,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (!giveUp) guTrendFires++;
         giveUp = true;
       }
+      // COVER TO OPEN (opts.coverToOpen; set at a signal below): an underwater position chases its cover from here on.
+      if (pos._c2o != null) { if (!giveUp) c2oChasing++; giveUp = true; }
       if (giveUp) pos._gu = true;
       // ⛔ MEASURED AND REJECTED 2026-09-22 — kept only so the measurement is reproducible. Do not enable,
       // and do not re-measure without reading the experiments-log entry first. 922 days, 8 variants, every
@@ -1258,7 +1260,9 @@ function runDay5m(bars, signalFn, opts = {}) {
         const cap = (guFrac != null ? guFrac : 0.15) * G.WIDTH;
         const mk = legsMark(pc.legs, S, tau, iv);
         // never pay more than break-even + the bounded loss, and never chase above the mark
-        workingTarget = roundTick(Math.min(mk + TICK, round2(G.WIDTH - pc.openCost + cap)));
+        let lim = round2(G.WIDTH - pc.openCost + cap);
+        if (pos._c2o != null) lim = pos._c2o === 'mkt' ? Infinity : round2(lim + pos._c2o);
+        workingTarget = roundTick(Math.min(mk + TICK, lim));
       }
       if (!giveUp && decayed) {
         workingTarget = roundTick(legsMark(pc.legs, S, tau, iv) + TICK);   // go to the market
@@ -1769,8 +1773,36 @@ function runDay5m(bars, signalFn, opts = {}) {
       const fl = floorOf(null);   // the book's guaranteed floor as it stands
       if (fl >= opts.openFloorGate) { openGated = true; gateWhy = 'floor'; }
     }
-    if (openGated) { if (gateWhy === 'cutoff') gateCutoff++; else gateFloor++; }
+    // NO ADDING TO AN UNDERWATER SIDE (opts.noAddUnderwater = $ per spread below paid; 2026-10-15, user + the v7-10
+    // two-week review: 17 opens added to a same side already losing — 24% good, -$4,288, 8 of the 17 uncovered
+    // losers). An open is skipped while any uncovered position on its side marks more than this below what it paid.
+    // 'any' = skip while any uncovered position on that side exists at all.
+    if (!openGated && opts.noAddUnderwater != null && sig.openSide) {
+      const same = st.positions.filter((p) => p.side === sig.openSide && !p.covered && p.filled !== false);
+      const under = opts.noAddUnderwater === 'any' ? same.length > 0
+        : same.some((p) => legsMark(p.legs, S, tau, iv) < p.limit - opts.noAddUnderwater);
+      if (under) { openGated = true; gateWhy = 'underwater'; }
+    }
+    if (openGated) { if (gateWhy === 'cutoff') gateCutoff++; else if (gateWhy === 'underwater') gateUnderwater++; else gateFloor++; }
 
+    // COVER TO OPEN (opts.coverToOpen = 'same' | 'both', opts.coverToOpenExtra = $ per spread over the give-up cap, or
+    // 'mkt'; 2026-10-15, user — cover-to-stack in reverse): an open signal first sends every UNDERWATER uncovered
+    // position on the open's side ('same') or on either side ('both') to the give-up path, its price allowed up to the
+    // give-up cap + extra (or the market), sticky until it fills. The open itself goes ahead as usual. The chase
+    // starts at the next bar's cover pass (one 5m bar later than live would).
+    if (opts.coverToOpen && sig.openSide) {
+      for (const p of st.positions) {
+        if (p.covered || !p.pendingCover || p._c2o != null || (p.side !== 'bull' && p.side !== 'bear')) continue;
+        if (opts.coverToOpen === 'same' && p.side !== sig.openSide) continue;
+        if (legsMark(p.legs, S, tau, iv) >= p.limit) continue;
+        p._c2o = opts.coverToOpenExtra != null ? opts.coverToOpenExtra : 0; c2oFires++;
+      }
+      // COVER TO OPEN, WAIT (opts.coverToOpenWait; 2026-10-15, user — c2o 'same' + no-add-underwater combined): the
+      // escalation above still fires, but THIS open is skipped while any same-side uncovered position is underwater
+      // (mark < paid); the side's next open waits until it has covered or recovered. Opposite-side opens unaffected.
+      if (opts.coverToOpenWait && !openGated && st.positions.some((p) => p.side === sig.openSide && !p.covered
+          && p.filled !== false && legsMark(p.legs, S, tau, iv) < p.limit)) { openGated = true; gateC2oWait++; }
+    }
     if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
       // OPENING FALLBACK (opts.openFallbackUntilMin, live parity — trader.buildOpenFallback): a declined open at the
@@ -2048,7 +2080,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // point in time by the same UI code that replays a live day. Only built when asked (opts.recordReplay).
   const replay = opts.recordReplay ? bars.filter(b => !rthOnly || inRth(b.dt)).map(b => ({ epoch: b.dt, time: etStamp(b.dt), underlying: priceOf(b).close })) : null;
   return {
-    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openFallbacks, openLowBand,
+    floor, terminal, opens, filled, naked, coverPending, coverBySrc, openTried, openMissed, giveUps, decayStops, gateCutoff, gateFloor, gateUnderwater, gateC2oWait, c2oFires, c2oChasing, flyCount, flySpent: Math.round(flySpent), coverPicks, settle, replay, positions: opts.recordReplay ? st.positions : undefined, capBlocked, capBlockedTrend, capSkipCeiling, nCoverToStack, geoSkip, openFallbacks, openLowBand,
     bestCase, worstCase, avgTerminalPotential,
     openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, restrikeReplaced, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,

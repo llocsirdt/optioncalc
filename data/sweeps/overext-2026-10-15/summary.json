@@ -1,0 +1,5916 @@
+{
+ "v7-10": {
+  "with-60m": [
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "train",
+    "removed": {
+     "n": 4733,
+     "good": 329,
+     "covlow": 2294,
+     "giveup": 1154,
+     "tail": 956,
+     "bad": 2110,
+     "pnl": 103975,
+     "neg": 1330,
+     "tailLoss": 796
+    },
+    "kept": {
+     "n": 1435,
+     "good": 144,
+     "covlow": 620,
+     "giveup": 384,
+     "tail": 287,
+     "bad": 671,
+     "pnl": 47460,
+     "neg": 444,
+     "tailLoss": 216
+    },
+    "rand": null
+   },
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "test",
+    "removed": {
+     "n": 2852,
+     "good": 398,
+     "covlow": 1181,
+     "giveup": 863,
+     "tail": 410,
+     "bad": 1273,
+     "pnl": 75659,
+     "neg": 977,
+     "tailLoss": 342
+    },
+    "kept": {
+     "n": 1153,
+     "good": 194,
+     "covlow": 447,
+     "giveup": 349,
+     "tail": 163,
+     "bad": 512,
+     "pnl": 48840,
+     "neg": 371,
+     "tailLoss": 115
+    },
+    "rand": {
+     "mean": 88645.902,
+     "p5": 74430,
+     "p95": 103476,
+     "pLE": 0.062
+    }
+   },
+   {
+    "rule": "single 1m pctB>=0.95",
+    "split": "train",
+    "removed": {
+     "n": 729,
+     "good": 74,
+     "covlow": 312,
+     "giveup": 188,
+     "tail": 155,
+     "bad": 343,
+     "pnl": -90,
+     "neg": 223,
+     "tailLoss": 125
+    },
+    "kept": {
+     "n": 5439,
+     "good": 399,
+     "covlow": 2602,
+     "giveup": 1350,
+     "tail": 1088,
+     "bad": 2438,
+     "pnl": 151525,
+     "neg": 1551,
+     "tailLoss": 887
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m pctB>=0.95",
+    "split": "test",
+    "removed": {
+     "n": 398,
+     "good": 59,
+     "covlow": 147,
+     "giveup": 128,
+     "tail": 64,
+     "bad": 192,
+     "pnl": 3700,
+     "neg": 157,
+     "tailLoss": 55
+    },
+    "kept": {
+     "n": 3607,
+     "good": 533,
+     "covlow": 1481,
+     "giveup": 1084,
+     "tail": 509,
+     "bad": 1593,
+     "pnl": 120799,
+     "neg": 1191,
+     "tailLoss": 402
+    },
+    "rand": {
+     "mean": 12422.951,
+     "p5": 2572,
+     "p95": 21998,
+     "pLE": 0.0695
+    }
+   },
+   {
+    "rule": "single 5m pctB>=0.95",
+    "split": "train",
+    "removed": {
+     "n": 998,
+     "good": 100,
+     "covlow": 459,
+     "giveup": 256,
+     "tail": 183,
+     "bad": 439,
+     "pnl": 1020,
+     "neg": 297,
+     "tailLoss": 156
+    },
+    "kept": {
+     "n": 5170,
+     "good": 373,
+     "covlow": 2455,
+     "giveup": 1282,
+     "tail": 1060,
+     "bad": 2342,
+     "pnl": 150415,
+     "neg": 1477,
+     "tailLoss": 856
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m pctB>=0.95",
+    "split": "test",
+    "removed": {
+     "n": 612,
+     "good": 108,
+     "covlow": 237,
+     "giveup": 187,
+     "tail": 80,
+     "bad": 267,
+     "pnl": 13604,
+     "neg": 212,
+     "tailLoss": 65
+    },
+    "kept": {
+     "n": 3393,
+     "good": 484,
+     "covlow": 1391,
+     "giveup": 1025,
+     "tail": 493,
+     "bad": 1518,
+     "pnl": 110895,
+     "neg": 1136,
+     "tailLoss": 392
+    },
+    "rand": {
+     "mean": 19239.96,
+     "p5": 7441,
+     "p95": 30309,
+     "pLE": 0.2085
+    }
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "train",
+    "removed": {
+     "n": 230,
+     "good": 46,
+     "covlow": 100,
+     "giveup": 64,
+     "tail": 20,
+     "bad": 84,
+     "pnl": 1440,
+     "neg": 58,
+     "tailLoss": 20
+    },
+    "kept": {
+     "n": 5938,
+     "good": 427,
+     "covlow": 2814,
+     "giveup": 1474,
+     "tail": 1223,
+     "bad": 2697,
+     "pnl": 149995,
+     "neg": 1716,
+     "tailLoss": 992
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "test",
+    "removed": {
+     "n": 133,
+     "good": 32,
+     "covlow": 45,
+     "giveup": 50,
+     "tail": 6,
+     "bad": 56,
+     "pnl": 1594,
+     "neg": 48,
+     "tailLoss": 6
+    },
+    "kept": {
+     "n": 3872,
+     "good": 560,
+     "covlow": 1583,
+     "giveup": 1162,
+     "tail": 567,
+     "bad": 1729,
+     "pnl": 122905,
+     "neg": 1300,
+     "tailLoss": 451
+    },
+    "rand": {
+     "mean": 4142.7615,
+     "p5": -1585,
+     "p95": 10214,
+     "pLE": 0.2445
+    }
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "train",
+    "removed": {
+     "n": 307,
+     "good": 48,
+     "covlow": 152,
+     "giveup": 76,
+     "tail": 31,
+     "bad": 107,
+     "pnl": 13515,
+     "neg": 80,
+     "tailLoss": 28
+    },
+    "kept": {
+     "n": 5861,
+     "good": 425,
+     "covlow": 2762,
+     "giveup": 1462,
+     "tail": 1212,
+     "bad": 2674,
+     "pnl": 137920,
+     "neg": 1694,
+     "tailLoss": 984
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "test",
+    "removed": {
+     "n": 97,
+     "good": 21,
+     "covlow": 35,
+     "giveup": 37,
+     "tail": 4,
+     "bad": 41,
+     "pnl": 5475,
+     "neg": 34,
+     "tailLoss": 4
+    },
+    "kept": {
+     "n": 3908,
+     "good": 571,
+     "covlow": 1593,
+     "giveup": 1175,
+     "tail": 569,
+     "bad": 1744,
+     "pnl": 119024,
+     "neg": 1314,
+     "tailLoss": 453
+    },
+    "rand": {
+     "mean": 3056.751,
+     "p5": -1919,
+     "p95": 8237,
+     "pLE": 0.793
+    }
+   },
+   {
+    "rule": "single 1m beyondPts>=-1",
+    "split": "train",
+    "removed": {
+     "n": 633,
+     "good": 57,
+     "covlow": 273,
+     "giveup": 161,
+     "tail": 142,
+     "bad": 303,
+     "pnl": -460,
+     "neg": 197,
+     "tailLoss": 114
+    },
+    "kept": {
+     "n": 5535,
+     "good": 416,
+     "covlow": 2641,
+     "giveup": 1377,
+     "tail": 1101,
+     "bad": 2478,
+     "pnl": 151895,
+     "neg": 1577,
+     "tailLoss": 898
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m beyondPts>=-1",
+    "split": "test",
+    "removed": {
+     "n": 310,
+     "good": 39,
+     "covlow": 122,
+     "giveup": 95,
+     "tail": 54,
+     "bad": 149,
+     "pnl": 2991,
+     "neg": 119,
+     "tailLoss": 46
+    },
+    "kept": {
+     "n": 3695,
+     "good": 553,
+     "covlow": 1506,
+     "giveup": 1117,
+     "tail": 519,
+     "bad": 1636,
+     "pnl": 121508,
+     "neg": 1229,
+     "tailLoss": 411
+    },
+    "rand": {
+     "mean": 9614.483,
+     "p5": 977,
+     "p95": 18458,
+     "pLE": 0.1135
+    }
+   },
+   {
+    "rule": "single 5m beyondPts>=-6",
+    "split": "train",
+    "removed": {
+     "n": 1216,
+     "good": 103,
+     "covlow": 548,
+     "giveup": 299,
+     "tail": 266,
+     "bad": 565,
+     "pnl": -8510,
+     "neg": 375,
+     "tailLoss": 224
+    },
+    "kept": {
+     "n": 4952,
+     "good": 370,
+     "covlow": 2366,
+     "giveup": 1239,
+     "tail": 977,
+     "bad": 2216,
+     "pnl": 159945,
+     "neg": 1399,
+     "tailLoss": 788
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m beyondPts>=-6",
+    "split": "test",
+    "removed": {
+     "n": 688,
+     "good": 110,
+     "covlow": 266,
+     "giveup": 201,
+     "tail": 111,
+     "bad": 312,
+     "pnl": 15916,
+     "neg": 234,
+     "tailLoss": 82
+    },
+    "kept": {
+     "n": 3317,
+     "good": 482,
+     "covlow": 1362,
+     "giveup": 1011,
+     "tail": 462,
+     "bad": 1473,
+     "pnl": 108583,
+     "neg": 1114,
+     "tailLoss": 375
+    },
+    "rand": {
+     "mean": 21426.124,
+     "p5": 9070,
+     "p95": 33729,
+     "pLE": 0.2405
+    }
+   },
+   {
+    "rule": "single 15m beyondPts>=34",
+    "split": "train",
+    "removed": {
+     "n": 314,
+     "good": 64,
+     "covlow": 140,
+     "giveup": 81,
+     "tail": 29,
+     "bad": 110,
+     "pnl": 3100,
+     "neg": 83,
+     "tailLoss": 28
+    },
+    "kept": {
+     "n": 5854,
+     "good": 409,
+     "covlow": 2774,
+     "giveup": 1457,
+     "tail": 1214,
+     "bad": 2671,
+     "pnl": 148335,
+     "neg": 1691,
+     "tailLoss": 984
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m beyondPts>=34",
+    "split": "test",
+    "removed": {
+     "n": 288,
+     "good": 75,
+     "covlow": 92,
+     "giveup": 110,
+     "tail": 11,
+     "bad": 121,
+     "pnl": 8149,
+     "neg": 104,
+     "tailLoss": 11
+    },
+    "kept": {
+     "n": 3717,
+     "good": 517,
+     "covlow": 1536,
+     "giveup": 1102,
+     "tail": 562,
+     "bad": 1664,
+     "pnl": 116350,
+     "neg": 1244,
+     "tailLoss": 446
+    },
+    "rand": {
+     "mean": 9063.377,
+     "p5": 807,
+     "p95": 17418,
+     "pLE": 0.4325
+    }
+   },
+   {
+    "rule": "single 60m beyondPts>=122.5",
+    "split": "train",
+    "removed": {
+     "n": 189,
+     "good": 40,
+     "covlow": 80,
+     "giveup": 50,
+     "tail": 19,
+     "bad": 69,
+     "pnl": 3885,
+     "neg": 52,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 5979,
+     "good": 433,
+     "covlow": 2834,
+     "giveup": 1488,
+     "tail": 1224,
+     "bad": 2712,
+     "pnl": 147550,
+     "neg": 1722,
+     "tailLoss": 994
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m beyondPts>=122.5",
+    "split": "test",
+    "removed": {
+     "n": 296,
+     "good": 85,
+     "covlow": 86,
+     "giveup": 112,
+     "tail": 13,
+     "bad": 125,
+     "pnl": 9629,
+     "neg": 112,
+     "tailLoss": 13
+    },
+    "kept": {
+     "n": 3709,
+     "good": 507,
+     "covlow": 1542,
+     "giveup": 1100,
+     "tail": 560,
+     "bad": 1660,
+     "pnl": 114870,
+     "neg": 1236,
+     "tailLoss": 444
+    },
+    "rand": {
+     "mean": 9194.9485,
+     "p5": 704,
+     "p95": 17785,
+     "pLE": 0.5375
+    }
+   },
+   {
+    "rule": "zone 1m pctB in [0.95,1.03)",
+    "split": "train",
+    "removed": {
+     "n": 377,
+     "good": 36,
+     "covlow": 151,
+     "giveup": 107,
+     "tail": 83,
+     "bad": 190,
+     "pnl": -7780,
+     "neg": 120,
+     "tailLoss": 71
+    },
+    "kept": {
+     "n": 5791,
+     "good": 437,
+     "covlow": 2763,
+     "giveup": 1431,
+     "tail": 1160,
+     "bad": 2591,
+     "pnl": 159215,
+     "neg": 1654,
+     "tailLoss": 941
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m pctB in [0.95,1.03)",
+    "split": "test",
+    "removed": {
+     "n": 208,
+     "good": 27,
+     "covlow": 76,
+     "giveup": 68,
+     "tail": 37,
+     "bad": 105,
+     "pnl": -632,
+     "neg": 88,
+     "tailLoss": 31
+    },
+    "kept": {
+     "n": 3797,
+     "good": 565,
+     "covlow": 1552,
+     "giveup": 1144,
+     "tail": 536,
+     "bad": 1680,
+     "pnl": 125131,
+     "neg": 1260,
+     "tailLoss": 426
+    },
+    "rand": {
+     "mean": 6490.152,
+     "p5": -693,
+     "p95": 13778,
+     "pLE": 0.0515
+    }
+   },
+   {
+    "rule": "zone 5m pctB in [0.97,1.1)",
+    "split": "train",
+    "removed": {
+     "n": 603,
+     "good": 50,
+     "covlow": 283,
+     "giveup": 149,
+     "tail": 121,
+     "bad": 270,
+     "pnl": -8120,
+     "neg": 181,
+     "tailLoss": 103
+    },
+    "kept": {
+     "n": 5565,
+     "good": 423,
+     "covlow": 2631,
+     "giveup": 1389,
+     "tail": 1122,
+     "bad": 2511,
+     "pnl": 159555,
+     "neg": 1593,
+     "tailLoss": 909
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m pctB in [0.97,1.1)",
+    "split": "test",
+    "removed": {
+     "n": 359,
+     "good": 69,
+     "covlow": 138,
+     "giveup": 111,
+     "tail": 41,
+     "bad": 152,
+     "pnl": 12826,
+     "neg": 120,
+     "tailLoss": 34
+    },
+    "kept": {
+     "n": 3646,
+     "good": 523,
+     "covlow": 1490,
+     "giveup": 1101,
+     "tail": 532,
+     "bad": 1633,
+     "pnl": 111673,
+     "neg": 1228,
+     "tailLoss": 423
+    },
+    "rand": {
+     "mean": 10932.8385,
+     "p5": 1599,
+     "p95": 20266,
+     "pLE": 0.637
+    }
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "train",
+    "removed": {
+     "n": 645,
+     "good": 29,
+     "covlow": 281,
+     "giveup": 168,
+     "tail": 167,
+     "bad": 335,
+     "pnl": -15770,
+     "neg": 226,
+     "tailLoss": 143
+    },
+    "kept": {
+     "n": 5523,
+     "good": 444,
+     "covlow": 2633,
+     "giveup": 1370,
+     "tail": 1076,
+     "bad": 2446,
+     "pnl": 167205,
+     "neg": 1548,
+     "tailLoss": 869
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "test",
+    "removed": {
+     "n": 457,
+     "good": 52,
+     "covlow": 209,
+     "giveup": 136,
+     "tail": 60,
+     "bad": 196,
+     "pnl": 24907,
+     "neg": 141,
+     "tailLoss": 48
+    },
+    "kept": {
+     "n": 3548,
+     "good": 540,
+     "covlow": 1419,
+     "giveup": 1076,
+     "tail": 513,
+     "bad": 1589,
+     "pnl": 99592,
+     "neg": 1207,
+     "tailLoss": 409
+    },
+    "rand": {
+     "mean": 14258.13,
+     "p5": 4330,
+     "p95": 24390,
+     "pLE": 0.956
+    }
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 813,
+     "good": 45,
+     "covlow": 341,
+     "giveup": 187,
+     "tail": 240,
+     "bad": 427,
+     "pnl": -17190,
+     "neg": 265,
+     "tailLoss": 188
+    },
+    "kept": {
+     "n": 5355,
+     "good": 428,
+     "covlow": 2573,
+     "giveup": 1351,
+     "tail": 1003,
+     "bad": 2354,
+     "pnl": 168625,
+     "neg": 1509,
+     "tailLoss": 824
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 579,
+     "good": 58,
+     "covlow": 256,
+     "giveup": 153,
+     "tail": 112,
+     "bad": 265,
+     "pnl": -1651,
+     "neg": 194,
+     "tailLoss": 94
+    },
+    "kept": {
+     "n": 3426,
+     "good": 534,
+     "covlow": 1372,
+     "giveup": 1059,
+     "tail": 461,
+     "bad": 1520,
+     "pnl": 126150,
+     "neg": 1154,
+     "tailLoss": 363
+    },
+    "rand": {
+     "mean": 18111.032,
+     "p5": 7037,
+     "p95": 29474,
+     "pLE": 0.002
+    }
+   },
+   {
+    "rule": "zone 1m beyondPts in [-1,1.5)",
+    "split": "train",
+    "removed": {
+     "n": 319,
+     "good": 15,
+     "covlow": 132,
+     "giveup": 84,
+     "tail": 88,
+     "bad": 172,
+     "pnl": -9320,
+     "neg": 107,
+     "tailLoss": 70
+    },
+    "kept": {
+     "n": 5849,
+     "good": 458,
+     "covlow": 2782,
+     "giveup": 1454,
+     "tail": 1155,
+     "bad": 2609,
+     "pnl": 160755,
+     "neg": 1667,
+     "tailLoss": 942
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m beyondPts in [-1,1.5)",
+    "split": "test",
+    "removed": {
+     "n": 120,
+     "good": 5,
+     "covlow": 56,
+     "giveup": 31,
+     "tail": 28,
+     "bad": 59,
+     "pnl": -236,
+     "neg": 44,
+     "tailLoss": 23
+    },
+    "kept": {
+     "n": 3885,
+     "good": 587,
+     "covlow": 1572,
+     "giveup": 1181,
+     "tail": 545,
+     "bad": 1726,
+     "pnl": 124735,
+     "neg": 1304,
+     "tailLoss": 434
+    },
+    "rand": {
+     "mean": 3664.5855,
+     "p5": -1797,
+     "p95": 9152,
+     "pLE": 0.1115
+    }
+   },
+   {
+    "rule": "zone 5m beyondPts in [-6,6.5)",
+    "split": "train",
+    "removed": {
+     "n": 906,
+     "good": 54,
+     "covlow": 411,
+     "giveup": 212,
+     "tail": 229,
+     "bad": 441,
+     "pnl": -17225,
+     "neg": 287,
+     "tailLoss": 191
+    },
+    "kept": {
+     "n": 5262,
+     "good": 419,
+     "covlow": 2503,
+     "giveup": 1326,
+     "tail": 1014,
+     "bad": 2340,
+     "pnl": 168660,
+     "neg": 1487,
+     "tailLoss": 821
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m beyondPts in [-6,6.5)",
+    "split": "test",
+    "removed": {
+     "n": 446,
+     "good": 47,
+     "covlow": 197,
+     "giveup": 111,
+     "tail": 91,
+     "bad": 202,
+     "pnl": 11994,
+     "neg": 144,
+     "tailLoss": 65
+    },
+    "kept": {
+     "n": 3559,
+     "good": 545,
+     "covlow": 1431,
+     "giveup": 1101,
+     "tail": 482,
+     "bad": 1583,
+     "pnl": 112505,
+     "neg": 1204,
+     "tailLoss": 392
+    },
+    "rand": {
+     "mean": 14045.205,
+     "p5": 3292,
+     "p95": 24794,
+     "pLE": 0.377
+    }
+   },
+   {
+    "rule": "zone 15m beyondPts in [-20,-13)",
+    "split": "train",
+    "removed": {
+     "n": 519,
+     "good": 24,
+     "covlow": 241,
+     "giveup": 110,
+     "tail": 144,
+     "bad": 254,
+     "pnl": -4190,
+     "neg": 158,
+     "tailLoss": 114
+    },
+    "kept": {
+     "n": 5649,
+     "good": 449,
+     "covlow": 2673,
+     "giveup": 1428,
+     "tail": 1099,
+     "bad": 2527,
+     "pnl": 155625,
+     "neg": 1616,
+     "tailLoss": 898
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m beyondPts in [-20,-13)",
+    "split": "test",
+    "removed": {
+     "n": 258,
+     "good": 28,
+     "covlow": 136,
+     "giveup": 54,
+     "tail": 40,
+     "bad": 94,
+     "pnl": 2381,
+     "neg": 74,
+     "tailLoss": 32
+    },
+    "kept": {
+     "n": 3747,
+     "good": 564,
+     "covlow": 1492,
+     "giveup": 1158,
+     "tail": 533,
+     "bad": 1691,
+     "pnl": 122118,
+     "neg": 1274,
+     "tailLoss": 425
+    },
+    "rand": {
+     "mean": 7972.5035,
+     "p5": 411,
+     "p95": 16378,
+     "pLE": 0.118
+    }
+   },
+   {
+    "rule": "zone 60m beyondPts in [-20,-15)",
+    "split": "train",
+    "removed": {
+     "n": 205,
+     "good": 12,
+     "covlow": 75,
+     "giveup": 55,
+     "tail": 63,
+     "bad": 118,
+     "pnl": -12770,
+     "neg": 80,
+     "tailLoss": 53
+    },
+    "kept": {
+     "n": 5963,
+     "good": 461,
+     "covlow": 2839,
+     "giveup": 1483,
+     "tail": 1180,
+     "bad": 2663,
+     "pnl": 164205,
+     "neg": 1694,
+     "tailLoss": 959
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m beyondPts in [-20,-15)",
+    "split": "test",
+    "removed": {
+     "n": 111,
+     "good": 13,
+     "covlow": 49,
+     "giveup": 31,
+     "tail": 18,
+     "bad": 49,
+     "pnl": -305,
+     "neg": 43,
+     "tailLoss": 17
+    },
+    "kept": {
+     "n": 3894,
+     "good": 579,
+     "covlow": 1579,
+     "giveup": 1181,
+     "tail": 555,
+     "bad": 1736,
+     "pnl": 124804,
+     "neg": 1305,
+     "tailLoss": 440
+    },
+    "rand": {
+     "mean": 3465.609,
+     "p5": -1846,
+     "p95": 9115,
+     "pLE": 0.126
+    }
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "train",
+    "removed": {
+     "n": 847,
+     "good": 59,
+     "covlow": 363,
+     "giveup": 199,
+     "tail": 226,
+     "bad": 425,
+     "pnl": -975,
+     "neg": 263,
+     "tailLoss": 183
+    },
+    "kept": {
+     "n": 5321,
+     "good": 414,
+     "covlow": 2551,
+     "giveup": 1339,
+     "tail": 1017,
+     "bad": 2356,
+     "pnl": 152410,
+     "neg": 1511,
+     "tailLoss": 829
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "test",
+    "removed": {
+     "n": 655,
+     "good": 94,
+     "covlow": 235,
+     "giveup": 201,
+     "tail": 125,
+     "bad": 326,
+     "pnl": 6099,
+     "neg": 236,
+     "tailLoss": 97
+    },
+    "kept": {
+     "n": 3350,
+     "good": 498,
+     "covlow": 1393,
+     "giveup": 1011,
+     "tail": 448,
+     "bad": 1459,
+     "pnl": 118400,
+     "neg": 1112,
+     "tailLoss": 360
+    },
+    "rand": {
+     "mean": 20271.818,
+     "p5": 8052,
+     "p95": 32703,
+     "pLE": 0.0255
+    }
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "train",
+    "removed": {
+     "n": 558,
+     "good": 36,
+     "covlow": 251,
+     "giveup": 110,
+     "tail": 161,
+     "bad": 271,
+     "pnl": -575,
+     "neg": 172,
+     "tailLoss": 128
+    },
+    "kept": {
+     "n": 5610,
+     "good": 437,
+     "covlow": 2663,
+     "giveup": 1428,
+     "tail": 1082,
+     "bad": 2510,
+     "pnl": 152010,
+     "neg": 1602,
+     "tailLoss": 884
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "test",
+    "removed": {
+     "n": 236,
+     "good": 27,
+     "covlow": 94,
+     "giveup": 62,
+     "tail": 53,
+     "bad": 115,
+     "pnl": 1461,
+     "neg": 78,
+     "tailLoss": 40
+    },
+    "kept": {
+     "n": 3769,
+     "good": 565,
+     "covlow": 1534,
+     "giveup": 1150,
+     "tail": 520,
+     "bad": 1670,
+     "pnl": 123038,
+     "neg": 1270,
+     "tailLoss": 417
+    },
+    "rand": {
+     "mean": 7304.2335,
+     "p5": 16,
+     "p95": 14990,
+     "pLE": 0.1
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 813,
+     "good": 45,
+     "covlow": 341,
+     "giveup": 187,
+     "tail": 240,
+     "bad": 427,
+     "pnl": -17190,
+     "neg": 265,
+     "tailLoss": 188
+    },
+    "kept": {
+     "n": 5355,
+     "good": 428,
+     "covlow": 2573,
+     "giveup": 1351,
+     "tail": 1003,
+     "bad": 2354,
+     "pnl": 168625,
+     "neg": 1509,
+     "tailLoss": 824
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 579,
+     "good": 58,
+     "covlow": 256,
+     "giveup": 153,
+     "tail": 112,
+     "bad": 265,
+     "pnl": -1651,
+     "neg": 194,
+     "tailLoss": 94
+    },
+    "kept": {
+     "n": 3426,
+     "good": 534,
+     "covlow": 1372,
+     "giveup": 1059,
+     "tail": 461,
+     "bad": 1520,
+     "pnl": 126150,
+     "neg": 1154,
+     "tailLoss": 363
+    },
+    "rand": {
+     "mean": 18111.032,
+     "p5": 7037,
+     "p95": 29474,
+     "pLE": 0.002
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "train",
+    "removed": {
+     "n": 1148,
+     "good": 80,
+     "covlow": 478,
+     "giveup": 281,
+     "tail": 309,
+     "bad": 590,
+     "pnl": -21230,
+     "neg": 368,
+     "tailLoss": 246
+    },
+    "kept": {
+     "n": 5020,
+     "good": 393,
+     "covlow": 2436,
+     "giveup": 1257,
+     "tail": 934,
+     "bad": 2191,
+     "pnl": 172665,
+     "neg": 1406,
+     "tailLoss": 766
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "test",
+    "removed": {
+     "n": 756,
+     "good": 82,
+     "covlow": 321,
+     "giveup": 212,
+     "tail": 141,
+     "bad": 353,
+     "pnl": -963,
+     "neg": 267,
+     "tailLoss": 118
+    },
+    "kept": {
+     "n": 3249,
+     "good": 510,
+     "covlow": 1307,
+     "giveup": 1000,
+     "tail": 432,
+     "bad": 1432,
+     "pnl": 125462,
+     "neg": 1081,
+     "tailLoss": 339
+    },
+    "rand": {
+     "mean": 23534.324,
+     "p5": 11530,
+     "p95": 36010,
+     "pLE": 0
+    }
+   },
+   {
+    "rule": "OR [1m 0.95, 5m 1, 15m 1.6, 60m off]",
+    "split": "train",
+    "removed": {
+     "n": 1110,
+     "good": 107,
+     "covlow": 502,
+     "giveup": 282,
+     "tail": 219,
+     "bad": 501,
+     "pnl": -1740,
+     "neg": 337,
+     "tailLoss": 183
+    },
+    "kept": {
+     "n": 5058,
+     "good": 366,
+     "covlow": 2412,
+     "giveup": 1256,
+     "tail": 1024,
+     "bad": 2280,
+     "pnl": 153175,
+     "neg": 1437,
+     "tailLoss": 829
+    },
+    "rand": null
+   },
+   {
+    "rule": "OR [1m 0.95, 5m 1, 15m 1.6, 60m off]",
+    "split": "test",
+    "removed": {
+     "n": 681,
+     "good": 118,
+     "covlow": 255,
+     "giveup": 218,
+     "tail": 90,
+     "bad": 308,
+     "pnl": 12395,
+     "neg": 247,
+     "tailLoss": 77
+    },
+    "kept": {
+     "n": 3324,
+     "good": 474,
+     "covlow": 1373,
+     "giveup": 994,
+     "tail": 483,
+     "bad": 1477,
+     "pnl": 112104,
+     "neg": 1101,
+     "tailLoss": 380
+    },
+    "rand": {
+     "mean": 21101.603,
+     "p5": 9325,
+     "p95": 33741,
+     "pLE": 0.118
+    }
+   },
+   {
+    "rule": "count>=2 [1m 0.95, 5m 1, 15m 1.6, 60m 0.6]",
+    "split": "train",
+    "removed": {
+     "n": 1105,
+     "good": 107,
+     "covlow": 500,
+     "giveup": 280,
+     "tail": 218,
+     "bad": 498,
+     "pnl": -3350,
+     "neg": 336,
+     "tailLoss": 183
+    },
+    "kept": {
+     "n": 5063,
+     "good": 366,
+     "covlow": 2414,
+     "giveup": 1258,
+     "tail": 1025,
+     "bad": 2283,
+     "pnl": 154785,
+     "neg": 1438,
+     "tailLoss": 829
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=2 [1m 0.95, 5m 1, 15m 1.6, 60m 0.6]",
+    "split": "test",
+    "removed": {
+     "n": 675,
+     "good": 117,
+     "covlow": 254,
+     "giveup": 216,
+     "tail": 88,
+     "bad": 304,
+     "pnl": 12655,
+     "neg": 244,
+     "tailLoss": 75
+    },
+    "kept": {
+     "n": 3330,
+     "good": 475,
+     "covlow": 1374,
+     "giveup": 996,
+     "tail": 485,
+     "bad": 1481,
+     "pnl": 111844,
+     "neg": 1104,
+     "tailLoss": 382
+    },
+    "rand": {
+     "mean": 20822.222,
+     "p5": 8935,
+     "p95": 32496,
+     "pLE": 0.1355
+    }
+   },
+   {
+    "rule": "count>=3 [1m 1.3, 5m 0.95, 15m 0.8, 60m 0.95]",
+    "split": "train",
+    "removed": {
+     "n": 865,
+     "good": 88,
+     "covlow": 394,
+     "giveup": 218,
+     "tail": 165,
+     "bad": 383,
+     "pnl": -3670,
+     "neg": 260,
+     "tailLoss": 142
+    },
+    "kept": {
+     "n": 5303,
+     "good": 385,
+     "covlow": 2520,
+     "giveup": 1320,
+     "tail": 1078,
+     "bad": 2398,
+     "pnl": 155105,
+     "neg": 1514,
+     "tailLoss": 870
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=3 [1m 1.3, 5m 0.95, 15m 0.8, 60m 0.95]",
+    "split": "test",
+    "removed": {
+     "n": 509,
+     "good": 91,
+     "covlow": 197,
+     "giveup": 160,
+     "tail": 61,
+     "bad": 221,
+     "pnl": 10960,
+     "neg": 179,
+     "tailLoss": 53
+    },
+    "kept": {
+     "n": 3496,
+     "good": 501,
+     "covlow": 1431,
+     "giveup": 1052,
+     "tail": 512,
+     "bad": 1564,
+     "pnl": 113539,
+     "neg": 1169,
+     "tailLoss": 404
+    },
+    "rand": {
+     "mean": 15623.8995,
+     "p5": 4766,
+     "p95": 26808,
+     "pLE": 0.241
+    }
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 0.95, 15m 1.2, 60m 1.3]",
+    "split": "train",
+    "removed": {
+     "n": 194,
+     "good": 39,
+     "covlow": 81,
+     "giveup": 49,
+     "tail": 25,
+     "bad": 74,
+     "pnl": -3010,
+     "neg": 57,
+     "tailLoss": 25
+    },
+    "kept": {
+     "n": 5974,
+     "good": 434,
+     "covlow": 2833,
+     "giveup": 1489,
+     "tail": 1218,
+     "bad": 2707,
+     "pnl": 154445,
+     "neg": 1717,
+     "tailLoss": 987
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 0.95, 15m 1.2, 60m 1.3]",
+    "split": "test",
+    "removed": {
+     "n": 89,
+     "good": 19,
+     "covlow": 27,
+     "giveup": 40,
+     "tail": 3,
+     "bad": 43,
+     "pnl": 134,
+     "neg": 34,
+     "tailLoss": 3
+    },
+    "kept": {
+     "n": 3916,
+     "good": 573,
+     "covlow": 1601,
+     "giveup": 1172,
+     "tail": 570,
+     "bad": 1742,
+     "pnl": 124365,
+     "neg": 1314,
+     "tailLoss": 454
+    },
+    "rand": {
+     "mean": 2765.005,
+     "p5": -1845,
+     "p95": 7472,
+     "pLE": 0.1905
+    }
+   }
+  ],
+  "all": [
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "train",
+    "removed": {
+     "n": 5274,
+     "good": 390,
+     "covlow": 2546,
+     "giveup": 1302,
+     "tail": 1036,
+     "bad": 2338,
+     "pnl": 118960,
+     "neg": 1472,
+     "tailLoss": 867
+    },
+    "kept": {
+     "n": 4998,
+     "good": 557,
+     "covlow": 2160,
+     "giveup": 1312,
+     "tail": 969,
+     "bad": 2281,
+     "pnl": 150725,
+     "neg": 1494,
+     "tailLoss": 764
+    },
+    "rand": null
+   },
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "test",
+    "removed": {
+     "n": 3099,
+     "good": 448,
+     "covlow": 1269,
+     "giveup": 940,
+     "tail": 442,
+     "bad": 1382,
+     "pnl": 70839,
+     "neg": 1061,
+     "tailLoss": 370
+    },
+    "kept": {
+     "n": 3705,
+     "good": 697,
+     "covlow": 1378,
+     "giveup": 1157,
+     "tail": 473,
+     "bad": 1630,
+     "pnl": 138934,
+     "neg": 1196,
+     "tailLoss": 374
+    },
+    "rand": {
+     "mean": 95418.8235,
+     "p5": 74335,
+     "p95": 116573,
+     "pLE": 0.022
+    }
+   },
+   {
+    "rule": "single 1m pctB>=1.05",
+    "split": "train",
+    "removed": {
+     "n": 483,
+     "good": 57,
+     "covlow": 205,
+     "giveup": 122,
+     "tail": 99,
+     "bad": 221,
+     "pnl": 16575,
+     "neg": 139,
+     "tailLoss": 74
+    },
+    "kept": {
+     "n": 9789,
+     "good": 890,
+     "covlow": 4501,
+     "giveup": 2492,
+     "tail": 1906,
+     "bad": 4398,
+     "pnl": 253110,
+     "neg": 2827,
+     "tailLoss": 1557
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m pctB>=1.05",
+    "split": "test",
+    "removed": {
+     "n": 267,
+     "good": 57,
+     "covlow": 92,
+     "giveup": 87,
+     "tail": 31,
+     "bad": 118,
+     "pnl": 6627,
+     "neg": 89,
+     "tailLoss": 26
+    },
+    "kept": {
+     "n": 6537,
+     "good": 1088,
+     "covlow": 2555,
+     "giveup": 2010,
+     "tail": 884,
+     "bad": 2894,
+     "pnl": 203146,
+     "neg": 2168,
+     "tailLoss": 718
+    },
+    "rand": {
+     "mean": 8258.193,
+     "p5": 374,
+     "p95": 16561,
+     "pLE": 0.372
+    }
+   },
+   {
+    "rule": "single 5m pctB>=1.05",
+    "split": "train",
+    "removed": {
+     "n": 683,
+     "good": 102,
+     "covlow": 280,
+     "giveup": 203,
+     "tail": 98,
+     "bad": 301,
+     "pnl": 12685,
+     "neg": 204,
+     "tailLoss": 83
+    },
+    "kept": {
+     "n": 9589,
+     "good": 845,
+     "covlow": 4426,
+     "giveup": 2411,
+     "tail": 1907,
+     "bad": 4318,
+     "pnl": 257000,
+     "neg": 2762,
+     "tailLoss": 1548
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m pctB>=1.05",
+    "split": "test",
+    "removed": {
+     "n": 444,
+     "good": 103,
+     "covlow": 140,
+     "giveup": 154,
+     "tail": 47,
+     "bad": 201,
+     "pnl": 8699,
+     "neg": 157,
+     "tailLoss": 36
+    },
+    "kept": {
+     "n": 6360,
+     "good": 1042,
+     "covlow": 2507,
+     "giveup": 1943,
+     "tail": 868,
+     "bad": 2811,
+     "pnl": 201074,
+     "neg": 2100,
+     "tailLoss": 708
+    },
+    "rand": {
+     "mean": 13858.2875,
+     "p5": 3934,
+     "p95": 24474,
+     "pLE": 0.214
+    }
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "train",
+    "removed": {
+     "n": 365,
+     "good": 73,
+     "covlow": 152,
+     "giveup": 111,
+     "tail": 29,
+     "bad": 140,
+     "pnl": 10505,
+     "neg": 95,
+     "tailLoss": 28
+    },
+    "kept": {
+     "n": 9907,
+     "good": 874,
+     "covlow": 4554,
+     "giveup": 2503,
+     "tail": 1976,
+     "bad": 4479,
+     "pnl": 259180,
+     "neg": 2871,
+     "tailLoss": 1603
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "test",
+    "removed": {
+     "n": 213,
+     "good": 55,
+     "covlow": 74,
+     "giveup": 75,
+     "tail": 9,
+     "bad": 84,
+     "pnl": 4284,
+     "neg": 74,
+     "tailLoss": 9
+    },
+    "kept": {
+     "n": 6591,
+     "good": 1090,
+     "covlow": 2573,
+     "giveup": 2022,
+     "tail": 906,
+     "bad": 2928,
+     "pnl": 205489,
+     "neg": 2183,
+     "tailLoss": 735
+    },
+    "rand": {
+     "mean": 6354.682,
+     "p5": -898,
+     "p95": 13967,
+     "pLE": 0.317
+    }
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "train",
+    "removed": {
+     "n": 345,
+     "good": 53,
+     "covlow": 168,
+     "giveup": 87,
+     "tail": 37,
+     "bad": 124,
+     "pnl": 14055,
+     "neg": 94,
+     "tailLoss": 34
+    },
+    "kept": {
+     "n": 9927,
+     "good": 894,
+     "covlow": 4538,
+     "giveup": 2527,
+     "tail": 1968,
+     "bad": 4495,
+     "pnl": 255630,
+     "neg": 2872,
+     "tailLoss": 1597
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "test",
+    "removed": {
+     "n": 101,
+     "good": 21,
+     "covlow": 37,
+     "giveup": 39,
+     "tail": 4,
+     "bad": 43,
+     "pnl": 5400,
+     "neg": 36,
+     "tailLoss": 4
+    },
+    "kept": {
+     "n": 6703,
+     "good": 1124,
+     "covlow": 2610,
+     "giveup": 2058,
+     "tail": 911,
+     "bad": 2969,
+     "pnl": 204373,
+     "neg": 2221,
+     "tailLoss": 740
+    },
+    "rand": {
+     "mean": 3046.937,
+     "p5": -1779,
+     "p95": 8178,
+     "pLE": 0.7735
+    }
+   },
+   {
+    "rule": "single 1m beyondPts>=-1",
+    "split": "train",
+    "removed": {
+     "n": 1008,
+     "good": 105,
+     "covlow": 424,
+     "giveup": 267,
+     "tail": 212,
+     "bad": 479,
+     "pnl": 14555,
+     "neg": 303,
+     "tailLoss": 168
+    },
+    "kept": {
+     "n": 9264,
+     "good": 842,
+     "covlow": 4282,
+     "giveup": 2347,
+     "tail": 1793,
+     "bad": 4140,
+     "pnl": 255130,
+     "neg": 2663,
+     "tailLoss": 1463
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m beyondPts>=-1",
+    "split": "test",
+    "removed": {
+     "n": 537,
+     "good": 96,
+     "covlow": 187,
+     "giveup": 173,
+     "tail": 81,
+     "bad": 254,
+     "pnl": 8631,
+     "neg": 194,
+     "tailLoss": 67
+    },
+    "kept": {
+     "n": 6267,
+     "good": 1049,
+     "covlow": 2460,
+     "giveup": 1924,
+     "tail": 834,
+     "bad": 2758,
+     "pnl": 201142,
+     "neg": 2063,
+     "tailLoss": 677
+    },
+    "rand": {
+     "mean": 16807.131,
+     "p5": 5440,
+     "p95": 28441,
+     "pLE": 0.1155
+    }
+   },
+   {
+    "rule": "single 5m beyondPts>=0.5",
+    "split": "train",
+    "removed": {
+     "n": 1009,
+     "good": 132,
+     "covlow": 427,
+     "giveup": 286,
+     "tail": 164,
+     "bad": 450,
+     "pnl": 12675,
+     "neg": 304,
+     "tailLoss": 137
+    },
+    "kept": {
+     "n": 9263,
+     "good": 815,
+     "covlow": 4279,
+     "giveup": 2328,
+     "tail": 1841,
+     "bad": 4169,
+     "pnl": 257010,
+     "neg": 2662,
+     "tailLoss": 1494
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m beyondPts>=0.5",
+    "split": "test",
+    "removed": {
+     "n": 672,
+     "good": 149,
+     "covlow": 220,
+     "giveup": 232,
+     "tail": 71,
+     "bad": 303,
+     "pnl": 16197,
+     "neg": 240,
+     "tailLoss": 58
+    },
+    "kept": {
+     "n": 6132,
+     "good": 996,
+     "covlow": 2427,
+     "giveup": 1865,
+     "tail": 844,
+     "bad": 2709,
+     "pnl": 193576,
+     "neg": 2017,
+     "tailLoss": 686
+    },
+    "rand": {
+     "mean": 20652.849,
+     "p5": 8163,
+     "p95": 33215,
+     "pLE": 0.2915
+    }
+   },
+   {
+    "rule": "single 15m beyondPts>=41.5",
+    "split": "train",
+    "removed": {
+     "n": 315,
+     "good": 71,
+     "covlow": 131,
+     "giveup": 86,
+     "tail": 27,
+     "bad": 113,
+     "pnl": 12490,
+     "neg": 84,
+     "tailLoss": 25
+    },
+    "kept": {
+     "n": 9957,
+     "good": 876,
+     "covlow": 4575,
+     "giveup": 2528,
+     "tail": 1978,
+     "bad": 4506,
+     "pnl": 257195,
+     "neg": 2882,
+     "tailLoss": 1606
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m beyondPts>=41.5",
+    "split": "test",
+    "removed": {
+     "n": 331,
+     "good": 96,
+     "covlow": 87,
+     "giveup": 133,
+     "tail": 15,
+     "bad": 148,
+     "pnl": 6959,
+     "neg": 130,
+     "tailLoss": 15
+    },
+    "kept": {
+     "n": 6473,
+     "good": 1049,
+     "covlow": 2560,
+     "giveup": 1964,
+     "tail": 900,
+     "bad": 2864,
+     "pnl": 202814,
+     "neg": 2127,
+     "tailLoss": 729
+    },
+    "rand": {
+     "mean": 10061.4675,
+     "p5": 1430,
+     "p95": 19187,
+     "pLE": 0.283
+    }
+   },
+   {
+    "rule": "single 60m beyondPts>=108",
+    "split": "train",
+    "removed": {
+     "n": 310,
+     "good": 58,
+     "covlow": 152,
+     "giveup": 75,
+     "tail": 25,
+     "bad": 100,
+     "pnl": 13185,
+     "neg": 76,
+     "tailLoss": 24
+    },
+    "kept": {
+     "n": 9962,
+     "good": 889,
+     "covlow": 4554,
+     "giveup": 2539,
+     "tail": 1980,
+     "bad": 4519,
+     "pnl": 256500,
+     "neg": 2890,
+     "tailLoss": 1607
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m beyondPts>=108",
+    "split": "test",
+    "removed": {
+     "n": 375,
+     "good": 101,
+     "covlow": 118,
+     "giveup": 138,
+     "tail": 18,
+     "bad": 156,
+     "pnl": 13881,
+     "neg": 135,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 6429,
+     "good": 1044,
+     "covlow": 2529,
+     "giveup": 1959,
+     "tail": 897,
+     "bad": 2856,
+     "pnl": 195892,
+     "neg": 2122,
+     "tailLoss": 726
+    },
+    "rand": {
+     "mean": 11679.8305,
+     "p5": 2321,
+     "p95": 21194,
+     "pLE": 0.657
+    }
+   },
+   {
+    "rule": "zone 1m pctB in [0.97,1.03)",
+    "split": "train",
+    "removed": {
+     "n": 439,
+     "good": 54,
+     "covlow": 169,
+     "giveup": 130,
+     "tail": 86,
+     "bad": 216,
+     "pnl": -3375,
+     "neg": 137,
+     "tailLoss": 74
+    },
+    "kept": {
+     "n": 9833,
+     "good": 893,
+     "covlow": 4537,
+     "giveup": 2484,
+     "tail": 1919,
+     "bad": 4403,
+     "pnl": 273060,
+     "neg": 2829,
+     "tailLoss": 1557
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m pctB in [0.97,1.03)",
+    "split": "test",
+    "removed": {
+     "n": 264,
+     "good": 43,
+     "covlow": 82,
+     "giveup": 91,
+     "tail": 48,
+     "bad": 139,
+     "pnl": -2597,
+     "neg": 113,
+     "tailLoss": 40
+    },
+    "kept": {
+     "n": 6540,
+     "good": 1102,
+     "covlow": 2565,
+     "giveup": 2006,
+     "tail": 867,
+     "bad": 2873,
+     "pnl": 212370,
+     "neg": 2144,
+     "tailLoss": 704
+    },
+    "rand": {
+     "mean": 8180.472,
+     "p5": 182,
+     "p95": 16293,
+     "pLE": 0.0175
+    }
+   },
+   {
+    "rule": "zone 5m pctB in [1.03,1.1)",
+    "split": "train",
+    "removed": {
+     "n": 413,
+     "good": 44,
+     "covlow": 176,
+     "giveup": 106,
+     "tail": 87,
+     "bad": 193,
+     "pnl": -9890,
+     "neg": 136,
+     "tailLoss": 76
+    },
+    "kept": {
+     "n": 9859,
+     "good": 903,
+     "covlow": 4530,
+     "giveup": 2508,
+     "tail": 1918,
+     "bad": 4426,
+     "pnl": 279575,
+     "neg": 2830,
+     "tailLoss": 1555
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m pctB in [1.03,1.1)",
+    "split": "test",
+    "removed": {
+     "n": 261,
+     "good": 53,
+     "covlow": 84,
+     "giveup": 93,
+     "tail": 31,
+     "bad": 124,
+     "pnl": 6143,
+     "neg": 94,
+     "tailLoss": 24
+    },
+    "kept": {
+     "n": 6543,
+     "good": 1092,
+     "covlow": 2563,
+     "giveup": 2004,
+     "tail": 884,
+     "bad": 2888,
+     "pnl": 203630,
+     "neg": 2163,
+     "tailLoss": 720
+    },
+    "rand": {
+     "mean": 8139.815,
+     "p5": 82,
+     "p95": 16514,
+     "pLE": 0.352
+    }
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "train",
+    "removed": {
+     "n": 915,
+     "good": 46,
+     "covlow": 404,
+     "giveup": 239,
+     "tail": 226,
+     "bad": 465,
+     "pnl": -4445,
+     "neg": 297,
+     "tailLoss": 188
+    },
+    "kept": {
+     "n": 9357,
+     "good": 901,
+     "covlow": 4302,
+     "giveup": 2375,
+     "tail": 1779,
+     "bad": 4154,
+     "pnl": 274130,
+     "neg": 2669,
+     "tailLoss": 1443
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "test",
+    "removed": {
+     "n": 629,
+     "good": 87,
+     "covlow": 269,
+     "giveup": 188,
+     "tail": 85,
+     "bad": 273,
+     "pnl": 39570,
+     "neg": 192,
+     "tailLoss": 68
+    },
+    "kept": {
+     "n": 6175,
+     "good": 1058,
+     "covlow": 2378,
+     "giveup": 1909,
+     "tail": 830,
+     "bad": 2739,
+     "pnl": 170203,
+     "neg": 2065,
+     "tailLoss": 676
+    },
+    "rand": {
+     "mean": 19394.1385,
+     "p5": 6968,
+     "p95": 31411,
+     "pLE": 0.997
+    }
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 916,
+     "good": 56,
+     "covlow": 393,
+     "giveup": 211,
+     "tail": 256,
+     "bad": 467,
+     "pnl": -16480,
+     "neg": 292,
+     "tailLoss": 204
+    },
+    "kept": {
+     "n": 9356,
+     "good": 891,
+     "covlow": 4313,
+     "giveup": 2403,
+     "tail": 1749,
+     "bad": 4152,
+     "pnl": 286165,
+     "neg": 2674,
+     "tailLoss": 1427
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 643,
+     "good": 75,
+     "covlow": 276,
+     "giveup": 168,
+     "tail": 124,
+     "bad": 292,
+     "pnl": -5131,
+     "neg": 217,
+     "tailLoss": 105
+    },
+    "kept": {
+     "n": 6161,
+     "good": 1070,
+     "covlow": 2371,
+     "giveup": 1929,
+     "tail": 791,
+     "bad": 2720,
+     "pnl": 214904,
+     "neg": 2040,
+     "tailLoss": 639
+    },
+    "rand": {
+     "mean": 19670.93,
+     "p5": 6982,
+     "p95": 32008,
+     "pLE": 0.0005
+    }
+   },
+   {
+    "rule": "zone 1m beyondPts in [-1,1.5)",
+    "split": "train",
+    "removed": {
+     "n": 490,
+     "good": 31,
+     "covlow": 207,
+     "giveup": 129,
+     "tail": 123,
+     "bad": 252,
+     "pnl": -4700,
+     "neg": 157,
+     "tailLoss": 95
+    },
+    "kept": {
+     "n": 9782,
+     "good": 916,
+     "covlow": 4499,
+     "giveup": 2485,
+     "tail": 1882,
+     "bad": 4367,
+     "pnl": 274385,
+     "neg": 2809,
+     "tailLoss": 1536
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m beyondPts in [-1,1.5)",
+    "split": "test",
+    "removed": {
+     "n": 210,
+     "good": 25,
+     "covlow": 77,
+     "giveup": 65,
+     "tail": 43,
+     "bad": 108,
+     "pnl": -21,
+     "neg": 78,
+     "tailLoss": 35
+    },
+    "kept": {
+     "n": 6594,
+     "good": 1120,
+     "covlow": 2570,
+     "giveup": 2032,
+     "tail": 872,
+     "bad": 2904,
+     "pnl": 209794,
+     "neg": 2179,
+     "tailLoss": 709
+    },
+    "rand": {
+     "mean": 6667.772,
+     "p5": -266,
+     "p95": 13983,
+     "pLE": 0.0555
+    }
+   },
+   {
+    "rule": "zone 5m beyondPts in [-5,5)",
+    "split": "train",
+    "removed": {
+     "n": 1139,
+     "good": 71,
+     "covlow": 494,
+     "giveup": 280,
+     "tail": 294,
+     "bad": 574,
+     "pnl": -10675,
+     "neg": 361,
+     "tailLoss": 234
+    },
+    "kept": {
+     "n": 9133,
+     "good": 876,
+     "covlow": 4212,
+     "giveup": 2334,
+     "tail": 1711,
+     "bad": 4045,
+     "pnl": 280360,
+     "neg": 2605,
+     "tailLoss": 1397
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m beyondPts in [-5,5)",
+    "split": "test",
+    "removed": {
+     "n": 536,
+     "good": 65,
+     "covlow": 220,
+     "giveup": 146,
+     "tail": 105,
+     "bad": 251,
+     "pnl": 8970,
+     "neg": 182,
+     "tailLoss": 83
+    },
+    "kept": {
+     "n": 6268,
+     "good": 1080,
+     "covlow": 2427,
+     "giveup": 1951,
+     "tail": 810,
+     "bad": 2761,
+     "pnl": 200803,
+     "neg": 2075,
+     "tailLoss": 661
+    },
+    "rand": {
+     "mean": 16780.398,
+     "p5": 6277,
+     "p95": 27985,
+     "pLE": 0.117
+    }
+   },
+   {
+    "rule": "zone 15m beyondPts in [5,10)",
+    "split": "train",
+    "removed": {
+     "n": 360,
+     "good": 28,
+     "covlow": 170,
+     "giveup": 95,
+     "tail": 67,
+     "bad": 162,
+     "pnl": -1035,
+     "neg": 109,
+     "tailLoss": 54
+    },
+    "kept": {
+     "n": 9912,
+     "good": 919,
+     "covlow": 4536,
+     "giveup": 2519,
+     "tail": 1938,
+     "bad": 4457,
+     "pnl": 270720,
+     "neg": 2857,
+     "tailLoss": 1577
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m beyondPts in [5,10)",
+    "split": "test",
+    "removed": {
+     "n": 180,
+     "good": 25,
+     "covlow": 76,
+     "giveup": 64,
+     "tail": 15,
+     "bad": 79,
+     "pnl": 7095,
+     "neg": 60,
+     "tailLoss": 11
+    },
+    "kept": {
+     "n": 6624,
+     "good": 1120,
+     "covlow": 2571,
+     "giveup": 2033,
+     "tail": 900,
+     "bad": 2933,
+     "pnl": 202678,
+     "neg": 2197,
+     "tailLoss": 733
+    },
+    "rand": {
+     "mean": 5461.7245,
+     "p5": -1148,
+     "p95": 12344,
+     "pLE": 0.6535
+    }
+   },
+   {
+    "rule": "zone 60m beyondPts in [17.5,26.5)",
+    "split": "train",
+    "removed": {
+     "n": 530,
+     "good": 30,
+     "covlow": 259,
+     "giveup": 120,
+     "tail": 121,
+     "bad": 241,
+     "pnl": -5345,
+     "neg": 145,
+     "tailLoss": 99
+    },
+    "kept": {
+     "n": 9742,
+     "good": 917,
+     "covlow": 4447,
+     "giveup": 2494,
+     "tail": 1884,
+     "bad": 4378,
+     "pnl": 275030,
+     "neg": 2821,
+     "tailLoss": 1532
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m beyondPts in [17.5,26.5)",
+    "split": "test",
+    "removed": {
+     "n": 242,
+     "good": 19,
+     "covlow": 119,
+     "giveup": 73,
+     "tail": 31,
+     "bad": 104,
+     "pnl": 9207,
+     "neg": 76,
+     "tailLoss": 25
+    },
+    "kept": {
+     "n": 6562,
+     "good": 1126,
+     "covlow": 2528,
+     "giveup": 2024,
+     "tail": 884,
+     "bad": 2908,
+     "pnl": 200566,
+     "neg": 2181,
+     "tailLoss": 719
+    },
+    "rand": {
+     "mean": 7376.136,
+     "p5": -333,
+     "p95": 15015,
+     "pLE": 0.657
+    }
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "train",
+    "removed": {
+     "n": 1007,
+     "good": 74,
+     "covlow": 444,
+     "giveup": 235,
+     "tail": 254,
+     "bad": 489,
+     "pnl": 1735,
+     "neg": 306,
+     "tailLoss": 209
+    },
+    "kept": {
+     "n": 9265,
+     "good": 873,
+     "covlow": 4262,
+     "giveup": 2379,
+     "tail": 1751,
+     "bad": 4130,
+     "pnl": 267950,
+     "neg": 2660,
+     "tailLoss": 1422
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "test",
+    "removed": {
+     "n": 745,
+     "good": 120,
+     "covlow": 263,
+     "giveup": 227,
+     "tail": 135,
+     "bad": 362,
+     "pnl": 4169,
+     "neg": 261,
+     "tailLoss": 105
+    },
+    "kept": {
+     "n": 6059,
+     "good": 1025,
+     "covlow": 2384,
+     "giveup": 1870,
+     "tail": 780,
+     "bad": 2650,
+     "pnl": 205604,
+     "neg": 1996,
+     "tailLoss": 639
+    },
+    "rand": {
+     "mean": 22889.5875,
+     "p5": 8684,
+     "p95": 36363,
+     "pLE": 0.0095
+    }
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "train",
+    "removed": {
+     "n": 706,
+     "good": 48,
+     "covlow": 337,
+     "giveup": 136,
+     "tail": 185,
+     "bad": 321,
+     "pnl": 5405,
+     "neg": 209,
+     "tailLoss": 150
+    },
+    "kept": {
+     "n": 9566,
+     "good": 899,
+     "covlow": 4369,
+     "giveup": 2478,
+     "tail": 1820,
+     "bad": 4298,
+     "pnl": 264280,
+     "neg": 2757,
+     "tailLoss": 1481
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "test",
+    "removed": {
+     "n": 283,
+     "good": 40,
+     "covlow": 105,
+     "giveup": 78,
+     "tail": 60,
+     "bad": 138,
+     "pnl": -924,
+     "neg": 92,
+     "tailLoss": 46
+    },
+    "kept": {
+     "n": 6521,
+     "good": 1105,
+     "covlow": 2542,
+     "giveup": 2019,
+     "tail": 855,
+     "bad": 2874,
+     "pnl": 210697,
+     "neg": 2165,
+     "tailLoss": 698
+    },
+    "rand": {
+     "mean": 8514.4365,
+     "p5": 476,
+     "p95": 16670,
+     "pLE": 0.027
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 916,
+     "good": 56,
+     "covlow": 393,
+     "giveup": 211,
+     "tail": 256,
+     "bad": 467,
+     "pnl": -16480,
+     "neg": 292,
+     "tailLoss": 204
+    },
+    "kept": {
+     "n": 9356,
+     "good": 891,
+     "covlow": 4313,
+     "giveup": 2403,
+     "tail": 1749,
+     "bad": 4152,
+     "pnl": 286165,
+     "neg": 2674,
+     "tailLoss": 1427
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 643,
+     "good": 75,
+     "covlow": 276,
+     "giveup": 168,
+     "tail": 124,
+     "bad": 292,
+     "pnl": -5131,
+     "neg": 217,
+     "tailLoss": 105
+    },
+    "kept": {
+     "n": 6161,
+     "good": 1070,
+     "covlow": 2371,
+     "giveup": 1929,
+     "tail": 791,
+     "bad": 2720,
+     "pnl": 214904,
+     "neg": 2040,
+     "tailLoss": 639
+    },
+    "rand": {
+     "mean": 19670.93,
+     "p5": 6982,
+     "p95": 32008,
+     "pLE": 0.0005
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "train",
+    "removed": {
+     "n": 1454,
+     "good": 121,
+     "covlow": 611,
+     "giveup": 369,
+     "tail": 353,
+     "bad": 722,
+     "pnl": -14415,
+     "neg": 454,
+     "tailLoss": 285
+    },
+    "kept": {
+     "n": 8818,
+     "good": 826,
+     "covlow": 4095,
+     "giveup": 2245,
+     "tail": 1652,
+     "bad": 3897,
+     "pnl": 284100,
+     "neg": 2512,
+     "tailLoss": 1346
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "test",
+    "removed": {
+     "n": 972,
+     "good": 131,
+     "covlow": 381,
+     "giveup": 284,
+     "tail": 176,
+     "bad": 460,
+     "pnl": -7283,
+     "neg": 356,
+     "tailLoss": 150
+    },
+    "kept": {
+     "n": 5832,
+     "good": 1014,
+     "covlow": 2266,
+     "giveup": 1813,
+     "tail": 739,
+     "bad": 2552,
+     "pnl": 217056,
+     "neg": 1901,
+     "tailLoss": 594
+    },
+    "rand": {
+     "mean": 29649.743,
+     "p5": 14713,
+     "p95": 44979,
+     "pLE": 0
+    }
+   },
+   {
+    "rule": "OR [1m 1.2, 5m 1.15, 15m off, 60m off]",
+    "split": "train",
+    "removed": {
+     "n": 311,
+     "good": 49,
+     "covlow": 113,
+     "giveup": 100,
+     "tail": 49,
+     "bad": 149,
+     "pnl": 4470,
+     "neg": 99,
+     "tailLoss": 38
+    },
+    "kept": {
+     "n": 9961,
+     "good": 898,
+     "covlow": 4593,
+     "giveup": 2514,
+     "tail": 1956,
+     "bad": 4470,
+     "pnl": 265215,
+     "neg": 2867,
+     "tailLoss": 1593
+    },
+    "rand": null
+   },
+   {
+    "rule": "OR [1m 1.2, 5m 1.15, 15m off, 60m off]",
+    "split": "test",
+    "removed": {
+     "n": 216,
+     "good": 56,
+     "covlow": 69,
+     "giveup": 71,
+     "tail": 20,
+     "bad": 91,
+     "pnl": 7019,
+     "neg": 75,
+     "tailLoss": 15
+    },
+    "kept": {
+     "n": 6588,
+     "good": 1089,
+     "covlow": 2578,
+     "giveup": 2026,
+     "tail": 895,
+     "bad": 2921,
+     "pnl": 202754,
+     "neg": 2182,
+     "tailLoss": 729
+    },
+    "rand": {
+     "mean": 6630.8745,
+     "p5": -282,
+     "p95": 13783,
+     "pLE": 0.5395
+    }
+   },
+   {
+    "rule": "count>=2 [1m 0.95, 5m 1.4, 15m off, 60m 0.9]",
+    "split": "train",
+    "removed": {
+     "n": 763,
+     "good": 83,
+     "covlow": 326,
+     "giveup": 200,
+     "tail": 154,
+     "bad": 354,
+     "pnl": -660,
+     "neg": 225,
+     "tailLoss": 124
+    },
+    "kept": {
+     "n": 9509,
+     "good": 864,
+     "covlow": 4380,
+     "giveup": 2414,
+     "tail": 1851,
+     "bad": 4265,
+     "pnl": 270345,
+     "neg": 2741,
+     "tailLoss": 1507
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=2 [1m 0.95, 5m 1.4, 15m off, 60m 0.9]",
+    "split": "test",
+    "removed": {
+     "n": 377,
+     "good": 55,
+     "covlow": 139,
+     "giveup": 123,
+     "tail": 60,
+     "bad": 183,
+     "pnl": 1400,
+     "neg": 146,
+     "tailLoss": 51
+    },
+    "kept": {
+     "n": 6427,
+     "good": 1090,
+     "covlow": 2508,
+     "giveup": 1974,
+     "tail": 855,
+     "bad": 2829,
+     "pnl": 208373,
+     "neg": 2111,
+     "tailLoss": 693
+    },
+    "rand": {
+     "mean": 11719.587,
+     "p5": 2095,
+     "p95": 21317,
+     "pLE": 0.033
+    }
+   },
+   {
+    "rule": "count>=3 [1m 0.85, 5m 1.3, 15m 1.2, 60m 0.95]",
+    "split": "train",
+    "removed": {
+     "n": 317,
+     "good": 60,
+     "covlow": 130,
+     "giveup": 91,
+     "tail": 36,
+     "bad": 127,
+     "pnl": -1840,
+     "neg": 93,
+     "tailLoss": 34
+    },
+    "kept": {
+     "n": 9955,
+     "good": 887,
+     "covlow": 4576,
+     "giveup": 2523,
+     "tail": 1969,
+     "bad": 4492,
+     "pnl": 271525,
+     "neg": 2873,
+     "tailLoss": 1597
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=3 [1m 0.85, 5m 1.3, 15m 1.2, 60m 0.95]",
+    "split": "test",
+    "removed": {
+     "n": 166,
+     "good": 38,
+     "covlow": 54,
+     "giveup": 65,
+     "tail": 9,
+     "bad": 74,
+     "pnl": 3333,
+     "neg": 61,
+     "tailLoss": 8
+    },
+    "kept": {
+     "n": 6638,
+     "good": 1107,
+     "covlow": 2593,
+     "giveup": 2032,
+     "tail": 906,
+     "bad": 2938,
+     "pnl": 206440,
+     "neg": 2196,
+     "tailLoss": 736
+    },
+    "rand": {
+     "mean": 5250.4815,
+     "p5": -1100,
+     "p95": 11730,
+     "pLE": 0.314
+    }
+   },
+   {
+    "rule": "count>=4 [1m 0.85, 5m 0.95, 15m 0.8, 60m 0.95]",
+    "split": "train",
+    "removed": {
+     "n": 663,
+     "good": 81,
+     "covlow": 279,
+     "giveup": 178,
+     "tail": 125,
+     "bad": 303,
+     "pnl": -3405,
+     "neg": 203,
+     "tailLoss": 108
+    },
+    "kept": {
+     "n": 9609,
+     "good": 866,
+     "covlow": 4427,
+     "giveup": 2436,
+     "tail": 1880,
+     "bad": 4316,
+     "pnl": 273090,
+     "neg": 2763,
+     "tailLoss": 1523
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=4 [1m 0.85, 5m 0.95, 15m 0.8, 60m 0.95]",
+    "split": "test",
+    "removed": {
+     "n": 347,
+     "good": 66,
+     "covlow": 122,
+     "giveup": 115,
+     "tail": 44,
+     "bad": 159,
+     "pnl": 2537,
+     "neg": 129,
+     "tailLoss": 39
+    },
+    "kept": {
+     "n": 6457,
+     "good": 1079,
+     "covlow": 2525,
+     "giveup": 1982,
+     "tail": 871,
+     "bad": 2853,
+     "pnl": 207236,
+     "neg": 2128,
+     "tailLoss": 705
+    },
+    "rand": {
+     "mean": 10599.447,
+     "p5": 1649,
+     "p95": 19677,
+     "pLE": 0.07
+    }
+   }
+  ]
+ },
+ "v7-20": {
+  "with-60m": [
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "train",
+    "removed": {
+     "n": 4820,
+     "good": 535,
+     "covlow": 1731,
+     "giveup": 1668,
+     "tail": 886,
+     "bad": 2554,
+     "pnl": 380690,
+     "neg": 1737,
+     "tailLoss": 740
+    },
+    "kept": {
+     "n": 1643,
+     "good": 191,
+     "covlow": 540,
+     "giveup": 626,
+     "tail": 286,
+     "bad": 912,
+     "pnl": 145520,
+     "neg": 663,
+     "tailLoss": 218
+    },
+    "rand": null
+   },
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "test",
+    "removed": {
+     "n": 2737,
+     "good": 345,
+     "covlow": 903,
+     "giveup": 1125,
+     "tail": 364,
+     "bad": 1489,
+     "pnl": 182558,
+     "neg": 1229,
+     "tailLoss": 312
+    },
+    "kept": {
+     "n": 1090,
+     "good": 128,
+     "covlow": 371,
+     "giveup": 463,
+     "tail": 128,
+     "bad": 591,
+     "pnl": 94142,
+     "neg": 473,
+     "tailLoss": 98
+    },
+    "rand": {
+     "mean": 198463.533,
+     "p5": 172348,
+     "p95": 223384,
+     "pLE": 0.1475
+    }
+   },
+   {
+    "rule": "single 1m pctB>=1.05",
+    "split": "train",
+    "removed": {
+     "n": 252,
+     "good": 44,
+     "covlow": 81,
+     "giveup": 83,
+     "tail": 44,
+     "bad": 127,
+     "pnl": 27365,
+     "neg": 87,
+     "tailLoss": 35
+    },
+    "kept": {
+     "n": 6211,
+     "good": 682,
+     "covlow": 2190,
+     "giveup": 2211,
+     "tail": 1128,
+     "bad": 3339,
+     "pnl": 498845,
+     "neg": 2313,
+     "tailLoss": 923
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m pctB>=1.05",
+    "split": "test",
+    "removed": {
+     "n": 146,
+     "good": 24,
+     "covlow": 41,
+     "giveup": 57,
+     "tail": 24,
+     "bad": 81,
+     "pnl": 5785,
+     "neg": 64,
+     "tailLoss": 19
+    },
+    "kept": {
+     "n": 3681,
+     "good": 449,
+     "covlow": 1233,
+     "giveup": 1531,
+     "tail": 468,
+     "bad": 1999,
+     "pnl": 270915,
+     "neg": 1638,
+     "tailLoss": 391
+    },
+    "rand": {
+     "mean": 10723.6985,
+     "p5": 52,
+     "p95": 21686,
+     "pLE": 0.2215
+    }
+   },
+   {
+    "rule": "single 5m pctB>=1.05",
+    "split": "train",
+    "removed": {
+     "n": 386,
+     "good": 50,
+     "covlow": 121,
+     "giveup": 134,
+     "tail": 81,
+     "bad": 215,
+     "pnl": 1600,
+     "neg": 165,
+     "tailLoss": 70
+    },
+    "kept": {
+     "n": 6077,
+     "good": 676,
+     "covlow": 2150,
+     "giveup": 2160,
+     "tail": 1091,
+     "bad": 3251,
+     "pnl": 524610,
+     "neg": 2235,
+     "tailLoss": 888
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m pctB>=1.05",
+    "split": "test",
+    "removed": {
+     "n": 198,
+     "good": 29,
+     "covlow": 59,
+     "giveup": 86,
+     "tail": 24,
+     "bad": 110,
+     "pnl": 11490,
+     "neg": 95,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 3629,
+     "good": 444,
+     "covlow": 1215,
+     "giveup": 1502,
+     "tail": 468,
+     "bad": 1970,
+     "pnl": 265210,
+     "neg": 1607,
+     "tailLoss": 392
+    },
+    "rand": {
+     "mean": 14065.141,
+     "p5": 1941,
+     "p95": 26470,
+     "pLE": 0.362
+    }
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "train",
+    "removed": {
+     "n": 201,
+     "good": 36,
+     "covlow": 72,
+     "giveup": 77,
+     "tail": 16,
+     "bad": 93,
+     "pnl": 24685,
+     "neg": 70,
+     "tailLoss": 13
+    },
+    "kept": {
+     "n": 6262,
+     "good": 690,
+     "covlow": 2199,
+     "giveup": 2217,
+     "tail": 1156,
+     "bad": 3373,
+     "pnl": 501525,
+     "neg": 2330,
+     "tailLoss": 945
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "test",
+    "removed": {
+     "n": 85,
+     "good": 10,
+     "covlow": 30,
+     "giveup": 39,
+     "tail": 6,
+     "bad": 45,
+     "pnl": 625,
+     "neg": 44,
+     "tailLoss": 6
+    },
+    "kept": {
+     "n": 3742,
+     "good": 463,
+     "covlow": 1244,
+     "giveup": 1549,
+     "tail": 486,
+     "bad": 2035,
+     "pnl": 276075,
+     "neg": 1658,
+     "tailLoss": 404
+    },
+    "rand": {
+     "mean": 6458.658,
+     "p5": -1885,
+     "p95": 14695,
+     "pLE": 0.1225
+    }
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "train",
+    "removed": {
+     "n": 242,
+     "good": 36,
+     "covlow": 93,
+     "giveup": 89,
+     "tail": 24,
+     "bad": 113,
+     "pnl": 24315,
+     "neg": 77,
+     "tailLoss": 20
+    },
+    "kept": {
+     "n": 6221,
+     "good": 690,
+     "covlow": 2178,
+     "giveup": 2205,
+     "tail": 1148,
+     "bad": 3353,
+     "pnl": 501895,
+     "neg": 2323,
+     "tailLoss": 938
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "test",
+    "removed": {
+     "n": 94,
+     "good": 15,
+     "covlow": 33,
+     "giveup": 41,
+     "tail": 5,
+     "bad": 46,
+     "pnl": 5370,
+     "neg": 45,
+     "tailLoss": 5
+    },
+    "kept": {
+     "n": 3733,
+     "good": 458,
+     "covlow": 1241,
+     "giveup": 1547,
+     "tail": 487,
+     "bad": 2034,
+     "pnl": 271330,
+     "neg": 1657,
+     "tailLoss": 405
+    },
+    "rand": {
+     "mean": 6979.6095,
+     "p5": -1549,
+     "p95": 15539,
+     "pLE": 0.3755
+    }
+   },
+   {
+    "rule": "single 1m beyondPts>=2.5",
+    "split": "train",
+    "removed": {
+     "n": 207,
+     "good": 41,
+     "covlow": 67,
+     "giveup": 71,
+     "tail": 28,
+     "bad": 99,
+     "pnl": 25570,
+     "neg": 69,
+     "tailLoss": 22
+    },
+    "kept": {
+     "n": 6256,
+     "good": 685,
+     "covlow": 2204,
+     "giveup": 2223,
+     "tail": 1144,
+     "bad": 3367,
+     "pnl": 500640,
+     "neg": 2331,
+     "tailLoss": 936
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m beyondPts>=2.5",
+    "split": "test",
+    "removed": {
+     "n": 140,
+     "good": 24,
+     "covlow": 44,
+     "giveup": 51,
+     "tail": 21,
+     "bad": 72,
+     "pnl": 7900,
+     "neg": 58,
+     "tailLoss": 16
+    },
+    "kept": {
+     "n": 3687,
+     "good": 449,
+     "covlow": 1230,
+     "giveup": 1537,
+     "tail": 471,
+     "bad": 2008,
+     "pnl": 268800,
+     "neg": 1644,
+     "tailLoss": 394
+    },
+    "rand": {
+     "mean": 9954.626,
+     "p5": -510,
+     "p95": 20281,
+     "pLE": 0.3745
+    }
+   },
+   {
+    "rule": "single 5m beyondPts>=-0.5",
+    "split": "train",
+    "removed": {
+     "n": 673,
+     "good": 90,
+     "covlow": 224,
+     "giveup": 235,
+     "tail": 124,
+     "bad": 359,
+     "pnl": 8765,
+     "neg": 279,
+     "tailLoss": 109
+    },
+    "kept": {
+     "n": 5790,
+     "good": 636,
+     "covlow": 2047,
+     "giveup": 2059,
+     "tail": 1048,
+     "bad": 3107,
+     "pnl": 517445,
+     "neg": 2121,
+     "tailLoss": 849
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m beyondPts>=-0.5",
+    "split": "test",
+    "removed": {
+     "n": 328,
+     "good": 42,
+     "covlow": 105,
+     "giveup": 139,
+     "tail": 42,
+     "bad": 181,
+     "pnl": 14850,
+     "neg": 158,
+     "tailLoss": 35
+    },
+    "kept": {
+     "n": 3499,
+     "good": 431,
+     "covlow": 1169,
+     "giveup": 1449,
+     "tail": 450,
+     "bad": 1899,
+     "pnl": 261850,
+     "neg": 1544,
+     "tailLoss": 375
+    },
+    "rand": {
+     "mean": 24026.0435,
+     "p5": 8256,
+     "p95": 39630,
+     "pLE": 0.168
+    }
+   },
+   {
+    "rule": "single 15m beyondPts>=42.5",
+    "split": "train",
+    "removed": {
+     "n": 194,
+     "good": 37,
+     "covlow": 68,
+     "giveup": 70,
+     "tail": 19,
+     "bad": 89,
+     "pnl": 17055,
+     "neg": 70,
+     "tailLoss": 16
+    },
+    "kept": {
+     "n": 6269,
+     "good": 689,
+     "covlow": 2203,
+     "giveup": 2224,
+     "tail": 1153,
+     "bad": 3377,
+     "pnl": 509155,
+     "neg": 2330,
+     "tailLoss": 942
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m beyondPts>=42.5",
+    "split": "test",
+    "removed": {
+     "n": 184,
+     "good": 30,
+     "covlow": 52,
+     "giveup": 92,
+     "tail": 10,
+     "bad": 102,
+     "pnl": 9770,
+     "neg": 100,
+     "tailLoss": 10
+    },
+    "kept": {
+     "n": 3643,
+     "good": 443,
+     "covlow": 1222,
+     "giveup": 1496,
+     "tail": 482,
+     "bad": 1978,
+     "pnl": 266930,
+     "neg": 1602,
+     "tailLoss": 400
+    },
+    "rand": {
+     "mean": 13081.5865,
+     "p5": 920,
+     "p95": 24988,
+     "pLE": 0.32
+    }
+   },
+   {
+    "rule": "single 60m beyondPts>=118",
+    "split": "train",
+    "removed": {
+     "n": 194,
+     "good": 38,
+     "covlow": 67,
+     "giveup": 67,
+     "tail": 22,
+     "bad": 89,
+     "pnl": 18305,
+     "neg": 61,
+     "tailLoss": 19
+    },
+    "kept": {
+     "n": 6269,
+     "good": 688,
+     "covlow": 2204,
+     "giveup": 2227,
+     "tail": 1150,
+     "bad": 3377,
+     "pnl": 507905,
+     "neg": 2339,
+     "tailLoss": 939
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m beyondPts>=118",
+    "split": "test",
+    "removed": {
+     "n": 306,
+     "good": 66,
+     "covlow": 82,
+     "giveup": 144,
+     "tail": 14,
+     "bad": 158,
+     "pnl": 24865,
+     "neg": 146,
+     "tailLoss": 14
+    },
+    "kept": {
+     "n": 3521,
+     "good": 407,
+     "covlow": 1192,
+     "giveup": 1444,
+     "tail": 478,
+     "bad": 1922,
+     "pnl": 251835,
+     "neg": 1556,
+     "tailLoss": 396
+    },
+    "rand": {
+     "mean": 21782.439,
+     "p5": 7183,
+     "p95": 36649,
+     "pLE": 0.6365
+    }
+   },
+   {
+    "rule": "zone 1m pctB in [0.9,0.95)",
+    "split": "train",
+    "removed": {
+     "n": 255,
+     "good": 23,
+     "covlow": 79,
+     "giveup": 95,
+     "tail": 58,
+     "bad": 153,
+     "pnl": -2355,
+     "neg": 115,
+     "tailLoss": 53
+    },
+    "kept": {
+     "n": 6208,
+     "good": 703,
+     "covlow": 2192,
+     "giveup": 2199,
+     "tail": 1114,
+     "bad": 3313,
+     "pnl": 528565,
+     "neg": 2285,
+     "tailLoss": 905
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m pctB in [0.9,0.95)",
+    "split": "test",
+    "removed": {
+     "n": 168,
+     "good": 25,
+     "covlow": 53,
+     "giveup": 74,
+     "tail": 16,
+     "bad": 90,
+     "pnl": 12057,
+     "neg": 71,
+     "tailLoss": 13
+    },
+    "kept": {
+     "n": 3659,
+     "good": 448,
+     "covlow": 1221,
+     "giveup": 1514,
+     "tail": 476,
+     "bad": 1990,
+     "pnl": 264643,
+     "neg": 1631,
+     "tailLoss": 397
+    },
+    "rand": {
+     "mean": 11857.584,
+     "p5": 73,
+     "p95": 23604,
+     "pLE": 0.5115
+    }
+   },
+   {
+    "rule": "zone 5m pctB in [1.05,1.2)",
+    "split": "train",
+    "removed": {
+     "n": 309,
+     "good": 35,
+     "covlow": 98,
+     "giveup": 108,
+     "tail": 68,
+     "bad": 176,
+     "pnl": -6605,
+     "neg": 135,
+     "tailLoss": 60
+    },
+    "kept": {
+     "n": 6154,
+     "good": 691,
+     "covlow": 2173,
+     "giveup": 2186,
+     "tail": 1104,
+     "bad": 3290,
+     "pnl": 532815,
+     "neg": 2265,
+     "tailLoss": 898
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m pctB in [1.05,1.2)",
+    "split": "test",
+    "removed": {
+     "n": 152,
+     "good": 24,
+     "covlow": 48,
+     "giveup": 63,
+     "tail": 17,
+     "bad": 80,
+     "pnl": 9760,
+     "neg": 70,
+     "tailLoss": 12
+    },
+    "kept": {
+     "n": 3675,
+     "good": 449,
+     "covlow": 1226,
+     "giveup": 1525,
+     "tail": 475,
+     "bad": 2000,
+     "pnl": 266940,
+     "neg": 1632,
+     "tailLoss": 398
+    },
+    "rand": {
+     "mean": 11318.0665,
+     "p5": 325,
+     "p95": 22321,
+     "pLE": 0.409
+    }
+   },
+   {
+    "rule": "zone 15m pctB in [0.97,1)",
+    "split": "train",
+    "removed": {
+     "n": 248,
+     "good": 27,
+     "covlow": 82,
+     "giveup": 93,
+     "tail": 46,
+     "bad": 139,
+     "pnl": 3955,
+     "neg": 95,
+     "tailLoss": 41
+    },
+    "kept": {
+     "n": 6215,
+     "good": 699,
+     "covlow": 2189,
+     "giveup": 2201,
+     "tail": 1126,
+     "bad": 3327,
+     "pnl": 522255,
+     "neg": 2305,
+     "tailLoss": 917
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m pctB in [0.97,1)",
+    "split": "test",
+    "removed": {
+     "n": 120,
+     "good": 14,
+     "covlow": 31,
+     "giveup": 62,
+     "tail": 13,
+     "bad": 75,
+     "pnl": 1175,
+     "neg": 64,
+     "tailLoss": 12
+    },
+    "kept": {
+     "n": 3707,
+     "good": 459,
+     "covlow": 1243,
+     "giveup": 1526,
+     "tail": 479,
+     "bad": 2005,
+     "pnl": 275525,
+     "neg": 1638,
+     "tailLoss": 398
+    },
+    "rand": {
+     "mean": 8571.6825,
+     "p5": -1071,
+     "p95": 18660,
+     "pLE": 0.1065
+    }
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1)",
+    "split": "train",
+    "removed": {
+     "n": 293,
+     "good": 27,
+     "covlow": 83,
+     "giveup": 113,
+     "tail": 70,
+     "bad": 183,
+     "pnl": 4835,
+     "neg": 127,
+     "tailLoss": 59
+    },
+    "kept": {
+     "n": 6170,
+     "good": 699,
+     "covlow": 2188,
+     "giveup": 2181,
+     "tail": 1102,
+     "bad": 3283,
+     "pnl": 521375,
+     "neg": 2273,
+     "tailLoss": 899
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m pctB in [0.97,1)",
+    "split": "test",
+    "removed": {
+     "n": 235,
+     "good": 26,
+     "covlow": 82,
+     "giveup": 90,
+     "tail": 37,
+     "bad": 127,
+     "pnl": 15935,
+     "neg": 106,
+     "tailLoss": 30
+    },
+    "kept": {
+     "n": 3592,
+     "good": 447,
+     "covlow": 1192,
+     "giveup": 1498,
+     "tail": 455,
+     "bad": 1953,
+     "pnl": 260765,
+     "neg": 1596,
+     "tailLoss": 380
+    },
+    "rand": {
+     "mean": 16909.329,
+     "p5": 2945,
+     "p95": 30198,
+     "pLE": 0.441
+    }
+   },
+   {
+    "rule": "zone 1m beyondPts in [0,2.5)",
+    "split": "train",
+    "removed": {
+     "n": 212,
+     "good": 26,
+     "covlow": 76,
+     "giveup": 62,
+     "tail": 48,
+     "bad": 110,
+     "pnl": 10380,
+     "neg": 82,
+     "tailLoss": 38
+    },
+    "kept": {
+     "n": 6251,
+     "good": 700,
+     "covlow": 2195,
+     "giveup": 2232,
+     "tail": 1124,
+     "bad": 3356,
+     "pnl": 515830,
+     "neg": 2318,
+     "tailLoss": 920
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m beyondPts in [0,2.5)",
+    "split": "test",
+    "removed": {
+     "n": 77,
+     "good": 10,
+     "covlow": 18,
+     "giveup": 35,
+     "tail": 14,
+     "bad": 49,
+     "pnl": 887,
+     "neg": 41,
+     "tailLoss": 13
+    },
+    "kept": {
+     "n": 3750,
+     "good": 463,
+     "covlow": 1256,
+     "giveup": 1553,
+     "tail": 478,
+     "bad": 2031,
+     "pnl": 275813,
+     "neg": 1661,
+     "tailLoss": 397
+    },
+    "rand": {
+     "mean": 5473.4905,
+     "p5": -2039,
+     "p95": 13235,
+     "pLE": 0.1695
+    }
+   },
+   {
+    "rule": "zone 5m beyondPts in [0,10)",
+    "split": "train",
+    "removed": {
+     "n": 440,
+     "good": 53,
+     "covlow": 135,
+     "giveup": 159,
+     "tail": 93,
+     "bad": 252,
+     "pnl": -13850,
+     "neg": 199,
+     "tailLoss": 83
+    },
+    "kept": {
+     "n": 6023,
+     "good": 673,
+     "covlow": 2136,
+     "giveup": 2135,
+     "tail": 1079,
+     "bad": 3214,
+     "pnl": 540060,
+     "neg": 2201,
+     "tailLoss": 875
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m beyondPts in [0,10)",
+    "split": "test",
+    "removed": {
+     "n": 184,
+     "good": 15,
+     "covlow": 64,
+     "giveup": 72,
+     "tail": 33,
+     "bad": 105,
+     "pnl": 65,
+     "neg": 87,
+     "tailLoss": 27
+    },
+    "kept": {
+     "n": 3643,
+     "good": 458,
+     "covlow": 1210,
+     "giveup": 1516,
+     "tail": 459,
+     "bad": 1975,
+     "pnl": 276635,
+     "neg": 1615,
+     "tailLoss": 383
+    },
+    "rand": {
+     "mean": 13081.5865,
+     "p5": 920,
+     "p95": 24988,
+     "pLE": 0.0405
+    }
+   },
+   {
+    "rule": "zone 15m beyondPts in [-17.5,-15)",
+    "split": "train",
+    "removed": {
+     "n": 212,
+     "good": 19,
+     "covlow": 67,
+     "giveup": 78,
+     "tail": 48,
+     "bad": 126,
+     "pnl": 3840,
+     "neg": 84,
+     "tailLoss": 37
+    },
+    "kept": {
+     "n": 6251,
+     "good": 707,
+     "covlow": 2204,
+     "giveup": 2216,
+     "tail": 1124,
+     "bad": 3340,
+     "pnl": 522370,
+     "neg": 2316,
+     "tailLoss": 921
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m beyondPts in [-17.5,-15)",
+    "split": "test",
+    "removed": {
+     "n": 85,
+     "good": 13,
+     "covlow": 35,
+     "giveup": 31,
+     "tail": 6,
+     "bad": 37,
+     "pnl": 14250,
+     "neg": 31,
+     "tailLoss": 5
+    },
+    "kept": {
+     "n": 3742,
+     "good": 460,
+     "covlow": 1239,
+     "giveup": 1557,
+     "tail": 486,
+     "bad": 2043,
+     "pnl": 262450,
+     "neg": 1671,
+     "tailLoss": 405
+    },
+    "rand": {
+     "mean": 6458.658,
+     "p5": -1885,
+     "p95": 14695,
+     "pLE": 0.936
+    }
+   },
+   {
+    "rule": "zone 60m beyondPts in [-200,-60)",
+    "split": "train",
+    "removed": {
+     "n": 371,
+     "good": 47,
+     "covlow": 107,
+     "giveup": 170,
+     "tail": 47,
+     "bad": 217,
+     "pnl": 7375,
+     "neg": 185,
+     "tailLoss": 42
+    },
+    "kept": {
+     "n": 6092,
+     "good": 679,
+     "covlow": 2164,
+     "giveup": 2124,
+     "tail": 1125,
+     "bad": 3249,
+     "pnl": 518835,
+     "neg": 2215,
+     "tailLoss": 916
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m beyondPts in [-200,-60)",
+    "split": "test",
+    "removed": {
+     "n": 537,
+     "good": 79,
+     "covlow": 160,
+     "giveup": 247,
+     "tail": 51,
+     "bad": 298,
+     "pnl": 37888,
+     "neg": 245,
+     "tailLoss": 44
+    },
+    "kept": {
+     "n": 3290,
+     "good": 394,
+     "covlow": 1114,
+     "giveup": 1341,
+     "tail": 441,
+     "bad": 1782,
+     "pnl": 238812,
+     "neg": 1457,
+     "tailLoss": 366
+    },
+    "rand": {
+     "mean": 38530.639,
+     "p5": 18072,
+     "p95": 58708,
+     "pLE": 0.4705
+    }
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "train",
+    "removed": {
+     "n": 951,
+     "good": 92,
+     "covlow": 307,
+     "giveup": 358,
+     "tail": 194,
+     "bad": 552,
+     "pnl": 70185,
+     "neg": 370,
+     "tailLoss": 157
+    },
+    "kept": {
+     "n": 5512,
+     "good": 634,
+     "covlow": 1964,
+     "giveup": 1936,
+     "tail": 978,
+     "bad": 2914,
+     "pnl": 456025,
+     "neg": 2030,
+     "tailLoss": 801
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "test",
+    "removed": {
+     "n": 691,
+     "good": 83,
+     "covlow": 236,
+     "giveup": 263,
+     "tail": 109,
+     "bad": 372,
+     "pnl": 35149,
+     "neg": 303,
+     "tailLoss": 90
+    },
+    "kept": {
+     "n": 3136,
+     "good": 390,
+     "covlow": 1038,
+     "giveup": 1325,
+     "tail": 383,
+     "bad": 1708,
+     "pnl": 241551,
+     "neg": 1399,
+     "tailLoss": 320
+    },
+    "rand": {
+     "mean": 49706.641,
+     "p5": 28747,
+     "p95": 69940,
+     "pLE": 0.133
+    }
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "train",
+    "removed": {
+     "n": 593,
+     "good": 51,
+     "covlow": 203,
+     "giveup": 216,
+     "tail": 123,
+     "bad": 339,
+     "pnl": 43165,
+     "neg": 230,
+     "tailLoss": 95
+    },
+    "kept": {
+     "n": 5870,
+     "good": 675,
+     "covlow": 2068,
+     "giveup": 2078,
+     "tail": 1049,
+     "bad": 3127,
+     "pnl": 483045,
+     "neg": 2170,
+     "tailLoss": 863
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "test",
+    "removed": {
+     "n": 293,
+     "good": 26,
+     "covlow": 116,
+     "giveup": 106,
+     "tail": 45,
+     "bad": 151,
+     "pnl": 22088,
+     "neg": 121,
+     "tailLoss": 35
+    },
+    "kept": {
+     "n": 3534,
+     "good": 447,
+     "covlow": 1158,
+     "giveup": 1482,
+     "tail": 447,
+     "bad": 1929,
+     "pnl": 254612,
+     "neg": 1581,
+     "tailLoss": 375
+    },
+    "rand": {
+     "mean": 21288.089,
+     "p5": 6545,
+     "p95": 36245,
+     "pLE": 0.531
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 873,
+     "good": 87,
+     "covlow": 283,
+     "giveup": 307,
+     "tail": 196,
+     "bad": 503,
+     "pnl": 45965,
+     "neg": 350,
+     "tailLoss": 156
+    },
+    "kept": {
+     "n": 5590,
+     "good": 639,
+     "covlow": 1988,
+     "giveup": 1987,
+     "tail": 976,
+     "bad": 2963,
+     "pnl": 480245,
+     "neg": 2050,
+     "tailLoss": 802
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 590,
+     "good": 59,
+     "covlow": 200,
+     "giveup": 222,
+     "tail": 109,
+     "bad": 331,
+     "pnl": 29371,
+     "neg": 272,
+     "tailLoss": 88
+    },
+    "kept": {
+     "n": 3237,
+     "good": 414,
+     "covlow": 1074,
+     "giveup": 1366,
+     "tail": 383,
+     "bad": 1749,
+     "pnl": 247329,
+     "neg": 1430,
+     "tailLoss": 322
+    },
+    "rand": {
+     "mean": 42717.844,
+     "p5": 22668,
+     "p95": 63152,
+     "pLE": 0.1475
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "train",
+    "removed": {
+     "n": 1208,
+     "good": 134,
+     "covlow": 396,
+     "giveup": 419,
+     "tail": 259,
+     "bad": 678,
+     "pnl": 69380,
+     "neg": 484,
+     "tailLoss": 208
+    },
+    "kept": {
+     "n": 5255,
+     "good": 592,
+     "covlow": 1875,
+     "giveup": 1875,
+     "tail": 913,
+     "bad": 2788,
+     "pnl": 456830,
+     "neg": 1916,
+     "tailLoss": 750
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "test",
+    "removed": {
+     "n": 737,
+     "good": 83,
+     "covlow": 246,
+     "giveup": 277,
+     "tail": 131,
+     "bad": 408,
+     "pnl": 38563,
+     "neg": 337,
+     "tailLoss": 108
+    },
+    "kept": {
+     "n": 3090,
+     "good": 390,
+     "covlow": 1028,
+     "giveup": 1311,
+     "tail": 361,
+     "bad": 1672,
+     "pnl": 238137,
+     "neg": 1365,
+     "tailLoss": 302
+    },
+    "rand": {
+     "mean": 52595.1355,
+     "p5": 31600,
+     "p95": 73872,
+     "pLE": 0.138
+    }
+   },
+   {
+    "rule": "OR [1m 1.3, 5m 1.05, 15m off, 60m off]",
+    "split": "train",
+    "removed": {
+     "n": 391,
+     "good": 51,
+     "covlow": 124,
+     "giveup": 134,
+     "tail": 82,
+     "bad": 216,
+     "pnl": 850,
+     "neg": 167,
+     "tailLoss": 71
+    },
+    "kept": {
+     "n": 6072,
+     "good": 675,
+     "covlow": 2147,
+     "giveup": 2160,
+     "tail": 1090,
+     "bad": 3250,
+     "pnl": 525360,
+     "neg": 2233,
+     "tailLoss": 887
+    },
+    "rand": null
+   },
+   {
+    "rule": "OR [1m 1.3, 5m 1.05, 15m off, 60m off]",
+    "split": "test",
+    "removed": {
+     "n": 201,
+     "good": 30,
+     "covlow": 60,
+     "giveup": 87,
+     "tail": 24,
+     "bad": 111,
+     "pnl": 11745,
+     "neg": 96,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 3626,
+     "good": 443,
+     "covlow": 1214,
+     "giveup": 1501,
+     "tail": 468,
+     "bad": 1969,
+     "pnl": 264955,
+     "neg": 1606,
+     "tailLoss": 392
+    },
+    "rand": {
+     "mean": 14454.4075,
+     "p5": 2222,
+     "p95": 26852,
+     "pLE": 0.36
+    }
+   },
+   {
+    "rule": "count>=2 [1m 1.6, 5m 0.95, 15m off, 60m 1.4]",
+    "split": "train",
+    "removed": {
+     "n": 207,
+     "good": 24,
+     "covlow": 79,
+     "giveup": 73,
+     "tail": 31,
+     "bad": 104,
+     "pnl": -740,
+     "neg": 84,
+     "tailLoss": 29
+    },
+    "kept": {
+     "n": 6256,
+     "good": 702,
+     "covlow": 2192,
+     "giveup": 2221,
+     "tail": 1141,
+     "bad": 3362,
+     "pnl": 526950,
+     "neg": 2316,
+     "tailLoss": 929
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=2 [1m 1.6, 5m 0.95, 15m off, 60m 1.4]",
+    "split": "test",
+    "removed": {
+     "n": 68,
+     "good": 10,
+     "covlow": 23,
+     "giveup": 33,
+     "tail": 2,
+     "bad": 35,
+     "pnl": 4560,
+     "neg": 32,
+     "tailLoss": 2
+    },
+    "kept": {
+     "n": 3759,
+     "good": 463,
+     "covlow": 1251,
+     "giveup": 1555,
+     "tail": 490,
+     "bad": 2045,
+     "pnl": 272140,
+     "neg": 1670,
+     "tailLoss": 408
+    },
+    "rand": {
+     "mean": 4916.8455,
+     "p5": -2510,
+     "p95": 12630,
+     "pLE": 0.4565
+    }
+   },
+   {
+    "rule": "count>=3 [1m 1.2, 5m 0.95, 15m 0.95, 60m 1.4]",
+    "split": "train",
+    "removed": {
+     "n": 216,
+     "good": 25,
+     "covlow": 80,
+     "giveup": 77,
+     "tail": 34,
+     "bad": 111,
+     "pnl": -1830,
+     "neg": 88,
+     "tailLoss": 32
+    },
+    "kept": {
+     "n": 6247,
+     "good": 701,
+     "covlow": 2191,
+     "giveup": 2217,
+     "tail": 1138,
+     "bad": 3355,
+     "pnl": 528040,
+     "neg": 2312,
+     "tailLoss": 926
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=3 [1m 1.2, 5m 0.95, 15m 0.95, 60m 1.4]",
+    "split": "test",
+    "removed": {
+     "n": 71,
+     "good": 10,
+     "covlow": 23,
+     "giveup": 34,
+     "tail": 4,
+     "bad": 38,
+     "pnl": 2085,
+     "neg": 35,
+     "tailLoss": 4
+    },
+    "kept": {
+     "n": 3756,
+     "good": 463,
+     "covlow": 1251,
+     "giveup": 1554,
+     "tail": 488,
+     "bad": 2042,
+     "pnl": 274615,
+     "neg": 1667,
+     "tailLoss": 406
+    },
+    "rand": {
+     "mean": 5031.6805,
+     "p5": -2230,
+     "p95": 12575,
+     "pLE": 0.27
+    }
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 0.95, 15m 0.95, 60m 1.4]",
+    "split": "train",
+    "removed": {
+     "n": 201,
+     "good": 24,
+     "covlow": 74,
+     "giveup": 72,
+     "tail": 31,
+     "bad": 103,
+     "pnl": -1670,
+     "neg": 83,
+     "tailLoss": 29
+    },
+    "kept": {
+     "n": 6262,
+     "good": 702,
+     "covlow": 2197,
+     "giveup": 2222,
+     "tail": 1141,
+     "bad": 3363,
+     "pnl": 527880,
+     "neg": 2317,
+     "tailLoss": 929
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 0.95, 15m 0.95, 60m 1.4]",
+    "split": "test",
+    "removed": {
+     "n": 64,
+     "good": 8,
+     "covlow": 22,
+     "giveup": 32,
+     "tail": 2,
+     "bad": 34,
+     "pnl": 3480,
+     "neg": 31,
+     "tailLoss": 2
+    },
+    "kept": {
+     "n": 3763,
+     "good": 465,
+     "covlow": 1252,
+     "giveup": 1556,
+     "tail": 490,
+     "bad": 2046,
+     "pnl": 273220,
+     "neg": 1671,
+     "tailLoss": 408
+    },
+    "rand": {
+     "mean": 4738.937,
+     "p5": -2250,
+     "p95": 11675,
+     "pLE": 0.39
+    }
+   }
+  ]
+ },
+ "v6-10": {
+  "with-60m": [
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "train",
+    "removed": {
+     "n": 2928,
+     "good": 235,
+     "covlow": 1345,
+     "giveup": 773,
+     "tail": 575,
+     "bad": 1348,
+     "pnl": 81120,
+     "neg": 822,
+     "tailLoss": 447
+    },
+    "kept": {
+     "n": 1602,
+     "good": 160,
+     "covlow": 661,
+     "giveup": 457,
+     "tail": 324,
+     "bad": 781,
+     "pnl": 35830,
+     "neg": 520,
+     "tailLoss": 254
+    },
+    "rand": null
+   },
+   {
+    "rule": "REF 60m pctB>=0.9",
+    "split": "test",
+    "removed": {
+     "n": 1821,
+     "good": 265,
+     "covlow": 726,
+     "giveup": 577,
+     "tail": 253,
+     "bad": 830,
+     "pnl": 43231,
+     "neg": 642,
+     "tailLoss": 205
+    },
+    "kept": {
+     "n": 1132,
+     "good": 227,
+     "covlow": 429,
+     "giveup": 328,
+     "tail": 148,
+     "bad": 476,
+     "pnl": 58606,
+     "neg": 351,
+     "tailLoss": 110
+    },
+    "rand": {
+     "mean": 62543.428,
+     "p5": 49346,
+     "p95": 75648,
+     "pLE": 0.0055
+    }
+   },
+   {
+    "rule": "single 1m pctB>=0.9",
+    "split": "train",
+    "removed": {
+     "n": 789,
+     "good": 96,
+     "covlow": 323,
+     "giveup": 209,
+     "tail": 161,
+     "bad": 370,
+     "pnl": 4520,
+     "neg": 234,
+     "tailLoss": 121
+    },
+    "kept": {
+     "n": 3741,
+     "good": 299,
+     "covlow": 1683,
+     "giveup": 1021,
+     "tail": 738,
+     "bad": 1759,
+     "pnl": 112430,
+     "neg": 1108,
+     "tailLoss": 580
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m pctB>=0.9",
+    "split": "test",
+    "removed": {
+     "n": 494,
+     "good": 79,
+     "covlow": 186,
+     "giveup": 163,
+     "tail": 66,
+     "bad": 229,
+     "pnl": 20706,
+     "neg": 172,
+     "tailLoss": 51
+    },
+    "kept": {
+     "n": 2459,
+     "good": 413,
+     "covlow": 969,
+     "giveup": 742,
+     "tail": 335,
+     "bad": 1077,
+     "pnl": 81131,
+     "neg": 821,
+     "tailLoss": 264
+    },
+    "rand": {
+     "mean": 17066.1915,
+     "p5": 6857,
+     "p95": 27379,
+     "pLE": 0.7265
+    }
+   },
+   {
+    "rule": "single 5m pctB>=1.1",
+    "split": "train",
+    "removed": {
+     "n": 197,
+     "good": 35,
+     "covlow": 67,
+     "giveup": 63,
+     "tail": 32,
+     "bad": 95,
+     "pnl": -2340,
+     "neg": 68,
+     "tailLoss": 27
+    },
+    "kept": {
+     "n": 4333,
+     "good": 360,
+     "covlow": 1939,
+     "giveup": 1167,
+     "tail": 867,
+     "bad": 2034,
+     "pnl": 119290,
+     "neg": 1274,
+     "tailLoss": 674
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m pctB>=1.1",
+    "split": "test",
+    "removed": {
+     "n": 141,
+     "good": 24,
+     "covlow": 47,
+     "giveup": 48,
+     "tail": 22,
+     "bad": 70,
+     "pnl": 255,
+     "neg": 54,
+     "tailLoss": 17
+    },
+    "kept": {
+     "n": 2812,
+     "good": 468,
+     "covlow": 1108,
+     "giveup": 857,
+     "tail": 379,
+     "bad": 1236,
+     "pnl": 101582,
+     "neg": 939,
+     "tailLoss": 298
+    },
+    "rand": {
+     "mean": 4916.902,
+     "p5": -669,
+     "p95": 10765,
+     "pLE": 0.091
+    }
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "train",
+    "removed": {
+     "n": 149,
+     "good": 41,
+     "covlow": 62,
+     "giveup": 37,
+     "tail": 9,
+     "bad": 46,
+     "pnl": 2345,
+     "neg": 37,
+     "tailLoss": 9
+    },
+    "kept": {
+     "n": 4381,
+     "good": 354,
+     "covlow": 1944,
+     "giveup": 1193,
+     "tail": 890,
+     "bad": 2083,
+     "pnl": 114605,
+     "neg": 1305,
+     "tailLoss": 692
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m pctB>=1.3",
+    "split": "test",
+    "removed": {
+     "n": 92,
+     "good": 20,
+     "covlow": 32,
+     "giveup": 36,
+     "tail": 4,
+     "bad": 40,
+     "pnl": 55,
+     "neg": 36,
+     "tailLoss": 4
+    },
+    "kept": {
+     "n": 2861,
+     "good": 472,
+     "covlow": 1123,
+     "giveup": 869,
+     "tail": 397,
+     "bad": 1266,
+     "pnl": 101782,
+     "neg": 957,
+     "tailLoss": 311
+    },
+    "rand": {
+     "mean": 3139.7605,
+     "p5": -1418,
+     "p95": 7911,
+     "pLE": 0.157
+    }
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "train",
+    "removed": {
+     "n": 177,
+     "good": 30,
+     "covlow": 83,
+     "giveup": 49,
+     "tail": 15,
+     "bad": 64,
+     "pnl": 5775,
+     "neg": 44,
+     "tailLoss": 12
+    },
+    "kept": {
+     "n": 4353,
+     "good": 365,
+     "covlow": 1923,
+     "giveup": 1181,
+     "tail": 884,
+     "bad": 2065,
+     "pnl": 111175,
+     "neg": 1298,
+     "tailLoss": 689
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m pctB>=1.6",
+    "split": "test",
+    "removed": {
+     "n": 65,
+     "good": 12,
+     "covlow": 23,
+     "giveup": 29,
+     "tail": 1,
+     "bad": 30,
+     "pnl": 3333,
+     "neg": 25,
+     "tailLoss": 1
+    },
+    "kept": {
+     "n": 2888,
+     "good": 480,
+     "covlow": 1132,
+     "giveup": 876,
+     "tail": 400,
+     "bad": 1276,
+     "pnl": 98504,
+     "neg": 968,
+     "tailLoss": 314
+    },
+    "rand": {
+     "mean": 2187.99,
+     "p5": -1830,
+     "p95": 6425,
+     "pLE": 0.6915
+    }
+   },
+   {
+    "rule": "single 1m beyondPts>=3",
+    "split": "train",
+    "removed": {
+     "n": 156,
+     "good": 30,
+     "covlow": 59,
+     "giveup": 48,
+     "tail": 19,
+     "bad": 67,
+     "pnl": 4435,
+     "neg": 45,
+     "tailLoss": 14
+    },
+    "kept": {
+     "n": 4374,
+     "good": 365,
+     "covlow": 1947,
+     "giveup": 1182,
+     "tail": 880,
+     "bad": 2062,
+     "pnl": 112515,
+     "neg": 1297,
+     "tailLoss": 687
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 1m beyondPts>=3",
+    "split": "test",
+    "removed": {
+     "n": 118,
+     "good": 22,
+     "covlow": 36,
+     "giveup": 41,
+     "tail": 19,
+     "bad": 60,
+     "pnl": 6885,
+     "neg": 46,
+     "tailLoss": 14
+    },
+    "kept": {
+     "n": 2835,
+     "good": 470,
+     "covlow": 1119,
+     "giveup": 864,
+     "tail": 382,
+     "bad": 1246,
+     "pnl": 94952,
+     "neg": 947,
+     "tailLoss": 301
+    },
+    "rand": {
+     "mean": 4110.1935,
+     "p5": -1352,
+     "p95": 9730,
+     "pLE": 0.804
+    }
+   },
+   {
+    "rule": "single 5m beyondPts>=1",
+    "split": "train",
+    "removed": {
+     "n": 469,
+     "good": 67,
+     "covlow": 193,
+     "giveup": 130,
+     "tail": 79,
+     "bad": 209,
+     "pnl": -3635,
+     "neg": 141,
+     "tailLoss": 65
+    },
+    "kept": {
+     "n": 4061,
+     "good": 328,
+     "covlow": 1813,
+     "giveup": 1100,
+     "tail": 820,
+     "bad": 1920,
+     "pnl": 120585,
+     "neg": 1201,
+     "tailLoss": 636
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 5m beyondPts>=1",
+    "split": "test",
+    "removed": {
+     "n": 322,
+     "good": 70,
+     "covlow": 104,
+     "giveup": 109,
+     "tail": 39,
+     "bad": 148,
+     "pnl": 8787,
+     "neg": 117,
+     "tailLoss": 31
+    },
+    "kept": {
+     "n": 2631,
+     "good": 422,
+     "covlow": 1051,
+     "giveup": 796,
+     "tail": 362,
+     "bad": 1158,
+     "pnl": 93050,
+     "neg": 876,
+     "tailLoss": 284
+    },
+    "rand": {
+     "mean": 11207.958,
+     "p5": 2847,
+     "p95": 20061,
+     "pLE": 0.3295
+    }
+   },
+   {
+    "rule": "single 15m beyondPts>=39",
+    "split": "train",
+    "removed": {
+     "n": 136,
+     "good": 41,
+     "covlow": 51,
+     "giveup": 38,
+     "tail": 6,
+     "bad": 44,
+     "pnl": 2935,
+     "neg": 37,
+     "tailLoss": 6
+    },
+    "kept": {
+     "n": 4394,
+     "good": 354,
+     "covlow": 1955,
+     "giveup": 1192,
+     "tail": 893,
+     "bad": 2085,
+     "pnl": 114015,
+     "neg": 1305,
+     "tailLoss": 695
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 15m beyondPts>=39",
+    "split": "test",
+    "removed": {
+     "n": 171,
+     "good": 36,
+     "covlow": 52,
+     "giveup": 79,
+     "tail": 4,
+     "bad": 83,
+     "pnl": 4588,
+     "neg": 72,
+     "tailLoss": 4
+    },
+    "kept": {
+     "n": 2782,
+     "good": 456,
+     "covlow": 1103,
+     "giveup": 826,
+     "tail": 397,
+     "bad": 1223,
+     "pnl": 97249,
+     "neg": 921,
+     "tailLoss": 311
+    },
+    "rand": {
+     "mean": 6063.995,
+     "p5": -384,
+     "p95": 12367,
+     "pLE": 0.3505
+    }
+   },
+   {
+    "rule": "single 60m beyondPts>=95",
+    "split": "train",
+    "removed": {
+     "n": 227,
+     "good": 37,
+     "covlow": 106,
+     "giveup": 70,
+     "tail": 14,
+     "bad": 84,
+     "pnl": 14325,
+     "neg": 65,
+     "tailLoss": 13
+    },
+    "kept": {
+     "n": 4303,
+     "good": 358,
+     "covlow": 1900,
+     "giveup": 1160,
+     "tail": 885,
+     "bad": 2045,
+     "pnl": 102625,
+     "neg": 1277,
+     "tailLoss": 688
+    },
+    "rand": null
+   },
+   {
+    "rule": "single 60m beyondPts>=95",
+    "split": "test",
+    "removed": {
+     "n": 252,
+     "good": 52,
+     "covlow": 77,
+     "giveup": 113,
+     "tail": 10,
+     "bad": 123,
+     "pnl": 6278,
+     "neg": 108,
+     "tailLoss": 10
+    },
+    "kept": {
+     "n": 2701,
+     "good": 440,
+     "covlow": 1078,
+     "giveup": 792,
+     "tail": 391,
+     "bad": 1183,
+     "pnl": 95559,
+     "neg": 885,
+     "tailLoss": 305
+    },
+    "rand": {
+     "mean": 8645.867,
+     "p5": 880,
+     "p95": 16413,
+     "pLE": 0.316
+    }
+   },
+   {
+    "rule": "zone 1m pctB in [0.9,1)",
+    "split": "train",
+    "removed": {
+     "n": 427,
+     "good": 46,
+     "covlow": 175,
+     "giveup": 110,
+     "tail": 96,
+     "bad": 206,
+     "pnl": -6695,
+     "neg": 138,
+     "tailLoss": 78
+    },
+    "kept": {
+     "n": 4103,
+     "good": 349,
+     "covlow": 1831,
+     "giveup": 1120,
+     "tail": 803,
+     "bad": 1923,
+     "pnl": 123645,
+     "neg": 1204,
+     "tailLoss": 623
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m pctB in [0.9,1)",
+    "split": "test",
+    "removed": {
+     "n": 277,
+     "good": 43,
+     "covlow": 114,
+     "giveup": 88,
+     "tail": 32,
+     "bad": 120,
+     "pnl": 12341,
+     "neg": 94,
+     "tailLoss": 24
+    },
+    "kept": {
+     "n": 2676,
+     "good": 449,
+     "covlow": 1041,
+     "giveup": 817,
+     "tail": 369,
+     "bad": 1186,
+     "pnl": 89496,
+     "neg": 899,
+     "tailLoss": 291
+    },
+    "rand": {
+     "mean": 9325.923,
+     "p5": 1808,
+     "p95": 17226,
+     "pLE": 0.739
+    }
+   },
+   {
+    "rule": "zone 5m pctB in [1.03,1.2)",
+    "split": "train",
+    "removed": {
+     "n": 335,
+     "good": 41,
+     "covlow": 141,
+     "giveup": 87,
+     "tail": 66,
+     "bad": 153,
+     "pnl": -4425,
+     "neg": 99,
+     "tailLoss": 54
+    },
+    "kept": {
+     "n": 4195,
+     "good": 354,
+     "covlow": 1865,
+     "giveup": 1143,
+     "tail": 833,
+     "bad": 1976,
+     "pnl": 121375,
+     "neg": 1243,
+     "tailLoss": 647
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m pctB in [1.03,1.2)",
+    "split": "test",
+    "removed": {
+     "n": 207,
+     "good": 39,
+     "covlow": 73,
+     "giveup": 71,
+     "tail": 24,
+     "bad": 95,
+     "pnl": 4887,
+     "neg": 73,
+     "tailLoss": 19
+    },
+    "kept": {
+     "n": 2746,
+     "good": 453,
+     "covlow": 1082,
+     "giveup": 834,
+     "tail": 377,
+     "bad": 1211,
+     "pnl": 96950,
+     "neg": 920,
+     "tailLoss": 296
+    },
+    "rand": {
+     "mean": 7106.3125,
+     "p5": 365,
+     "p95": 14049,
+     "pLE": 0.319
+    }
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "train",
+    "removed": {
+     "n": 366,
+     "good": 21,
+     "covlow": 151,
+     "giveup": 94,
+     "tail": 100,
+     "bad": 194,
+     "pnl": -4325,
+     "neg": 134,
+     "tailLoss": 80
+    },
+    "kept": {
+     "n": 4164,
+     "good": 374,
+     "covlow": 1855,
+     "giveup": 1136,
+     "tail": 799,
+     "bad": 1935,
+     "pnl": 121275,
+     "neg": 1208,
+     "tailLoss": 621
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m pctB in [0.8,0.85)",
+    "split": "test",
+    "removed": {
+     "n": 260,
+     "good": 34,
+     "covlow": 113,
+     "giveup": 68,
+     "tail": 45,
+     "bad": 113,
+     "pnl": 15140,
+     "neg": 81,
+     "tailLoss": 34
+    },
+    "kept": {
+     "n": 2693,
+     "good": 458,
+     "covlow": 1042,
+     "giveup": 837,
+     "tail": 356,
+     "bad": 1193,
+     "pnl": 86697,
+     "neg": 912,
+     "tailLoss": 281
+    },
+    "rand": {
+     "mean": 9043.525,
+     "p5": 1196,
+     "p95": 17016,
+     "pLE": 0.902
+    }
+   },
+   {
+    "rule": "zone 60m pctB in [1.03,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 144,
+     "good": 11,
+     "covlow": 54,
+     "giveup": 40,
+     "tail": 39,
+     "bad": 79,
+     "pnl": -4985,
+     "neg": 51,
+     "tailLoss": 33
+    },
+    "kept": {
+     "n": 4386,
+     "good": 384,
+     "covlow": 1952,
+     "giveup": 1190,
+     "tail": 860,
+     "bad": 2050,
+     "pnl": 121935,
+     "neg": 1291,
+     "tailLoss": 668
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m pctB in [1.03,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 95,
+     "good": 10,
+     "covlow": 42,
+     "giveup": 30,
+     "tail": 13,
+     "bad": 43,
+     "pnl": 4105,
+     "neg": 31,
+     "tailLoss": 11
+    },
+    "kept": {
+     "n": 2858,
+     "good": 482,
+     "covlow": 1113,
+     "giveup": 875,
+     "tail": 388,
+     "bad": 1263,
+     "pnl": 97732,
+     "neg": 962,
+     "tailLoss": 304
+    },
+    "rand": {
+     "mean": 3311.124,
+     "p5": -1430,
+     "p95": 8253,
+     "pLE": 0.6125
+    }
+   },
+   {
+    "rule": "zone 1m beyondPts in [-3,0)",
+    "split": "train",
+    "removed": {
+     "n": 389,
+     "good": 32,
+     "covlow": 160,
+     "giveup": 88,
+     "tail": 109,
+     "bad": 197,
+     "pnl": -3190,
+     "neg": 121,
+     "tailLoss": 83
+    },
+    "kept": {
+     "n": 4141,
+     "good": 363,
+     "covlow": 1846,
+     "giveup": 1142,
+     "tail": 790,
+     "bad": 1932,
+     "pnl": 120140,
+     "neg": 1221,
+     "tailLoss": 618
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 1m beyondPts in [-3,0)",
+    "split": "test",
+    "removed": {
+     "n": 189,
+     "good": 13,
+     "covlow": 88,
+     "giveup": 49,
+     "tail": 39,
+     "bad": 88,
+     "pnl": 8199,
+     "neg": 60,
+     "tailLoss": 26
+    },
+    "kept": {
+     "n": 2764,
+     "good": 479,
+     "covlow": 1067,
+     "giveup": 856,
+     "tail": 362,
+     "bad": 1218,
+     "pnl": 93638,
+     "neg": 933,
+     "tailLoss": 289
+    },
+    "rand": {
+     "mean": 6507.2175,
+     "p5": -197,
+     "p95": 13105,
+     "pLE": 0.6615
+    }
+   },
+   {
+    "rule": "zone 5m beyondPts in [3,15)",
+    "split": "train",
+    "removed": {
+     "n": 273,
+     "good": 35,
+     "covlow": 110,
+     "giveup": 80,
+     "tail": 48,
+     "bad": 128,
+     "pnl": -6030,
+     "neg": 83,
+     "tailLoss": 42
+    },
+    "kept": {
+     "n": 4257,
+     "good": 360,
+     "covlow": 1896,
+     "giveup": 1150,
+     "tail": 851,
+     "bad": 2001,
+     "pnl": 122980,
+     "neg": 1259,
+     "tailLoss": 659
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 5m beyondPts in [3,15)",
+    "split": "test",
+    "removed": {
+     "n": 153,
+     "good": 33,
+     "covlow": 48,
+     "giveup": 50,
+     "tail": 22,
+     "bad": 72,
+     "pnl": 7714,
+     "neg": 58,
+     "tailLoss": 17
+    },
+    "kept": {
+     "n": 2800,
+     "good": 459,
+     "covlow": 1107,
+     "giveup": 855,
+     "tail": 379,
+     "bad": 1234,
+     "pnl": 94123,
+     "neg": 935,
+     "tailLoss": 298
+    },
+    "rand": {
+     "mean": 5313.4665,
+     "p5": -556,
+     "p95": 11556,
+     "pLE": 0.7335
+    }
+   },
+   {
+    "rule": "zone 15m beyondPts in [-40,-28.5)",
+    "split": "train",
+    "removed": {
+     "n": 451,
+     "good": 37,
+     "covlow": 177,
+     "giveup": 115,
+     "tail": 122,
+     "bad": 237,
+     "pnl": -7575,
+     "neg": 151,
+     "tailLoss": 97
+    },
+    "kept": {
+     "n": 4079,
+     "good": 358,
+     "covlow": 1829,
+     "giveup": 1115,
+     "tail": 777,
+     "bad": 1892,
+     "pnl": 124525,
+     "neg": 1191,
+     "tailLoss": 604
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 15m beyondPts in [-40,-28.5)",
+    "split": "test",
+    "removed": {
+     "n": 238,
+     "good": 28,
+     "covlow": 100,
+     "giveup": 59,
+     "tail": 51,
+     "bad": 110,
+     "pnl": 10843,
+     "neg": 68,
+     "tailLoss": 32
+    },
+    "kept": {
+     "n": 2715,
+     "good": 464,
+     "covlow": 1055,
+     "giveup": 846,
+     "tail": 350,
+     "bad": 1196,
+     "pnl": 90994,
+     "neg": 925,
+     "tailLoss": 283
+    },
+    "rand": {
+     "mean": 8329.742,
+     "p5": 1161,
+     "p95": 16116,
+     "pLE": 0.714
+    }
+   },
+   {
+    "rule": "zone 60m beyondPts in [3,10)",
+    "split": "train",
+    "removed": {
+     "n": 297,
+     "good": 19,
+     "covlow": 123,
+     "giveup": 73,
+     "tail": 82,
+     "bad": 155,
+     "pnl": -4770,
+     "neg": 97,
+     "tailLoss": 65
+    },
+    "kept": {
+     "n": 4233,
+     "good": 376,
+     "covlow": 1883,
+     "giveup": 1157,
+     "tail": 817,
+     "bad": 1974,
+     "pnl": 121720,
+     "neg": 1245,
+     "tailLoss": 636
+    },
+    "rand": null
+   },
+   {
+    "rule": "zone 60m beyondPts in [3,10)",
+    "split": "test",
+    "removed": {
+     "n": 105,
+     "good": 4,
+     "covlow": 53,
+     "giveup": 26,
+     "tail": 22,
+     "bad": 48,
+     "pnl": 1448,
+     "neg": 37,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 2848,
+     "good": 488,
+     "covlow": 1102,
+     "giveup": 879,
+     "tail": 379,
+     "bad": 1258,
+     "pnl": 100389,
+     "neg": 956,
+     "tailLoss": 297
+    },
+    "rand": {
+     "mean": 3605.1475,
+     "p5": -1539,
+     "p95": 8675,
+     "pLE": 0.243
+    }
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "train",
+    "removed": {
+     "n": 606,
+     "good": 37,
+     "covlow": 277,
+     "giveup": 166,
+     "tail": 126,
+     "bad": 292,
+     "pnl": 23340,
+     "neg": 167,
+     "tailLoss": 100
+    },
+    "kept": {
+     "n": 3924,
+     "good": 358,
+     "covlow": 1729,
+     "giveup": 1064,
+     "tail": 773,
+     "bad": 1837,
+     "pnl": 93610,
+     "neg": 1175,
+     "tailLoss": 601
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m pctB in [0.9,1.0)",
+    "split": "test",
+    "removed": {
+     "n": 463,
+     "good": 76,
+     "covlow": 163,
+     "giveup": 126,
+     "tail": 98,
+     "bad": 224,
+     "pnl": -928,
+     "neg": 171,
+     "tailLoss": 79
+    },
+    "kept": {
+     "n": 2490,
+     "good": 416,
+     "covlow": 992,
+     "giveup": 779,
+     "tail": 303,
+     "bad": 1082,
+     "pnl": 102765,
+     "neg": 822,
+     "tailLoss": 236
+    },
+    "rand": {
+     "mean": 15976.5235,
+     "p5": 6467,
+     "p95": 25994,
+     "pLE": 0.002
+    }
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "train",
+    "removed": {
+     "n": 385,
+     "good": 25,
+     "covlow": 192,
+     "giveup": 85,
+     "tail": 83,
+     "bad": 168,
+     "pnl": 12665,
+     "neg": 100,
+     "tailLoss": 64
+    },
+    "kept": {
+     "n": 4145,
+     "good": 370,
+     "covlow": 1814,
+     "giveup": 1145,
+     "tail": 816,
+     "bad": 1961,
+     "pnl": 104285,
+     "neg": 1242,
+     "tailLoss": 637
+    },
+    "rand": null
+   },
+   {
+    "rule": "FIXED 60m room 0-10pts (beyondPts in [-10,0))",
+    "split": "test",
+    "removed": {
+     "n": 164,
+     "good": 21,
+     "covlow": 68,
+     "giveup": 41,
+     "tail": 34,
+     "bad": 75,
+     "pnl": -947,
+     "neg": 55,
+     "tailLoss": 26
+    },
+    "kept": {
+     "n": 2789,
+     "good": 471,
+     "covlow": 1087,
+     "giveup": 864,
+     "tail": 367,
+     "bad": 1231,
+     "pnl": 102784,
+     "neg": 938,
+     "tailLoss": 289
+    },
+    "rand": {
+     "mean": 5553.9775,
+     "p5": -642,
+     "p95": 11921,
+     "pLE": 0.042
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "train",
+    "removed": {
+     "n": 533,
+     "good": 34,
+     "covlow": 230,
+     "giveup": 131,
+     "tail": 138,
+     "bad": 269,
+     "pnl": -1620,
+     "neg": 168,
+     "tailLoss": 109
+    },
+    "kept": {
+     "n": 3997,
+     "good": 361,
+     "covlow": 1776,
+     "giveup": 1099,
+     "tail": 761,
+     "bad": 1860,
+     "pnl": 118570,
+     "neg": 1174,
+     "tailLoss": 592
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m pctB in [0.97,1.05)",
+    "split": "test",
+    "removed": {
+     "n": 351,
+     "good": 41,
+     "covlow": 146,
+     "giveup": 102,
+     "tail": 62,
+     "bad": 164,
+     "pnl": 4534,
+     "neg": 125,
+     "tailLoss": 52
+    },
+    "kept": {
+     "n": 2602,
+     "good": 451,
+     "covlow": 1009,
+     "giveup": 803,
+     "tail": 339,
+     "bad": 1142,
+     "pnl": 97303,
+     "neg": 868,
+     "tailLoss": 263
+    },
+    "rand": {
+     "mean": 12165.689,
+     "p5": 3436,
+     "p95": 20875,
+     "pLE": 0.0765
+    }
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "train",
+    "removed": {
+     "n": 787,
+     "good": 65,
+     "covlow": 338,
+     "giveup": 194,
+     "tail": 190,
+     "bad": 384,
+     "pnl": -3885,
+     "neg": 241,
+     "tailLoss": 149
+    },
+    "kept": {
+     "n": 3743,
+     "good": 330,
+     "covlow": 1668,
+     "giveup": 1036,
+     "tail": 709,
+     "bad": 1745,
+     "pnl": 120835,
+     "neg": 1101,
+     "tailLoss": 552
+    },
+    "rand": null
+   },
+   {
+    "rule": "V7-10-FIT 60m OR 1m zone (60m [0.97,1.05) or 1m [0.95,1.03))",
+    "split": "test",
+    "removed": {
+     "n": 495,
+     "good": 61,
+     "covlow": 202,
+     "giveup": 150,
+     "tail": 82,
+     "bad": 232,
+     "pnl": 10000,
+     "neg": 174,
+     "tailLoss": 68
+    },
+    "kept": {
+     "n": 2458,
+     "good": 431,
+     "covlow": 953,
+     "giveup": 755,
+     "tail": 319,
+     "bad": 1074,
+     "pnl": 91837,
+     "neg": 819,
+     "tailLoss": 247
+    },
+    "rand": {
+     "mean": 17027.2645,
+     "p5": 6822,
+     "p95": 27456,
+     "pLE": 0.1285
+    }
+   },
+   {
+    "rule": "OR [1m 1.3, 5m 1.1, 15m 1.4, 60m off]",
+    "split": "train",
+    "removed": {
+     "n": 223,
+     "good": 38,
+     "covlow": 78,
+     "giveup": 72,
+     "tail": 35,
+     "bad": 107,
+     "pnl": -3735,
+     "neg": 78,
+     "tailLoss": 30
+    },
+    "kept": {
+     "n": 4307,
+     "good": 357,
+     "covlow": 1928,
+     "giveup": 1158,
+     "tail": 864,
+     "bad": 2022,
+     "pnl": 120685,
+     "neg": 1264,
+     "tailLoss": 671
+    },
+    "rand": null
+   },
+   {
+    "rule": "OR [1m 1.3, 5m 1.1, 15m 1.4, 60m off]",
+    "split": "test",
+    "removed": {
+     "n": 160,
+     "good": 27,
+     "covlow": 53,
+     "giveup": 56,
+     "tail": 24,
+     "bad": 80,
+     "pnl": 50,
+     "neg": 63,
+     "tailLoss": 18
+    },
+    "kept": {
+     "n": 2793,
+     "good": 465,
+     "covlow": 1102,
+     "giveup": 849,
+     "tail": 377,
+     "bad": 1226,
+     "pnl": 101787,
+     "neg": 930,
+     "tailLoss": 297
+    },
+    "rand": {
+     "mean": 5601.84,
+     "p5": -707,
+     "p95": 12215,
+     "pLE": 0.0775
+    }
+   },
+   {
+    "rule": "count>=2 [1m 1.3, 5m 1.05, 15m 1.4, 60m 1.2]",
+    "split": "train",
+    "removed": {
+     "n": 199,
+     "good": 36,
+     "covlow": 80,
+     "giveup": 54,
+     "tail": 29,
+     "bad": 83,
+     "pnl": -6250,
+     "neg": 65,
+     "tailLoss": 28
+    },
+    "kept": {
+     "n": 4331,
+     "good": 359,
+     "covlow": 1926,
+     "giveup": 1176,
+     "tail": 870,
+     "bad": 2046,
+     "pnl": 123200,
+     "neg": 1277,
+     "tailLoss": 673
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=2 [1m 1.3, 5m 1.05, 15m 1.4, 60m 1.2]",
+    "split": "test",
+    "removed": {
+     "n": 116,
+     "good": 21,
+     "covlow": 33,
+     "giveup": 51,
+     "tail": 11,
+     "bad": 62,
+     "pnl": -1142,
+     "neg": 50,
+     "tailLoss": 9
+    },
+    "kept": {
+     "n": 2837,
+     "good": 471,
+     "covlow": 1122,
+     "giveup": 854,
+     "tail": 390,
+     "bad": 1244,
+     "pnl": 102979,
+     "neg": 943,
+     "tailLoss": 306
+    },
+    "rand": {
+     "mean": 3879.635,
+     "p5": -1295,
+     "p95": 9348,
+     "pLE": 0.054
+    }
+   },
+   {
+    "rule": "count>=3 [1m 1.3, 5m 1, 15m 0.85, 60m 0.95]",
+    "split": "train",
+    "removed": {
+     "n": 430,
+     "good": 61,
+     "covlow": 175,
+     "giveup": 121,
+     "tail": 73,
+     "bad": 194,
+     "pnl": -6340,
+     "neg": 128,
+     "tailLoss": 60
+    },
+    "kept": {
+     "n": 4100,
+     "good": 334,
+     "covlow": 1831,
+     "giveup": 1109,
+     "tail": 826,
+     "bad": 1935,
+     "pnl": 123290,
+     "neg": 1214,
+     "tailLoss": 641
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=3 [1m 1.3, 5m 1, 15m 0.85, 60m 0.95]",
+    "split": "test",
+    "removed": {
+     "n": 269,
+     "good": 53,
+     "covlow": 94,
+     "giveup": 93,
+     "tail": 29,
+     "bad": 122,
+     "pnl": 7245,
+     "neg": 97,
+     "tailLoss": 25
+    },
+    "kept": {
+     "n": 2684,
+     "good": 439,
+     "covlow": 1061,
+     "giveup": 812,
+     "tail": 372,
+     "bad": 1184,
+     "pnl": 94592,
+     "neg": 896,
+     "tailLoss": 290
+    },
+    "rand": {
+     "mean": 9288.974,
+     "p5": 1705,
+     "p95": 17443,
+     "pLE": 0.3545
+    }
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 1.05, 15m 0.85, 60m 1.2]",
+    "split": "train",
+    "removed": {
+     "n": 167,
+     "good": 29,
+     "covlow": 69,
+     "giveup": 43,
+     "tail": 26,
+     "bad": 69,
+     "pnl": -5870,
+     "neg": 53,
+     "tailLoss": 25
+    },
+    "kept": {
+     "n": 4363,
+     "good": 366,
+     "covlow": 1937,
+     "giveup": 1187,
+     "tail": 873,
+     "bad": 2060,
+     "pnl": 122820,
+     "neg": 1289,
+     "tailLoss": 676
+    },
+    "rand": null
+   },
+   {
+    "rule": "count>=4 [1m 0.6, 5m 1.05, 15m 0.85, 60m 1.2]",
+    "split": "test",
+    "removed": {
+     "n": 98,
+     "good": 17,
+     "covlow": 27,
+     "giveup": 44,
+     "tail": 10,
+     "bad": 54,
+     "pnl": -2537,
+     "neg": 43,
+     "tailLoss": 9
+    },
+    "kept": {
+     "n": 2855,
+     "good": 475,
+     "covlow": 1128,
+     "giveup": 861,
+     "tail": 391,
+     "bad": 1252,
+     "pnl": 104374,
+     "neg": 950,
+     "tailLoss": 306
+    },
+    "rand": {
+     "mean": 3342.664,
+     "p5": -1553,
+     "p95": 8265,
+     "pLE": 0.024
+    }
+   }
+  ]
+ }
+}
