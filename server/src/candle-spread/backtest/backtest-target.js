@@ -523,8 +523,39 @@ function runDayTarget(bars, optsIn = {}) {
     uncoveredEod: verts.filter((p) => !p.covered).length,
     governor: null, ratchet: null,
     // target-engine extras
-    decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
+    touch: undefined, decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
   };
+}
+
+// ── shared with the runDay5m touch overlay (backtest-v6-5m opts.touch*) ─────────────────────────────────
+// RTH line tracker: prior sessions bucketed once, today's bars pushed as they complete; lines(P, day, min) returns the
+// completed-bucket BB(20,2)/9EMA lines (null until 20 buckets) — the same aggregate/linesOf the target engine uses.
+function makeRthLines(priorBars) {
+  const prior = { 15: aggregate(priorBars || [], 15, null, 0), 60: aggregate(priorBars || [], 60, null, 0) };
+  const today = [], cache = { 15: { n: -1, l: null }, 60: { n: -1, l: null } };
+  return {
+    push: (bar) => today.push(bar),
+    lines: (P, day, min) => { const t = aggregate(today, P, day, min); if (t.length !== cache[P].n) { cache[P].n = t.length; cache[P].l = linesOf(prior[P].concat(t)); } return cache[P].l; },
+  };
+}
+// v11 SETUP at a completed bar. mode 'mid': NQ 15m AND 60m trends both point toward the RTH 15m mid M, minDist <= |M-S|
+// <= maxDist sigma. mode 'ladder': the nearest line of {RTH15 mid/ema/upper/lower, RTH60 ema/mid, prior close} in the
+// direction both NQ trends agree on, inside the same distance band. Returns { side, level } or null. NQ levels are not
+// used (all lines are in pricing space). nq = NQ 5m close, S = pricing close, sig = sigma to 16:00 in points.
+function v11Setup({ A, nq, S, sig, r15, r60, priorClose, minDist = 0.15, maxDist = 1.0, mode = 'mid' }) {
+  if (!r15 || !(sig > 0)) return null;
+  const c15 = A['15m'], c60 = A['60m'];
+  const t15 = trendOf(nq, c15.ema, nqSlope(c15)), t60 = trendOf(nq, c60.ema, nqSlope(c60));
+  if (!t15 || t15 !== t60) return null;
+  const inRange = (L) => { const d = Math.abs(L - S); return d >= minDist * sig && d <= maxDist * sig; };
+  let level = null;
+  if (mode === 'ladder') {
+    const lines = [r15.mid, r15.ema, r15.upper, r15.lower];
+    if (r60) lines.push(r60.ema, r60.mid);
+    if (priorClose != null) lines.push(priorClose);
+    for (const L of lines) if (L != null && Math.sign(L - S) === t15 && inRange(L) && (level == null || Math.abs(L - S) < Math.abs(level - S))) level = L;
+  } else if (r15.mid != null && Math.sign(r15.mid - S) === t15 && inRange(r15.mid)) level = r15.mid;
+  return level == null ? null : { side: t15 === 1 ? 'bull' : 'bear', level };
 }
 
 // ── per-day NDX-RTH context ──────────────────────────────────────────────────────────────────────────
@@ -570,4 +601,4 @@ function buildRthContexts(sessions, nPrior = 8) {
   return out;
 }
 
-module.exports = { DEFAULT_COVER, COVER_KEYS, runDayTarget, buildRthContexts, sessionFromBars, sessionFrom1m, aggregate, linesOf, trendOf, probLoss, etMin, etIso, DEFAULTS, CAP_BY_W, CAPFRAC_BY_W };
+module.exports = { makeRthLines, v11Setup, nqSlope, DEFAULT_COVER, COVER_KEYS, runDayTarget, buildRthContexts, sessionFromBars, sessionFrom1m, aggregate, linesOf, trendOf, probLoss, etMin, etIso, DEFAULTS, CAP_BY_W, CAPFRAC_BY_W };

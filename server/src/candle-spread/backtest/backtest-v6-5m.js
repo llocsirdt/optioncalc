@@ -329,6 +329,21 @@ function runDay5m(bars, signalFn, opts = {}) {
       + 'See feedback: signals from NQ, pricing/action from NDX.');
   }
   const priceOf = opts.priceOf || (b => { const c = b.analysis['5m']; return { close: c.close, high: c.high, low: c.low }; });
+  // ══ v11 TOUCH OVERLAY (backtest-only, 2026-10-17; ALL OFF by default = byte-identical) ═══════════════════════
+  // opts.touchCover 'be' | 'gu': a position opened toward an active v11 setup (NQ 15m+60m both point at the RTH 15m mid M,
+  //   0.15-1.0 sigma away; or the ladder target with opts.touchTarget 'ladder') whose path touches that level has its
+  //   cover jumped to break-even ('be': the mark at the level + a tick, never past W - open) or sent to the give-up
+  //   path ('gu', sticky like cover-to-open). opts.touchAnyTime: any position whose profit side faces the level.
+  // opts.touchFilter 'block-against' | 'require': refuse an open opposite an active setup / without one on its side.
+  // Lines/setup come from backtest-target.js (makeRthLines, v11Setup) fed by opts.rthCtx (buildRthContexts).
+  const touchCov = opts.touchCover && opts.touchCover !== 'off' ? opts.touchCover : null;
+  const touchFilt = opts.touchFilter && opts.touchFilter !== 'off' ? opts.touchFilter : null;
+  const touchOn = !!(touchCov || touchFilt);
+  const TGT = touchOn ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
+  const touchMode = opts.touchTarget === 'ladder' ? 'ladder' : 'mid';
+  const rthLines = touchOn ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
+  let setupNow = null, setupPrev = null, touchMidNow = null, touchMidPrev = null, touchSNow = null, touchSPrev = null;
+  let touchHits = 0, touchCoverFills = 0, touchBlocked = 0, touchSetupBars = 0;
   // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
   // engine (resolveRestingCovers) books at the candle-CLOSE mark. opts.coverFillAtClose matches live.
   const coverAtClose = opts.coverFillAtClose === true;
@@ -813,6 +828,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // the correction flows into every legsMark/bsPrice below. Default OFF -> iv === ivOf(A) (byte-identical).
     let iv = ivOf(A);
     if (opts.intradayIV) iv *= ivMultAt(etMinute(bars[i].dt));
+    const ivBaseT = iv;   // touch overlay: sigma uses the base (pre-skew) vol, as the expected-move band below does
     // With skew on, `iv` becomes a FUNCTION of (type, strike): the base vol scaled by the smile at that
     // strike's moneyness. The expected-move band is computed from the BASE vol — one pass, no circularity.
     // Everything downstream (legsMark, buildOpen, cover pricing, settlement marks) takes it unchanged.
@@ -821,6 +837,17 @@ function runDay5m(bars, signalFn, opts = {}) {
       iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
     }
     const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
+    if (touchOn) {   // v11 setup at THIS completed bar (opens decided at its close); touches in this bar use the PREVIOUS one
+      const _m = etMinute(bars[i].dt), _day = TGT.etIso(bars[i].dt);
+      setupPrev = setupNow; touchMidPrev = touchMidNow; touchSPrev = touchSNow;
+      if (_m >= 575) rthLines.push({ day: _day, min: _m, open: (bars[i].px || c5).open, high: px.high, low: px.low, close: S });
+      const _r15 = rthLines.lines(15, _day, _m), _r60 = rthLines.lines(60, _day, _m);
+      setupNow = TGT.v11Setup({ A, nq: c5.close, S, sig: S * ivBaseT * Math.sqrt(tau), r15: _r15, r60: _r60,
+        priorClose: opts.rthCtx ? opts.rthCtx.priorClose : null, minDist: opts.touchMinDist != null ? opts.touchMinDist : 0.15,
+        maxDist: opts.touchMaxDist != null ? opts.touchMaxDist : 1.0, mode: touchMode });
+      touchMidNow = _r15 ? _r15.mid : null; touchSNow = S;
+      if (setupNow) touchSetupBars++;
+    }
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
     // BOOK AN OPEN — the one place a filled open enters the book, shared by the immediate model and the
@@ -831,7 +858,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (o.belowBand) openLowBand++;
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
-          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i });
+          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i, ...(o._touchLvl != null ? { touchLvl: o._touchLvl } : {}) });
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
         // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
@@ -1152,6 +1179,16 @@ function runDay5m(bars, signalFn, opts = {}) {
       const pc = pos.pendingCover;
       const _hc = opts.coverFillHaircut || 0;
       const ext = subExt != null ? (pos.side === 'bull' ? subExt - _hc : subExt + _hc) : (pos.side === 'bull' ? (px.high - _hc) : (px.low + _hc));
+      // TOUCH OVERLAY: did the part of the bar this cover can see reach the position's level?
+      let touchNow = false;
+      if (touchCov && !pos._touched && !pos.hedge) {
+        let L = pos.touchLvl != null ? pos.touchLvl : null;
+        if (L == null && opts.touchAnyTime) {
+          const cand = touchMode === 'ladder' ? (setupPrev && setupPrev.side === pos.side ? setupPrev.level : null) : touchMidPrev;
+          if (cand != null && touchSPrev != null && (pos.side === 'bull' ? cand > touchSPrev : cand < touchSPrev)) L = cand;
+        }
+        if (L != null && (pos.side === 'bull' ? ext >= L : ext <= L)) { pos._touched = true; pos._touchL = L; touchHits++; touchNow = true; }
+      }
       // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
       // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
       // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
@@ -1208,6 +1245,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       // COVER TO OPEN (opts.coverToOpen; set at a signal below): an underwater position chases its cover from here on.
       if (pos._c2o != null) { if (!giveUp) c2oChasing++; giveUp = true; }
+      if (touchCov === 'gu' && pos._touched) giveUp = true;   // touch overlay: sticky give-up after the touch
       if (giveUp) pos._gu = true;
       // ⛔ MEASURED AND REJECTED 2026-09-22 — kept only so the measurement is reproducible. Do not enable,
       // and do not re-measure without reading the experiments-log entry first. 922 days, 8 variants, every
@@ -1305,6 +1343,13 @@ function runDay5m(bars, signalFn, opts = {}) {
       // used to LOWER the working price to the bar-close mark and book the cover there — a price a real resting
       // limit never gets: it fills at its own price on first touch. 10-07 10:15 bull: live covered at 3.75, the
       // backtest booked 1.40. The live-vs-backtest audit put this optimism at ~$2,600 over four days.
+      // TOUCH OVERLAY 'be': once touched, the cover works at the mark (+ a tick) — at the level on the touch bar, at the
+      // close after — never past break-even (cover total = W): any tent that locks >= 0 is taken. Raises only.
+      if (touchCov === 'be' && pos._touched && !giveUp) {
+        const _be = round2(G.WIDTH - (pc.openCost != null ? pc.openCost : pos.limit));
+        const _tp = roundTick(Math.min(_be, legsMark(pc.legs, touchNow ? pos._touchL : S, tau, iv) + TICK));
+        if (_tp > workingTarget) workingTarget = _tp;
+      }
       if (opts.coverNeverLower) {
         if (pc._working != null && workingTarget < pc._working) workingTarget = pc._working;
         pc._working = workingTarget;
@@ -1390,6 +1435,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
         pos.coverLegs = cLegs; pos.coverLimit = cLimit; pos.covered = true; pos.pendingCover = null;
         pos.coverEpoch = nowEpoch; pos.coverTime = nowET; markBookDirty();
+        if (pos._touched) touchCoverFills++;
         pos.coverStyle = rc ? rc.style : 'debit';
         if (_newCover) coverSameBar++;
         if (rc && rc.wing !== G.WIDTH) continue;   // anchor cover: legacy skips the capital accounting below
@@ -1803,6 +1849,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (opts.coverToOpenWait && !openGated && st.positions.some((p) => p.side === sig.openSide && !p.covered
           && p.filled !== false && legsMark(p.legs, S, tau, iv) < p.limit)) { openGated = true; gateC2oWait++; }
     }
+    // TOUCH FILTER (overlay): refuse an open opposite an active v11 setup ('block-against') / without one on its side ('require')
+    if (touchFilt && sig.openSide && dirOk && !openGated) {
+      const _ok = touchFilt === 'require' ? !!(setupNow && setupNow.side === sig.openSide) : !(setupNow && setupNow.side !== sig.openSide);
+      if (!_ok) { openGated = true; touchBlocked++; }
+    }
     if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
       // OPENING FALLBACK (opts.openFallbackUntilMin, live parity — trader.buildOpenFallback): a declined open at the
@@ -1954,6 +2005,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
         // ATTRIBUTION: which signal produced this open, and when (the signal bar, not the fill bar).
         o.reason = sig.reason; o.sigEpoch = nowEpoch;
+        if (touchCov && setupNow && setupNow.side === sig.openSide) o._touchLvl = setupNow.level;   // touch overlay tag
         if (openLadderModel) {
           // OPEN LADDER: the order WORKS from the next bar (see the fill check at the top of the bar loop).
           // Legs and stance are recorded now, at the send, exactly as live does; nothing is booked yet.
@@ -2137,6 +2189,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
+    touch: touchOn ? { hits: touchHits, coverFills: touchCoverFills, blocked: touchBlocked, setupBars: touchSetupBars } : undefined,
     sigCoverGiveUps, coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
