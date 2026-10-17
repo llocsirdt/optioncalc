@@ -1010,6 +1010,28 @@ function applySimFillRealism(v) {
   if (v.simMaxQuoteWidthFrac == null) v.simMaxQuoteWidthFrac = 1.0;
 }
 
+// SIM FILL REALISM, PART 2 (2026-10-17) — the 10/16 audit of simulated fills against real quotes. Defaults for
+// every variant, overridable per run; all null/false under CANDLE_SPREAD_SIM_FILL=legacy (engine defaults = off).
+//   simCoverFillMinLooks 2 / simHedgeFillMinLooks 2   consecutive at-or-through looks on DISTINCT chain fetches,
+//                                                     reset on a miss, never on the fetch that placed/repriced it
+//   simHedgeFillThroughTicks 1                        hedges need the market a tick better than their limit
+//   simFillStrict true                                cover cheapOutlier + parity-fair (ITM legs), credit covers
+//                                                     need the twin AND the debit legs at the price, no parity
+//                                                     fallback, hedge structure bounds / structureQuoteSane / iron legs
+//   parityGateTolFrac 0.25                            two-sided parity residual gate (opens, covers, hedges)
+//   simMaxQuoteAgeSec 60                              refuse a leg whose quoteTime is older (abstain when absent)
+function simFillRealismDeps(run) {
+  const pick = (k, d) => (run[k] != null ? run[k] : (SIM_FILL_LEGACY ? null : d));
+  return {
+    simCoverFillMinLooks: pick('simCoverFillMinLooks', 2),
+    simHedgeFillMinLooks: pick('simHedgeFillMinLooks', 2),
+    simHedgeFillThroughTicks: pick('simHedgeFillThroughTicks', 1),
+    simFillStrict: run.simFillStrict != null ? run.simFillStrict === true : !SIM_FILL_LEGACY,
+    parityGateTolFrac: pick('parityGateTolFrac', 0.25),
+    simMaxQuoteAgeSec: pick('simMaxQuoteAgeSec', 60),
+  };
+}
+
 // STALL COVER on every variant (2026-10-08): 15 minutes without a favourable move -> cover at break-even (or
 // better). 765 days x 50 governed: avg/day +1.1%, maxDD better on 33/50, worst day better on 44/50, locked days
 // flat; v7-10 maxDD -4,610 -> -3,910, v9-20 -23,766 -> -17,193. Env CANDLE_SPREAD_STALL_COVER=off disables.
@@ -1891,7 +1913,7 @@ function makePlaceOrder(run, record) {
         : !(DEPS && DEPS.isProd) ? 'dev-mode'
         : !LIVE_ARMED ? 'disarmed'
         : 'no-client';
-      store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `not sent (${why}); assumed filled at limit` });
+      store.appendEvent(record, { type: 'order_simulated', by: why, meta, payload, note: `not sent (${why}); fill decided by the mark path` });
       console.log(`[candle-spread] ${run.variant} ${summary.orderLine(meta, payload, `SIM:${why}`)}`);
       return { status: `simulated:${why}`, filled: true };
     }
@@ -2024,6 +2046,9 @@ function buildEngineDeps(run, live) {
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
       simMaxQuoteWidthFrac: run.simMaxQuoteWidthFrac != null ? run.simMaxQuoteWidthFrac : null,
+      // SIM FILL REALISM, PART 2 (2026-10-17; trader.js, the block above simDwell). Mark path only — every rule is
+      // inert under fillSource 'broker'. CANDLE_SPREAD_SIM_FILL=legacy turns them all off with the rest.
+      ...simFillRealismDeps(run),
       // Urgent cover for a position fighting the trend (trend-state definition name, or null = off).
       giveUpTrend: run.giveUpTrend || null,
       // Stall cover: minutes without a favourable move before the cover goes to break-even (null = off).
@@ -3895,6 +3920,7 @@ async function accountBook(symbol, expiration, variant) {
 }
 
 module.exports = {
+  simFillRealismDeps,   // SIM FILL REALISM part 2 defaults (2026-10-17) — exported for its test
   accountBook,
   // The live STARTUP check, exported so a unit test runs it against the real roster: 2026-10-05 a roster
   // field the check did not know took prod down at boot while every unit suite passed.

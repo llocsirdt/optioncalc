@@ -362,4 +362,35 @@ function chainMonotonic(legs, getLeg, incr) {
   return { ok: violations.length === 0, violations };
 }
 
-module.exports = { netQuote, parityCheck, parityDeviation, chainMonotonic, neighbourCheck, cheapOutlier, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };
+/**
+ * PARITY-FAIR COMBO — each IN-THE-MONEY leg revalued from the OTHER option type at its strike.
+ *
+ * Put-call parity at 0DTE (r ~ 0): C(K) - P(K) = S - K. So an ITM call is worth P(K) + (S - K) and an ITM put
+ * C(K) + (K - S), where the other-type quote is the OTM one — the liquid, frequently-updated side. OTM legs keep
+ * their own mid. Returns { fair, mark, width, anyItm } in the engine's sign convention (long +, short -), or null
+ * when spot is unknown or any ITM leg lacks the other-type quote (ABSTAIN — a thin chain is not a bad one).
+ *
+ * WHY (2026-10-17). Stale deep-ITM leg mids dragged cheap ITM debit covers to ~W/2 on a 0..2W natural (10/16
+ * v9-20 10:42:50: +C29630 -C29650 quoted 1.0 / 9.85 / 18.7, parity fair ~13.7). cheapOutlier's 40%-of-W floor
+ * caught 22 of 751 such covers because the dips land at 47-58% of W. This targets the stale leg, not the width.
+ */
+function parityFairCombo(legs, getLeg, spot) {
+  if (!(spot > 0) || !legs || !legs.length) return null;
+  let fair = 0, mark = 0, anyItm = false;
+  for (const l of legs) {
+    const q = getLeg(l.type, l.strike);
+    if (!q || q.mid == null) return null;
+    const sgn = l.side === 'long' ? 1 : -1;
+    mark += sgn * q.mid;
+    const itm = l.type === 'C' ? l.strike < spot : l.strike > spot;
+    if (!itm) { fair += sgn * q.mid; continue; }
+    const o = getLeg(l.type === 'C' ? 'P' : 'C', l.strike);
+    if (!o || o.mid == null) return null;
+    anyItm = true;
+    fair += sgn * (o.mid + Math.abs(spot - l.strike));
+  }
+  const ks = legs.map((l) => l.strike);
+  return { fair: r2(fair), mark: r2(mark), width: Math.max(...ks) - Math.min(...ks), anyItm };
+}
+
+module.exports = { parityFairCombo, netQuote, parityCheck, parityDeviation, chainMonotonic, neighbourCheck, cheapOutlier, validateOpen, bullCallLegs, bearPutLegs, verticalSanity, quoteUsable };

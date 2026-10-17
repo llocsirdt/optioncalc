@@ -44,8 +44,35 @@ function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`;
 // or null if not present. mid uses Schwab's `mark` (its mid/mark), matching the rest of
 // the app. The exact contract `symbol` is read from the chain so we never hand-build
 // OCC symbols.
+// CHAIN FETCH IDENTITY (2026-10-17, sim fill realism). A simulated fill now needs at-or-through looks on DISTINCT
+// chain fetches, and may not fill on the fetch that placed or repriced it, so every accessor carries `chainId`.
+// The chain cache re-parses from disk on each read (persistence.getChainCache), so object identity cannot tell two
+// fetches apart: the id is the NEWEST quoteTimeInLong anywhere in the chain — two reads with the same newest quote
+// carry the same market data, which is exactly "the same fetch" for a fill test. Falls back to object identity
+// when the chain has no quote times (fixtures).
+const CHAIN_IDS = new WeakMap();
+let chainSeq = 0;
+function chainIdOf(chainData) {
+  if (!chainData || typeof chainData !== 'object') return null;
+  let newest = 0;
+  for (const side of [chainData.call, chainData.put]) {
+    if (!side) continue;
+    for (const exp of Object.values(side)) {
+      if (!exp || typeof exp !== 'object') continue;
+      for (const arr of Object.values(exp)) {
+        const c = Array.isArray(arr) ? arr[0] : null;
+        if (c && c.quoteTimeInLong > newest) newest = c.quoteTimeInLong;
+      }
+    }
+  }
+  if (newest > 0) return `q${newest}`;
+  let id = CHAIN_IDS.get(chainData);
+  if (id == null) { id = `o${++chainSeq}`; CHAIN_IDS.set(chainData, id); }
+  return id;
+}
+
 function makeLegAccessor(chainData, expiration) {
-  return function getLeg(type, strike) {
+  const getLeg = function getLeg(type, strike) {
     if (!chainData) return null;
     const map = type === 'C' ? chainData.call : chainData.put;
     if (!map) return null;
@@ -57,8 +84,13 @@ function makeLegAccessor(chainData, expiration) {
     const c = strikeMap[strikeKey][0];
     if (!c) return null;
     const mid = c.mark != null ? c.mark : (c.bid != null && c.ask != null ? (c.bid + c.ask) / 2 : null);
-    return mid == null ? null : { mid, symbol: c.symbol, bid: c.bid, ask: c.ask };
+    // quoteTime: Schwab's quoteTimeInLong (epoch ms of the leg's last quote update) — the quote-age gate and the
+    // per-leg fill evidence read it. null when the chain does not carry it (the age gate then abstains).
+    return mid == null ? null : { mid, symbol: c.symbol, bid: c.bid, ask: c.ask,
+      quoteTime: c.quoteTimeInLong != null ? c.quoteTimeInLong : null };
   };
+  getLeg.chainId = chainIdOf(chainData);
+  return getLeg;
 }
 
 // --- Order payload (Schwab shape) -----------------------------------------
@@ -285,7 +317,9 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
   // A lock reported for an order that was never placed. Attached only after a send is confirmed.
   const pending = { legs: bookLegs, target, geometry: plan.geometry, longStrike: plan.longStrike,
     markAtPlace: plan.mark, placedAt: candleTime, placedEpoch: Date.now(), placedUnder: deps.underlying != null ? deps.underlying : null,
-    minLock: ML, openCost: pos.limit };
+    minLock: ML, openCost: pos.limit,
+    // The fetch that priced it: a simulated cover may not fill on this same fetch (sim fill realism, 2026-10-17).
+    ...(deps.fillSource !== 'broker' && chainIdOf_(deps.getLeg) != null ? { placedChainAt: chainIdOf_(deps.getLeg) } : {}) };
   // SEND the resolved cover (debit or credit) at the resolved wing.
   const sendLegs = (style === 'debit' && !shift) ? plan.legs : CL.coverLegsFor(pos.side, anchor, W, style);
   const srl = resolveLegs(sendLegs, deps.getLeg);
@@ -489,6 +523,16 @@ async function tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, cand
         + 'falling back to the sequential open path' });
     return false;
   }
+  // NOR ON THE MARK PATH (sim fill realism, 2026-10-17). This booked a cover, an open and a locked floor on SEND
+  // ACCEPTANCE — and in simulation placeOrder accepts everything, so the combo's fill was never tested against any
+  // quote at all, and its cover booked at mark + tick, under its target. A combo that is not tested is not booked:
+  // fall back to the sequential path, whose opens and covers rest and are resolved like every other order. Routing
+  // a single 4-leg fill through resolvePendingOpen + resolveRestingCovers is the same split the broker note above
+  // describes; build it deliberately if comboOrders is ever wanted. No variant sets comboOrders today.
+  decisions.push({ action: 'combo-skip-mark',
+    note: 'comboOrders booked on send acceptance with no fill test — falling back to the sequential open path' });
+  return false;
+  // ── UNREACHABLE below: the original body, kept for the day it is rebuilt with a real fill test. ──
   if (!(deps.enforceLegUniqueness && deps._ledger)) return false;   // combo requires the leg-uniqueness ledger
   const W = cfg.spreadWidth, tick = cfg.tickIncrement, qty = cfg.quantity;
   const minFrac = deps.coverToStackMinFrac != null ? deps.coverToStackMinFrac : 0.65;
@@ -1109,7 +1153,7 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
     // guards) until a later observation says the market reached our price, which is the whole point: an
     // offset we do not own must not reshape a risk curve we are about to act on.
     best.hp.filled = false;
-    best.hp.pendingHedge = { limit: limitPx, kind: 'offset', markAtPlace: chk.mark,
+    best.hp.pendingHedge = { ...simPlacedStamp(deps), limit: limitPx, kind: 'offset', markAtPlace: chk.mark,
       orderId: (placed && placed.orderId) || null,
       placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) };
     st.positions.push(best.hp);
@@ -1221,7 +1265,7 @@ async function convertWings(st, cfg, deps, decisions, candleTime, viaRaise = fal
       markAtPlace: chk.mark, limitSent: limitPx,
       // See the note at the floor-offset site: without orderId a broker fill cannot be matched to this row.
       orderId: (placed && placed.orderId) || null,
-      pendingHedge: { limit: limitPx, kind: 'wing', markAtPlace: chk.mark, tag: w.tag,
+      pendingHedge: { ...simPlacedStamp(deps), limit: limitPx, kind: 'wing', markAtPlace: chk.mark, tag: w.tag,
         orderId: (placed && placed.orderId) || null,
         placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
@@ -1322,7 +1366,7 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
       markAtPlace: chk.mark, limitSent: limitPx,
       // See the note at the floor-offset site: without orderId a broker fill cannot be matched to this row.
       orderId: (placed && placed.orderId) || null,
-      pendingHedge: { limit: limitPx, kind: 'fly', markAtPlace: chk.mark, tag: f.tag,
+      pendingHedge: { ...simPlacedStamp(deps), limit: limitPx, kind: 'fly', markAtPlace: chk.mark, tag: f.tag,
         orderId: (placed && placed.orderId) || null,
         placedEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()) },
       openedAt: candleTime, openTime: candleTime, openEpoch: deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()),
@@ -1566,7 +1610,7 @@ async function raiseFloor(st, cfg, deps, decisions, candleTime, sig) {
       if (!placed || placed.filled === false) { stop = true; break; }
       const pos = { id: nextId('raise'), filled: false, side: 'raise', shortStrike: null, legs: h.legs, limit: startPx,
         markAtPlace: chk.mark, limitSent: startPx, orderId: (placed && placed.orderId) || null,
-        pendingHedge: { limit: startPx, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
+        pendingHedge: { ...simPlacedStamp(deps), sigmaPts: band / (cfg.floorRaiseSigmas != null ? cfg.floorRaiseSigmas : 2), limit: startPx, kind: 'raise', markAtPlace: chk.mark, tag: h.kind, orderId: (placed && placed.orderId) || null,
           placedEpoch: nowMs, quotedMid: ev.mid, quotedAsk: ev.ask,
           ...(walk ? { walkStart: startPx, ceiling, walkStepSec: walk.stepSec, walkStepDollars: walk.stepDollars } : {}),
           ...(alt ? { sentNet: 'CREDIT', sentLegs: alt.legs, sentOffset: alt.offset, sentLimit: sendPx } : {}) },
@@ -1641,6 +1685,10 @@ async function walkRaiseOrders(st, cfg, deps, decisions) {
       if (r && r.orderId) { ph.orderId = r.orderId; pos.orderId = r.orderId; }
     }
     ph.limit = target; pos.limit = target; pos.limitSent = target;
+    if (deps.fillSource !== 'broker') {   // a reprice restarts the dwell (sim fill realism, 2026-10-17)
+      ph.fillStreak = 0; ph.streakChainAt = null;
+      if (chainIdOf_(deps.getLeg) != null) ph.repricedChainAt = chainIdOf_(deps.getLeg);
+    }
     if (ph.sentNet === 'CREDIT' && ph.sentOffset != null) { ph.sentLimit = round2(ph.sentOffset - target); pos.sentLimit = ph.sentLimit; }
     decisions.push({ action: 'raise-walk', id: pos.id, from, to: target, ceiling: ph.ceiling, orderId: ph.orderId || null });
     moved++;
@@ -3233,6 +3281,108 @@ function noteCash(st, dollars) {
   return st.cashDeployed;
 }
 
+// ── SIM FILL REALISM, PART 2 (2026-10-17) ────────────────────────────────────────────────────────────
+// The 10/16 audit against real quotes found simulated fills booked off a single noisy look, on the very fetch
+// that priced the order, on a credit twin nobody quoted, on fly marks below zero and on stale legs. Every rule
+// below is MARK-PATH ONLY (fillSource !== 'broker' — the broker's fill is never second-guessed) and OFF at the
+// engine default, so fixtures and replays that predate it are unchanged; buildEngineDeps (index.js) arms them for
+// every roster variant. Knobs, all on deps:
+//   simCoverFillMinLooks / simHedgeFillMinLooks  consecutive at-or-through looks on DISTINCT chain fetches (2)
+//   simHedgeFillThroughTicks                     hedges need the market a tick better than the limit (1)
+//   simFillStrict                                cover cheapOutlier, credit-twin rules, hedge shape checks
+//   parityGateTolFrac                            two-sided parity residual gate, fraction of width (0.25)
+//   simMaxQuoteAgeSec                            refuse a leg whose quoteTime is older than this (60)
+
+// Chain fetch identity of an accessor (makeLegAccessor sets it; test stubs may set it by hand). null = unknown.
+function chainIdOf_(getLeg) { return getLeg && getLeg.chainId != null ? getLeg.chainId : null; }
+
+// THE DWELL RULE. `through` = this look passed the price test AND every quote gate. A miss resets the streak; a
+// look on the same fetch as the previous counted one does not count again; and a look on the fetch that placed or
+// last repriced the order neither counts nor fills — so minLooks 2 means two through looks on two fetches AFTER it. Returns true when the order may fill on this look. minLooks null => legacy (no dwell).
+// Also annotates the newest recorded look (noteRecentLook) with the outcome, so every look — including the first
+// at-or-through look and the one after it, which never fill — is in the record and the dwell can be scored later.
+function simDwell(o, through, getLeg, minLooks) {
+  const last = o && o.recentLooks && o.recentLooks.length ? o.recentLooks[o.recentLooks.length - 1] : null;
+  const cid = chainIdOf_(getLeg);
+  if (!through) {
+    o.fillStreak = 0; o.streakChainAt = null;
+    if (last && last.thr == null) { last.thr = 0; last.s = 0; }
+    return false;
+  }
+  // The fetch that placed or repriced the order is not evidence: the price was chosen FROM it, so being through on
+  // it says nothing. It neither counts toward the streak nor resets it (only when the dwell rule is armed).
+  const pricingFetch = minLooks != null && cid != null && (cid === o.placedChainAt || cid === o.repricedChainAt);
+  if (!pricingFetch && (cid == null || cid !== o.streakChainAt)) { o.fillStreak = (o.fillStreak || 0) + 1; o.streakChainAt = cid; }
+  if (last && last.thr == null) { last.thr = 1; last.s = o.fillStreak || 0; if (pricingFetch) last.pf = 1; }
+  if (minLooks == null) return true;
+  if (pricingFetch) return false;
+  return o.fillStreak >= minLooks;
+}
+
+// The last 4 looks on a working order (cover, hedge, open): chain fetch id (`c`, = newest quote time in that chain
+// when the chain carries one), wall time (`t`), the combo mark/bid/ask, and — set by simDwell — whether the look
+// was at-or-through with every gate passed (`thr`) and the streak it reached (`s`).
+function noteRecentLook(o, q, getLeg, nowMs) {
+  if (!o || !q) return;
+  const look = { c: chainIdOf_(getLeg), t: nowMs != null ? nowMs : Date.now(),
+    m: q.mark != null ? q.mark : null, b: q.bid != null ? q.bid : null, a: q.ask != null ? q.ask : null };
+  o.recentLooks = (o.recentLooks || []).concat([look]).slice(-4);
+}
+
+// The fetch that placed an order, stamped on the working record (mark path only).
+function simPlacedStamp(deps) {
+  return deps && deps.fillSource !== 'broker' && chainIdOf_(deps.getLeg) != null ? { placedChainAt: chainIdOf_(deps.getLeg) } : {};
+}
+
+// PER-LEG QUOTES at a fill decision, so a later audit replays the exact numbers rather than reconstructing them.
+function legQuotes(legs, getLeg) {
+  return (legs || []).map((l) => {
+    const q = getLeg(l.type, l.strike) || {};
+    return { strike: l.strike, type: l.type, side: l.side, bid: q.bid != null ? q.bid : null, ask: q.ask != null ? q.ask : null,
+      mark: q.mid != null ? q.mid : null, quoteTime: q.quoteTime != null ? q.quoteTime : null };
+  });
+}
+function fillEvidence(legs, getLeg, q, o) {
+  return { legs: legQuotes(legs, getLeg), bid: q ? q.bid : null, ask: q ? q.ask : null, mark: q ? q.mark : null,
+    chainAt: chainIdOf_(getLeg), looks: (o && o.recentLooks) || null };
+}
+
+// QUOTE AGE. A leg whose quoteTime is older than maxAgeSec is refused; a leg without one ABSTAINS and is counted.
+function quoteAgeCheck(legs, getLeg, maxAgeSec, nowMs) {
+  let unknown = 0, worst = null;
+  for (const l of legs || []) {
+    const q = getLeg(l.type, l.strike);
+    if (!q) continue;
+    if (q.quoteTime == null || !Number.isFinite(q.quoteTime)) { unknown++; continue; }
+    const age = (nowMs - q.quoteTime) / 1000;
+    if (age > maxAgeSec && (!worst || age > worst.age)) worst = { age, leg: `${l.type}${l.strike}` };
+  }
+  return { ok: !worst, unknown,
+    reason: worst ? `stale quote: ${worst.leg} last quoted ${Math.round(worst.age)}s ago (max ${maxAgeSec}s)` : null };
+}
+
+// STRUCTURE BOUNDS for anything verticalSanity does not judge (1 leg, 3-4 legs, mixed types). A European structure
+// is worth between its lowest and highest terminal payoff, so a mark outside [min, max] payoff cannot exist: a long
+// fly marked below zero, a condor above its wing, a long option below zero. A single long leg is also refused below
+// its intrinsic value at `spot` by more than a point — the stale deep-ITM leg. Mark is in the engine's sign
+// convention (long +, short -), payoff likewise, so a credit-sent iron (mark < 0) is judged the same way.
+function structureBounds(legs, mark, spot) {
+  if (mark == null || !Number.isFinite(mark) || !legs || !legs.length) return { ok: true };
+  const ks = legs.map((l) => l.strike);
+  const lo = Math.min(...ks), hi = Math.max(...ks), pad = Math.max(1000, (hi - lo) * 10);
+  const xs = [lo - pad, ...ks, hi + pad];
+  const vals = xs.map((x) => FR.payoff(legs, x, 1) / 100);
+  const vMin = Math.min(...vals), vMax = Math.max(...vals), tol = 0.05;
+  if (mark < vMin - tol) return { ok: false, reason: `mark ${round2(mark)} is below the least this structure can pay (${round2(vMin)})` };
+  if (mark > vMax + tol) return { ok: false, reason: `mark ${round2(mark)} is above the most this structure can pay (${round2(vMax)})` };
+  if (legs.length === 1 && legs[0].side === 'long' && spot > 0) {
+    const l = legs[0];
+    const intr = l.type === 'C' ? Math.max(0, spot - l.strike) : Math.max(0, l.strike - spot);
+    if (mark < intr - 1) return { ok: false, reason: `long ${l.type}${l.strike} marked ${round2(mark)} under its intrinsic ${round2(intr)} at ${round2(spot)} (stale leg)` };
+  }
+  return { ok: true };
+}
+
 function markFill(legs, limit, getLeg, tick, deps, net) {
   const q = spreadQuote(legs, getLeg);
   const mark = q.mark;
@@ -3252,6 +3402,17 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   // cheap fill — refuse it and let the order keep working.
   const sane = SQ.verticalSanity(legs, mark);
   if (!sane.ok) return { ...base, fillable: false, fill: null, badQuote: sane.reason };
+  // SIM FILL REALISM, PART 2 — mark path only (see the block above simDwell).
+  const simPath = !!deps && deps.fillSource !== 'broker';
+  if (simPath && deps.simMaxQuoteAgeSec != null) {
+    const age = quoteAgeCheck(legs, getLeg, deps.simMaxQuoteAgeSec, deps.nowMs != null ? deps.nowMs : Date.now());
+    base.quoteAgeUnknown = age.unknown;
+    if (!age.ok) return { ...base, fillable: false, fill: null, badQuote: age.reason, staleQuote: true };
+  }
+  if (simPath && deps.simFillStrict === true && !(legs.length === 2 && legs[0].type === legs[1].type)) {
+    const sb = structureBounds(legs, mark, deps.underlying);
+    if (!sb.ok) return { ...base, fillable: false, fill: null, badQuote: sb.reason };
+  }
   const usable = SQ.quoteUsable(legs, q);
   if (!usable.ok) return { ...base, fillable: false, fill: null, badQuote: usable.reason };
   // CHAIN MONOTONICITY — the invariant that actually broke on 2026-09-16, and the one gate here that
@@ -3286,7 +3447,9 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   let parity = null;
   if (legs.length === 2 && legs[0].type === legs[1].type) {
     const ks = legs.map((l) => l.strike);
-    const tolFrac = deps && deps.parityGateTolFrac != null ? deps.parityGateTolFrac : null;
+    // ARMED ON THE MARK PATH ONLY (2026-10-17): buildEngineDeps passes 0.25 for every variant; a broker run's
+    // observation and hedge placement are left exactly as they were.
+    const tolFrac = deps && deps.parityGateTolFrac != null && deps.fillSource !== 'broker' ? deps.parityGateTolFrac : null;
     const pd = SQ.parityDeviation(Math.min(...ks), Math.max(...ks), getLeg, { tolFrac: tolFrac != null ? tolFrac : 0.25 });
     if (pd) {
       parity = { residual: pd.residual, width: pd.width, callMid: pd.callMid, putMid: pd.putMid };
@@ -3568,10 +3731,52 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
       }
       continue;
     }
-    if (chk.fillable) {
-      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = chk.fill; pos.pendingHedge = null;
+    // SIM FILL REALISM, PART 2 (2026-10-17) — mark path only; see the block above simDwell.
+    //   - fill-through: the market a tick BETTER than the limit (simHedgeFillThroughTicks)
+    //   - an iron raise (put/call twin sent as a CREDIT) is tested on the legs that rest, at the credit it asks
+    //   - impossible structure marks (a long fly below zero, a condor above its wing) refused in markFill (strict)
+    //   - structureQuoteSane re-run at FILL time on 3+ leg shapes (it only ran at plan time)
+    //   - dwell: consecutive at-or-through looks on distinct fetches, never the placing/repricing fetch
+    const tickH = cfg.tickIncrement || 0.05;
+    const hStrict = deps.simFillStrict === true;
+    const thruH = (deps.simHedgeFillThroughTicks || 0) * tickH;
+    const minLooksH = deps.simHedgeFillMinLooks != null ? deps.simHedgeFillMinLooks : null;
+    const ironH = hStrict && ph.sentNet === 'CREDIT' && ph.sentOffset != null && ph.sentLimit != null
+      && Array.isArray(ph.sentLegs) && ph.sentLegs.length > 0;
+    const testLegsH = ironH ? ph.sentLegs : pos.legs;
+    let simChk = chk, simFill = chk.fill;
+    if (ironH || thruH > 0) {
+      simChk = ironH ? markFill(ph.sentLegs, round2(ph.sentLimit + thruH), deps.getLeg, tickH, deps, 'CREDIT')
+        : markFill(pos.legs, round2(ph.limit - thruH), deps.getLeg, tickH, deps);
+      if (simChk.fillable) {
+        simFill = deps.simFillAtLimit ? ph.limit
+          : ironH ? round2(ph.sentOffset - simChk.fill) : Math.min(ph.limit, simChk.fill);
+      }
+    }
+    if (simChk !== chk && simChk.quoteAgeUnknown) st.simQuoteAgeUnknown = (st.simQuoteAgeUnknown || 0) + simChk.quoteAgeUnknown;
+    else if (chk.quoteAgeUnknown) st.simQuoteAgeUnknown = (st.simQuoteAgeUnknown || 0) + chk.quoteAgeUnknown;
+    noteRecentLook(ph, simChk, deps.getLeg, deps.nowMs);
+    let hBad = simChk.badQuote || null;
+    if (simChk.fillable && hStrict && pos.legs && pos.legs.length >= 3) {
+      const spotH = paritySpot(deps.getLeg, deps.underlying != null ? deps.underlying : st.lastUnderlying,
+        deps.strikeIncrement || cfg.strikeIncrement || 10) || deps.underlying || st.lastUnderlying;
+      const midH = ironH ? round2(ph.sentOffset + simChk.mark) : simChk.mark;
+      const sq = FR.structureQuoteSane(pos.legs, midH, spotH, { sigmaPts: ph.sigmaPts });
+      if (!sq.ok) hBad = sq.reason;
+    }
+    if (hStrict && hBad && simChk.mark != null) {
+      decisions.push({ action: `${ph.kind}-badquote`, id: pos.id, mark: simChk.mark, limit: ph.limit, reason: hBad });
+    }
+    const hThrough = !!simChk.fillable && !hBad;
+    const hFill = simDwell(ph, hThrough, deps.getLeg, minLooksH);
+    if (hThrough && !hFill) {
+      decisions.push({ action: `${ph.kind}-dwell`, id: pos.id, mark: simChk.mark, streak: ph.fillStreak || 0, need: minLooksH });
+    }
+    if (hFill) {
+      pos.fillQuote = fillEvidence(testLegsH, deps.getLeg, simChk, ph);
+      pos.filled = true; pos.orderStatus = 'filled'; pos.limit = simFill; pos.pendingHedge = null;
       // Spend is counted HERE, not at placement: budget should be consumed by hedges we actually own.
-      const spent = chk.fill * 100 * (pos.quantity || cfg.quantity);
+      const spent = simFill * 100 * (pos.quantity || cfg.quantity);
       noteCash(st, spent);          // a hedge is always a DEBIT — it pays, and the ledger must see it
 
       if (ph.kind === 'wing') { st.wingCount = (st.wingCount || 0) + 1; st.wingSpent = round2((st.wingSpent || 0) + spent); }
@@ -3579,7 +3784,7 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
       else if (ph.kind === 'raise') { st.raiseCount = (st.raiseCount || 0) + 1; st.raiseSpent = round2((st.raiseSpent || 0) + spent); }
       else { st.offCount = (st.offCount || 0) + 1; st.offSpent = round2((st.offSpent || 0) + spent); }
       decisions.push({ action: `${ph.kind}-fill`, id: pos.id, legs: pos.legs, limit: ph.limit,
-        fillPrice: chk.fill, mark: chk.mark, bid: chk.bid, ask: chk.ask,
+        fillPrice: simFill, mark: simChk.mark, bid: simChk.bid, ask: simChk.ask, quote: pos.fillQuote,
         markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk, cost: Math.round(spent),
         restedMs: ph.placedEpoch != null ? now - ph.placedEpoch : null });
       filled++;
@@ -3628,6 +3833,10 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     : markFill(pos.legs, pos.limit, deps.getLeg, cfg.tickIncrement, deps);
   noteMarkLow(pos, chk, sentCredit ? pos.sentLimit : pos.limit, sentCredit ? 'CREDIT' : 'DEBIT');
   notePlaced(pos, chk, deps.underlying);
+  if (deps.fillSource !== 'broker') {
+    noteRecentLook(pos, chk, deps.getLeg, deps.nowMs);
+    if (chk.quoteAgeUnknown) st.simQuoteAgeUnknown = (st.simQuoteAgeUnknown || 0) + chk.quoteAgeUnknown;
+  }
   // CLOSED LOOP: under a real broker the fill is the BROKER'S to report. Keep observing — markLow/looks
   // above are the evidence of how close the market came — but book nothing here; applyBrokerFills does it
   // from the order row. The ladder below still runs, because working an unfilled order is exactly what
@@ -3657,7 +3866,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
     decisions.push({ action: 'open-fill', positionId: pos.id, side: pos.side, limit: pos.limit, cashDeployed: st.cashDeployed,
       mark: chk.mark, bid: chk.bid, ask: chk.ask,
       markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
-      looks: pos.looks, atOrThrough: pos.atOrThrough, restedSince: pos.openTime });
+      looks: pos.looks, atOrThrough: pos.atOrThrough, restedSince: pos.openTime,
+      quote: (pos.fillQuote = fillEvidence(sentCredit ? pos.sentLegs : pos.legs, deps.getLeg, chk, pos)) });
     st.pendingOpenId = null;
     return 1;
   }
@@ -3895,6 +4105,12 @@ async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra
   }
   const credit = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
   const before = { target: pc.target, sentCredit: pc.sentCredit };
+  // A REPRICE RESTARTS THE DWELL (sim fill realism, 2026-10-17): looks at the old price do not count toward the new
+  // one, and the fetch that repriced it cannot fill it. Mark path only.
+  if (!(deps && deps.fillSource === 'broker')) {
+    pc.fillStreak = 0; pc.streakChainAt = null;
+    if (chainIdOf_(deps && deps.getLeg) != null) pc.repricedChainAt = chainIdOf_(deps.getLeg);
+  }
   pc.target = to;                                  // the booked target moves with the working limit, or we
                                                    // would fill on one price and book at another
   let sentFrom = from, sentTo = to, net = 'DEBIT';
@@ -4157,7 +4373,22 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // bug fixed in 53b12b7, and the reason the earlier audit missed it is that it asked whether FILLED
     // credit covers deserved to fill — never whether the unfilled ones deserved not to.
     const creditRest = pc.sentNet === 'CREDIT' && pc.sentCredit != null;
-    if (mark == null) continue;
+    // SIM FILL REALISM, PART 2 (2026-10-17) — see the block above simDwell. `miss()` resets the dwell streak on
+    // every look that does not pass the price test and every quote gate.
+    const strict = !!(deps && deps.simFillStrict === true);
+    const minLooksC = deps && deps.simCoverFillMinLooks != null ? deps.simCoverFillMinLooks : null;
+    const parityTol = deps && deps.parityGateTolFrac != null ? deps.parityGateTolFrac : null;
+    const miss = () => { simDwell(pc, false, getLeg, minLooksC); };
+    noteRecentLook(pc, twinQuoted ? sentQ : quote, getLeg, deps && deps.nowMs);
+    if (mark == null) { miss(); continue; }
+    // A CREDIT COVER IS JUDGED ON THE TWIN THAT IS RESTING, OR NOT AT ALL. The parity fallback (W - debit mark)
+    // decided fills on an instrument that was not the order; strict refuses it.
+    if (strict && creditRest && !twinQuoted) {
+      miss();
+      decisions.push({ action: 'cover-twin-unquoted', positionId: pos.id, mark, sentCredit: pc.sentCredit,
+        note: 'the credit twin resting is not quoted — no fill off the debit legs by parity' });
+      continue;
+    }
     // FILL-THROUGH: a simulated cover books only when the market is at least N ticks BETTER than its price,
     // not merely touching it (cfg.coverFillThroughTicks: the roster sets 1 for every variant; the engine
     // default stays 0 = touch, so fixtures and replays that predate it are unchanged). 2026-10-05:
@@ -4181,13 +4412,23 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       const w0 = ks0.length ? Math.max(...ks0) - Math.min(...ks0) : cfg.spreadWidth;
       if (qq && qq.bid != null && qq.ask != null && (qq.ask - qq.bid) > cfg.simMaxQuoteWidthFrac * w0) {
         decisions.push({ action: 'cover-wide-quote', positionId: pos.id, bid: qq.bid, ask: qq.ask, mark, note: 'quote wider than the spread — not a tradeable mid' });
-        continue;
+        miss(); continue;
       }
     }
     if (creditRest) {
-      if (!(creditOffered() >= pc.sentCredit + thru - 1e-9)) continue;   // market has not come up to our ask yet
+      if (!(creditOffered() >= pc.sentCredit + thru - 1e-9)) { miss(); continue; }   // market has not come up to our ask yet
+      // BOTH CHAINS AT THE PRICE (strict, 2026-10-17). The twin's own credit reaching the ask is not enough: the debit
+      // legs at the same strikes must ALSO mark at or through the debit-equivalent (W - sentCredit), on the same look.
+      // The 10/05-10/16 audit: 831 cheap credit covers sat a median 6.5% of W (p90 14%) under the debit legs' mid,
+      // so a tolerance either missed them (25%) or refused good fills (5%). Requiring both, on every dwell look, needs
+      // no tolerance at all.
+      if (strict) {
+        const ksB = (pc.legs || []).map((l) => l.strike);
+        const cwB = ksB.length ? Math.max(...ksB) - Math.min(...ksB) : 0;
+        if (mark > round2(cwB - pc.sentCredit) - thru + 1e-9) { miss(); continue; }
+      }
     } else if (mark > pc.target - thru + 1e-9) {
-      continue;                                          // debit: not fillable yet — keep resting
+      miss(); continue;                                  // debit: not fillable yet — keep resting
     }
     // THE MAIN COVER FILL PATH, and where most of 2026-09-16's 154 bogus fills were booked. The guard
     // above only asks whether the mark reached the target, which an IMPOSSIBLE mark passes trivially:
@@ -4208,18 +4449,66 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     const sane = SQ.verticalSanity(pc.legs, mark);
     if (!sane.ok) {
       decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: sane.reason, target: pc.target });
-      continue;
+      miss(); continue;
     }
     const usable = SQ.quoteUsable(pc.legs, quote);
     if (!usable.ok) {
       decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason: usable.reason, target: pc.target });
-      continue;
+      miss(); continue;
     }
     const cmono = SQ.chainMonotonic(pc.legs, getLeg, (deps && deps.strikeIncrement) || cfg.strikeIncrement || 10);
     if (!cmono.ok) {
       const v = cmono.violations[0];
       decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, target: pc.target,
         reason: `chain not monotonic: ${v.type}${v.at} at ${v.mid} beside ${v.type}${v.neighbour} at ${v.neighbourMid}` });
+      miss(); continue;
+    }
+    // THE GATES markFill ALREADY RAN AND THIS PATH DID NOT (2026-10-17). Each refusal is a bad quote: log it, reset
+    // the dwell, keep the order working.
+    const badC = (reason) => { decisions.push({ action: 'cover-badquote', positionId: pos.id, mark, reason, target: pc.target }); miss(); };
+    // Too cheap to be true — the debit legs priced below a further-OTM sibling, or far under 40% of W while deep ITM.
+    // The underlying is read off THIS chain (put-call parity) rather than the last candle's, which the 30s worker
+    // carries up to five minutes stale.
+    if (strict) {
+      const incrC = (deps && deps.strikeIncrement) || cfg.strikeIncrement || 10;
+      const near = deps && deps.underlying != null ? deps.underlying : st.lastUnderlying;
+      const spotC = paritySpot(getLeg, near, incrC) || near;
+      const co = SQ.cheapOutlier(pc.legs, getLeg, { incr: incrC, underlying: spotC });
+      if (!co.ok) { badC(co.reason); continue; }
+      // PARITY FAIR for ITM legs (2026-10-17). A stale deep-ITM leg mid drags the combo toward W/2 on a 0..2W natural
+      // (10/16 v9-20 10:42:50: +C29630 -C29650 quoted 1.0 / 9.85 / 18.7 where parity said ~13.7). Each ITM leg is
+      // revalued from the OTHER type at its strike (C - P = S - K, 0DTE, r ~ 0), which is the liquid OTM quote.
+      const pf = SQ.parityFairCombo(pc.legs, getLeg, spotC);
+      if (pf && pf.anyItm) {
+        const tolP = Math.max(0.5, 0.05 * pf.width);
+        if (mark < pf.fair - tolP - 1e-9) {
+          badC(`mark ${mark} is under the parity-fair ${pf.fair} (ITM legs from the other type at spot ${round2(spotC)}; tolerance ${round2(tolP)}) — a stale ITM leg, not a cheap spread`);
+          continue;
+        }
+      }
+    }
+    // Two-sided parity residual on the debit legs and on the resting twin.
+    if (parityTol != null) {
+      let pbad = null;
+      for (const ls of [pc.legs, creditRest ? pc.sentLegs : null]) {
+        if (!ls || ls.length !== 2 || ls[0].type !== ls[1].type) continue;
+        const ks = ls.map((l) => l.strike);
+        const pd = SQ.parityDeviation(Math.min(...ks), Math.max(...ks), getLeg, { tolFrac: parityTol });
+        if (pd && !pd.ok) { pbad = `parity off by ${pd.residual} on a ${pd.width} spread (calls ${pd.callMid} + puts ${pd.putMid})`; break; }
+      }
+      if (pbad) { badC(pbad); continue; }
+    }
+    // Quote age, on every leg the test read.
+    if (deps && deps.simMaxQuoteAgeSec != null) {
+      const ageLegs = (pc.legs || []).concat(creditRest && pc.sentLegs ? pc.sentLegs : []);
+      const age = quoteAgeCheck(ageLegs, getLeg, deps.simMaxQuoteAgeSec, deps.nowMs != null ? deps.nowMs : Date.now());
+      if (age.unknown) st.simQuoteAgeUnknown = (st.simQuoteAgeUnknown || 0) + age.unknown;
+      if (!age.ok) { badC(age.reason); continue; }
+    }
+    // DWELL: consecutive at-or-through looks on distinct fetches, never the fetch that placed or repriced it.
+    if (!simDwell(pc, true, getLeg, minLooksC)) {
+      decisions.push({ action: 'cover-dwell', positionId: pos.id, mark, streak: pc.fillStreak || 0, need: minLooksC,
+        sameFetch: chainIdOf_(getLeg) != null && (chainIdOf_(getLeg) === pc.placedChainAt || chainIdOf_(getLeg) === pc.repricedChainAt) });
       continue;
     }
     // THE PRICE, IN THE SPACE THE ORDER WAS SENT IN, then booked debit-canonically.
@@ -4329,12 +4618,16 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
     // looked identical afterwards. `filledCover` carries the same object forward and resolveRestingCovers
     // keeps feeding it observations, accruing throughLooks/throughAt/throughBest for the rest of the day.
     // It is evidence only; nothing reads it to make a decision.
+    // PER-LEG EVIDENCE (2026-10-17): the debit legs, and the twin's legs when it was the order resting.
+    pos.coverFillQuote = fillEvidence(pc.legs, getLeg, quote, pc);
+    if (creditRest && twinQuoted) pos.coverFillQuote.sent = fillEvidence(pc.sentLegs, getLeg, sentQ, null);
     pc.filled = true;
     pos.filledCover = pc;
     pos.pendingCover = null;
     decisions.push({ action: 'cover-fill', positionId: pos.id, coverId: pos.coverId, fillPrice: fill, mark,
       bid: quote.bid, ask: quote.ask, markLow: pc.markLow, markLowBid: pc.markLowBid, markLowAsk: pc.markLowAsk,
-      looks: pc.looks, atOrThrough: pc.atOrThrough, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed });
+      looks: pc.looks, atOrThrough: pc.atOrThrough, target: pc.target, geometry: pc.geometry, lockedFloor: floor, sentNet: pc.sentNet, cashDeployed: st.cashDeployed,
+      quote: pos.coverFillQuote });
   }
 }
 
@@ -4358,6 +4651,7 @@ module.exports = {
   lateFloorLimit,                // LATE-DAY FLOOR GUARD
   ratchetLimit, noteFloorPeak,   // FLOOR RATCHET — exported so the suite can drive them directly
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
+  structureBounds, simDwell, quoteAgeCheck,   // SIM FILL REALISM part 2 (2026-10-17) — exported for their tests
   placeRestingCover,
   coverToStackFreeBudget, capState,   // CAP ACCOUNTING — exported so stackLocked's effect can be tested             // COVER PLACEMENT — exported so credit/debit price PARITY can be tested
   buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly

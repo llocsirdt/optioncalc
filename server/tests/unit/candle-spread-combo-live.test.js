@@ -32,48 +32,21 @@ const deps = {
 };
 
 (async () => {
+  // ── SIM FILL REALISM (2026-10-17): THE MARK PATH NO LONGER BOOKS A COMBO ON SEND ACCEPTANCE ──────
+  // It booked a cover, an open and a locked floor the moment placeOrder accepted — and in simulation placeOrder
+  // accepts everything — so the combo's fill was never tested against any quote, and its cover booked at
+  // mark + tick, under its target. It now declines (falls back to the sequential path), sends nothing and books
+  // nothing; the broker path already declined (combo-skip-broker, pinned in broker-authority). The original
+  // booking assertions (one CUSTOM order, both halves booked, attributed shares) tested a path that cannot run.
   const decisions = [];
   const placed = await trader.tryComboLockAndOpen(st, res, 'bull', cfg, deps, decisions, '2026-09-01T10:00:00');
-  ok(placed === true, `combo placed (returned ${placed})`);
-  ok(sent.length === 1, `exactly ONE order sent (${sent.length})`);
-  const p = sent[0] && sent[0].payload;
-  ok(p && p.complexOrderStrategyType === 'CUSTOM', 'order is a CUSTOM combo');
-  ok(p && p.orderLegCollection.length === 4, `4 legs in one order (${p && p.orderLegCollection.length})`);
-  ok(p && (p.orderType === 'NET_DEBIT' || p.orderType === 'NET_CREDIT'), `net type set (${p && p.orderType})`);
-  ok(winner.covered === true && winner.coverLimit != null && winner.coverLegs, 'winner covered with legs + limit');
-  ok(st.realizedPnl > 0, `locked floor booked (realizedPnl ${st.realizedPnl})`);
-  const newPos = st.positions.find(x => x.id !== 'pos-1');
-  ok(newPos && newPos.side === 'bull' && newPos.viaCombo === 'pos-1', 'new open added, tagged viaCombo');
-  ok(newPos && newPos.filled === true, 'new open marked filled');
-  ok(st.legLedger['C110'] && st.legLedger['C100'] && st.legLedger['C120'], 'ledger recorded cover + open legs');
-  const dec = decisions.find(d => d.action === 'combo-lock-open');
-  ok(dec && dec.openId === (newPos && newPos.id), 'combo-lock-open decision logged');
-
-  // ── THE PRICE BELONGS TO THE SPREAD THAT INCURRED IT ────────────────────────────────────────────
-  // cn.side/cn.limit describe the whole FOUR-LEG order. Both halves were stamped with them, so a
-  // credit-style cover inside a net-DEBIT combo recorded coverSentNet 'DEBIT' — and every valuation then
-  // priced the debit twin of legs that were never sent — while the open recorded the combo's own net as
-  // its sentLimit, which book-value reads as `-sentLimit` for a credit open: one position carrying the
-  // cash of the entire order.
-  {
-    const dec = decisions.find((d) => d.action === 'combo-lock-open');
-    ok(dec.coverNet === (winner.coverLegs && winner.coverSentNet),
-      `the decision and the position agree on the cover's own net (${dec.coverNet} / ${winner.coverSentNet})`);
-    ok(['DEBIT', 'CREDIT'].includes(winner.coverSentNet), 'the cover carries a net of its own');
-    ok(winner.coverSentNet !== 'DEBIT' || !winner.coverSentCredit,
-      'a debit cover carries no credit figure');
-    // The two shares must reconstruct the order exactly — that is what makes them an attribution rather
-    // than two more guesses.
-    const signed = (net, amt) => (net === 'CREDIT' ? -amt : amt);
-    const sum = Math.round((signed(dec.coverNet, dec.coverPart) + signed(dec.openNet, dec.openPart)) * 100) / 100;
-    const orderSigned = signed(dec.net, dec.limit);
-    ok(Math.abs(sum - orderSigned) < 0.011,
-      `cover share ${dec.coverPart} ${dec.coverNet} + open share ${dec.openPart} ${dec.openNet} = the order's ${orderSigned}`);
-    ok(newPos.sentLimit === dec.openPart && newPos.sentNet === dec.openNet,
-      `the open records its OWN share (${newPos.sentLimit} ${newPos.sentNet}), not the combo's ${dec.limit} ${dec.net}`);
-    ok(newPos.comboLimit === dec.limit && newPos.comboNet === dec.net,
-      'while still carrying the order-level figure, so the fill can be reconciled');
-  }
+  ok(placed === false, `mark path: combo declines (returned ${placed})`);
+  ok(sent.length === 0, `nothing sent (${sent.length})`);
+  ok(winner.covered === false && winner.coverLimit == null, 'winner NOT covered');
+  ok(st.realizedPnl === 0, `no locked floor booked (realizedPnl ${st.realizedPnl})`);
+  ok(st.positions.length === 1, 'no open booked');
+  ok(Object.keys(st.legLedger).length === 2, 'ledger unchanged (only the winner legs)');
+  ok(decisions.some((d) => d.action === 'combo-skip-mark'), 'combo-skip-mark logged');
 
   // ── A SLID COVER SENDS THE STRIKES IT RESERVED ──────────────────────────────────────────────────
   // coverSentLegs and coverBookLegs were both built at winner.shortStrike, ignoring rc.anchor. When the
