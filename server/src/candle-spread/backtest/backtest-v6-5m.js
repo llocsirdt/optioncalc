@@ -339,9 +339,15 @@ function runDay5m(bars, signalFn, opts = {}) {
   const touchCov = opts.touchCover && opts.touchCover !== 'off' ? opts.touchCover : null;
   const touchFilt = opts.touchFilter && opts.touchFilter !== 'off' ? opts.touchFilter : null;
   const touchOn = !!(touchCov || touchFilt);
-  const TGT = touchOn ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
+  // STACK GATE (backtest-only, 2026-10-17; default off): an ADD on side X (the book already holds a same-side position —
+  // opts.stackScope 'uncovered' (default) or 'any') must pass a trend read: 'notAgainst' (neither RTH 15m nor 60m against),
+  // 'oneWith' (>= 1 RTH TF with, none against), 'rth15' / 'rth60' (that TF not against), 'nqNotAgainst' (NQ 15m/60m).
+  const stackGate = opts.stackGate && opts.stackGate !== 'off' ? opts.stackGate : null;
+  const stackScopeAny = opts.stackScope === 'any';
+  let stackBlocked = 0, stackBothBlocked = 0, stackAdds = 0, sgRt15 = 0, sgRt60 = 0, sgNq15 = 0, sgNq60 = 0;
+  const TGT = (touchOn || stackGate) ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
   const touchMode = opts.touchTarget === 'ladder' ? 'ladder' : 'mid';
-  const rthLines = touchOn ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
+  const rthLines = (touchOn || stackGate) ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
   let setupNow = null, setupPrev = null, touchMidNow = null, touchMidPrev = null, touchSNow = null, touchSPrev = null;
   let touchHits = 0, touchCoverFills = 0, touchBlocked = 0, touchSetupBars = 0;
   // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
@@ -837,16 +843,24 @@ function runDay5m(bars, signalFn, opts = {}) {
       iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
     }
     const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
-    if (touchOn) {   // v11 setup at THIS completed bar (opens decided at its close); touches in this bar use the PREVIOUS one
+    if (touchOn || stackGate) {   // RTH lines at THIS completed bar (opens decided at its close)
       const _m = etMinute(bars[i].dt), _day = TGT.etIso(bars[i].dt);
-      setupPrev = setupNow; touchMidPrev = touchMidNow; touchSPrev = touchSNow;
       if (_m >= 575) rthLines.push({ day: _day, min: _m, open: (bars[i].px || c5).open, high: px.high, low: px.low, close: S });
       const _r15 = rthLines.lines(15, _day, _m), _r60 = rthLines.lines(60, _day, _m);
+      if (stackGate) {   // trend reads: price vs completed 9EMA + its slope, the backtest-target.js read
+        sgRt15 = _r15 ? TGT.trendOf(S, _r15.ema, _r15.ema - _r15.emaPrev) : 0;
+        sgRt60 = _r60 ? TGT.trendOf(S, _r60.ema, _r60.ema - _r60.emaPrev) : 0;
+        sgNq15 = TGT.trendOf(c5.close, A['15m'].ema, TGT.nqSlope(A['15m']));
+        sgNq60 = TGT.trendOf(c5.close, A['60m'].ema, TGT.nqSlope(A['60m']));
+      }
+      if (touchOn) {   // v11 setup; touches in this bar use the PREVIOUS one
+      setupPrev = setupNow; touchMidPrev = touchMidNow; touchSPrev = touchSNow;
       setupNow = TGT.v11Setup({ A, nq: c5.close, S, sig: S * ivBaseT * Math.sqrt(tau), r15: _r15, r60: _r60,
         priorClose: opts.rthCtx ? opts.rthCtx.priorClose : null, minDist: opts.touchMinDist != null ? opts.touchMinDist : 0.15,
         maxDist: opts.touchMaxDist != null ? opts.touchMaxDist : 1.0, mode: touchMode });
       touchMidNow = _r15 ? _r15.mid : null; touchSNow = S;
       if (setupNow) touchSetupBars++;
+      }
     }
     const capMark = (t, k) => legsMark([{ side: 'long', type: t, strike: k }], S, tau, iv);   // single-leg mid for capital-legs
     const isDeep = pos => pFrac != null && !pos.covered && legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH;
@@ -1836,6 +1850,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     // position on the open's side ('same') or on either side ('both') to the give-up path, its price allowed up to the
     // give-up cap + extra (or the market), sticky until it fills. The open itself goes ahead as usual. The chase
     // starts at the next bar's cover pass (one 5m bar later than live would).
+    const _c2oPrev = gateC2oWait;   // stack gate: did the c2o wait block THIS open?
     if (opts.coverToOpen && sig.openSide) {
       for (const p of st.positions) {
         if (p.covered || !p.pendingCover || p._c2o != null || (p.side !== 'bull' && p.side !== 'bear')) continue;
@@ -1853,6 +1868,24 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (touchFilt && sig.openSide && dirOk && !openGated) {
       const _ok = touchFilt === 'require' ? !!(setupNow && setupNow.side === sig.openSide) : !(setupNow && setupNow.side !== sig.openSide);
       if (!_ok) { openGated = true; touchBlocked++; }
+    }
+    // STACK GATE: only an ADD (same-side position already held, or a same-side open working) is judged.
+    if (stackGate && sig.openSide && dirOk) {
+      const X = sig.openSide, d = X === 'bull' ? 1 : -1;
+      const isAdd = st.positions.some((p) => !p.hedge && p.side === X && (stackScopeAny || !p.covered))
+        || !!(st.pendingOpen && st.pendingOpen.side === X);
+      if (isAdd) {
+        stackAdds++;
+        const ok = stackGate === 'notAgainst' ? (sgRt15 !== -d && sgRt60 !== -d)
+          : stackGate === 'oneWith' ? ((sgRt15 === d || sgRt60 === d) && sgRt15 !== -d && sgRt60 !== -d)
+            : stackGate === 'rth15' ? sgRt15 !== -d
+              : stackGate === 'rth60' ? sgRt60 !== -d
+                : stackGate === 'nqNotAgainst' ? (sgNq15 !== -d && sgNq60 !== -d) : true;
+        if (!ok) {
+          if (gateC2oWait !== _c2oPrev) stackBothBlocked++;   // the c2o wait already refused it
+          if (!openGated) { openGated = true; stackBlocked++; }
+        }
+      }
     }
     if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
       let o = G.buildOpen(sig.openSide, S, tau, iv);
@@ -2189,6 +2222,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
+    stackGate: stackGate ? { blocked: stackBlocked, alsoC2o: stackBothBlocked, adds: stackAdds } : undefined,
     touch: touchOn ? { hits: touchHits, coverFills: touchCoverFills, blocked: touchBlocked, setupBars: touchSetupBars } : undefined,
     sigCoverGiveUps, coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,

@@ -523,7 +523,7 @@ function runDayTarget(bars, optsIn = {}) {
     uncoveredEod: verts.filter((p) => !p.covered).length,
     governor: null, ratchet: null,
     // target-engine extras
-    touch: undefined, decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
+    stackGate: undefined, touch: undefined, decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
   };
 }
 

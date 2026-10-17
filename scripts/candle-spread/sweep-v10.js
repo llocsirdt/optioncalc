@@ -27,7 +27,9 @@ const VARS_ONLY = (argVal('--variants', '') || '').split(',').filter(Boolean);
 const NO_CONTROLS = process.argv.includes('--noControls');
 const IS_CHILD = process.argv.includes('--_slice');
 // --overlay: the v11 TOUCH OVERLAY on the roster v6-v9 engines (runDay5m opts.touch*), instead of the target engines.
-const OVERLAY = process.argv.includes('--overlay');
+// --stackGate: the NDX-trend gate on ADDS (runDay5m opts.stackGate / stackScope) on the same roster variants.
+const STACK = process.argv.includes('--stackGate');
+const OVERLAY = process.argv.includes('--overlay') || STACK;
 
 // ── days (same filter as the baselines) ──
 const t0 = Date.now();
@@ -75,9 +77,12 @@ const CONTROLS = ['v6', 'v7', 'v8', 'v9'].flatMap((f) => [10, 20, 40].map((w) =>
 const OVERLAY_ARMS = [['base', {}], ['touchBe', { touchCover: 'be' }], ['touchGu', { touchCover: 'gu' }], ['touchBeAny', { touchCover: 'be', touchAnyTime: true }],
   ['touchBeLadder', { touchCover: 'be', touchTarget: 'ladder' }], ['filterBlock', { touchFilter: 'block-against' }], ['filterRequire', { touchFilter: 'require' }],
   ['touchBeFilterBlock', { touchCover: 'be', touchFilter: 'block-against' }]];
+const STACK_ARMS = [['base', {}], ['notAgainst', { stackGate: 'notAgainst' }], ['oneWith', { stackGate: 'oneWith' }], ['rth15', { stackGate: 'rth15' }],
+  ['rth60', { stackGate: 'rth60' }], ['nqNotAgainst', { stackGate: 'nqNotAgainst' }], ['notAgainstAny', { stackGate: 'notAgainst', stackScope: 'any' }],
+  ['oneWithAny', { stackGate: 'oneWith', stackScope: 'any' }]];
 const units = [];
 if (OVERLAY) {
-  for (const c of CONTROLS) for (const [arm, over] of OVERLAY_ARMS) {
+  for (const c of CONTROLS) for (const [arm, over] of (STACK ? STACK_ARMS : OVERLAY_ARMS)) {
     if ((VARS_ONLY.length && !VARS_ONLY.includes(c)) || (ARMS_ONLY.length && !ARMS_ONLY.includes(arm))) continue;
     units.push({ key: `${c}|${arm}`, kind: 'control', variant: c, arm, over });
   }
@@ -95,7 +100,8 @@ if (!NO_CONTROLS && !OVERLAY) for (const c of CONTROLS) if (!VARS_ONLY.length ||
 const slim = (r) => ({ t: r.terminal, o: r.opens, f: r.filled, n: r.naked, tr: r.lock && r.lock.traded ? 1 : 0, ef: r.lock ? r.lock.endBookFloor : null,
   nl: r.lock && r.lock.endFloorNoLoss ? 1 : 0, ifa: r.intradayFloorAvg, ifp: r.intradayFloorNonNegPct, te: r.tents || 0,
   op: r.openLadder ? [r.openLadder.placed, r.openLadder.filled] : null, d: r.decisions || null, gd: r.gapDay ? 1 : 0,
-  th: r.touch ? [r.touch.hits, r.touch.coverFills, r.touch.blocked, r.touch.setupBars] : null });
+  th: r.touch ? [r.touch.hits, r.touch.coverFills, r.touch.blocked, r.touch.setupBars] : null,
+  sg: r.stackGate ? [r.stackGate.blocked, r.stackGate.alsoC2o, r.stackGate.adds] : null });
 
 // COVER CONFIG FROM THE ROSTER: the v6-W run through optsFor, sliced to the cover keys — so a v10/v11 vertical is
 // covered exactly as a v6 vertical of that width (target/minLock, geometry, ladder, give-up, c2o, stall, fill rules).
@@ -163,6 +169,8 @@ function agg(recs) {
     out.opensBeforeTouchPerDay = per(D.opensBeforeTouch); out.opensAfterTouchPerDay = per(D.opensAfterTouch);
     out.decisionsPerDay = {}; for (const k in D) out.decisionsPerDay[k] = per(D[k]);
   } else {
+    if (recs[0] && recs[0].sg) { const t = [0, 1, 2].map((j) => recs.reduce((a, r) => a + (r.sg ? r.sg[j] : 0), 0));
+      out.blockedAddsPerDay = per(t[0]); out.alsoC2oPerDay = per(t[1]); out.addsPerDay = per(t[2]); }
     if (recs[0] && recs[0].th) { const t = [0, 1, 2, 3].map((j) => recs.reduce((a, r) => a + (r.th ? r.th[j] : 0), 0));
       out.touchHitsPerDay = per(t[0]); out.touchCoverFillsPerDay = per(t[1]); out.touchBlockedPerDay = per(t[2]); out.setupBarsPerDay = per(t[3]); }
     const pl = recs.reduce((a, r) => a + (r.op ? r.op[0] : 0), 0), fl = recs.reduce((a, r) => a + (r.op ? r.op[1] : 0), 0);
@@ -190,7 +198,7 @@ function agg(recs) {
   const tag = ARMS_ONLY.length ? '-' + ARMS_ONLY.join('_').slice(0, 40) : '';
   fs.writeFileSync(path.join(OUT, `sweep${tag}.json`), JSON.stringify({ meta, rows }, null, 1));
   const cols = ['days', 'total', 'lockedPct', 'avgEndFloor', 'avgDaily', 'median', 'worst5', 'worst10', 'maxDD', 'maxDD30', 'worst', 'best', 'winPct', 'opensPerDay', 'payoff',
-    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay'];
+    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay'];
   const lines = [['variant', 'arm', 'era', ...cols].join(',')];
   for (const r of rows) for (const [e, a] of [['all', r.all], ['2026', r.y2026], ['pre', r.pre]]) if (a) lines.push([r.variant, r.arm, e, ...cols.map((c) => (a[c] == null ? '' : a[c]))].join(','));
   fs.writeFileSync(path.join(OUT, `sweep${tag}.csv`), lines.join('\n') + '\n');
