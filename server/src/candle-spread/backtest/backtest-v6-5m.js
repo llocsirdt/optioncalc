@@ -345,9 +345,30 @@ function runDay5m(bars, signalFn, opts = {}) {
   const stackGate = opts.stackGate && opts.stackGate !== 'off' ? opts.stackGate : null;
   const stackScopeAny = opts.stackScope === 'any';
   let stackBlocked = 0, stackBothBlocked = 0, stackAdds = 0, sgRt15 = 0, sgRt60 = 0, sgNq15 = 0, sgNq60 = 0;
-  const TGT = (touchOn || stackGate) ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
+  // ══ NATURAL COVER (v12 / v13; backtest-only, 2026-10-17; default OFF = byte-identical) ═════════════════════════
+  // opts.natural 'v12': NO per-position covers; a same-side ADD needs the last completed NQ 15m candle at the outer band
+  //   (opts.addGate, maxAdds per side); a REVERSAL-OPEN (REV) on the other side of the book's live bias when an outer-band
+  //   touch (opts.revTouch), speed (opts.revWindowMin of the last same-side open) and a zigzag run (opts.revRun) all hold,
+  //   struck by opts.revStrike ('same' | 'curve' | 'cost'); a JUMP GUARD (opts.jumpGuard) opens the protective side when
+  //   the book's mark at spot +- X (the 15-min p95 move by time of day x IV / median IV) is through -lossMax.
+  // opts.natural 'v13': v12 + the rostered continuous cover, placed only once a position is coverAfterMin old.
+  // opts.perPositionCovers === false (no natural): the per-position covers alone switched off (the reference arm).
+  const natural = opts.natural === 'v12' || opts.natural === 'v13' ? opts.natural : null;
+  const noPpc = !!natural || opts.perPositionCovers === false;
+  const coverAfterMs = natural === 'v13' ? (opts.coverAfterMin != null ? opts.coverAfterMin : 30) * 60000 : null;
+  const NC = natural ? { addGate: opts.addGate !== false, maxAdds: opts.maxAdds != null ? opts.maxAdds : 3, revTouch: opts.revTouch || 'rth5|nq60',
+    revWindowMs: opts.revWindowMin === false ? null : (opts.revWindowMin != null ? opts.revWindowMin : 30) * 60000,
+    revRun: opts.revRun === false ? null : (opts.revRun != null ? opts.revRun : 40), revStrike: opts.revStrike || 'same', revMaxTotal: 1.15,
+    jumpGuard: opts.jumpGuard !== false, guardMult: opts.guardMult != null ? opts.guardMult : 1, guardFixed: opts.guardFixed != null ? opts.guardFixed : null,
+    guardMedianIv: opts.guardMedianIv, guardMaxPerDay: opts.guardMaxPerDay != null ? opts.guardMaxPerDay : 6, theta: 20, lineTol: 12, touchTol: 3 } : null;
+  const ncC = { natLegSkip: 0, natCapBlocked: 0, revReach: 0, adds: 0, addBlocked: 0, addCapped: 0, rev: 0, revPlaced: 0, revFilled: 0, revSameHit: 0, revSkipTotal: 0, revNoStrike: 0, revTouch: 0, revWindow: 0, revRun: 0,
+    revMidOnly: 0, guard: 0, guardSkip: 0, guardNoRaise: 0 };
+  const zz = { dir: 0, hi: null, lo: null, ext: null, piv: null, last: null };
+  let ncR5 = null, ncR15 = null, ncR60 = null;
+  const ceilTk = (p) => Math.round(Math.ceil((p / TICK) - 1e-9) * TICK * 100) / 100;
+  const TGT = (touchOn || stackGate || natural) ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
   const touchMode = opts.touchTarget === 'ladder' ? 'ladder' : 'mid';
-  const rthLines = (touchOn || stackGate) ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
+  const rthLines = (touchOn || stackGate || natural) ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
   let setupNow = null, setupPrev = null, touchMidNow = null, touchMidPrev = null, touchSNow = null, touchSPrev = null;
   let touchHits = 0, touchCoverFills = 0, touchBlocked = 0, touchSetupBars = 0;
   // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
@@ -622,6 +643,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   // 8 naked bulls stayed on). So "cover to reduce risk" is only true position-locally; against the book it
   // has to be checked. Ungoverned callers keep the legacy unconditional behaviour (baseline parity).
   function lockDeepWinners(need, S, tau, iv, floorAware) {
+    if (noPpc) return [];   // natural cover / reference arm: no per-position covers
     const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
     const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge)
       .map(p => ({ p, mark: legsMark(p.legs, S, tau, iv) }))
@@ -802,6 +824,130 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (-floorNow() > lossMax) { const n = buyFloorOffsets(lossMax, S, tau, iv, true); if (!floorOffset) frCapCount += n; }
   }
 
+  // ── NATURAL COVER helpers (opts.natural; see the setup block above) ─────────────────────────────────────────
+  const ncLive = () => st.positions.filter((p) => !p.hedge && !p.covered && !p._offset && p._nat !== 'guard');
+  // REV strike: 'same' = the paired position's short (else one strike cheaper/dearer to fit the price cap, else the
+  // v6 geometry); 'cost' = pair cost + REV cost closest to <= W; 'curve' = max book floor (expiry) over spot +- 1 sigma.
+  // Any pick must keep pair + REV <= 1.15 W.
+  function buildRev(revSide, pair, S, tau, iv, sigPts) {
+    const W = G.WIDTH, incr = legIncr, capF = G.capFrac != null ? G.capFrac : 0.55;
+    const vert = (K) => (revSide === 'bull' ? [{ side: 'long', type: 'C', strike: K - W }, { side: 'short', type: 'C', strike: K }]
+      : [{ side: 'long', type: 'P', strike: K + W }, { side: 'short', type: 'P', strike: K }]);
+    const mk = (K) => { const legs = vert(K), m = legsMark(legs, S, tau, iv); return { legs, shortStrike: K, mark: m, limit: Math.max(TICK, ceilTk(m)) }; };
+    const fits = (c) => c.mark > 0 && c.mark <= capF * W + 1e-9;
+    const cheaper = revSide === 'bull' ? incr : -incr, K0 = pair.shortStrike;
+    let pick = null, sameHit = false;
+    if (NC.revStrike === 'same') {
+      const c0 = mk(K0);
+      if (fits(c0)) { pick = c0; sameHit = true; }
+      else { const c1 = mk(K0 + cheaper), c2 = mk(K0 - cheaper); pick = fits(c1) ? c1 : fits(c2) ? c2 : null; }
+      if (!pick) { const g = G.buildOpen(revSide, S, tau, iv); if (g && !g.skip && g.legs) pick = { legs: g.legs, shortStrike: g.shortStrike, limit: g.limit }; }
+    } else if (NC.revStrike === 'cost') {
+      let best = null;
+      for (let j = -4; j <= 4; j++) { const c = mk(K0 + j * incr); if (!fits(c)) continue; const tot = pair.limit + c.limit;
+        const score = tot <= W + 1e-9 ? W - tot : 1000 + tot - W; if (!best || score < best.score) best = { c, score }; }
+      pick = best && best.c;
+    } else {
+      const { xs } = FR.samplePoints(S, sigPts, incr, null), base = xs.map((x) => bookAt(x, null));
+      const ctr = Math.round(S / incr) * incr, nK = Math.max(2, Math.ceil(sigPts / incr));
+      let best = null;
+      for (let j = -nK; j <= nK; j++) {
+        const c = mk(ctr + j * incr); if (!fits(c)) continue;
+        let mn = Infinity; for (let q = 0; q < xs.length; q++) { const v = base[q] + (legsPayoff(c.legs, xs[q]) - c.limit) * 100 * QTY; if (v < mn) mn = v; }
+        if (!best || mn > best.mn) best = { c, mn };
+      }
+      pick = best && best.c;
+    }
+    if (!pick) { ncC.revNoStrike++; return null; }
+    if (pair.limit + pick.limit > NC.revMaxTotal * W + 1e-9) { ncC.revSkipTotal++; return null; }
+    if (sameHit) ncC.revSameHit++;
+    return { legs: pick.legs, shortStrike: pick.shortStrike, limit: pick.limit, _natural: 'rev', _pair: pair };
+  }
+  // The bar's natural-cover decision on top of the v6 signal: a REV takes priority; otherwise a same-side open is an ADD
+  // and must pass the 15m band gate and the per-side cap.
+  function naturalStep(sig, A, S, tau, iv, c5, nowEpoch, sigPts) {
+    const live = ncLive(), nB = live.filter((p) => p.side === 'bull').length, nR = live.length - nB;
+    let bias = nB > nR ? 'bull' : nR > nB ? 'bear' : null;
+    if (!bias && live.length) bias = live.reduce((a, p) => (p.openEpoch >= a.openEpoch ? p : a)).side;
+    const tol = NC.touchTol;
+    const outer = (c, d) => !!(c && c.bbupper != null && (d > 0 ? c.high >= c.bbupper - tol : c.low <= c.bblower + tol));
+    const outerR = (r, d) => !!(r && r.upper != null && (d > 0 ? r.high >= r.upper - tol : r.low <= r.lower + tol));
+    if (bias && !(st.pendingOpen && st.pendingOpen.o && st.pendingOpen.o._natural)) {
+      const d = bias === 'bull' ? 1 : -1, revSide = bias === 'bull' ? 'bear' : 'bull';
+      const tRth5 = outerR(ncR5, d), tNq60 = outer(A['60m'], d);
+      const anyOuter = tRth5 || tNq60 || outer(A['5m'], d) || outer(A['15m'], d) || outerR(ncR15, d) || outerR(ncR60, d);
+      const touchOk = NC.revTouch === 'off' ? true : NC.revTouch === 'any' ? anyOuter : (tRth5 || tNq60);
+      const inR = (lo, hi, v) => v != null && lo <= v && v <= hi;
+      const midOnly = !anyOuter && ((ncR5 && (inR(ncR5.low, ncR5.high, ncR5.mid) || inR(ncR5.low, ncR5.high, ncR5.ema)))
+        || inR(A['5m'].low, A['5m'].high, A['5m'].bbmiddle) || inR(A['5m'].low, A['5m'].high, A['5m'].ema));
+      const lastSame = Math.max(...live.filter((p) => p.side === bias).map((p) => p.openEpoch));
+      const winOk = NC.revWindowMs == null || nowEpoch - lastSame <= NC.revWindowMs;
+      let runOk = true;
+      if (NC.revRun != null) {
+        let run = 0, ext = null;
+        if (zz.dir === d) { run = Math.abs(zz.ext - zz.piv); ext = zz.ext; } else if (zz.last && zz.last.dir === d) { run = zz.last.len; ext = zz.last.ext; }
+        if (ext == null) runOk = false;
+        else {
+          const basis = c5.close - S, lines = [];
+          for (const tf of ['5m', '15m', '60m']) for (const k of ['bbupper', 'bbmiddle', 'bblower', 'ema']) if (A[tf][k] != null) lines.push(A[tf][k] - basis);
+          for (const r of [ncR5, ncR15, ncR60]) if (r) for (const k of ['upper', 'mid', 'lower', 'ema']) if (r[k] != null) lines.push(r[k]);
+          runOk = run >= (lines.some((L) => Math.abs(L - ext) <= NC.lineTol) ? NC.revRun : NC.revRun + 20);
+        }
+      }
+      if (touchOk) ncC.revTouch++; if (winOk) ncC.revWindow++; if (runOk) ncC.revRun++;
+      if (touchOk && winOk && runOk) {
+        if (midOnly) ncC.revMidOnly++;
+        else {
+          const pair = live.filter((p) => p.side === bias).reduce((a, p) => (p.openEpoch >= a.openEpoch ? p : a));
+          const o = buildRev(revSide, pair, S, tau, iv, sigPts);
+          if (o) { ncC.rev++; return { ...sig, openSide: revSide, cover: false, coverSide: null, reason: 'natural-rev', _natural: 'rev', _o: o }; }
+        }
+      }
+    }
+    if (sig && sig.openSide && !sig._natural) {
+      const same = live.filter((p) => p.side === sig.openSide).length;
+      if (same >= 1) {
+        if (NC.addGate && !outer(A['15m'], sig.openSide === 'bull' ? 1 : -1)) { ncC.addBlocked++; return { ...sig, openSide: null }; }
+        if (same - 1 >= NC.maxAdds) { ncC.addCapped++; return { ...sig, openSide: null }; }
+        return { ...sig, _add: true };
+      }
+    }
+    return sig;
+  }
+  // JUMP GUARD: the book's MARK (BS at this bar's tau/iv) at spot +- X; through -lossMax -> buy the losing side's vertical
+  // with the best expiry floor over the jump region, booked now at the ceiled mark (the ladder's start price). Allowed past
+  // the governor only when it raises the book floor.
+  function jumpGuardStep(S, tau, iv, A, nowEpoch, m, commitOpen) {
+    if (ncC.guard >= NC.guardMaxPerDay || !st.positions.length) return;
+    const p95 = m < 600 ? 150 : m < 660 ? 120 : m < 840 ? 85 : m < 900 ? 80 : 85;
+    const X = NC.guardFixed != null ? NC.guardFixed : p95 * (NC.guardMedianIv > 0 ? ivOf(A) / NC.guardMedianIv : 1) * NC.guardMult;
+    const markAt = (Sx) => { let t = 0; for (const p of st.positions) { t += legsMark(p.legs, Sx, tau, iv) - p.limit;
+      if (p.covered && p.coverLegs) t += legsMark(p.coverLegs, Sx, tau, iv) - p.coverLimit; } return t * 100 * QTY; };
+    const up = markAt(S + X), dn = markAt(S - X);
+    // threshold: -lossMax (the spec; the governor already holds the expiry floor there, so a long-debit book's mark
+    // rarely gets below it) | opts.guardAt 'target' = -lossTarget | a dollar number.
+    const gLim = opts.guardAt === 'target' ? lossTarget : (typeof opts.guardAt === 'number' ? opts.guardAt : lossMax);
+    if (!Number.isFinite(gLim) || (up >= -gLim && dn >= -gLim)) return;
+    const side = up < dn ? 'bull' : 'bear', W = G.WIDTH, incr = legIncr, capF = G.capFrac != null ? G.capFrac : 0.55;
+    const lo = side === 'bull' ? S : S - X, hi = side === 'bull' ? S + X : S;
+    const xs = []; for (let x = lo; x <= hi + 1e-9; x += 5) xs.push(x);
+    const base = xs.map((x) => bookAt(x, null)), f0 = Math.min(...base);
+    let best = null;
+    for (let K = Math.floor(lo / incr) * incr - W; K <= Math.ceil(hi / incr) * incr + W; K += incr) {
+      const legs = side === 'bull' ? [{ side: 'long', type: 'C', strike: K - W }, { side: 'short', type: 'C', strike: K }]
+        : [{ side: 'long', type: 'P', strike: K + W }, { side: 'short', type: 'P', strike: K }];
+      const mk = legsMark(legs, S, tau, iv); if (!(mk > 0) || mk > capF * W) continue;
+      const limit = Math.max(TICK, ceilTk(mk));
+      let mn = Infinity; for (let q = 0; q < xs.length; q++) { const v = base[q] + (legsPayoff(legs, xs[q]) - limit) * 100 * QTY; if (v < mn) mn = v; }
+      if (!best || mn > best.mn) best = { legs, K, limit, mn };
+    }
+    if (!best || !(best.mn > f0)) { ncC.guardNoRaise++; return; }
+    const fNow = floorNow(), fWith = floorOf({ legs: best.legs, limit: best.limit, covered: false });
+    if (Number.isFinite(lossMax) && -fWith > lossMax && !(fWith > fNow)) { ncC.guardSkip++; return; }
+    commitOpen(side, { legs: best.legs, shortStrike: best.K, limit: best.limit, reason: 'jump-guard', sigEpoch: nowEpoch, _natural: 'guard' }, best.legs, false);
+    ncC.guard++;
+  }
+
   let lastActedI = -1;
   for (let i = 0; i < bars.length; i++) {
     if (trendStep) trendCtx = trendStep(bars[i].analysis, bars[i].dt);
@@ -843,10 +989,26 @@ function runDay5m(bars, signalFn, opts = {}) {
       iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
     }
     const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
-    if (touchOn || stackGate) {   // RTH lines at THIS completed bar (opens decided at its close)
+    if (touchOn || stackGate || natural) {   // RTH lines at THIS completed bar (opens decided at its close)
       const _m = etMinute(bars[i].dt), _day = TGT.etIso(bars[i].dt);
       if (_m >= 575) rthLines.push({ day: _day, min: _m, open: (bars[i].px || c5).open, high: px.high, low: px.low, close: S });
       const _r15 = rthLines.lines(15, _day, _m), _r60 = rthLines.lines(60, _day, _m);
+      if (natural) {
+        ncR5 = rthLines.lines(5, _day, _m); ncR15 = _r15; ncR60 = _r60;
+        // ZIGZAG on the pricing series' 1m closes (the 5m close where no 1m candles exist), theta = NC.theta
+        if (_m >= 575) {
+          const closes = bars[i].sub1m && bars[i].sub1m.length ? bars[i].sub1m.map((c1) => c1.close) : [S];
+          for (const c of closes) {
+            if (zz.hi == null) { zz.hi = c; zz.lo = c; continue; }
+            if (zz.dir === 0) {
+              if (c > zz.hi) zz.hi = c; if (c < zz.lo) zz.lo = c;
+              if (zz.hi - c >= NC.theta) { zz.dir = -1; zz.piv = zz.hi; zz.ext = c; } else if (c - zz.lo >= NC.theta) { zz.dir = 1; zz.piv = zz.lo; zz.ext = c; }
+            } else if (zz.dir === 1) {
+              if (c > zz.ext) zz.ext = c; else if (zz.ext - c >= NC.theta) { zz.last = { dir: 1, len: zz.ext - zz.piv, ext: zz.ext }; zz.dir = -1; zz.piv = zz.ext; zz.ext = c; }
+            } else if (c < zz.ext) zz.ext = c; else if (c - zz.ext >= NC.theta) { zz.last = { dir: -1, len: zz.piv - zz.ext, ext: zz.ext }; zz.dir = 1; zz.piv = zz.ext; zz.ext = c; }
+          }
+        }
+      }
       if (stackGate) {   // trend reads: price vs completed 9EMA + its slope, the backtest-target.js read
         sgRt15 = _r15 ? TGT.trendOf(S, _r15.ema, _r15.ema - _r15.emaPrev) : 0;
         sgRt60 = _r60 ? TGT.trendOf(S, _r60.ema, _r60.ema - _r60.emaPrev) : 0;
@@ -872,7 +1034,10 @@ function runDay5m(bars, signalFn, opts = {}) {
         if (o.belowBand) openLowBand++;
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
-          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i, ...(o._touchLvl != null ? { touchLvl: o._touchLvl } : {}) });
+          openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i, ...(o._touchLvl != null ? { touchLvl: o._touchLvl } : {}),
+          ...(o._natural ? { _nat: o._natural } : {}) });
+        if (o._natural === 'rev') { ncC.revFilled++; if (o._pair && !o._pair.covered) o._pair._offset = true; }
+        if (o._add && natural) ncC.adds++;
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
         // It never meant "rest a cover the instant a position opens"; it meant that opening a NEW position
         // is itself the trigger to cover a PRIOR one. Open one and leave it working; if a cover signal
@@ -880,7 +1045,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         // (now deeper in the money) as the new one goes on. Same family as cover-to-stack — free capital
         // by locking a winner — but paced by the open cadence instead of waiting for the risk cap.
         // Priced at the MARK: a cover placed to protect capital must not assume a profit.
-        if (opts.coverPriorOnOpen) {
+        if (opts.coverPriorOnOpen && !noPpc) {
           const cands = st.positions.filter(p => !p.covered && !p.pendingCover && !p.hedge && p.openEpoch !== nowEpoch);
           if (cands.length) {
             // 'oldest' (the user's description: cover the first one) or 'deepest' (most ITM = biggest
@@ -980,7 +1145,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
     }
     // (a0) PROACTIVE DEEP-ITM COVER (v8) — a leader is deep enough ITM to lock a good tent → rest a cover.
-    if (pFrac != null) {
+    if (pFrac != null && !noPpc) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover) continue;
         if (legsMark(pos.legs, S, tau, iv) >= pFrac * G.WIDTH) { const _l = G.coverLegs(pos.side, pos.shortStrike);
@@ -1010,7 +1175,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     const armFrac = opts.continuousCoverArmFrac;
     const oppRatio = opts.continuousCoverOppRatio;
     const armedByRisk = armFrac == null || (lossTarget < Infinity && -floorNow() >= armFrac * lossTarget);
-    if (opts.continuousCover) {
+    if (opts.continuousCover && (!noPpc || natural === 'v13')) {
       // continuousCoverMinLockFrac: the resting target is the price that still LOCKS A REAL PROFIT, not
       // merely break-even. Resting at the bare break-even price (W − openCost) fills the instant the cover
       // is barely acceptable, and that is a bad trade on a deep winner: an uncovered spread wins
@@ -1056,6 +1221,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
+        // v13: the rostered cover only on a LIVE position (not offset by a REV) once it is coverAfterMin old
+        if (natural === 'v13' && (pos._offset || pos._nat === 'guard' || nowEpoch - pos.openEpoch < coverAfterMs)) continue;
         const posMinLock = asymDef && opts.coverPatientMinLock != null && withTrend(pos.side) ? opts.coverPatientMinLock * G.WIDTH : minLock;
         const tgt = round2(G.WIDTH - pos.limit - posMinLock);
         // THE `tgt <= 0` REFUSAL IS GONE. It silently placed NO cover at all whenever the open cost plus
@@ -1750,6 +1917,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       sig = { ...sig, openSide: null, reason: `${sig.reason} [trend-blocked]` }; openTrendBlocked++;
     }
     guSig = sig;
+    if (natural) sig = naturalStep(sig, A, S, tau, iv, c5, nowEpoch, S * ivBaseT * Math.sqrt(tau));
     // Trend-side floor chose an OPEN: it takes the bar's open slot when the signal has none, through every gate.
     if (tfOpenSide && !sig.openSide) sig = { ...sig, openSide: tfOpenSide, reason: `${sig.reason || ''} [trend-floor]` };
     // (c) COVER — sig.coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy
@@ -1766,7 +1934,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       for (const p of st.positions) if (!p.covered && p.pendingCover && coverSet.includes(p.side) && !p._sigCover) { p._sigCover = true; sigCoverGiveUps++; }
     }
     if (coverSet.length) {
-      const toCover = st.positions.filter(p => !p.covered && !p.pendingCover && coverSet.includes(p.side));
+      const toCover = noPpc ? [] : st.positions.filter(p => !p.covered && !p.pendingCover && coverSet.includes(p.side));
       let plans = null;
       if (coverSel) {   // v1/v2/v3: reuse the server cover selectors with a BS getLeg (single source of truth)
         const getLeg = (type, k) => ({ mid: bs.bsPrice(type, S, k, tau, ivFor(type, k)), symbol: `x${type}${k}`, bid: 0, ask: 0 });
@@ -1797,7 +1965,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     // the cancel-open branch): the signal now wants the other side, or wants this side covered.
     if (openLadderModel && st.pendingOpen) {
       const po = st.pendingOpen;
-      if ((sig.openSide && sig.openSide !== po.side) || coverSet.includes(po.side)) {
+      // natural cover: a working REV is not cancelled by the v6 signal turning back
+      if (((sig.openSide && sig.openSide !== po.side) || coverSet.includes(po.side)) && !(po.o && po.o._natural && !sig._natural)) {
         st.pendingOpen = null; openCanceled++; markBookDirty();
       } else if (sig.openSide) { openSkipPending++; sig.openSide = null; }
     }
@@ -1861,7 +2030,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // COVER TO OPEN, WAIT (opts.coverToOpenWait; 2026-10-15, user — c2o 'same' + no-add-underwater combined): the
       // escalation above still fires, but THIS open is skipped while any same-side uncovered position is underwater
       // (mark < paid); the side's next open waits until it has covered or recovered. Opposite-side opens unaffected.
-      if (opts.coverToOpenWait && !openGated && st.positions.some((p) => p.side === sig.openSide && !p.covered
+      if (opts.coverToOpenWait && !openGated && !sig._natural && st.positions.some((p) => p.side === sig.openSide && !p.covered
           && p.filled !== false && legsMark(p.legs, S, tau, iv) < p.limit)) { openGated = true; gateC2oWait++; }
     }
     // TOUCH FILTER (overlay): refuse an open opposite an active v11 setup ('block-against') / without one on its side ('require')
@@ -1887,8 +2056,10 @@ function runDay5m(bars, signalFn, opts = {}) {
         }
       }
     }
-    if (sig.openSide && dirOk && !openGated) {               // (d) open (subject to the caps)
-      let o = G.buildOpen(sig.openSide, S, tau, iv);
+    if (sig.openSide && (dirOk || sig._natural) && !openGated) {               // (d) open (subject to the caps)
+      let o = sig._o || G.buildOpen(sig.openSide, S, tau, iv);
+      if (o && sig._add) o._add = true;
+      if (sig._natural === 'rev') ncC.revReach++;
       // OPENING FALLBACK (opts.openFallbackUntilMin, live parity — trader.buildOpenFallback): a declined open at the
       // open is placed anyway at the short strike nearest S, limit at the low end of the known range, walk cap at its
       // high end.
@@ -1922,14 +2093,16 @@ function runDay5m(bars, signalFn, opts = {}) {
       // strikes) → shift → skip. P&L stays on the debit-canonical spread at the RESOLVED strikes; the
       // ledger records the actual (style-specific) legs on commit. `resolvedLegs` = what to record.
       let resolvedLegs = o.legs, legSkip1 = false;
-      if (enforceLegs) {
+      // natural-cover REV: its strikes ARE the decision (the prior short), so it skips the leg-uniqueness re-resolve and
+      // the never-start-OTM rule (both written for initial opens); the leg ledger still records it at commit.
+      if (enforceLegs && !o._natural) {
         const _s = o.legs.map(l => l.strike), _lo = Math.min(..._s), _hi = Math.max(..._s);
         const preferStyle = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
         // openNeverOtm mirrors the live rule: an initial order must not START fully out of the money.
         // Opt-in so the committed baselines reproduce with it off.
         const legAllow = opts.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(sig.openSide, lo, hi, S)) : undefined;
         const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle, allow: legAllow });
-        if (res.resolution === 'skip') { legSkip++; legSkip1 = true; }
+        if (res.resolution === 'skip') { legSkip++; legSkip1 = true; if (o._natural) ncC.natLegSkip++; }
         else {
           // The REBUILD at the shifted anchor can decline even though the unshifted one did not — the
           // shift moves the placement and therefore the price. Treat that exactly like the first decline
@@ -2043,6 +2216,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           // OPEN LADDER: the order WORKS from the next bar (see the fill check at the top of the bar loop).
           // Legs and stance are recorded now, at the send, exactly as live does; nothing is booked yet.
           openPlaced++;
+          if (o._natural === 'rev') ncC.revPlaced++;
           st.pendingOpen = { side: sig.openSide, o, base: o.limit, limit: o.limit,
             // WALK CAP: how far the ladder may walk the price, separately settable from the PLACEMENT ceiling
             // (opts.openWalkCapFrac). Placement picks the strikes under capFrac; the walk may then concede a
@@ -2056,7 +2230,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           markBookDirty();
         } else commitOpen(sig.openSide, o, resolvedLegs, true);
       } else {
-        capBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
+        capBlocked++; if (o._natural) ncC.natCapBlocked++;   // a cap refused this open; was it a same-direction (trend-stacking) add?
         if (strategyOk && !ceilingOk) capSkipCeiling++;   // refused ONLY by the account ceiling (would've passed the strategy risk cap)
         if (st.positions.every(p => p.covered || p.side === sig.openSide) && st.positions.some(p => !p.covered)) capBlockedTrend++;
       }
@@ -2083,6 +2257,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     // deployedCapital average: sample the real deployed cash once per (RTH) action step. Overnight bars
     // are `continue`d above under rthOnly, so only true action steps are counted.
+    if (natural && NC.jumpGuard) jumpGuardStep(S, tau, iv, A, nowEpoch, etMinute(bars[i].dt), commitOpen);
     if (trackCap) { sumReal += depR; nSteps++; }
     _bar = i; noteLock();   // END of the bar: opens, covers and the reduction ladder have all settled
     // FLOOR RATCHET high-water mark, taken at the same point for the same reason: every floor-moving
@@ -2222,6 +2397,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     giveUpCandleFires: guCandle ? guCandleFires : undefined,
     trendFloor: opts.trendFloor ? { covers: tfCovers, opens: tfOpens, biasedBars: tfBiasedBars } : undefined,   // positions flagged by the candle give-up rule
     coverAsym: asymDef ? { patientBars: asymPatientBars, aggressiveBars: asymAggBars } : undefined,
+    natural: noPpc ? (() => { const ps = st.positions.filter((p) => !p.hedge && p._nat !== 'guard');
+      return { mode: natural || 'noCovers', ...ncC, positions: ps.length, offset: ps.filter((p) => p._offset).length,
+        v13Covered: ps.filter((p) => p.covered && !p._offset).length, never: ps.filter((p) => !p._offset && !p.covered).length }; })() : undefined,
     stackGate: stackGate ? { blocked: stackBlocked, alsoC2o: stackBothBlocked, adds: stackAdds } : undefined,
     touch: touchOn ? { hits: touchHits, coverFills: touchCoverFills, blocked: touchBlocked, setupBars: touchSetupBars } : undefined,
     sigCoverGiveUps, coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,

@@ -523,7 +523,7 @@ function runDayTarget(bars, optsIn = {}) {
     uncoveredEod: verts.filter((p) => !p.covered).length,
     governor: null, ratchet: null,
     // target-engine extras
-    stackGate: undefined, touch: undefined, decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
+    natural: undefined, stackGate: undefined, touch: undefined, decisions: D, gap: gap != null ? round2(gap) : null, gapDay: !!gapDay, rthPriorBars: nPrior,
   };
 }
 
@@ -531,11 +531,12 @@ function runDayTarget(bars, optsIn = {}) {
 // RTH line tracker: prior sessions bucketed once, today's bars pushed as they complete; lines(P, day, min) returns the
 // completed-bucket BB(20,2)/9EMA lines (null until 20 buckets) — the same aggregate/linesOf the target engine uses.
 function makeRthLines(priorBars) {
-  const prior = { 15: aggregate(priorBars || [], 15, null, 0), 60: aggregate(priorBars || [], 60, null, 0) };
-  const today = [], cache = { 15: { n: -1, l: null }, 60: { n: -1, l: null } };
+  const prior = {}, today = [], cache = {};   // any bucket size P (5 / 15 / 60), prior sessions bucketed once per P
   return {
     push: (bar) => today.push(bar),
-    lines: (P, day, min) => { const t = aggregate(today, P, day, min); if (t.length !== cache[P].n) { cache[P].n = t.length; cache[P].l = linesOf(prior[P].concat(t)); } return cache[P].l; },
+    lines: (P, day, min) => {
+      if (!prior[P]) { prior[P] = aggregate(priorBars || [], P, null, 0); cache[P] = { n: -1, l: null }; }
+      const t = aggregate(today, P, day, min); if (t.length !== cache[P].n) { cache[P].n = t.length; cache[P].l = linesOf(prior[P].concat(t)); } return cache[P].l; },
   };
 }
 // v11 SETUP at a completed bar. mode 'mid': NQ 15m AND 60m trends both point toward the RTH 15m mid M, minDist <= |M-S|

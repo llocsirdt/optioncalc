@@ -29,7 +29,10 @@ const IS_CHILD = process.argv.includes('--_slice');
 // --overlay: the v11 TOUCH OVERLAY on the roster v6-v9 engines (runDay5m opts.touch*), instead of the target engines.
 // --stackGate: the NDX-trend gate on ADDS (runDay5m opts.stackGate / stackScope) on the same roster variants.
 const STACK = process.argv.includes('--stackGate');
-const OVERLAY = process.argv.includes('--overlay') || STACK;
+// --natural: the v12/v13 natural-cover families (runDay5m opts.natural on the v6-W roster config) + v6/v7 controls +
+// the v7 reference arm with per-position covers off.
+const NATURAL = process.argv.includes('--natural');
+const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL;
 
 // ── days (same filter as the baselines) ──
 const t0 = Date.now();
@@ -56,6 +59,10 @@ if (fs.existsSync(SUB1M)) {
   }
 }
 const CTX = TG.buildRthContexts(sessions, 8);
+// MEDIAN 15m-band IV over every RTH bar of the dataset (the jump guard's IV scale; runDay5m ivOf = ivFromRelBandWidth)
+const MEDIAN_IV = (() => { const bsP = require('../../server/src/candle-spread/bs-pricer'), v = [];
+  for (const d of days) for (const b of d.bars) { const m = etMin(b.dt); if (m >= 575 && m <= 955) { const a = b.analysis['15m']; v.push(bsP.ivFromRelBandWidth((a.bbupper - a.bblower) / a.close)); } }
+  v.sort((x, y) => x - y); return v[Math.floor(v.length / 2)]; })();
 
 // ── variants / arms ──
 const FAMS = ['v10', 'v11'];
@@ -80,7 +87,23 @@ const OVERLAY_ARMS = [['base', {}], ['touchBe', { touchCover: 'be' }], ['touchGu
 const STACK_ARMS = [['base', {}], ['notAgainst', { stackGate: 'notAgainst' }], ['oneWith', { stackGate: 'oneWith' }], ['rth15', { stackGate: 'rth15' }],
   ['rth60', { stackGate: 'rth60' }], ['nqNotAgainst', { stackGate: 'nqNotAgainst' }], ['notAgainstAny', { stackGate: 'notAgainst', stackScope: 'any' }],
   ['oneWithAny', { stackGate: 'oneWith', stackScope: 'any' }]];
+const NAT_ARMS = [['base', {}], ['revTouchAny', { revTouch: 'any' }], ['revTouchOff', { revTouch: 'off' }], ['revWindowOff', { revWindowMin: false }],
+  ['revRunOff', { revRun: false }], ['revRun25', { revRun: 25 }], ['revStrikeCurve', { revStrike: 'curve' }], ['revStrikeCost', { revStrike: 'cost' }],
+  ['jumpGuardOff', { jumpGuard: false }], ['guardX1.5', { guardMult: 1.5 }], ['guard50', { guardFixed: 50 }], ['guard100', { guardFixed: 100 }], ['guardAtTarget', { guardAt: 'target' }],
+  ['addGateOff', { addGate: false }]];
+const NAT_V13 = [['coverAfter15', { coverAfterMin: 15 }], ['coverAfter60', { coverAfterMin: 60 }]];
 const units = [];
+if (NATURAL) {
+  for (const w of [10, 20, 40]) {
+    for (const fam of ['v12', 'v13']) for (const [arm, over] of NAT_ARMS.concat(fam === 'v13' ? NAT_V13 : [])) {
+      const name = `${fam}-${w}`;
+      if ((VARS_ONLY.length && !VARS_ONLY.includes(name)) || (ARMS_ONLY.length && !ARMS_ONLY.includes(arm))) continue;
+      units.push({ key: `${name}|${arm}`, kind: 'control', variant: `v6-${w}`, label: name, arm, over: { natural: fam, ...over } });
+    }
+    for (const c of [`v6-${w}`, `v7-${w}`]) if (!VARS_ONLY.length || VARS_ONLY.includes(c)) units.push({ key: `${c}|control`, kind: 'control', variant: c, arm: 'control' });
+    if (!VARS_ONLY.length || VARS_ONLY.includes(`v7-${w}-nocov`)) units.push({ key: `v7-${w}-nocov|reference`, kind: 'control', variant: `v7-${w}`, label: `v7-${w}-nocov`, arm: 'reference', over: { perPositionCovers: false } });
+  }
+} else
 if (OVERLAY) {
   for (const c of CONTROLS) for (const [arm, over] of (STACK ? STACK_ARMS : OVERLAY_ARMS)) {
     if ((VARS_ONLY.length && !VARS_ONLY.includes(c)) || (ARMS_ONLY.length && !ARMS_ONLY.includes(arm))) continue;
@@ -101,7 +124,9 @@ const slim = (r) => ({ t: r.terminal, o: r.opens, f: r.filled, n: r.naked, tr: r
   nl: r.lock && r.lock.endFloorNoLoss ? 1 : 0, ifa: r.intradayFloorAvg, ifp: r.intradayFloorNonNegPct, te: r.tents || 0,
   op: r.openLadder ? [r.openLadder.placed, r.openLadder.filled] : null, d: r.decisions || null, gd: r.gapDay ? 1 : 0,
   th: r.touch ? [r.touch.hits, r.touch.coverFills, r.touch.blocked, r.touch.setupBars] : null,
-  sg: r.stackGate ? [r.stackGate.blocked, r.stackGate.alsoC2o, r.stackGate.adds] : null });
+  sg: r.stackGate ? [r.stackGate.blocked, r.stackGate.alsoC2o, r.stackGate.adds] : null,
+  nc: r.natural ? [r.natural.adds, r.natural.rev, r.natural.revFilled, r.natural.guard, r.natural.offset, r.natural.v13Covered, r.natural.never, r.natural.revSameHit,
+    r.natural.revTouch, r.natural.revWindow, r.natural.revRun, r.natural.addBlocked, r.natural.revSkipTotal, r.natural.revMidOnly, r.natural.positions] : null });
 
 // COVER CONFIG FROM THE ROSTER: the v6-W run through optsFor, sliced to the cover keys — so a v10/v11 vertical is
 // covered exactly as a v6 vertical of that width (target/minLock, geometry, ladder, give-up, c2o, stall, fill rules).
@@ -131,6 +156,7 @@ function computeUnit(u) {
   if (SUB_FILL !== 'none') env.subBarFill = SUB_FILL;
   const o = optsFor(run, env);
   const fn = (A, p, ctx) => run.signalFn(A, p, { ...ctx, cfg: run.signalCfg || {} });
+  if (NATURAL) o.guardMedianIv = MEDIAN_IV;
   if (OVERLAY) return days.map((d) => slim(runDay5m(d.bars, fn, { ...o, rthCtx: CTX.get(isoOf(d)) })));
   return days.map((d) => slim(runDay5m(d.bars, fn, o)));
 }
@@ -169,6 +195,12 @@ function agg(recs) {
     out.opensBeforeTouchPerDay = per(D.opensBeforeTouch); out.opensAfterTouchPerDay = per(D.opensAfterTouch);
     out.decisionsPerDay = {}; for (const k in D) out.decisionsPerDay[k] = per(D[k]);
   } else {
+    if (recs[0] && recs[0].nc) { const t = Array.from({ length: 15 }, (_, j) => recs.reduce((a, r) => a + (r.nc ? r.nc[j] : 0), 0));
+      out.addsPerDay = per(t[0]); out.revsPerDay = per(t[1]); out.revFilledPerDay = per(t[2]); out.guardPerDay = per(t[3]);
+      const np = t[4] + t[5] + t[6]; out.offsetShare = np ? Math.round(1000 * t[4] / np) / 10 : null; out.v13CoveredShare = np ? Math.round(1000 * t[5] / np) / 10 : null;
+      out.neverShare = np ? Math.round(1000 * t[6] / np) / 10 : null; out.revSameHitPerDay = per(t[7]);
+      out.revTouchBarsPerDay = per(t[8]); out.revWindowBarsPerDay = per(t[9]); out.revRunBarsPerDay = per(t[10]); out.addBlockedPerDay = per(t[11]);
+      out.revSkipTotalPerDay = per(t[12]); out.revMidOnlyPerDay = per(t[13]); }
     if (recs[0] && recs[0].sg) { const t = [0, 1, 2].map((j) => recs.reduce((a, r) => a + (r.sg ? r.sg[j] : 0), 0));
       out.blockedAddsPerDay = per(t[0]); out.alsoC2oPerDay = per(t[1]); out.addsPerDay = per(t[2]); }
     if (recs[0] && recs[0].th) { const t = [0, 1, 2, 3].map((j) => recs.reduce((a, r) => a + (r.th ? r.th[j] : 0), 0));
@@ -189,16 +221,17 @@ function agg(recs) {
   const rows = [];
   for (const u of units) {
     const recs = res[u.key];
-    const name = u.kind === 'target' ? u.v.name : u.variant;
+    const name = u.kind === 'target' ? u.v.name : (u.label || u.variant);
     rows.push({ variant: name, arm: u.arm, all: agg(recs), y2026: agg(recs.filter((_, i) => era[i] === '2026')), pre: agg(recs.filter((_, i) => era[i] === 'pre')) });
   }
   fs.mkdirSync(OUT, { recursive: true });
   const meta = { generatedAt: new Date().toISOString(), days: days.length, from: days[0].date, to: days[days.length - 1].date, n2026: era.filter((e) => e === '2026').length,
-    sub1mDays: n1m, wallSec: Math.round((Date.now() - t0) / 1000), workers: workerCount() };
+    sub1mDays: n1m, medianIv15mBand: typeof MEDIAN_IV !== "undefined" ? MEDIAN_IV : null, wallSec: Math.round((Date.now() - t0) / 1000), workers: workerCount() };
   const tag = ARMS_ONLY.length ? '-' + ARMS_ONLY.join('_').slice(0, 40) : '';
   fs.writeFileSync(path.join(OUT, `sweep${tag}.json`), JSON.stringify({ meta, rows }, null, 1));
   const cols = ['days', 'total', 'lockedPct', 'avgEndFloor', 'avgDaily', 'median', 'worst5', 'worst10', 'maxDD', 'maxDD30', 'worst', 'best', 'winPct', 'opensPerDay', 'payoff',
-    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay'];
+    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
+    'revSameHitPerDay', 'revTouchBarsPerDay', 'revWindowBarsPerDay', 'revRunBarsPerDay', 'addBlockedPerDay', 'revSkipTotalPerDay', 'revMidOnlyPerDay'];
   const lines = [['variant', 'arm', 'era', ...cols].join(',')];
   for (const r of rows) for (const [e, a] of [['all', r.all], ['2026', r.y2026], ['pre', r.pre]]) if (a) lines.push([r.variant, r.arm, e, ...cols.map((c) => (a[c] == null ? '' : a[c]))].join(','));
   fs.writeFileSync(path.join(OUT, `sweep${tag}.csv`), lines.join('\n') + '\n');
