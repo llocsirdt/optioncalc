@@ -989,6 +989,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       iv = band > 0 ? ((type, K) => base * skewMultAt((K - S) / band)) : base;
     }
     const ivFor = volFn(iv);   // resolve per leg for the direct bs.bsPrice() calls below
+    if (opts.giveUpTap) opts.giveUpTap.bar(i, S, px, tau, iv, nowET);   // study hook (study-giveup-regime.js); unset = inert
     if (touchOn || stackGate || natural) {   // RTH lines at THIS completed bar (opens decided at its close)
       const _m = etMinute(bars[i].dt), _day = TGT.etIso(bars[i].dt);
       if (_m >= 575) rthLines.push({ day: _day, min: _m, open: (bars[i].px || c5).open, high: px.high, low: px.low, close: S });
@@ -1482,6 +1483,14 @@ function runDay5m(bars, signalFn, opts = {}) {
         let lim = round2(G.WIDTH - pc.openCost + cap);
         if (pos._c2o != null) lim = pos._c2o === 'mkt' ? Infinity : round2(lim + pos._c2o);
         workingTarget = roundTick(Math.min(mk + TICK, lim));
+        // STUDY HOOK (opts.giveUpTap, study-giveup-regime.js): the FIRST give-up of each position, with the cover legs it
+        // works and the price it would pay. Read-only; unset = inert.
+        if (opts.giveUpTap && !pos._guTap) {
+          pos._guTap = true;
+          const thr = pos.shortStrike == null ? null : (pos.side === 'bull' ? pos.shortStrike - S : S - pos.shortStrike);
+          opts.giveUpTap.trigger({ pos, i, S, tau, iv, nowET, legs: pc.legs.slice(), openCost: pc.openCost, mark: mk, lim, cap, workingTarget, width: G.WIDTH,
+            through: thr, src: pos._c2o != null ? 'c2o' : (opts.giveUpPoints != null && thr != null && thr >= opts.giveUpPoints ? 'points' : 'other') });
+        }
       }
       if (!giveUp && decayed) {
         workingTarget = roundTick(legsMark(pc.legs, S, tau, iv) + TICK);   // go to the market
