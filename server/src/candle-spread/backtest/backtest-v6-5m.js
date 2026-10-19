@@ -1012,8 +1012,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       if (stackGate) {   // trend reads: price vs completed 9EMA + its slope, the backtest-target.js read
         sgRt15 = _r15 ? TGT.trendOf(S, _r15.ema, _r15.ema - _r15.emaPrev) : 0;
         sgRt60 = _r60 ? TGT.trendOf(S, _r60.ema, _r60.ema - _r60.emaPrev) : 0;
-        sgNq15 = TGT.trendOf(c5.close, A['15m'].ema, TGT.nqSlope(A['15m']));
-        sgNq60 = TGT.trendOf(c5.close, A['60m'].ema, TGT.nqSlope(A['60m']));
+        const _nq = TS.nqStackTrend(A); sgNq15 = _nq.t15; sgNq60 = _nq.t60;   // shared with the live trader
       }
       if (touchOn) {   // v11 setup; touches in this bar use the PREVIOUS one
       setupPrev = setupNow; touchMidPrev = touchMidNow; touchSPrev = touchSNow;
@@ -2049,7 +2048,7 @@ function runDay5m(bars, signalFn, opts = {}) {
           : stackGate === 'oneWith' ? ((sgRt15 === d || sgRt60 === d) && sgRt15 !== -d && sgRt60 !== -d)
             : stackGate === 'rth15' ? sgRt15 !== -d
               : stackGate === 'rth60' ? sgRt60 !== -d
-                : stackGate === 'nqNotAgainst' ? (sgNq15 !== -d && sgNq60 !== -d) : true;
+                : stackGate === 'nqNotAgainst' ? TS.stackGatePasses(X, { t15: sgNq15, t60: sgNq60 }) : true;
         if (!ok) {
           if (gateC2oWait !== _c2oPrev) stackBothBlocked++;   // the c2o wait already refused it
           if (!openGated) { openGated = true; stackBlocked++; }

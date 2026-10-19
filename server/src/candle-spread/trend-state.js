@@ -90,4 +90,19 @@ function makeTracker() {
 // Does a position fight the trend? (bull position in a bear trend or vice versa)
 const against = (side, st) => (st === 1 && side === 'bear') || (st === -1 && side === 'bull');
 
-module.exports = { trendOf, state, contextFromSeries, makeTracker, against, DEFS };
+// STACK GATE NQ READ ('nqNotAgainst'; v9sg, 2026-10-19) — shared by the live trader and runDay5m so both read it
+// identically. Per timeframe: the signal-series 5m close vs that TF's 9EMA, confirmed by the candle's own close-vs-EMA
+// (the backtest-target.js trendOf/nqSlope read): +1 above and rising, -1 below and falling, else 0.
+const emaRead = (px, c) => {
+  if (px == null || !c || c.ema == null || c.close == null) return 0;
+  const a = Math.sign(px - c.ema), b = Math.sign(c.close - c.ema);
+  return a !== 0 && a === b ? a : 0;
+};
+function nqStackTrend(A) {
+  const px = A && A['5m'] ? A['5m'].close : null;
+  return { t15: emaRead(px, A && A['15m']), t60: emaRead(px, A && A['60m']) };
+}
+// An ADD on `side` passes the gate unless either NQ timeframe points against it.
+const stackGatePasses = (side, r) => { const d = side === 'bull' ? 1 : -1; return r.t15 !== -d && r.t60 !== -d; };
+
+module.exports = { trendOf, state, contextFromSeries, makeTracker, against, DEFS, nqStackTrend, stackGatePasses };

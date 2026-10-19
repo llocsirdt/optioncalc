@@ -252,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.10</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.10.11</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
@@ -336,7 +336,8 @@ const BT_BASE = FORCE_BASE || (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
 // is the one being iterated on — read them from wherever the backtest side is pointed.
 const PROXY_URL = BT_BASE;
 
-const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9'];
+// v9sg / v9ob: feature-test copies of v9 (user, 2026-10-19) — rows right under their parent.
+const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9','v9sg','v9ob'];
 // Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
 // then the 2 tight-cap A/B twins (only v5-v9 have these → empty cells elsewhere).
 // Order: the 3 short-ATM widths (the candidates), the 2 ATM-centered controls, THEN the uncapped twins
@@ -826,7 +827,7 @@ async function loadBaselines() {
   for (const [k, e] of Object.entries(src || {})) {
     if (!e || typeof e !== 'object' || !/^v\d/.test(k)) continue;
     if (e.avgWorstCase == null && e.avgTerminalPotential == null && e.avgBestCase == null) continue;
-    const wm = k.match(/^v\d+-(\d+)/); const width = wm ? +wm[1] : 20; const widthNorm = 20 / width;
+    const wm = k.match(/^v\d+[a-z]*-(\d+)/); const width = wm ? +wm[1] : 20; const widthNorm = 20 / width;
     const md30 = e.maxDD30;
     m[k] = { worst: e.avgWorstCase, avg: e.avgTerminalPotential, best: e.avgBestCase,
       trades: e.avgTradesPerDay, peakCap: e.avgPeakCapital, deployedCap: e.avgDeployedCapital,

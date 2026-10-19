@@ -47,7 +47,7 @@ function canonicalFor(config, roster) {
   if (!recorded) return null;
   if (roster.has(recorded)) return { variant: recorded, exact: true };
 
-  const fam = /^(v\d+)/.exec(recorded);
+  const fam = /^(v\d+[a-z]*)(?=-|$)/.exec(recorded);   // v9sg-10 is family v9sg, never v9
   const width = config.spreadWidth;
   if (!fam || !(width > 0)) return null;
 

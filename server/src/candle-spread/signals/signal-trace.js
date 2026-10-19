@@ -229,7 +229,7 @@ const v6Trace = (A, p, c) => lineageTrace('v6', A, p, c);
 const v7Trace = (A, p, c) => lineageTrace('v7', A, p, c);
 // Signal family of a variant (by its family key; v8 runs v6's signal, v9 runs v7's).
 const FAMILY_OF = { v0: classicTrace, v1: classicTrace, v2: classicTrace, v3: classicTrace, v4: v4Trace, v5: v5Trace,
-  v6: v6Trace, v7: v7Trace, v8: v6Trace, v9: v7Trace };
-function traceFor(variant) { const m = /^(v\d+)-/.exec(String(variant || '')); return (m && FAMILY_OF[m[1]]) || null; }
+  v6: v6Trace, v7: v7Trace, v8: v6Trace, v9: v7Trace, v9sg: v7Trace, v9ob: v7Trace };
+function traceFor(variant) { const m = /^(v\d+[a-z]*)-/.exec(String(variant || '')); return (m && FAMILY_OF[m[1]]) || null; }
 
 module.exports = { v4Trace, v5Trace, v6Trace, v7Trace, classicTrace, traceFor };

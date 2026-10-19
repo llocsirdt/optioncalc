@@ -1904,6 +1904,14 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     const traceFn = ST.traceFor(cfg.variant);
     if (traceFn) { try { portedTrace = traceFn(deps.A, deps.priorA, sigCtx); } catch (e) { portedTrace = { error: e.message }; } }
     openSide = portedSig.openSide || null;
+    // OPEN TREND BLOCK (deps.openTrendBlock = a trend-state definition; v9ob, 2026-10-19 — backtest parity: runDay5m
+    // opts.openTrendBlock, applied to the signal's open before anything else reads it): an open AGAINST the trend is
+    // dropped; the signal's cover side still acts.
+    if (openSide && deps.openTrendBlock && st.trendCtx && TS.against(openSide, TS.state(st.trendCtx, deps.openTrendBlock))) {
+      decisions.push({ action: 'open-skip-trend-block', side: openSide, def: deps.openTrendBlock,
+        trend: TS.state(st.trendCtx, deps.openTrendBlock), ctx: st.trendCtx });
+      openSide = null;
+    }
     // coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy cover:true = both.
     coverSet = portedSig.coverSide
       ? (portedSig.coverSide === 'both' ? ['bull', 'bear'] : [portedSig.coverSide])
@@ -2133,6 +2141,15 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     }
     if (uw.length) c2oWait = uw;
   }
+  // STACK GATE (deps.stackGate 'nqNotAgainst'; v9sg, 2026-10-19 — backtest parity: runDay5m opts.stackGate, default
+  // scope 'uncovered'): an ADD — the side already holds an uncovered, non-hedge position (a working open counts) — is
+  // refused while the NQ 15m or 60m trend read points against it. First open on a side, and opposite-side opens, pass.
+  let stackBlock = null;
+  if (openSide && deps.stackGate === 'nqNotAgainst' && ported && (bidir || st.direction === 'none' || openSide === st.direction)
+      && st.positions.some((p) => p && !p.hedge && !p.manual && p.side === openSide && !p.covered)) {
+    const r = TS.nqStackTrend(deps.A);
+    if (!TS.stackGatePasses(openSide, r)) stackBlock = r;
+  }
   // REMOTE NO-OPEN (deps.blockNewOpens, set from the S3 control file — see index.buildEngineDeps). Refused HERE,
   // at the decision, not at the send: the record should show that the signal fired and what stopped it, so a
   // quiet afternoon under a restriction is distinguishable from a quiet afternoon with no setups. Everything
@@ -2145,6 +2162,8 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   } else if (openSide && c2oWait) {
     decisions.push({ action: 'open-skip-c2o-wait', side: openSide,
       underwater: c2oWait.map((x) => ({ id: x.pos.id, mark: x.mark, paid: x.paid })) });
+  } else if (openSide && stackBlock) {
+    decisions.push({ action: 'open-skip-stack-gate', side: openSide, gate: deps.stackGate, nq15: stackBlock.t15, nq60: stackBlock.t60 });
   } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {

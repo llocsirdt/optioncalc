@@ -658,7 +658,7 @@ const MINLOCK_CONTROL_CELLS = new Set(
   (process.env.CANDLE_SPREAD_MINLOCK_CTL != null ? process.env.CANDLE_SPREAD_MINLOCK_CTL : '')
     .split(',').map(s => s.trim()).filter(Boolean));
 // `vX-W` for any variant shape — the cell a variant belongs to.
-const cellOf = (variant) => { const m = /^(v\d+)-(\d+)/.exec(variant); return m ? `${m[1]}-${m[2]}` : variant; };
+const cellOf = (variant) => { const m = /^(v\d+[a-z]*)-(\d+)/.exec(variant); return m ? `${m[1]}-${m[2]}` : variant; };
 // ── WIDTH RULE (user, 2026-10-04) — replaces the checkerboard below as the fleet level ───────────────
 // The checkerboard split 0.10/0.20 across (family, width) so live could decide the level. The full-roster
 // re-sweep on the current engine (scripts/candle-spread/sweep-minlock.js, 765 days) decided it, and by
@@ -1471,11 +1471,49 @@ function reportArming(list) {
   return list;
 }
 
-const VARIANTS = reportArming(validateSelectors([
-  ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
-  ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
-  ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
-]));
+// FEATURE-TEST FAMILIES (user, 2026-10-19). Testing ONE feature against an existing family = a COMPLETE copy of that
+// family (every width, -cATM and -unc), named v<parent><tag>, so the parent stays a clean control and every width is
+// tested. Cloned from the FINISHED parent variants (after every builder and applyExperiments), so each copy is the
+// parent in every field — caps, minLock, ladder, give-up, reopen, name-keyed overrides — plus exactly the flags below.
+// Never armed: dryRun is dropped so the base run's simulate default applies.
+const FEATURE_FAMILIES = [
+  // v9sg: STACK GATE — no ADD on a side while the NQ 15m or 60m trend points against it (stack-gate-2026-10-17,
+  // arm nqNotAgainst: on v9 better maxDD30 at 10/40W and end floor at all three widths, total -1..+9%).
+  { parent: 'v9', tag: 'sg', label: '+ stack gate (NQ not against)', flags: { stackGate: 'nqNotAgainst' } },
+  // v9ob: OPEN BLOCK — drop any open against trend A (15m structural + last completed hourly; trend sweep 2026-10-08:
+  // the best risk arm fleet-wide, 20/40W maxDD much better, 10W total -27%).
+  { parent: 'v9', tag: 'ob', label: '+ open block against trend A', flags: { openTrendBlock: 'A' } },
+];
+function buildFeatureFamilies(list) {
+  const out = [];
+  for (const ff of FEATURE_FAMILIES) {
+    const re = new RegExp(`^${ff.parent}-(\\d+.*)$`);
+    for (const v of list) {
+      const m = re.exec(v.variant);
+      if (!m) continue;
+      const c = { ...v };
+      for (const k of Object.keys(c)) {   // one level deeper so no nested config object is shared with the parent
+        if (Array.isArray(c[k])) c[k] = c[k].slice();
+        else if (c[k] && typeof c[k] === 'object' && Object.getPrototypeOf(c[k]) === Object.prototype) c[k] = { ...c[k] };
+      }
+      delete c.dryRun;
+      c.variant = `${ff.parent}${ff.tag}-${m[1]}`;
+      c.variantLabel = `${v.variantLabel} ${ff.label}`;
+      Object.assign(c, ff.flags);
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+const VARIANTS = reportArming(validateSelectors((() => {
+  const base = [
+    ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
+    ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
+    ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
+  ];
+  return [...base, ...buildFeatureFamilies(base)];   // v9sg-*, v9ob-* (complete copies of v9)
+})()));
 
 // Expand base runs × variants into the concrete run list.
 function buildRuns() {
@@ -2128,6 +2166,8 @@ function buildEngineDeps(run, live) {
       // Trend-side floor (trend-floor.js): trend definition (null = off), action order, ratio, per-day cap.
       trendFloor: run.trendFloor || null, trendFloorOrder: run.trendFloorOrder, trendFloorMinRatio: run.trendFloorMinRatio,
       trendFloorMaxPerDay: run.trendFloorMaxPerDay,
+      // Feature-test families (2026-10-19): v9ob = open block against trend 'A'; v9sg = stack gate 'nqNotAgainst'.
+      openTrendBlock: run.openTrendBlock || null, stackGate: run.stackGate || null,
       minLockRamp: run.minLockRamp, minLockRampStart: run.minLockRampStart, minLockRampEnd: run.minLockRampEnd,
       minLockRampFrom: run.minLockRampFrom, minLockRampTo: run.minLockRampTo,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
@@ -3356,10 +3396,11 @@ function listRuns() {
 // suffix so callers get version order for free.
 function listVariants() {
   const rank = v => {
-    const m = /^v(\d+)-(\d+)(?:-(.*))?$/.exec(v.variant) || [];
-    const suffix = m[3] || '';
+    // v<n><tag>-W[-suffix]: a feature-test family (v9sg) sorts right after its parent (v9).
+    const m = /^v(\d+)([a-z]*)-(\d+)(?:-(.*))?$/.exec(v.variant) || [];
+    const suffix = m[4] || '';
     const grp = suffix === '' ? 0 : suffix === 'unc' ? 1 : 2;
-    return [Number(m[1] || 99), grp, Number(m[2] || 0), suffix];
+    return [Number(m[1] || 99), m[2] || '', grp, Number(m[3] || 0), suffix];
   };
   return buildRuns()
     .map(v => ({
@@ -3389,7 +3430,7 @@ function getRun(symbol, expiration, date, variant) {
   // returned as-recorded apart from the added alias fields: nothing about the run itself is rewritten, so
   // its config still says what it really traded.
   const roster = new Set(buildRuns().map(r => r.variant));
-  const fam = /^(v\d+)/.exec(variant);
+  const fam = /^(v\d+[a-z]*)(?=-|$)/.exec(variant);
   if (!fam) return null;
   const prefix = `${symbol}_${expiration}_${tradeDate}_`;
   const cands = [];
@@ -3920,6 +3961,7 @@ async function accountBook(symbol, expiration, variant) {
 }
 
 module.exports = {
+  FEATURE_FAMILIES,     // feature-test family copies (2026-10-19) — exported for the clone-completeness test
   simFillRealismDeps,   // SIM FILL REALISM part 2 defaults (2026-10-17) — exported for its test
   accountBook,
   // The live STARTUP check, exported so a unit test runs it against the real roster: 2026-10-05 a roster

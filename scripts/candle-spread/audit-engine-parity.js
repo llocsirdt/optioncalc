@@ -103,10 +103,11 @@ const ALIAS = { capitalRecapture: 'recaptureAlternate' };
 
 // A divergence only MATTERS if a live run actually sets the field. One that no variant carries is dead
 // config: worth fixing, but it is not making today's baselines describe the wrong strategy.
-let liveSets = {};
+let liveSets = {}, nRuns = 0;
 try {
   const { buildRuns } = require('../../server/src/candle-spread/index');
   const runs = buildRuns();
+  nRuns = runs.length;
   for (const v of runs) for (const k of Object.keys(v)) {
     if (v[k] != null && v[k] !== false) liveSets[k] = (liveSets[k] || 0) + 1;
   }
@@ -160,7 +161,7 @@ const cold = divergent.filter(d => !d.live);
 
 console.log(`\u26a0\ufe0f  ACTIVE DIVERGENCES (${hot.length}) — a LIVE RUN SETS THIS and the engines disagree.`);
 console.log('   These make the baseline describe a different strategy from the one running.');
-for (const d of hot) console.log(`     ${d.side.padEnd(14)} ${d.field.padEnd(26)} set by ${d.live}/80 runs`);
+for (const d of hot) console.log(`     ${d.side.padEnd(14)} ${d.field.padEnd(26)} set by ${d.live}/${nRuns} runs`);
 if (!hot.length) console.log('     none — no live variant currently depends on a divergent field');
 
 console.log(`\nDORMANT (${cold.length}) — the engines disagree but NO live run sets the field.`);
@@ -177,7 +178,7 @@ console.log(`\nALIASED (${Object.keys(ALIAS).length}) — same behaviour, differ
 console.log('   Not a divergence, but the variant-contract guard CANNOT catch a missed translation.');
 for (const [l, b] of Object.entries(ALIAS)) {
   const n = liveSets ? (liveSets[l] || 0) : '?';
-  console.log(`     live \`${l}\` == backtest \`${b}\`   (set by ${n}/80 runs)`);
+  console.log(`     live \`${l}\` == backtest \`${b}\`   (set by ${n}/${nRuns} runs)`);
 }
 
 if (process.argv.includes('--verbose')) {

@@ -32,7 +32,9 @@ const STACK = process.argv.includes('--stackGate');
 // --natural: the v12/v13 natural-cover families (runDay5m opts.natural on the v6-W roster config) + v6/v7 controls +
 // the v7 reference arm with per-position covers off.
 const NATURAL = process.argv.includes('--natural');
-const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL;
+// --roster v9,v9sg,v9ob: every ROSTER variant of those families, as configured (feature-test families, 2026-10-19).
+const ROSTER_FAMS = (argVal('--roster', '') || '').split(',').filter(Boolean);
+const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || ROSTER_FAMS.length > 0;
 
 // ── days (same filter as the baselines) ──
 const t0 = Date.now();
@@ -93,6 +95,13 @@ const NAT_ARMS = [['base', {}], ['revTouchAny', { revTouch: 'any' }], ['revTouch
   ['addGateOff', { addGate: false }]];
 const NAT_V13 = [['coverAfter15', { coverAfterMin: 15 }], ['coverAfter60', { coverAfterMin: 60 }]];
 const units = [];
+if (ROSTER_FAMS.length) {
+  const { buildRuns } = require('../../server/src/candle-spread/index');
+  for (const r of buildRuns()) {
+    const fam = (/^(v\d+[a-z]*)-/.exec(r.variant) || [])[1];
+    if (ROSTER_FAMS.includes(fam)) units.push({ key: `${r.variant}|roster`, kind: 'control', variant: r.variant, arm: 'roster' });
+  }
+} else
 if (NATURAL) {
   for (const w of [10, 20, 40]) {
     for (const fam of ['v12', 'v13']) for (const [arm, over] of NAT_ARMS.concat(fam === 'v13' ? NAT_V13 : [])) {

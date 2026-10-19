@@ -31,7 +31,8 @@
   const money = n => (n == null ? '—' : (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US'));
 
   // Grid axes — MUST match the server variant naming (family-width[-suffix]) and the compare page.
-  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9'];
+  // v9sg / v9ob: feature-test copies of v9 (2026-10-19), listed right under their parent.
+  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob'];
   // The `-unc` twins are DROPPED from this grid entirely. They exist to measure what the day-loss
   // governor costs, are uncapped and therefore not candidates to trade, and at 30 of 80 runs they were
   // half the width of the grid — pure distraction on the screen used to watch the live session.

@@ -29,10 +29,11 @@ ok(v710.giveUpPoints === 20, 'give-up trigger is 20 points');
 // ── CANDLE_SPREAD_FLOOR_FOLD=on: the folded roster, in a child process (the switch is read at load) ────
 const probe = `const {buildRuns}=require(${JSON.stringify(path.resolve(__dirname, '../../src/candle-spread/index'))});
   const r=buildRuns();const c=(k)=>r.filter((x)=>x[k]===true).length;
-  process.stdout.write(JSON.stringify({w:c('wingConvert'),o:c('floorOffset'),f:c('flyConvert'),rw:c('floorRaiseWings'),rc:c('floorRaiseCapFix'),n:r.length}));`;
+  process.stdout.write(JSON.stringify({w:c('wingConvert'),o:c('floorOffset'),f:c('flyConvert'),rw:c('floorRaiseWings'),rc:c('floorRaiseCapFix'),g:r.filter((x)=>x.lossMax!=null).length,n:r.length}));`;
 const out = execFileSync(process.execPath, ['-e', probe], { env: { ...process.env, CANDLE_SPREAD_FLOOR_FOLD: 'on' }, encoding: 'utf8' });
 const k = JSON.parse(out.slice(out.lastIndexOf('{')));
-ok(k.w === 0 && k.o === 0 && k.f === 0 && k.rw === k.n && k.rc === 50, `FOLD=on: wings/offsets become stages (${JSON.stringify(k)})`);
+ok(k.w === 0 && k.o === 0 && k.f === 0 && k.rw === k.n && k.rc === k.g && k.g >= 50,   // cap fix on every GOVERNED run (50, +10 from v9sg/v9ob)
+   `FOLD=on: wings/offsets become stages (${JSON.stringify(k)})`);
 
 // ── backtest: the fold's stages are counted apart from the planner's own raises ──────────────────────────
 const DIR = path.join(process.cwd(), 'tests/backtest/backtest-data-5m-nq');

@@ -27,6 +27,15 @@ const FAMILY = {
     open: 'v6\'s.', cover: 'v6\'s, plus a cover on any position marking >= 70% of the width.' },
   v9: { name: 'be-wrong + proactive', what: 'v7 signal with proactive covering.',
     open: 'v7\'s.', cover: 'v7\'s, plus a cover on any position marking >= 80% of the width.' },
+  // FEATURE-TEST FAMILIES (user, 2026-10-19): a complete copy of the parent family with ONE feature added, named
+  // v<parent><tag>. Everything not stated here is the parent's.
+  v9sg: { name: 'v9 + stack gate', what: 'v9 with a stack gate: no adding to a side while the NQ trend points against it.',
+    open: 'v9\'s, except an ADD (the side already holds an uncovered position) is skipped while the NQ 15m or 60m trend '
+      + '(5m close vs that timeframe\'s 9 EMA, confirmed by the candle) points against the side. First opens are never gated.',
+    cover: 'v9\'s.' },
+  v9ob: { name: 'v9 + open block', what: 'v9 that never opens against the trend.',
+    open: 'v9\'s, except an open against trend A (15m structural trend agreeing with the last completed hourly candle) is dropped.',
+    cover: 'v9\'s (a dropped open\'s cover side still acts).' },
 };
 // Everything below the signal is shared by every strategy (see docs/strategies/README.md).
 const SHARED = 'Shared by all: day-loss governor, placement G (deepest ITM inside a price band), open ladder, '
@@ -34,7 +43,7 @@ const SHARED = 'Shared by all: day-loss governor, placement G (deepest ITM insid
   + 'also the must-fix past the loss cap and peak-banking wings with an upside term).';
 
 function describeVariant(variant) {
-  const m = /^(v\d)-(\d+)(-(unc|cATM))?$/.exec(String(variant || ''));
+  const m = /^(v\d+[a-z]*)-(\d+)(-(unc|cATM))?$/.exec(String(variant || ''));
   if (!m || !FAMILY[m[1]]) return null;
   const f = FAMILY[m[1]];
   const suffix = m[4] === 'unc' ? 'Uncapped twin: no day-loss governor — shows what the cap costs; not a candidate to trade.'
