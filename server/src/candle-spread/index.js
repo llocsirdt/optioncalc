@@ -1755,10 +1755,44 @@ function makeReplaceOrder(run, record) {
       return { status: 'skipped:cancel-requested', orderId };
     }
     if (tracked && om.isTerminal(tracked)) {
+      // A DEAD ID MUST NOT BE RETRIED FOREVER (2026-10-20). Refusing the replace is right, but the strategy then
+      // reverts its price and asks again next pass — 513 times for one give-up on v7-10 on 10/20. Three cases:
+      //
+      // 1) The order was REPLACED and we know the successor: work the successor instead of the dead id.
+      if (tracked.replacedBy && !(meta && meta._followed >= 5)) {
+        const los = (record.state && record.state.liveOrders) || [];
+        let nu = los.find((x) => x && x.orderId === tracked.replacedBy);
+        for (let hop = 0; nu && om.isTerminal(nu) && nu.replacedBy && hop < 5; hop++) nu = los.find((x) => x && x.orderId === nu.replacedBy);
+        if (nu && !om.isTerminal(nu)) {
+          store.appendEvent(record, { type: 'order_replace_followed', orderId, to: nu.orderId, kind: meta && meta.kind,
+            note: `#${orderId} is ${tracked.status}; repricing its live successor #${nu.orderId} instead` });
+          return replaceOrder(nu.orderId, payload, { ...(meta || {}), _followed: ((meta && meta._followed) || 0) + 1 });
+        }
+      }
+      // 2) A TEST ORDER THE ENGINE PULLED ITSELF. In test mode the position is SIMULATED (fills on the mark path);
+      //    the unfillable order only exercises the wire and is auto-cancelled after TEST_CANCEL_MS on purpose,
+      //    without clearing the strategy's state. Refusing every later reprice froze the simulated book at the
+      //    price it had 60 s after placement: v7-10's give-ups, ladder steps and open walks never moved from
+      //    10/16 (when it went to test) — 841 open reprices, 713 give-ups, 269 cover reprices refused. The
+      //    book moves exactly as it would in simulate; nothing is sent (re-placing would mean another real
+      //    order whose unfillability is not always guaranteed — see order_test_not_guaranteed).
+      if (tracked.testMode && tracked.canceledReason === 'test-auto-cancel') {
+        store.appendEvent(record, { type: 'order_simulated', by: 'test-pulled', meta, payload, orderId,
+          note: `replace not sent: test order #${orderId} was already pulled (test-auto-cancel); the simulated price moves` });
+        return { status: 'simulated:test-pulled', orderId };
+      }
+      // 3) A REAL ORDER THE BROKER FINISHED. The poller normally clears the strategy's pending state when it sees
+      //    the death (clearDeadOrderState), so the next pass places a NEW order at the strategy's price. Do the
+      //    same here so a dead id can never be retried indefinitely; idempotent if the poller got there first.
+      //    Not for the replace-pair rows whose death is bookkeeping (superseded by a fill / id unknown) — the
+      //    poller keeps their state on purpose (a fill is about to book, or the live successor is untracked).
+      const cleared = (!tracked.testMode && !tracked.supersededByFill && !tracked.replaceIdUnknown)
+        ? om.clearDeadOrderState(record, tracked) : null;
       store.appendEvent(record, { type: 'order_replace_skipped', orderId, kind: meta && meta.kind,
-        status: tracked.status, meta,
-        note: `not replaced: the broker already reports this order ${tracked.status}` });
-      return { status: `skipped:${tracked.status}`, orderId, sent: false };
+        status: tracked.status, meta, cleared: cleared || undefined,
+        note: `not replaced: the broker already reports this order ${tracked.status}`
+          + (cleared ? ` — ${cleared} state cleared; the next pass places a new order` : '') });
+      return { status: `skipped:${tracked.status}`, orderId, sent: false, cleared: cleared || undefined };
     }
     const isTest = mode === 'test';
     // Same rule as the place path: a replace is an order too, and a walked price that cannot be proven
