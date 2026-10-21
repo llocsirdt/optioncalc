@@ -36,7 +36,13 @@ const NATURAL = process.argv.includes('--natural');
 const ROSTER_FAMS = (argVal('--roster', '') || '').split(',').filter(Boolean);
 // --takeNow: give-up TAKE-NOW (runDay5m opts.giveUpTakeNowFrac, 2026-10-20) on v6-v9 (+ v9sg/v9ob) roster variants.
 const TAKENOW = process.argv.includes('--takeNow');
-const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || TAKENOW || ROSTER_FAMS.length > 0;
+// --bbFade: v20 / v21 BB-FADE families (2026-10-21, backtest only): open on a 5m close beyond BOTH the 15m and 60m
+// bands (signals/bb-fade.js), everything after the open = the v9 roster machinery. v20 = v9 strike placement (sATM +
+// cATM); v21 = strike priced closest to f x W (backtest-width.makePriceTargetGeo), f from --fFracs (default .50,.55,.60).
+// The v9 roster variants run alongside as controls.
+const BBFADE = process.argv.includes('--bbFade');
+const F_FRACS = (argVal('--fFracs', '0.50,0.55,0.60') || '').split(',').filter(Boolean).map(Number);
+const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || TAKENOW || BBFADE || ROSTER_FAMS.length > 0;
 
 // ── days (same filter as the baselines) ──
 const t0 = Date.now();
@@ -99,6 +105,18 @@ const NAT_V13 = [['coverAfter15', { coverAfterMin: 15 }], ['coverAfter60', { cov
 const TAKENOW_ARMS = [['off', {}], ['tn08', { giveUpTakeNowFrac: 0.08 }], ['tn10', { giveUpTakeNowFrac: 0.10 }], ['tn12', { giveUpTakeNowFrac: 0.12 }],
   ['tn15', { giveUpTakeNowFrac: 0.15 }]];
 const units = [];
+if (BBFADE) {
+  const { buildRuns } = require('../../server/src/candle-spread/index');
+  const shapes = ['10', '20', '40', '10-cATM', '20-cATM', '40-cATM'];
+  const has = (n) => buildRuns().some((r) => r.variant === n);
+  const want = (n) => !VARS_ONLY.length || VARS_ONLY.includes(n);
+  for (const sh of shapes) if (has(`v9-${sh}`) && want(`v9-${sh}`)) units.push({ key: `v9-${sh}|control`, kind: 'control', variant: `v9-${sh}`, arm: 'control' });
+  for (const sh of shapes) if (has(`v9-${sh}`) && want(`v20-${sh}`)) units.push({ key: `v20-${sh}|bbFade`, kind: 'control', variant: `v9-${sh}`, label: `v20-${sh}`, arm: 'bbFade', bbFade: true });
+  for (const w of [10, 20, 40]) for (const f of F_FRACS) {
+    const name = `v21-${w}-f${Math.round(f * 100)}`;
+    if (has(`v9-${w}`) && want(name)) units.push({ key: `${name}|bbFade`, kind: 'control', variant: `v9-${w}`, label: name, arm: 'bbFade', bbFade: true, priceF: f });
+  }
+} else
 if (TAKENOW) {
   const { buildRuns } = require('../../server/src/candle-spread/index');
   const fams = ['v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob'];
@@ -182,6 +200,18 @@ function computeUnit(u) {
   const o = optsFor(run, env);
   const fn = (A, p, ctx) => run.signalFn(A, p, { ...ctx, cfg: run.signalCfg || {} });
   if (NATURAL) o.guardMedianIv = MEDIAN_IV;
+  if (BBFADE) {
+    const BF = require('../../server/src/candle-spread/signals/bb-fade');
+    const sfn = u.bbFade ? BF.bbFadeSignal(fn) : fn;
+    if (u.priceF != null) {
+      // v21: the strike is picked by price. Walk room above the placed price = the v9 twin's (its ceiling over the 50% band centre).
+      const { makePriceTargetGeo } = require('../../server/src/candle-spread/backtest/backtest-width');
+      o.geo = makePriceTargetGeo({ width: run.spreadWidth, incr: run.strikeIncrement || 10, f: u.priceF, walkCapFrac: u.priceF + ((run.capFrac != null ? run.capFrac : 0.55) - 0.5) });
+    }
+    // signals/day = qualifying 5m closes inside the engine's action window (09:30-15:55 ET), counted whether or not they open
+    const nSig = (d) => d.bars.reduce((a, b) => { const m = etMin(b.dt); return a + (m >= 570 && m <= 955 && !b.officialClose && BF.bbFadeSide(b.analysis) ? 1 : 0); }, 0);
+    return days.map((d) => { const r = slim(runDay5m(d.bars, sfn, { ...o, rthCtx: CTX.get(isoOf(d)) })); if (u.bbFade) r.sig = nSig(d); return r; });
+  }
   if (OVERLAY) return days.map((d) => slim(runDay5m(d.bars, fn, { ...o, rthCtx: CTX.get(isoOf(d)) })));
   return days.map((d) => slim(runDay5m(d.bars, fn, o)));
 }
@@ -215,6 +245,7 @@ function agg(recs) {
     uncoveredEodPerDay: per(recs.reduce((a, r) => a + (r.ue || 0), 0)), takeNowPerDay: per(recs.reduce((a, r) => a + (r.tn || 0), 0)),
     coverFillRate: filled + naked ? Math.round(1000 * filled / (filled + naked)) / 10 : null, tradedDays: tr.length,
   };
+  if (recs[0] && recs[0].sig != null) out.signalsPerDay = per(recs.reduce((a, r) => a + (r.sig || 0), 0));
   if (hasD) {
     out.anchorFillRate = D.anchorPlaced ? Math.round(1000 * D.anchorFilled / D.anchorPlaced) / 10 : null;
     out.touchesPerDay = per(D.touches); out.reentriesPerDay = per(D.reentries);
@@ -233,6 +264,7 @@ function agg(recs) {
       out.touchHitsPerDay = per(t[0]); out.touchCoverFillsPerDay = per(t[1]); out.touchBlockedPerDay = per(t[2]); out.setupBarsPerDay = per(t[3]); }
     const pl = recs.reduce((a, r) => a + (r.op ? r.op[0] : 0), 0), fl = recs.reduce((a, r) => a + (r.op ? r.op[1] : 0), 0);
     out.openFillRate = pl ? Math.round(1000 * fl / pl) / 10 : null;
+    if (pl) { out.openPlacedPerDay = per(pl); out.openFilledPerDay = per(fl); }
   }
   return out;
 }
@@ -256,7 +288,7 @@ function agg(recs) {
   const tag = ARMS_ONLY.length ? '-' + ARMS_ONLY.join('_').slice(0, 40) : '';
   fs.writeFileSync(path.join(OUT, `sweep${tag}.json`), JSON.stringify({ meta, rows }, null, 1));
   const cols = ['days', 'total', 'lockedPct', 'avgEndFloor', 'avgDaily', 'median', 'worst5', 'worst10', 'maxDD', 'maxDD30', 'worst', 'best', 'winPct', 'opensPerDay', 'payoff',
-    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'uncoveredEodPerDay', 'takeNowPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
+    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'uncoveredEodPerDay', 'takeNowPerDay', 'signalsPerDay', 'openPlacedPerDay', 'openFilledPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
     'revSameHitPerDay', 'revTouchBarsPerDay', 'revWindowBarsPerDay', 'revRunBarsPerDay', 'addBlockedPerDay', 'revSkipTotalPerDay', 'revMidOnlyPerDay'];
   const lines = [['variant', 'arm', 'era', ...cols].join(',')];
   for (const r of rows) for (const [e, a] of [['all', r.all], ['2026', r.y2026], ['pre', r.pre]]) if (a) lines.push([r.variant, r.arm, e, ...cols.map((c) => (a[c] == null ? '' : a[c]))].join(','));

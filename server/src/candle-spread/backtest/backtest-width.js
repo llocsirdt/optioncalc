@@ -185,6 +185,44 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
   return { WIDTH: width, buildOpen, coverLegs, adaptive: true, capFrac: maxDebitFrac, minDebitFrac };
 }
 
+// ── PRICE-TARGET PLACEMENT (v21, 2026-10-21, BACKTEST ONLY) ─────────────────────────────────────────────
+// The strike is chosen by PRICE: of every vertical of this width on the strike grid (short strike within ±span
+// strikes of the money), take the one whose mark is closest to f x W; on a tie, the one nearest the money (spread
+// centre closest to S). Marks come from the same pricer the engine opens with (legsMark: Black-Scholes on band IV x
+// intraday mult x skew). No decline: the price is the decision. The limit is the live open rule (ceil the mark to
+// the tick); the ladder may walk it to `capOverride` = max(limit, walkCapFrac x W).
+// pickByPrice is the pure selection, exported for the unit test.
+function pickByPrice(side, S, width, f, markOf, { incr = 10, span = 12 } = {}) {
+  const center = Math.floor(S / incr) * incr, target = f * width;
+  let best = null;
+  for (let k = -span; k <= span; k++) {
+    const shortStrike = side === 'bull' ? center + k * incr : center - k * incr;
+    const lo = side === 'bull' ? shortStrike - width : shortStrike;
+    const hi = side === 'bull' ? shortStrike : shortStrike + width;
+    const legs = side === 'bull'
+      ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
+      : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
+    const mark = markOf(legs);
+    if (!(mark > 0)) continue;
+    const err = Math.round(Math.abs(mark - target) * 1e6), dist = Math.abs((lo + hi) / 2 - S);
+    if (!best || err < best.err || (err === best.err && dist < best.dist)) best = { legs, shortStrike, mark, err, dist };
+  }
+  return best;
+}
+function makePriceTargetGeo({ width, incr = 10, f = 0.5, walkCapFrac = null, span = 12 }) {
+  const capF = walkCapFrac != null ? walkCapFrac : f + 0.05;
+  function buildOpen(side, S, tau, iv) {
+    const b = pickByPrice(side, S, width, f, (legs) => legsMark(legs, S, tau, iv), { incr, span });
+    if (!b) return { skip: true, reason: 'no positive mark', limit: 0 };
+    const limit = openLimitOf(b.mark, 0, null, roundTick);
+    return { legs: b.legs, shortStrike: b.shortStrike, limit, capOverride: Math.max(limit, round2(capF * width)), fracOfWidth: b.mark / width, priceTarget: f };
+  }
+  const coverLegs = (side, shortStrike) => side === 'bull'
+    ? [{ side: 'short', type: 'P', strike: shortStrike }, { side: 'long', type: 'P', strike: shortStrike + width }]
+    : [{ side: 'short', type: 'C', strike: shortStrike }, { side: 'long', type: 'C', strike: shortStrike - width }];
+  return { WIDTH: width, buildOpen, coverLegs, capFrac: capF, minDebitFrac: 0, priceTarget: f };
+}
+
 const di = process.argv.indexOf('--dataDir');
 // LAZY. This used to load the whole dataset at MODULE LOAD, which is fine for a CLI but wrong for a
 // library: importing makeGeo/makeAdaptiveGeo should not touch the disk, and on the deployed server the
@@ -203,7 +241,7 @@ function avgDebit(geo) {   // sample the ATM open debit across days (first bar o
 }
 function stat(arr) { let t = 0, cum = 0, pk = 0, dd = 0, w = 1e9; for (const x of arr) { t += x; cum += x; pk = Math.max(pk, cum); dd = Math.max(dd, pk - cum); w = Math.min(w, x); } return { t, dd, w, ret: dd > 0 ? t / dd : 0 }; }
 
-module.exports = { makeGeo, makeAdaptiveGeo };
+module.exports = { makeGeo, makeAdaptiveGeo, makePriceTargetGeo, pickByPrice };
 
 if (require.main === module) {
   const geos = [
