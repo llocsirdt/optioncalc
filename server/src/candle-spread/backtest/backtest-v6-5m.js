@@ -629,6 +629,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let gateCutoff = 0, gateFloor = 0, gateUnderwater = 0, gateC2oWait = 0, c2oFires = 0, c2oChasing = 0;   // opens blocked by the stop-opening gates
   let flyCount = 0, flySpent = 0;      // valley-repair structures bought
   let lockEpoch = null, lockET = null;   // current bar's stamp, for cover-to-continue locks
+  let govFirstBlockMin = null;   // reporting only: ET minute of the day's first open refused by the governor
   let offCount = 0, offSpent = 0, floorCovers = 0, floorBreaches = 0, govBlocked = 0, coverDeferred = 0, worstFloor = 0, worstFloorPre = 0;
 
   // COVER-TO-CONTINUE — lock the deepest-ITM winners until `need()` is satisfied. A covered tent is a
@@ -2190,7 +2191,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       // re-resolve above may have shifted) must stay inside lossMax. Because realized day P&L =
       // bookPayoff(settle) >= floor, and every open is gated here, the day's loss is bounded by lossMax.
       const govOk = !governed || geoDecline || -floorOf({ legs: o.legs, limit: o.limit, covered: false }, openLadderModel) <= lossMax;
-      if (!govOk) govBlocked++;
+      if (!govOk) { govBlocked++; if (govFirstBlockMin == null) govFirstBlockMin = etMinute(bars[i].dt); }
       // FLOOR RATCHET GATE — independent of the governor and evaluated on the same FINAL `o`. A book can
       // sit far inside lossMax and still be handing back everything it won, which is exactly the case the
       // governor cannot reach.
@@ -2433,7 +2434,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     coverMins: st.positions.filter((p) => !p.hedge && p.covered && !p._gu && p.coverEpoch != null).map((p) => Math.round((p.coverEpoch - p.openEpoch) / 60000)),
     giveUpMins: st.positions.filter((p) => !p.hedge && p.covered && p._gu && p.coverEpoch != null).map((p) => Math.round((p.coverEpoch - p.openEpoch) / 60000)),
     uncoveredEod: st.positions.filter((p) => !p.hedge && !p.covered).length,
-    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
+    governor: governed ? { lossTarget, lossMax, worstFloor: Math.round(worstFloor), worstFloorPre: -Math.round(worstFloorPre), breaches: floorBreaches, covers: floorCovers, offsets: offCount, offsetSpent: Math.round(offSpent), offsetPnl: Math.round(offsetPnl), blocked: govBlocked, firstBlockMin: govFirstBlockMin, coverDeferred, lockMode, lockGate, lockRested, wings: wingCount, wingSpent: Math.round(wingSpent), lockUnfillable, lockFillable } : null,
     // FLOOR RATCHET result. Reported unconditionally when armed so a null result is distinguishable from
     // a flag that never engaged — `blocked: 0` with a real peak means the budget was never binding, which
     // is a different finding from "the ratchet did nothing because it was off".

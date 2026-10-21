@@ -41,6 +41,9 @@ const TAKENOW = process.argv.includes('--takeNow');
 // cATM); v21 = strike priced closest to f x W (backtest-width.makePriceTargetGeo), f from --fFracs (default .50,.55,.60).
 // The v9 roster variants run alongside as controls.
 const BBFADE = process.argv.includes('--bbFade');
+// --opensOnly (with --bbFade; user 2026-10-21): v20/v21 carry NO v9 machinery — opens held to expiry, no covers or hedges;
+// risk cap + open walk ladder kept (backtest/opens-only.js). Each gets a -unc twin (no cap). v9 controls unchanged.
+const OPENS_ONLY = process.argv.includes('--opensOnly');
 const F_FRACS = (argVal('--fFracs', '0.50,0.55,0.60') || '').split(',').filter(Boolean).map(Number);
 const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || TAKENOW || BBFADE || ROSTER_FAMS.length > 0;
 
@@ -111,10 +114,12 @@ if (BBFADE) {
   const has = (n) => buildRuns().some((r) => r.variant === n);
   const want = (n) => !VARS_ONLY.length || VARS_ONLY.includes(n);
   for (const sh of shapes) if (has(`v9-${sh}`) && want(`v9-${sh}`)) units.push({ key: `v9-${sh}|control`, kind: 'control', variant: `v9-${sh}`, arm: 'control' });
-  for (const sh of shapes) if (has(`v9-${sh}`) && want(`v20-${sh}`)) units.push({ key: `v20-${sh}|bbFade`, kind: 'control', variant: `v9-${sh}`, label: `v20-${sh}`, arm: 'bbFade', bbFade: true });
-  for (const w of [10, 20, 40]) for (const f of F_FRACS) {
-    const name = `v21-${w}-f${Math.round(f * 100)}`;
-    if (has(`v9-${w}`) && want(name)) units.push({ key: `${name}|bbFade`, kind: 'control', variant: `v9-${w}`, label: name, arm: 'bbFade', bbFade: true, priceF: f });
+  const arm = OPENS_ONLY ? 'opensOnly' : 'bbFade';
+  const twins = OPENS_ONLY ? ['', '-unc'] : [''];
+  for (const sh of shapes) for (const t of twins) if (has(`v9-${sh}`) && want(`v20-${sh}${t}`)) units.push({ key: `v20-${sh}${t}|${arm}`, kind: 'control', variant: `v9-${sh}`, label: `v20-${sh}${t}`, arm, bbFade: true, opensOnly: OPENS_ONLY, unc: t === '-unc' });
+  for (const w of [10, 20, 40]) for (const f of F_FRACS) for (const t of twins) {
+    const name = `v21-${w}-f${Math.round(f * 100)}${t}`;
+    if (has(`v9-${w}`) && want(name)) units.push({ key: `${name}|${arm}`, kind: 'control', variant: `v9-${w}`, label: name, arm, bbFade: true, priceF: f, opensOnly: OPENS_ONLY, unc: t === '-unc' });
   }
 } else
 if (TAKENOW) {
@@ -197,12 +202,14 @@ function computeUnit(u) {
   const env = { intradayIV: true, hasPx: HAS_PX, where: 'sweep-v10' };
   if (OPEN_FILL !== 'immediate') env.openFillModel = OPEN_FILL;
   if (SUB_FILL !== 'none') env.subBarFill = SUB_FILL;
-  const o = optsFor(run, env);
+  let o = optsFor(run, env);
   const fn = (A, p, ctx) => run.signalFn(A, p, { ...ctx, cfg: run.signalCfg || {} });
   if (NATURAL) o.guardMedianIv = MEDIAN_IV;
   if (BBFADE) {
     const BF = require('../../server/src/candle-spread/signals/bb-fade');
-    const sfn = u.bbFade ? BF.bbFadeSignal(fn) : fn;
+    // opens-only: the pure fade (no parent signal -> no signal covers) and the whitelisted opts (no covers / hedges)
+    const sfn = u.opensOnly ? BF.bbFadeSignal(null) : u.bbFade ? BF.bbFadeSignal(fn) : fn;
+    if (u.opensOnly) { const OO = require('../../server/src/candle-spread/backtest/opens-only'); o = OO.opensOnlyOpts(o, { capped: !u.unc }); }
     if (u.priceF != null) {
       // v21: the strike is picked by price. Walk room above the placed price = the v9 twin's (its ceiling over the 50% band centre).
       const { makePriceTargetGeo } = require('../../server/src/candle-spread/backtest/backtest-width');
@@ -210,7 +217,19 @@ function computeUnit(u) {
     }
     // signals/day = qualifying 5m closes inside the engine's action window (09:30-15:55 ET), counted whether or not they open
     const nSig = (d) => d.bars.reduce((a, b) => { const m = etMin(b.dt); return a + (m >= 570 && m <= 955 && !b.officialClose && BF.bbFadeSide(b.analysis) ? 1 : 0); }, 0);
-    return days.map((d) => { const r = slim(runDay5m(d.bars, sfn, { ...o, rthCtx: CTX.get(isoOf(d)) })); if (u.bbFade) r.sig = nSig(d); return r; });
+    return days.map((d) => {
+      const full = runDay5m(d.bars, sfn, { ...o, rthCtx: CTX.get(isoOf(d)) }), r = slim(full);
+      if (u.bbFade) r.sig = nSig(d);
+      if (u.opensOnly) {
+        // HARD CHECK: nothing but signal opens in the book — no cover filled, no hedge / wing / offset / fly position
+        const ol = full.openLadder || {};
+        if (full.filled !== 0 || full.opens !== ol.filled || (full.governor && (full.governor.offsets || full.governor.wings || full.governor.covers)))
+          throw new Error(`${u.label} ${d.date}: opens-only book holds non-open positions (filled ${full.filled}, opens ${full.opens}, ladder filled ${ol.filled})`);
+        r.cap = [full.governor ? full.governor.blocked : 0, full.governor ? full.governor.firstBlockMin : null, ol.walkGovBlocked || 0,
+          full.capital ? Math.round(full.capital.peakDebit) : 0, full.governor ? full.governor.worstFloor : null];
+      }
+      return r;
+    });
   }
   if (OVERLAY) return days.map((d) => slim(runDay5m(d.bars, fn, { ...o, rthCtx: CTX.get(isoOf(d)) })));
   return days.map((d) => slim(runDay5m(d.bars, fn, o)));
@@ -245,6 +264,15 @@ function agg(recs) {
     uncoveredEodPerDay: per(recs.reduce((a, r) => a + (r.ue || 0), 0)), takeNowPerDay: per(recs.reduce((a, r) => a + (r.tn || 0), 0)),
     coverFillRate: filled + naked ? Math.round(1000 * filled / (filled + naked)) / 10 : null, tradedDays: tr.length,
   };
+  if (recs[0] && recs[0].cap) {   // opens-only CAP columns
+    const blk = recs.filter((r) => r.cap[0] > 0), fm = blk.map((r) => r.cap[1]).filter((x) => x != null).sort((a, b) => a - b);
+    const pk = recs.map((r) => r.cap[3]).sort((a, b) => a - b);
+    const hm = (m) => (m == null ? null : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+    out.capBindPct = Math.round(1000 * blk.length / n) / 10; out.capBlockedPerDay = per(recs.reduce((a, r) => a + r.cap[0], 0));
+    out.capWalkBlockedPerDay = per(recs.reduce((a, r) => a + r.cap[2], 0));
+    out.capFirstBlockMedian = fm.length ? hm(fm[Math.floor(fm.length / 2)]) : null;
+    out.peakCapitalMedian = pk[Math.floor(n / 2)]; out.peakCapitalMax = pk[n - 1];
+  }
   if (recs[0] && recs[0].sig != null) out.signalsPerDay = per(recs.reduce((a, r) => a + (r.sig || 0), 0));
   if (hasD) {
     out.anchorFillRate = D.anchorPlaced ? Math.round(1000 * D.anchorFilled / D.anchorPlaced) / 10 : null;
@@ -288,7 +316,7 @@ function agg(recs) {
   const tag = ARMS_ONLY.length ? '-' + ARMS_ONLY.join('_').slice(0, 40) : '';
   fs.writeFileSync(path.join(OUT, `sweep${tag}.json`), JSON.stringify({ meta, rows }, null, 1));
   const cols = ['days', 'total', 'lockedPct', 'avgEndFloor', 'avgDaily', 'median', 'worst5', 'worst10', 'maxDD', 'maxDD30', 'worst', 'best', 'winPct', 'opensPerDay', 'payoff',
-    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'uncoveredEodPerDay', 'takeNowPerDay', 'signalsPerDay', 'openPlacedPerDay', 'openFilledPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
+    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'uncoveredEodPerDay', 'takeNowPerDay', 'signalsPerDay', 'capBindPct', 'capBlockedPerDay', 'capWalkBlockedPerDay', 'capFirstBlockMedian', 'peakCapitalMedian', 'peakCapitalMax', 'openPlacedPerDay', 'openFilledPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
     'revSameHitPerDay', 'revTouchBarsPerDay', 'revWindowBarsPerDay', 'revRunBarsPerDay', 'addBlockedPerDay', 'revSkipTotalPerDay', 'revMidOnlyPerDay'];
   const lines = [['variant', 'arm', 'era', ...cols].join(',')];
   for (const r of rows) for (const [e, a] of [['all', r.all], ['2026', r.y2026], ['pre', r.pre]]) if (a) lines.push([r.variant, r.arm, e, ...cols.map((c) => (a[c] == null ? '' : a[c]))].join(','));
