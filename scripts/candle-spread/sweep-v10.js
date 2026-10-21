@@ -34,7 +34,9 @@ const STACK = process.argv.includes('--stackGate');
 const NATURAL = process.argv.includes('--natural');
 // --roster v9,v9sg,v9ob: every ROSTER variant of those families, as configured (feature-test families, 2026-10-19).
 const ROSTER_FAMS = (argVal('--roster', '') || '').split(',').filter(Boolean);
-const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || ROSTER_FAMS.length > 0;
+// --takeNow: give-up TAKE-NOW (runDay5m opts.giveUpTakeNowFrac, 2026-10-20) on v6-v9 (+ v9sg/v9ob) roster variants.
+const TAKENOW = process.argv.includes('--takeNow');
+const OVERLAY = process.argv.includes('--overlay') || STACK || NATURAL || TAKENOW || ROSTER_FAMS.length > 0;
 
 // ── days (same filter as the baselines) ──
 const t0 = Date.now();
@@ -94,7 +96,21 @@ const NAT_ARMS = [['base', {}], ['revTouchAny', { revTouch: 'any' }], ['revTouch
   ['jumpGuardOff', { jumpGuard: false }], ['guardX1.5', { guardMult: 1.5 }], ['guard50', { guardFixed: 50 }], ['guard100', { guardFixed: 100 }], ['guardAtTarget', { guardAt: 'target' }],
   ['addGateOff', { addGate: false }]];
 const NAT_V13 = [['coverAfter15', { coverAfterMin: 15 }], ['coverAfter60', { coverAfterMin: 60 }]];
+const TAKENOW_ARMS = [['off', {}], ['tn08', { giveUpTakeNowFrac: 0.08 }], ['tn10', { giveUpTakeNowFrac: 0.10 }], ['tn12', { giveUpTakeNowFrac: 0.12 }],
+  ['tn15', { giveUpTakeNowFrac: 0.15 }]];
 const units = [];
+if (TAKENOW) {
+  const { buildRuns } = require('../../server/src/candle-spread/index');
+  const fams = ['v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob'];
+  for (const fam of fams) for (const w of [10, 20, 40]) {
+    const c = `${fam}-${w}`;
+    if (!buildRuns().some((r) => r.variant === c)) continue;
+    for (const [arm, over] of TAKENOW_ARMS) {
+      if ((VARS_ONLY.length && !VARS_ONLY.includes(c)) || (ARMS_ONLY.length && !ARMS_ONLY.includes(arm))) continue;
+      units.push({ key: `${c}|${arm}`, kind: 'control', variant: c, arm, over });
+    }
+  }
+} else
 if (ROSTER_FAMS.length) {
   const { buildRuns } = require('../../server/src/candle-spread/index');
   for (const r of buildRuns()) {
@@ -129,7 +145,7 @@ for (const v of VARIANTS) {
 if (!NO_CONTROLS && !OVERLAY) for (const c of CONTROLS) if (!VARS_ONLY.length || VARS_ONLY.includes(c)) units.push({ key: `${c}|control`, kind: 'control', variant: c, arm: 'control' });
 
 // one compact record per day
-const slim = (r) => ({ t: r.terminal, o: r.opens, f: r.filled, n: r.naked, tr: r.lock && r.lock.traded ? 1 : 0, ef: r.lock ? r.lock.endBookFloor : null,
+const slim = (r) => ({ t: r.terminal, o: r.opens, f: r.filled, n: r.naked, ue: r.uncoveredEod || 0, tn: r.giveUpTakeNow || 0, tr: r.lock && r.lock.traded ? 1 : 0, ef: r.lock ? r.lock.endBookFloor : null,
   nl: r.lock && r.lock.endFloorNoLoss ? 1 : 0, ifa: r.intradayFloorAvg, ifp: r.intradayFloorNonNegPct, te: r.tents || 0,
   op: r.openLadder ? [r.openLadder.placed, r.openLadder.filled] : null, d: r.decisions || null, gd: r.gapDay ? 1 : 0,
   th: r.touch ? [r.touch.hits, r.touch.coverFills, r.touch.blocked, r.touch.setupBars] : null,
@@ -196,6 +212,7 @@ function agg(recs) {
     payoff: avgWin != null && avgLoss ? Math.round(avgWin / Math.abs(avgLoss) * 100) / 100 : null,
     intradayFloorAvg: Math.round(tr.reduce((a, r) => a + (r.ifa || 0), 0) / nt), ifNonNegPct: Math.round(tr.reduce((a, r) => a + (r.ifp || 0), 0) / nt * 10) / 10,
     eodLockedPct: Math.round(1000 * tr.filter((r) => r.nl).length / nt) / 10, tentsPerDay: Math.round(tr.reduce((a, r) => a + r.te, 0) / nt * 10) / 10,
+    uncoveredEodPerDay: per(recs.reduce((a, r) => a + (r.ue || 0), 0)), takeNowPerDay: per(recs.reduce((a, r) => a + (r.tn || 0), 0)),
     coverFillRate: filled + naked ? Math.round(1000 * filled / (filled + naked)) / 10 : null, tradedDays: tr.length,
   };
   if (hasD) {
@@ -239,7 +256,7 @@ function agg(recs) {
   const tag = ARMS_ONLY.length ? '-' + ARMS_ONLY.join('_').slice(0, 40) : '';
   fs.writeFileSync(path.join(OUT, `sweep${tag}.json`), JSON.stringify({ meta, rows }, null, 1));
   const cols = ['days', 'total', 'lockedPct', 'avgEndFloor', 'avgDaily', 'median', 'worst5', 'worst10', 'maxDD', 'maxDD30', 'worst', 'best', 'winPct', 'opensPerDay', 'payoff',
-    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
+    'intradayFloorAvg', 'ifNonNegPct', 'eodLockedPct', 'tentsPerDay', 'uncoveredEodPerDay', 'takeNowPerDay', 'coverFillRate', 'anchorFillRate', 'openFillRate', 'touchesPerDay', 'reentriesPerDay', 'opensBeforeTouchPerDay', 'opensAfterTouchPerDay', 'touchHitsPerDay', 'touchCoverFillsPerDay', 'touchBlockedPerDay', 'setupBarsPerDay', 'blockedAddsPerDay', 'alsoC2oPerDay', 'addsPerDay', 'revsPerDay', 'revFilledPerDay', 'guardPerDay', 'offsetShare', 'v13CoveredShare', 'neverShare',
     'revSameHitPerDay', 'revTouchBarsPerDay', 'revWindowBarsPerDay', 'revRunBarsPerDay', 'addBlockedPerDay', 'revSkipTotalPerDay', 'revMidOnlyPerDay'];
   const lines = [['variant', 'arm', 'era', ...cols].join(',')];
   for (const r of rows) for (const [e, a] of [['all', r.all], ['2026', r.y2026], ['pre', r.pre]]) if (a) lines.push([r.variant, r.arm, e, ...cols.map((c) => (a[c] == null ? '' : a[c]))].join(','));

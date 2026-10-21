@@ -614,7 +614,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   };
   const withTrend = (side) => { const d = TS.state(trendCtx, asymDef); return (d === 1 && side === 'bull') || (d === -1 && side === 'bear'); };
   let stallFires = 0;
-  let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0;
+  let trendCtx = null, guTrendFires = 0, frTrendBlocked = { n: 0 }, openTrendBlocked = 0, guTakeNow = 0;
   let guSig = null;   // the signal of the last CLOSED bar, for the 'signal' / 'beWrong' give-up triggers
   const thruOpen = ((opts.fillThroughTicksOpen != null ? opts.fillThroughTicksOpen : opts.fillThroughTicks) || 0) * TICK;
   const coverAtLimit = opts.simFillAtLimit === true;
@@ -1482,6 +1482,13 @@ function runDay5m(bars, signalFn, opts = {}) {
         let lim = round2(G.WIDTH - pc.openCost + cap);
         if (pos._c2o != null) lim = pos._c2o === 'mkt' ? Infinity : round2(lim + pos._c2o);
         workingTarget = roundTick(Math.min(mk + TICK, lim));
+        // TAKE-NOW (opts.giveUpTakeNowFrac, backtest-only, 2026-10-20; giveup-regime study): when the cover's mark is
+        // within frac x W past break-even, pay the mark (+ a tick) now even above the usual allowance; otherwise the
+        // usual resting price stands. Never lowers the price. Unset = inert.
+        if (opts.giveUpTakeNowFrac != null && pos._c2o == null) {
+          const takeLim = round2(G.WIDTH - pc.openCost + opts.giveUpTakeNowFrac * G.WIDTH);
+          if (mk + TICK <= takeLim && mk + TICK > workingTarget) { workingTarget = roundTick(mk + TICK); if (!pos._tn) { pos._tn = true; guTakeNow++; } }
+        }
         // STUDY HOOK (opts.giveUpTap, study-giveup-regime.js): the FIRST give-up of each position, with the cover legs it
         // works and the price it would pay. Read-only; unset = inert.
         if (opts.giveUpTap && !pos._guTap) {
@@ -2412,6 +2419,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     touch: touchOn ? { hits: touchHits, coverFills: touchCoverFills, blocked: touchBlocked, setupBars: touchSetupBars } : undefined,
     sigCoverGiveUps, coverSameBar, subBar: subMode ? { mode: subMode, no1mBars: subNo1m, opensLostTo1m: subOpenNoFill } : undefined,
     openTrendBlocked: opts.openTrendBlock ? openTrendBlocked : undefined,
+    giveUpTakeNow: opts.giveUpTakeNowFrac != null ? guTakeNow : undefined,
     stallFires: opts.stallCoverMin != null ? stallFires : undefined,
     lateFloor: lateAfter != null ? { ref: lateRef, blocked: lateBlocked } : undefined,
     floorAt14, floorAt15,

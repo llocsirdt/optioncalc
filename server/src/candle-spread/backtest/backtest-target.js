@@ -514,7 +514,7 @@ function runDayTarget(bars, optsIn = {}) {
     capital: { peakReal: Math.round(capPeak), avgReal: capN ? round2(capSum / capN) : 0 },
     legs: null, harvest: null, wings: { count: 0, spent: 0 }, giveUpPos: D.giveUpPos, giveUpCovered: D.giveUpCovered, floorRaise: null,
     giveUpTrendFires: undefined, giveUpCandleFires: undefined, trendFloor: undefined, coverAsym: undefined, sigCoverGiveUps: 0, coverSameBar: 0,
-    subBar: o.subBarFill ? { mode: o.subBarFill } : undefined, openTrendBlocked: undefined, stallFires: D.stallFires, lateFloor: undefined,
+    subBar: o.subBarFill ? { mode: o.subBarFill } : undefined, openTrendBlocked: undefined, giveUpTakeNow: undefined, stallFires: D.stallFires, lateFloor: undefined,
     floorAt14, floorAt15,
     intradayFloorAvg: ifBars ? Math.round(ifSum / ifBars) : null, intradayFloorNonNegPct: ifBars ? Math.round(1000 * ifNonNeg / ifBars) / 10 : null,
     tents: verts.filter((p) => p.covered).length, flatFloors, coverRange: { rangeRestrikes: D.rangeRestrikes, guRestrikes: D.guRestrikes, stepIns: 0, rolls: 0, rollSpent: 0 },

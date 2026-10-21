@@ -92,6 +92,7 @@ function optsFor(v, env) {
     if (v.giveUpTrend != null) o.giveUpTrend = v.giveUpTrend;   // trend-state definition: urgent cover when fighting it
     if (v.giveUpCandle != null) o.giveUpCandle = v.giveUpCandle;   // candle reversal give-up (giveup-candle.js)
     if (v.giveUpPointsBackstop != null) o.giveUpPointsBackstop = v.giveUpPointsBackstop;   // false = candle rule alone
+    if (v.giveUpTakeNowFrac != null) o.giveUpTakeNowFrac = v.giveUpTakeNowFrac;   // backtest-only: pay the mark now when within frac x W past BE
   }
   // TREND-SIDE FLOOR (trend-floor.js): definition, action order, ratio, per-day cap.
   for (const k of ['trendFloor', 'trendFloorOrder', 'trendFloorMinRatio', 'trendFloorMaxPerDay']) if (v[k] != null) o[k] = v[k];
