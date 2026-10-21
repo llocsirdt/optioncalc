@@ -56,6 +56,7 @@ function installFakeS3(behaviour = {}) {
         }
         if (cmd._kind === 'get') {
           calls.get++;
+          if (behaviour.failGets > 0) { behaviour.failGets--; throw new Error('read-body: aborted'); }
           if (!store.has(cmd.input.Key)) { const e = new Error('NoSuchKey'); e.name = 'NoSuchKey'; throw e; }
           const body = store.get(cmd.input.Key);
           return { Body: { transformToString: async () => body } };
@@ -205,6 +206,23 @@ function loadArchive(env) {
       `a failing get is counted per record and restores nothing (listed ${d.listed}, failed ${d.failed})`);
     ok(fs.existsSync(dir2) && fs.readdirSync(dir2).length === 0, 'leaving the store empty rather than half-written');
     ok(A.health().getFails >= 2, 'and the failures are counted on health()');
+    restore();
+  }
+  // A TRANSIENT GET FAILURE IS RETRIED (2026-10-21: one aborted read lost v4-40-cATM 10/19 from the served store).
+  {
+    const fake = installFakeS3();
+    const { A, restore } = loadArchive({ CANDLE_SPREAD_S3_BUCKET: 'b' });
+    await A.putRun('NDX_2026-10-19_2026-10-19_v4-40-cATM', '{"c":3}');
+    fake.behaviour.failGets = 1;                         // the first read aborts, the retry succeeds
+    const dir = path.join(tmp, 'store-retry');
+    const d = await A.restoreDay('2026-10-19', dir, { retryDelayMs: 0 });
+    ok(d.restored === 1 && d.failed === 0 && d.retried === 1,
+      `one aborted read is retried and the record restores (${JSON.stringify({ r: d.restored, f: d.failed, t: d.retried })})`);
+    ok(fs.existsSync(path.join(dir, 'NDX_2026-10-19_2026-10-19_v4-40-cATM.json')), 'and the file is on disk');
+    fake.behaviour.failGets = 5;                         // more failures than retries: counted, named, no throw
+    const d2 = await A.restoreDay('2026-10-19', path.join(tmp, 'store-retry2'), { retryDelayMs: 0 });
+    ok(d2.failed === 1 && d2.failedIds && d2.failedIds[0] === 'NDX_2026-10-19_2026-10-19_v4-40-cATM',
+      `persistent failure is counted and the runId named (${JSON.stringify(d2.failedIds)})`);
     restore();
   }
   // A MISSING SDK must disable the archive, never crash the process on boot.

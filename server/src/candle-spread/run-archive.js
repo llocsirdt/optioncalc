@@ -178,8 +178,23 @@ async function restoreDay(tradeDate, runsDir, opts = {}) {
   for (const runId of l.ids) {
     const file = path.join(runsDir, `${runId}.json`);
     if (fs.existsSync(file)) { res.skippedPresent++; continue; }
-    const g = await getRun(runId);
-    if (!g.ok) { res.failed++; continue; }
+    // RETRY A TRANSIENT READ. 2026-10-21 00:12Z: the replacement instance's restore had one GET abort mid-body
+    // ("read-body: aborted") and v4-40-cATM 2026-10-19 simply never came back — getRun serves local disk only,
+    // so the record vanished from the UI until the next instance boot. A missing key is final; anything else
+    // gets `retries` more tries.
+    const retries = opts.retries != null ? opts.retries : 2;
+    const delayMs = opts.retryDelayMs != null ? opts.retryDelayMs : 500;
+    let g = await getRun(runId);
+    for (let i = 0; !g.ok && !g.missing && !g.disabled && i < retries; i++) {
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+      g = await getRun(runId);
+      if (g.ok) res.retried = (res.retried || 0) + 1;
+    }
+    if (!g.ok) {
+      res.failed++; (res.failedIds = res.failedIds || []).push(runId);
+      console.error(`[run-archive] restore of ${runId} failed after ${retries + 1} tries: ${g.error || g.reason || 'unknown'}`);
+      continue;
+    }
     try {
       // Write to a temp name and rename, so a crash mid-restore can never leave a half-written record —
       // the exact shape readRunStatus classifies as `corrupt` and refuses to overwrite.
