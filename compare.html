@@ -252,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.10.11</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.11.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
@@ -337,7 +337,19 @@ const BT_BASE = FORCE_BASE || (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
 const PROXY_URL = BT_BASE;
 
 // v9sg / v9ob: feature-test copies of v9 (user, 2026-10-19) — rows right under their parent.
-const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9','v9sg','v9ob'];
+// v20 / v21: the opens-only BB-fade families (2026-10-23, simulate-only), below everything else.
+const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9','v9sg','v9ob','v20','v21'];
+// v21 carries a PRICE TARGET after the width (v21-10-f55, v21-10-f55-unc), so it gets ONE ROW PER TARGET — v21 f50 /
+// f55 / f60 — under the same width columns; every other family is one row. A row names its family and optional tag,
+// and variantFor() builds the variant from (row, column): family-W[-cATM][-fNN][-unc].
+const PRICE_TAGS = { v21: ['f50', 'f55', 'f60'] };
+const ROWS = FAMILIES.flatMap((f) => (PRICE_TAGS[f] ? PRICE_TAGS[f].map((t) => ({ key: `${f}·${t}`, fam: f, tag: t, label: `${f} ${t}` }))
+  : [{ key: f, fam: f, tag: null, label: f }]));
+function variantFor(row, colKey) {
+  if (!row.tag) return `${row.fam}-${colKey}`;
+  const m = /^(\d+)(-cATM)?(-unc)?$/.exec(colKey);
+  return m ? `${row.fam}-${m[1]}${m[2] || ''}-${row.tag}${m[3] || ''}` : `${row.fam}-${colKey}-${row.tag}`;
+}
 // Column = the suffix after the family. Order: the 3 short-ATM widths, the 2 ATM-centered comparators,
 // then the 2 tight-cap A/B twins (only v5-v9 have these → empty cells elsewhere).
 // Order: the 3 short-ATM widths (the candidates), the 2 ATM-centered controls, THEN the uncapped twins
@@ -352,6 +364,9 @@ const COLUMNS = [
   { k:'10-unc',  h:'$10 unc', unc:true },
   { k:'20-unc',  h:'$20 unc', unc:true },
   { k:'40-unc',  h:'$40 unc', unc:true },
+  // centred uncapped twins exist only for v20 (2026-10-23) — empty for every other row
+  { k:'20-cATM-unc', h:'$20 ctr unc', unc:true },
+  { k:'40-cATM-unc', h:'$40 ctr unc', unc:true },
 ];
 // Uncapped hidden by DEFAULT — the button reveals rather than conceals.
 let showUnc = false;
@@ -401,9 +416,9 @@ function gridSpec() {
     };
   }
   return {
-    rows: FAMILIES.map((f) => ({ key: f, label: f })),
+    rows: ROWS,
     cols: visibleColumns().map((c) => ({ ...c, key: c.k })),
-    cellKey: (row, col) => `${row.key}-${col.key}`,
+    cellKey: (row, col) => variantFor(row, col.key),
   };
 }
 
@@ -864,7 +879,7 @@ async function ensureBaselines() {
 // actually happened — so the definition travels with the header instead of living in someone's memory.
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's',
-    d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement).' },
+    d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement). Suffix -fNN (v21) = price target: the strike priced closest to NN% of width. v20 / v21 = opens-only BB fade (no covers or hedges, held to the close), simulate-only.' },
   // WHAT IT IS TESTING — put directly after the name so the table doubles as the index of which variant
   // carries which experiment. Sortable like everything else, which is the point: sort by giveUp and the
   // five give-up variants group together with their results already beside them, instead of being
@@ -1407,7 +1422,7 @@ async function load() {
     }
     commonDate = pickDate;
     const targets = [];
-    for (const f of FAMILIES) for (const c of COLUMNS) { const v = `${f}-${c.k}`; if (vm[v]) targets.push(v); }
+    for (const r of ROWS) for (const c of COLUMNS) { const v = variantFor(r, c.k); if (vm[v]) targets.push(v); }
     if (!targets.length) { status.textContent = 'Runs exist but none match the v0-v9 sweep naming yet.'; return; }
     let done = 0;
     await inBatches(targets, 8, async (v) => {

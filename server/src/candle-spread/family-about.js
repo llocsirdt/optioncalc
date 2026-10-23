@@ -36,19 +36,39 @@ const FAMILY = {
   v9ob: { name: 'v9 + open block', what: 'v9 that never opens against the trend.',
     open: 'v9\'s, except an open against trend A (15m structural trend agreeing with the last completed hourly candle) is dropped.',
     cover: 'v9\'s (a dropped open\'s cover side still acts).' },
+  // OPENS-ONLY BB FADE (2026-10-21 backtest; live SIMULATE-ONLY 2026-10-23). None of the shared machinery below applies.
+  v20: { name: 'BB fade, opens only', what: 'Fades a 5-minute close beyond both the 15m and 60m Bollinger bands; opens only, '
+      + 'every position held to the close. Simulate-only — runs to be watched, not traded.',
+    open: '5m /NQ close below BOTH the last completed 15m and 60m lower BB(20,2) -> bull; above both uppers -> bear. '
+      + 'Strikes as v9 (placement G; centred on -cATM).',
+    cover: 'None: no covers, hedges, give-up or floor guards; settled at the 16:00 NDX close.',
+    shared: 'Kept: day-loss cap on opens (none on -unc), the open walk ladder (one working open, cancelled on a reversal, '
+      + 're-struck after 10 min at its cap), the leg ledger, the 09:30-15:55 action window. Nothing else.' },
+  v21: { name: 'BB fade, opens only, priced strike', what: 'v20 with the strike chosen by price: the spread whose real mark '
+      + 'is closest to f x width. Simulate-only — runs to be watched, not traded.',
+    open: 'v20\'s signal; strike = the vertical priced closest to f x W (f = 0.50 / 0.55 / 0.60, the -fNN suffix), nearest '
+      + 'the money on a tie; walked up to (f + v9 cap - 0.50) x W.',
+    cover: 'None: no covers, hedges, give-up or floor guards; settled at the 16:00 NDX close.',
+    shared: 'Kept: day-loss cap on opens (none on -unc), the open walk ladder (one working open, cancelled on a reversal, '
+      + 're-struck after 10 min at its cap), the leg ledger, the 09:30-15:55 action window. Nothing else.' },
 };
 // Everything below the signal is shared by every strategy (see docs/strategies/README.md).
 const SHARED = 'Shared by all: day-loss governor, placement G (deepest ITM inside a price band), open ladder, '
   + 'continuous covers + ladder, give-up, stall cover (15 min), late-day guard (15:00), floor raise (spreads first, 3:1; '
   + 'also the must-fix past the loss cap and peak-banking wings with an upside term).';
 
+// v<n>[tag]-W[-cATM][-fNN][-unc] — e.g. v9-20-cATM, v9sg-10-unc, v20-40-cATM-unc, v21-10-f55-unc.
 function describeVariant(variant) {
-  const m = /^(v\d+[a-z]*)-(\d+)(-(unc|cATM))?$/.exec(String(variant || ''));
+  const m = /^(v\d+[a-z]*)-(\d+)(-cATM)?(?:-f(\d+))?(-unc)?$/.exec(String(variant || ''));
   if (!m || !FAMILY[m[1]]) return null;
   const f = FAMILY[m[1]];
-  const suffix = m[4] === 'unc' ? 'Uncapped twin: no day-loss governor — shows what the cap costs; not a candidate to trade.'
-    : m[4] === 'cATM' ? 'Fixed-geometry control: strikes centred at the money instead of placement G.' : null;
-  return { family: m[1], name: f.name, width: Number(m[2]), what: f.what, open: f.open, cover: f.cover, suffix, shared: SHARED };
+  const parts = [];
+  if (m[4]) parts.push(`Price target f = ${(Number(m[4]) / 100).toFixed(2)}: the strike priced closest to ${(Number(m[4]) / 100).toFixed(2)} x W.`);
+  if (m[3]) parts.push('Fixed-geometry control: strikes centred at the money instead of placement G.');
+  if (m[5]) parts.push('Uncapped twin: no day-loss governor — shows what the cap costs; not a candidate to trade.');
+  return { family: m[1], name: f.name, width: Number(m[2]), what: f.what, open: f.open, cover: f.cover,
+    suffix: parts.length ? parts.join(' ') : null, shared: f.shared || SHARED,
+    ...(m[4] ? { priceTarget: Number(m[4]) / 100 } : {}) };
 }
 
 module.exports = { FAMILY, describeVariant };

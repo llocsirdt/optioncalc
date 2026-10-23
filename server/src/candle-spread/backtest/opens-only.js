@@ -1,6 +1,8 @@
 'use strict';
 /**
- * OPENS-ONLY engine opts (v20 / v21 BB-fade, 2026-10-21, BACKTEST ONLY; nothing calls this unless a sweep asks).
+ * OPENS-ONLY engine opts (v20 / v21 BB-fade, 2026-10-21). Since 2026-10-23 the rostered v20 / v21 (SIMULATE-ONLY live
+ * runs) are built here too (opensOnlyVariant), and backtest/opts-for.js applies opensOnlyOpts to any variant carrying
+ * `opensOnly`, so the live roster, the baselines and the sweep share ONE definition of what an opens-only run keeps.
  *
  * User (2026-10-21): v20/v21 carry NO v9/v7 machinery. Every open is held to expiry and settles at the NDX close.
  * No covers of any kind (signal covers, continuous / plateau tent, give-up, cover ladder, stall, proactive, c2o,
@@ -24,6 +26,12 @@ const KEEP = ['rthActionOnly', 'trackCapital', 'intradayIV', 'ivSkew', 'bidirect
 function opensOnlyOpts(o, { capped = true } = {}) {
   const out = {};
   for (const k of KEEP) if (o[k] !== undefined) out[k] = o[k];
+  // THE OPEN WALK IS KEPT, so its switch must survive the whitelist. The engine walks an open when opts.openLadder is
+  // set, else when opts.coverLadder is (runDay5m `openWalk`), and coverLadder — a cover feature — is rightly stripped
+  // above. The 2026-10-21 opens-only run had exactly that hole: the ladder clock was kept but the walk was OFF, so no
+  // open was ever walked (walk/d 0 in its table). Fixed 2026-10-23 with the live port: the parent's effective walk is
+  // carried over explicitly.
+  out.openLadder = o.openLadder != null ? o.openLadder === true : o.coverLadder === true;
   out.perPositionCovers = false;
   out.coverToStack = false;
   if (capped && o.lossMax != null && o.lossMax < Infinity) out.lossMax = o.lossMax;   // no lossTarget -> no reduce-risk actions
@@ -47,4 +55,45 @@ function guardsFor(out) {
   ];
 }
 
-module.exports = { opensOnlyOpts, guardsFor, KEEP };
+// ── LIVE ROSTER CONFIG (2026-10-23) ──────────────────────────────────────────────────────────────────────────────
+// The rostered opens-only variant, built from a FINISHED parent roster variant (v9-W / v9-W-cATM, after every builder
+// and applyExperiments). The roster-level counterpart of KEEP: only the fields that produce a kept engine opt (or are
+// the live mark path's fill realism) are carried over; everything else is ABSENT, and the four BASE_RUNS defaults that
+// switch machinery ON for every run are switched OFF explicitly (buildRuns merges BASE_RUNS under each variant):
+// capital recapture, the governor's lossTarget + floor offsets, cover-to-stack and continuous covering.
+const ROSTER_KEEP = [
+  // placement (backtest: geo)
+  'spreadWidth', 'spreadShift', 'adaptiveGeo', 'maxItmStrikes', 'capFrac', 'minDebitFrac', 'maxOtmStrikes', 'openOverCapBelow', 'orderSlipTicks',
+  // open ladder (walk cap, re-strike, fallback, clock)
+  'openLadderStepDollars', 'openWalkCapFrac', 'openRestrikeMin', 'openRestrikeReplace', 'openRestrikeReplaceMax',
+  'openFallbackUntilMin', 'openFallbackBull', 'openFallbackBear', 'openFallbackOpenUntilMin',
+  'ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderStepDollars',
+  'bidirectional', 'firstActionMin', 'lossMax',
+  // live mark-path fill realism (simulated fills only; the backtest's counterpart is its open fill model)
+  'simOpenFillMinLooks', 'simFillAtLimit', 'simMaxQuoteWidthFrac',
+  // the cover plumbing names (inert: an opens-only run never places a cover)
+  'coverSelector', 'coverFillModel',
+];
+const ROSTER_OFF = { capitalRecapture: false, openAlternateEvery: null, creditCoverFrac: null,
+  lossTarget: null, floorOffset: false, coverToStack: false, coverToStackMinFrac: null, continuousCover: false };
+
+// parent: finished roster variant. capped=false -> the -unc twin (no lossMax). extra: per-family fields (v21's price
+// target). signalFn: the shared fade (bb-fade.OPENS_ONLY_SIGNAL), passed in so this module stays free of signal code.
+function opensOnlyVariant(parent, { name, label, capped = true, signalFn, extra = {} }) {
+  const v = { variant: name, variantLabel: label, signalFn, signalCfg: { fiveMin: true } };
+  for (const k of ROSTER_KEEP) {
+    if (parent[k] === undefined) continue;
+    v[k] = Array.isArray(parent[k]) ? parent[k].slice() : parent[k];
+  }
+  // the parent's EFFECTIVE open walk (trader.resolvePendingOpen: openLadder, else coverLadder), made explicit
+  v.openLadder = parent.openLadder != null ? parent.openLadder === true : parent.coverLadder === true;
+  Object.assign(v, ROSTER_OFF);
+  if (!capped) { v.lossMax = null; v.softCap = null; v.hardCap = null; v.riskCap = null; }
+  v.opensOnly = true;
+  // SIMULATE-ONLY: never armed, never test (index.js: effectiveDryRun / applyArmedSelection / armableReason / deps).
+  v.simulateOnly = true;
+  v.dryRun = true;
+  return Object.assign(v, extra);
+}
+
+module.exports = { opensOnlyOpts, guardsFor, KEEP, ROSTER_KEEP, ROSTER_OFF, opensOnlyVariant };

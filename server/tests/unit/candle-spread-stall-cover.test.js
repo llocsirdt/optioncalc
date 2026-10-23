@@ -55,7 +55,7 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
     ok(!d7.some((x) => /cover-(giveup|reprice|stall)/.test(x.action) && x.to < 5.0), 'a working give-up cover is never pulled down when the mark dips');
   }
   // 6. roster
-  ok(CS.buildRuns().every((r) => r.stallCoverMin === 15), 'every variant carries 15 minutes');
+  ok(CS.buildRuns().filter((r) => !r.opensOnly).every((r) => r.stallCoverMin === 15), 'every variant carries 15 minutes');   // v20/v21 (opensOnly) carry no cover / hedge / guard machinery by design — pinned in opens-only-live
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

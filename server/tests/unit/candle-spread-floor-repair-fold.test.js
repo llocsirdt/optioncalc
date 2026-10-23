@@ -13,7 +13,7 @@ const { buildRuns } = require('../../src/candle-spread/index');
 const { optsFor } = require('../../src/candle-spread/backtest/opts-for');
 
 // ── default: separate hedgers, no stand-alone flies ────────────────────────────────────────────────────
-const runs = buildRuns();
+const runs = buildRuns().filter((r) => !r.opensOnly);   // v20/v21 (opensOnly) carry no cover / hedge / guard machinery by design — pinned in opens-only-live
 for (const r of runs) {
   ok(r.flyConvert !== true, `${r.variant}: stand-alone fly repair is off`);
   ok(r.wingConvert === true, `${r.variant}: wings run as their own feature`);
@@ -28,7 +28,7 @@ ok(v710.giveUpPoints === 20, 'give-up trigger is 20 points');
 
 // ── CANDLE_SPREAD_FLOOR_FOLD=on: the folded roster, in a child process (the switch is read at load) ────
 const probe = `const {buildRuns}=require(${JSON.stringify(path.resolve(__dirname, '../../src/candle-spread/index'))});
-  const r=buildRuns();const c=(k)=>r.filter((x)=>x[k]===true).length;
+  const r=buildRuns().filter((x)=>!x.opensOnly);const c=(k)=>r.filter((x)=>x[k]===true).length;
   process.stdout.write(JSON.stringify({w:c('wingConvert'),o:c('floorOffset'),f:c('flyConvert'),rw:c('floorRaiseWings'),rc:c('floorRaiseCapFix'),g:r.filter((x)=>x.lossMax!=null).length,n:r.length}));`;
 const out = execFileSync(process.execPath, ['-e', probe], { env: { ...process.env, CANDLE_SPREAD_FLOOR_FOLD: 'on' }, encoding: 'utf8' });
 const k = JSON.parse(out.slice(out.lastIndexOf('{')));

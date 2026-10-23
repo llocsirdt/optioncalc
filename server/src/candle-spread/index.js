@@ -1465,7 +1465,7 @@ function reportArming(list) {
   // Quiet in forked backtest workers — this line is about the LIVE order pipe and has nothing to do with a
   // backtest slice, but it fires once per worker process and buries the run's real output.
   if (process.argv.includes('--_slice')) return list;
-  const hit = list.find(v => v.variant === ARMED_VARIANT);
+  const hit = list.find(v => v.variant === ARMED_VARIANT && v.simulateOnly !== true);
   if (hit) console.log(`[candle-spread] ARMED SELECTION: ${ARMED_VARIANT} -> dryRun=${JSON.stringify(ARMED_MODE)} (${ARMED_MODE === false ? 'REAL FILLABLE ORDERS' : 'unfillable test orders'}); still gated by isProd + CANDLE_SPREAD_LIVE`);
   else console.log(`[candle-spread] ARMED SELECTION: "${ARMED_VARIANT}" is NOT on the roster — NOTHING is armed (all runs stay dryRun:true).`);
   return list;
@@ -1506,13 +1506,53 @@ function buildFeatureFamilies(list) {
   return out;
 }
 
+// ── OPENS-ONLY BB-FADE FAMILIES v20 / v21 (backtest 2026-10-21; live SIMULATE-ONLY 2026-10-23) ─────────────────────
+// User: watch them run in real sessions to confirm they act on the intended signals, even though they backtest poorly.
+// SIGNAL (signals/bb-fade.js, the ONE function the backtest also runs): on every 5m /NQ close, below BOTH the last
+// completed 15m and 60m lower BB(20,2) -> bull; above both uppers -> bear. Pricing / action on NDX.
+// AFTER THE OPEN: nothing — no covers, hedges, tent, give-up, c2o, floor guard; every open is held to the settle.
+// KEPT: the risk cap (lossMax; none on -unc), the open walk ladder, one working open, the leg ledger, the action window.
+// v20 = the v9 placement (G on 10/20/40, fixed centred on -cATM); v21 = the strike whose REAL mark is closest to f x W
+// (price-target.js), f = .50 / .55 / .60 as the -fNN suffix, walk cap f + (v9 capFrac - .50).
+// Built from the FINISHED v9 shapes (the 10/21 sweep's parents) by opens-only.js — exactly the backtested set: 5 v20
+// shapes + 9 v21 = 14, each with a -unc twin = 28. No v20-10-cATM (the roster has no v9-10-cATM). SIMULATE-ONLY.
+const OPENS_ONLY_F = [0.50, 0.55, 0.60];
+function buildOpensOnlyFamilies(list) {
+  const OO = require('./backtest/opens-only');
+  const PT = require('./price-target');
+  const BF = require('./signals/bb-fade');
+  const by = new Map(list.map((v) => [v.variant, v]));
+  const out = [];
+  const twins = (parent, name, label, extra) => {
+    out.push(OO.opensOnlyVariant(parent, { name, label, capped: true, signalFn: BF.OPENS_ONLY_SIGNAL, extra }));
+    out.push(OO.opensOnlyVariant(parent, { name: `${name}-unc`, label: `${label}, UNCAPPED`, capped: false, signalFn: BF.OPENS_ONLY_SIGNAL, extra }));
+  };
+  for (const sh of ['10', '20', '40', '20-cATM', '40-cATM']) {
+    const p = by.get(`v9-${sh}`);
+    if (!p) continue;
+    twins(p, `v20-${sh}`, `BB fade, opens only $${p.spreadWidth}${/cATM/.test(sh) ? ' ATM-centered' : ' short-ATM'}`, {});
+  }
+  for (const w of [10, 20, 40]) {
+    const p = by.get(`v9-${w}`);
+    if (!p) continue;
+    for (const f of OPENS_ONLY_F) {
+      const tag = `f${Math.round(f * 100)}`;
+      // Price-target placement replaces placement G: no adaptive walk, the strike is picked by price.
+      twins(p, `v21-${w}-${tag}`, `BB fade, opens only $${w}, strike priced closest to ${f.toFixed(2)} x W`, {
+        openPriceTarget: f, capFrac: PT.walkCapFracFor(f, p.capFrac), adaptiveGeo: false, maxItmStrikes: null, maxOtmStrikes: null, spreadShift: 0 });
+    }
+  }
+  return out;
+}
+
 const VARIANTS = reportArming(validateSelectors((() => {
   const base = [
     ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
     ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
     ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
   ];
-  return [...base, ...buildFeatureFamilies(base)];   // v9sg-*, v9ob-* (complete copies of v9)
+  return [...base, ...buildFeatureFamilies(base),   // v9sg-*, v9ob-* (complete copies of v9)
+    ...buildOpensOnlyFamilies(base)];               // v20-*, v21-* (opens-only BB fade, simulate-only)
 })()));
 
 // Expand base runs × variants into the concrete run list.
@@ -1643,6 +1683,8 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 // The clamp in strategy-control stops the file raising ABOVE the roster; this makes lowering actually work.
 // Together they are the rule stated from the start: the environment raises, the file lowers.
 function effectiveDryRun(run) {
+  // SIMULATE-ONLY runs (v20 / v21, 2026-10-23) never send: no control entry and no armed slot can move them off paper.
+  if (run && run.simulateOnly === true) return true;
   const c = SC.forVariant(run.variant);
   const fromControl = c.listed ? SC.dryRunFor(run.variant) : undefined;
   return fromControl !== undefined ? fromControl : run.dryRun;
@@ -2105,7 +2147,8 @@ function buildEngineDeps(run, live) {
   const ctl = SC.forVariant(run.variant);
   const ctlDryRun = ctl.listed ? SC.dryRunFor(run.variant) : undefined;
   return Object.assign({
-      dryRun: ctlDryRun !== undefined ? ctlDryRun : run.dryRun,
+      // simulate-only runs (v20 / v21) are paper whatever the control file says — the same rule as effectiveDryRun.
+      dryRun: run.simulateOnly === true ? true : ctlDryRun !== undefined ? ctlDryRun : run.dryRun,
       // NO-OPEN: work what is already on the book, start nothing new. The safe reflex — a live variant holding
       // an uncovered 0DTE position that stops acting entirely is in the most dangerous state available, so this
       // deliberately leaves covers, ladders and hedges running.
@@ -2235,6 +2278,9 @@ function assertDeps(runs) {
       ['coverGeometry', 'coverSelector', 'lockCoverMode', 'ivSkew',
         'simOpenFillMinLooks', 'coverFillThroughTicks', 'minDebitFrac', 'openWalkCapFrac', 'maxOtmStrikes', 'openRestrikeMin',
         'openFallbackUntilMin', 'openFallbackBull', 'openFallbackBear', 'openFallbackOpenUntilMin',   // open fallback, read off cfg
+        // opens-only BB fade (v20 / v21, 2026-10-23): read off cfg by processCandleClose (one-working-open order, the
+        // v21 price-target builder)
+        'opensOnly', 'openPriceTarget',
         // floor raise: read straight off cfg by trader.raiseFloor
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
         'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
@@ -3430,11 +3476,14 @@ function listRuns() {
 // suffix so callers get version order for free.
 function listVariants() {
   const rank = v => {
-    // v<n><tag>-W[-suffix]: a feature-test family (v9sg) sorts right after its parent (v9).
+    // v<n><tag>-W[-suffix]: a feature-test family (v9sg) sorts right after its parent (v9). A price-target tag in the
+    // suffix (v21-10-f55[-unc]) groups its own widths together, f50 before f55 before f60.
     const m = /^v(\d+)([a-z]*)-(\d+)(?:-(.*))?$/.exec(v.variant) || [];
-    const suffix = m[4] || '';
+    const raw = m[4] || '';
+    const ft = /^(f\d+)(?:-|$)/.exec(raw);
+    const suffix = ft ? raw.slice(ft[1].length).replace(/^-/, '') : raw;
     const grp = suffix === '' ? 0 : suffix === 'unc' ? 1 : 2;
-    return [Number(m[1] || 99), m[2] || '', grp, Number(m[3] || 0), suffix];
+    return [Number(m[1] || 99), m[2] || '', ft ? ft[1] : '', grp, Number(m[3] || 0), suffix];
   };
   return buildRuns()
     .map(v => ({
@@ -3450,6 +3499,9 @@ function listVariants() {
       about: FA.describeVariant(v.variant),   // plain-words strategy description (family-about.js)
       giveUp: v.coverGiveUp === true,
       fly: v.flyConvert === true,
+      // v20 / v21 (2026-10-23): opens only (no covers / hedges), simulate-only; v21's price target f.
+      opensOnly: v.opensOnly === true, simulateOnly: v.simulateOnly === true,
+      priceTarget: v.openPriceTarget != null ? v.openPriceTarget : null,
     }))
     .sort((a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) { if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; } return 0; });
 }
@@ -3560,7 +3612,7 @@ function applyArmedSelection() {
   const want = armedVariant();
   const moved = [];
   for (const r of RUNS) {
-    const d = r.variant === want ? ARMED_MODE : true;
+    const d = r.variant === want && r.simulateOnly !== true ? ARMED_MODE : true;   // a simulate-only run never takes the slot
     if (r.dryRun !== d) { moved.push(`${r.variant}: ${JSON.stringify(r.dryRun)} -> ${JSON.stringify(d)}`); r.dryRun = d; }
   }
   if (moved.length) {
@@ -3576,6 +3628,7 @@ function applyArmedSelection() {
 function armableReason(variant) {
   const run = RUNS.find((r) => r.variant === variant) || buildRuns().find((r) => r.variant === variant);
   if (!run) return `${variant} is not on the roster`;
+  if (run.simulateOnly === true) return `${variant} is simulate-only (it exists to be watched, never to send orders)`;
   if (!(Number.isFinite(run.lossMax) && run.lossMax > 0)) return `${variant} has no loss cap (lossMax ${run.lossMax}) — only governed variants can trade real money`;
   if (String(run.symbol || '').toUpperCase() !== 'NDX') return `${variant} trades ${run.symbol}, not NDX`;
   return null;
@@ -4027,6 +4080,8 @@ module.exports = {
   // cannot be shown through start(): it needs a real tradingClient and the live gates. See the control-mode
   // enforcement test — the bug it pins (senders reading the roster, ignoring a control-file lowering) was
   // invisible to every test that went through the trader, because the trader reads deps.dryRun and was right.
+  buildEngineDeps,   // exported for the v20/v21 simulate-only + forwarding test (2026-10-23)
+  armableReason,
   makePlaceOrder,
   makeReplaceOrder,
   makeCancelOrder,

@@ -32,7 +32,17 @@
 
   // Grid axes — MUST match the server variant naming (family-width[-suffix]) and the compare page.
   // v9sg / v9ob: feature-test copies of v9 (2026-10-19), listed right under their parent.
-  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob'];
+  // v20 / v21: opens-only BB-fade families (2026-10-23, simulate-only). v21's price target sits after the width
+  // (v21-10-f55), so it gets one row per target — the same layout as the compare page (variantFor there).
+  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob', 'v20', 'v21'];
+  const PRICE_TAGS = { v21: ['f50', 'f55', 'f60'] };
+  const ROWS = FAMILIES.flatMap((f) => (PRICE_TAGS[f] ? PRICE_TAGS[f].map((t) => ({ fam: f, tag: t, label: `${f} ${t}` }))
+    : [{ fam: f, tag: null, label: f }]));
+  const variantFor = (row, colKey) => {
+    if (!row.tag) return `${row.fam}-${colKey}`;
+    const m = /^(\d+)(-cATM)?(-unc)?$/.exec(colKey);
+    return m ? `${row.fam}-${m[1]}${m[2] || ''}-${row.tag}${m[3] || ''}` : `${row.fam}-${colKey}-${row.tag}`;
+  };
   // The `-unc` twins are DROPPED from this grid entirely. They exist to measure what the day-loss
   // governor costs, are uncapped and therefore not candidates to trade, and at 30 of 80 runs they were
   // half the width of the grid — pure distraction on the screen used to watch the live session.
@@ -252,17 +262,17 @@
     let body = '<table class="csg"><thead><tr><th class="rowh"></th>'
       + COLUMNS.map(c => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
     let shown = 0;
-    for (const f of FAMILIES) {
-      body += `<tr><th class="rowh">${f}</th>`;
+    for (const row of ROWS) {
+      body += `<tr><th class="rowh">${row.label}</th>`;
       for (const c of COLUMNS) {
-        const r = byVar[`${f}-${c.k}`];
+        const name = variantFor(row, c.k);
+        const r = byVar[name];
         if (!r) { body += '<td class="e"></td>'; continue; }
         shown++;
         const pnl = r.terminalPnl != null ? r.terminalPnl : r.realizedPnl;
         const col = pnl > 0 ? '#26a69a' : pnl < 0 ? '#ef5350' : '#aaa';
         const armed = r.mode !== 'simulate';
         const ro = r.realOrders || {};
-        const name = `${f}-${c.k}`;
         const sel = o.pick && o.selected === name;
         // WATCHED = a CONTROL FOR THE MINLOCK SPLIT: no ladder, family-default minLock. The reference for
         // reading a day — if these are down too, it was the market and not the fleet change.

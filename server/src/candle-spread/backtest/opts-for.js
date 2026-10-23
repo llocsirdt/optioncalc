@@ -23,8 +23,9 @@
  *   noWings    — build the WINGS-OFF control (--noWings). Wings are on for every variant, so the control
  *                has to be produced by stripping them here rather than by a variant that lacks them.
  */
-const { makeGeo, makeAdaptiveGeo } = require('./backtest-width');
+const { makeGeo, makeAdaptiveGeo, makePriceTargetGeo } = require('./backtest-width');
 const VC = require('../variant-contract');
+const OO = require('./opens-only');
 
 function optsFor(v, env) {
   const { intradayIV = true, hasPx = true, noWings = false } = env || {};
@@ -160,6 +161,9 @@ function optsFor(v, env) {
     o.coverLadder = true;
     for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderLossCapFrac',
       'ladderStepDollars']) if (v[k] != null) o[k] = v[k];
+  } else if (v.openLadder === true) {
+    // An OPEN walk with no cover ladder (the opens-only v20 / v21): the walk is paced by the same ladder clock.
+    for (const k of ['ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderStepDollars']) if (v[k] != null) o[k] = v[k];
   }
   // DYNAMIC minLock RAMP — paired with the tight day-loss cap on the capital-preservation variant (see
   // CAPPRES_LIVE in index.js). Only pays under that cap, so it is a per-variant pairing, not a default.
@@ -187,6 +191,9 @@ function optsFor(v, env) {
   o.geo = v.adaptiveGeo
     ? makeAdaptiveGeo({ width: w || 20, incr: 10, maxDebitFrac: cf != null ? cf : 0.65, maxItmStrikes: v.maxItmStrikes != null ? v.maxItmStrikes : 3, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0, maxOtmStrikes: v.maxOtmStrikes || 0, overCapBelow: v.openOverCapBelow != null ? v.openOverCapBelow : null })
     : makeGeo({ width: w || 20, shift: sh, capFrac: cf != null ? cf : undefined, orderSlipTicks: slip, minDebitFrac: v.minDebitFrac || 0, overCapBelow: v.openOverCapBelow != null ? v.openOverCapBelow : null });
+  // PRICE-TARGET PLACEMENT (v21, v.openPriceTarget = f): the strike priced closest to f x W (price-target.js, shared
+  // with the live trader); capFrac carries the walk cap fraction (f + parent capFrac - 0.50).
+  if (v.openPriceTarget != null) o.geo = makePriceTargetGeo({ width: w || 20, incr: v.strikeIncrement || 10, f: v.openPriceTarget, walkCapFrac: cf });
   if (v.openOverCapBelow != null) o.openOverCapBelow = v.openOverCapBelow;   // consumed by the geo above (recorded for the contract check)
   o.orderSlipTicks = slip;   // recorded on the run so a result can say what produced it (null = legacy)
   // FOUNDATIONAL: signals from /NQ, pricing and settlement from cash NDX. A dataset carrying an NDX price
@@ -210,8 +217,13 @@ function optsFor(v, env) {
       // has no quoted width.
       'simMaxQuoteWidthFrac',
       // minDebitFrac is consumed by the geo builders above (a price floor under capFrac).
-      'minDebitFrac', 'maxOtmStrikes']
+      'minDebitFrac', 'maxOtmStrikes',
+      // opensOnly is applied just below (the whitelist); openPriceTarget is consumed by the geo above.
+      'opensOnly', 'openPriceTarget']
       .concat(noWings ? WING_KEYS : []));
+  // OPENS ONLY (v20 / v21): the same whitelist the 2026-10-21 sweep applied to its parent's opts — no covers or hedges
+  // of any kind; the risk cap (lossMax, absent on -unc), the open walk ladder, placement and the leg ledger are kept.
+  if (v.opensOnly === true) return OO.opensOnlyOpts(o, { capped: v.lossMax != null });
   return o;
 }
 

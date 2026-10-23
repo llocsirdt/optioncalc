@@ -28,7 +28,7 @@ const deps = (over) => ({ lossMax: 2000, lateFloorAfterMin: 900, lateFloorKeepLo
   ok(T.lateFloorLimit(give, deps({ nowMs: at('15:05'), lateFloorGiveW: 0 }), 905, 10) === -400, 'with lateFloorGiveW 0 the reference itself is the limit (-400)');
 }
 {
-  const runs = CS.buildRuns();
+  const runs = CS.buildRuns().filter((r) => !r.opensOnly);   // v20/v21 (opensOnly) carry no cover / hedge / guard machinery by design — pinned in opens-only-live
   ok(runs.every((r) => r.lateFloorAfterMin === 900 && r.lateFloorKeepLocked === true), 'every variant: 15:00 keep-locked');
   CS.assertDeps(runs); ok(true, 'startup contract accepts the fields');
 }

@@ -185,31 +185,16 @@ function makeAdaptiveGeo({ width, incr = 10, maxDebitFrac = 0.65, maxItmStrikes 
   return { WIDTH: width, buildOpen, coverLegs, adaptive: true, capFrac: maxDebitFrac, minDebitFrac };
 }
 
-// ── PRICE-TARGET PLACEMENT (v21, 2026-10-21, BACKTEST ONLY) ─────────────────────────────────────────────
+// ── PRICE-TARGET PLACEMENT (v21, 2026-10-21; live-ported 2026-10-23) ─────────────────────────────────────
 // The strike is chosen by PRICE: of every vertical of this width on the strike grid (short strike within ±span
 // strikes of the money), take the one whose mark is closest to f x W; on a tie, the one nearest the money (spread
 // centre closest to S). Marks come from the same pricer the engine opens with (legsMark: Black-Scholes on band IV x
 // intraday mult x skew). No decline: the price is the decision. The limit is the live open rule (ceil the mark to
 // the tick); the ladder may walk it to `capOverride` = max(limit, walkCapFrac x W).
-// pickByPrice is the pure selection, exported for the unit test.
-function pickByPrice(side, S, width, f, markOf, { incr = 10, span = 12 } = {}) {
-  const center = Math.floor(S / incr) * incr, target = f * width;
-  let best = null;
-  for (let k = -span; k <= span; k++) {
-    const shortStrike = side === 'bull' ? center + k * incr : center - k * incr;
-    const lo = side === 'bull' ? shortStrike - width : shortStrike;
-    const hi = side === 'bull' ? shortStrike : shortStrike + width;
-    const legs = side === 'bull'
-      ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
-      : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }];
-    const mark = markOf(legs);
-    if (!(mark > 0)) continue;
-    const err = Math.round(Math.abs(mark - target) * 1e6), dist = Math.abs((lo + hi) / 2 - S);
-    if (!best || err < best.err || (err === best.err && dist < best.dist)) best = { legs, shortStrike, mark, err, dist };
-  }
-  return best;
-}
-function makePriceTargetGeo({ width, incr = 10, f = 0.5, walkCapFrac = null, span = 12 }) {
+// The SELECTION is shared with the live engine (price-target.js pickByPrice); this file only supplies the BS marks.
+const PT = require('../price-target');
+const pickByPrice = PT.pickByPrice;
+function makePriceTargetGeo({ width, incr = 10, f = 0.5, walkCapFrac = null, span = PT.SPAN }) {
   const capF = walkCapFrac != null ? walkCapFrac : f + 0.05;
   function buildOpen(side, S, tau, iv) {
     const b = pickByPrice(side, S, width, f, (legs) => legsMark(legs, S, tau, iv), { incr, span });

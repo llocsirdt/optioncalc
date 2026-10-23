@@ -1,6 +1,7 @@
 'use strict';
 // OPENS-ONLY mode (backtest/opens-only.js; v20/v21 BB-fade, user 2026-10-21): no covers or hedges of any kind, every
 // open held to the settle; the risk cap (governor lossMax) and the open walk ladder are kept; -unc drops the cap.
+// (The live port and the roster are pinned in candle-spread-opens-only-live.test.js.)
 //   - opensOnlyOpts: whitelist strips every cover / hedge / floor-guard flag, switches off the two default-on paths
 //     (cover-to-stack, per-position covers), keeps the open ladder + placement; never mutates its input
 //   - engine on real days: no cover fills, no hedge positions, book = ladder-filled opens; capped day loss >= -lossMax
@@ -35,6 +36,10 @@ const base = optsFor(v, { intradayIV: true, hasPx: true, where: 'test', openFill
   ok(o.lossMax === base.lossMax && base.lossMax > 0, 'capped keeps the risk cap (lossMax)');
   ok(u.lossMax === undefined && u.lossTarget === undefined, '-unc has no cap');
   ok(o.openFillModel === 'ladder' && o.openWalkCapFrac === base.openWalkCapFrac && o.geo === base.geo && o.ladderStepSeconds === base.ladderStepSeconds, 'open ladder + placement kept');
+  // THE WALK ITSELF (2026-10-23): runDay5m walks an open only when opts.openLadder (else opts.coverLadder) is on, and the
+  // whitelist strips coverLadder — the 10/21 run kept the clock but never walked. The parent's effective walk is carried.
+  ok(base.coverLadder === true && base.openLadder === undefined && o.openLadder === true && u.openLadder === true, 'the open walk survives the whitelist');
+  ok(OO.opensOnlyOpts({ ...base, coverLadder: false }).openLadder === false, 'a parent without a walk gives none');
   ok(OO.guardsFor(o).some(([g, on]) => /risk cap/.test(g) && on) && !OO.guardsFor(u).some(([g, on]) => /risk cap/.test(g) && on), 'guard list reflects the cap');
 }
 
@@ -43,7 +48,7 @@ const DIR = path.join(__dirname, '../../../tests/backtest/backtest-data-5m-combi
 if (fs.existsSync(DIR)) {
   const days = E.load5mDays(DIR).slice(-15);
   const sig = BF.bbFadeSignal(null);
-  let anyOpen = 0;
+  let anyOpen = 0, reprices = 0;
   for (const d of days) {
     const c = E.runDay5m(d.bars, sig, OO.opensOnlyOpts(base, { capped: true }));
     const u = E.runDay5m(d.bars, sig, OO.opensOnlyOpts(base, { capped: false }));
@@ -54,10 +59,11 @@ if (fs.existsSync(DIR)) {
     ok(c.governor && c.governor.offsets === 0 && c.governor.wings === 0 && c.governor.covers === 0, `${d.date}: governor bought nothing`);
     ok(c.terminal >= -base.lossMax - 1, `${d.date}: capped day loss within lossMax (${c.terminal})`);
     ok(u.governor === null, `${d.date}: -unc ungoverned`);
-    anyOpen += c.opens;
+    anyOpen += c.opens; reprices += c.openLadder.reprices + u.openLadder.reprices;
     if (c.governor.blocked) ok(c.governor.firstBlockMin >= 570 && c.governor.firstBlockMin <= 955, `${d.date}: first block inside the action window`);
   }
   ok(anyOpen > 0, 'opens happen on the sample');
+  ok(reprices > 0, `the open walk reprices on the sample (${reprices})`);
 }
 
 // ── debit vs credit (same strikes): parity under the backtest pricer ─────────────────────────────────

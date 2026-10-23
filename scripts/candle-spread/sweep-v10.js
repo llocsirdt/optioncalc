@@ -208,7 +208,7 @@ function computeUnit(u) {
   if (BBFADE) {
     const BF = require('../../server/src/candle-spread/signals/bb-fade');
     // opens-only: the pure fade (no parent signal -> no signal covers) and the whitelisted opts (no covers / hedges)
-    const sfn = u.opensOnly ? BF.bbFadeSignal(null) : u.bbFade ? BF.bbFadeSignal(fn) : fn;
+    const sfn = u.opensOnly ? BF.OPENS_ONLY_SIGNAL : u.bbFade ? BF.bbFadeSignal(fn) : fn;   // OPENS_ONLY_SIGNAL = the rostered v20/v21 signalFn
     if (u.opensOnly) { const OO = require('../../server/src/candle-spread/backtest/opens-only'); o = OO.opensOnlyOpts(o, { capped: !u.unc }); }
     if (u.priceF != null) {
       // v21: the strike is picked by price. Walk room above the placed price = the v9 twin's (its ceiling over the 50% band centre).

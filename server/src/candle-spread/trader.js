@@ -35,6 +35,7 @@ const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboN
 const store = require('./store');
 const OM = require('./order-manager');   // isOpenKind — which order rows are an open's
 const FG = require('./funds-guard');   // net-spend budget + debit/credit flip on a buying-power rejection
+const PT = require('./price-target');   // v21 price-target strike pick — SHARED with the backtest geo (pickByPrice)
 
 let nextPositionSeq = 1;
 function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`; }
@@ -843,6 +844,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // taken is what makes maxItmStrikes answerable from live data instead of only from the backtest.
   decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed,
     ...(res.itmStrikes != null ? { itmStrikes: res.itmStrikes, placementsTried: res.placementsTried } : {}),
+    ...(res.priceTarget != null ? { priceTarget: res.priceTarget, targetPrice: res.targetPrice, fracOfWidth: res.fracOfWidth,
+      candidatesPriced: res.candidatesPriced, walkCap: res.cap } : {}),
     ...(res.belowBand ? { belowBand: true, bandFloor: round2(cfg.minDebitFrac * cfg.spreadWidth) } : {}) });
 }
 
@@ -2155,10 +2158,19 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // quiet afternoon under a restriction is distinguishable from a quiet afternoon with no setups. Everything
   // else keeps running on purpose — covers, ladders, hedges and settlement — because a variant that stops
   // acting while holding an uncovered 0DTE position is in the most dangerous state available.
+  // OPENS-ONLY (cfg.opensOnly; v20 / v21): ONE WORKING OPEN is judged FIRST, in the backtest's order (runDay5m drops a
+  // signal while an open works before any gate runs), so the record's refusal counts read like the backtest's: a signal
+  // refused for the working open is never also counted as a cap refusal. Every other run keeps the order below.
+  const opensOnlyBusy = !!(openSide && cfg.opensOnly && st.pendingOpenId
+    && st.positions.some((p) => p.id === st.pendingOpenId && !p.filled));
   if (openSide && deps.blockNewOpens) {
     decisions.push({ action: 'open-skip-control', side: openSide,
       restrict: deps.controlRestrict || 'no-open', mode: deps.controlMode || null,
       note: 'strategy-control is blocking new opens; existing positions are still being worked' });
+  } else if (opensOnlyBusy) {
+    const prior = st.positions.find((p) => p.id === st.pendingOpenId);
+    decisions.push({ action: 'open-skip-pending', side: openSide, workingId: prior.id, workingSide: prior.side,
+      workingSince: prior.openTime, limit: prior.limit, note: 'one working open at a time' });
   } else if (openSide && c2oWait) {
     decisions.push({ action: 'open-skip-c2o-wait', side: openSide,
       underwater: c2oWait.map((x) => ({ id: x.pos.id, mark: x.mark, paid: x.paid })) });
@@ -2169,9 +2181,12 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   } else if (openSide) {
     // adaptiveGeo (per-variant, default OFF -> byte-identical to the fixed placement) walks the strike
     // to the most ITM placement still inside the ceiling instead of taking or declining a single one.
-    let res = cfg.adaptiveGeo
-      ? buildOpenAdaptive(openSide, underlying, cfg, deps.getLeg)
-      : buildOpen(openSide, underlying, cfg, deps.getLeg);
+    // v21 (cfg.openPriceTarget): the strike is picked by PRICE on the real chain (buildOpenPriceTarget).
+    let res = cfg.openPriceTarget != null
+      ? buildOpenPriceTarget(openSide, underlying, cfg, deps.getLeg)
+      : cfg.adaptiveGeo
+        ? buildOpenAdaptive(openSide, underlying, cfg, deps.getLeg)
+        : buildOpen(openSide, underlying, cfg, deps.getLeg);
     // OPENING FALLBACK (cfg.openFallback*, user 2026-10-13): at the open the quotes are chaotic, but a realistic price
     // is known. If no placement could be priced (every one over the cap, or quotes refused), place the order anyway:
     // short strike nearest the underlying, limit at the low end of the known range, walked up to its high end.
@@ -2209,7 +2224,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         // LOG THE SHIFT. It used to rebuild silently, so the recorded action:'open' showed the shifted
         // legs as if the geometry had chosen them — which is why strikes landing off-placement went
         // unnoticed. Record where it wanted to be, where it went, and what that cost.
-        out = withOverCap(buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying), openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying);
+        out = cfg.openPriceTarget != null
+          ? priceTargetAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying)   // v21: never declines, same walk cap
+          : withOverCap(buildOpenAtStrikes(openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying), openSide, rr.lo, rr.hi, cfg, deps.getLeg, deps.underlying);
         decisions.push({ action: 'open-shift', side: openSide, reason: 'leg-uniqueness',
           fromLower: plan.lower, fromUpper: plan.upper, toLower: rr.lo, toUpper: rr.hi,
           shift: rr.shift, style: rr.style, underlying,
@@ -2458,6 +2475,42 @@ function buildOpenAdaptive(side, underlying, cfg, getLeg) {
       : `no chain quotes for any placement${lastError ? ` (${lastError})` : ''}`,
     mark: lastDeclined ? lastDeclined.mark : null, cap: lastDeclined ? lastDeclined.cap : null,
   };
+}
+
+// PRICE-TARGET PLACEMENT (v21; cfg.openPriceTarget = f) — the live port of backtest-width.makePriceTargetGeo, through
+// the SAME selection (price-target.pickByPrice): of every vertical of width W with its short strike within ±12 strikes of
+// the money, the one whose REAL mark is closest to f x W, nearest the money on a tie. Each candidate is priced by
+// buildOpenAtStrikes — the live open pricer, with every quote gate (saneMark, chainMonotonic, cheapOutlier); a refused or
+// unquoted candidate has no mark and is skipped, the way the backtest skips a non-positive one. No price ceiling during
+// the search (the price IS the decision); the walk cap rule is the backtest's (priceTargetAtStrikes).
+function buildOpenPriceTarget(side, underlying, cfg, getLeg) {
+  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, f = cfg.openPriceTarget;
+  if (!(underlying > 0)) return { error: 'no underlying' };
+  const searchCfg = { ...cfg, capFrac: 1, openWalkCapFrac: null };   // the search never declines on price
+  const priced = new Map();
+  const markOf = (legs) => {
+    const ks = legs.map((l) => l.strike), lo = Math.min(...ks), hi = Math.max(...ks);
+    const r = buildOpenAtStrikes(side, lo, hi, searchCfg, getLeg, underlying);
+    priced.set(`${lo}/${hi}`, r);
+    return r.error || r.declined ? null : r.mark;
+  };
+  const b = PT.pickByPrice(side, underlying, W, f, markOf, { incr, span: PT.SPAN });
+  if (!b) return { error: `no priceable ${W}-wide ${side} spread within ${PT.SPAN} strikes of ${underlying} for the ${f} x W target` };
+  return priceTargetFinish(priced.get(`${b.lo}/${b.hi}`), cfg, { candidatesPriced: b.tried });
+}
+// One price-target open at EXPLICIT strikes (a leg-uniqueness shift): priced like the search, the same walk cap rule.
+function priceTargetAtStrikes(side, lower, upper, cfg, getLeg, underlying) {
+  const r = buildOpenAtStrikes(side, lower, upper, { ...cfg, capFrac: 1, openWalkCapFrac: null }, getLeg, underlying);
+  if (r.error || r.declined) return r;
+  return priceTargetFinish(r, cfg, {});
+}
+// Walk cap = max(limit, capFrac x W) — v21's capFrac IS the walk cap fraction (f + parent capFrac - 0.50) — exactly the
+// backtest's capOverride. The limit is the live open rule (the mark ceiled to the tick, plus any order slip).
+function priceTargetFinish(r, cfg, extra) {
+  const W = cfg.spreadWidth;
+  const cap = Math.max(r.limit, round2((cfg.capFrac != null ? cfg.capFrac : cfg.openPriceTarget + 0.05) * W));
+  return { ...r, cap, placementCap: cap, priceTarget: cfg.openPriceTarget, targetPrice: round2(cfg.openPriceTarget * W),
+    fracOfWidth: r.mark != null ? Math.round((r.mark / W) * 10000) / 10000 : null, ...extra };
 }
 
 // Build a debit-canonical open at EXPLICIT strikes (used by leg-uniqueness to reprice a shifted spread).
@@ -4652,6 +4705,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 
 module.exports = {
   walkRaiseOrders, buildOpenFallback, openFallbackApplies,
+  buildOpenPriceTarget, priceTargetAtStrikes,   // v21 price-target strike pick on the real chain (2026-10-23)
   noteCash,
   tickUp,                // hedge prices rounded UP to the tick
   govFloor,              // the governor's floor: the booked book + every open that can still fill

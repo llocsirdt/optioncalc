@@ -146,7 +146,7 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
 
   // ── the ROSTER turns 1 and 2 on for every variant ───────────────────────────────────────────────
   const runs = CS.buildRuns();
-  ok(runs.length > 0 && runs.every((r) => r.simOpenFillMinLooks === 2 && r.coverFillThroughTicks === 1),
+  ok(runs.length > 0 && runs.every((r) => r.simOpenFillMinLooks === 2 && (r.opensOnly || r.coverFillThroughTicks === 1)),  // v20/v21 (opensOnly) carry no cover / hedge / guard machinery by design — pinned in opens-only-live
     `every roster variant carries simOpenFillMinLooks 2 / coverFillThroughTicks 1 (${runs.length} runs)`);
 
   console.log(`\n${pass} passed, ${fail} failed`);

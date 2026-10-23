@@ -1,5 +1,5 @@
 'use strict';
-// BB FADE (v20 / v21, backtest only, 2026-10-21): the open signal (5m close beyond BOTH the 15m and 60m bands) and the
+// BB FADE (v20 / v21, 2026-10-21; live simulate-only since 2026-10-23): the open signal (5m close beyond BOTH the 15m and 60m bands) and the
 // v21 strike pick (the vertical whose mark is closest to f x W, nearest the money on a tie).
 //   - both-band condition: one band alone never fires; equality never fires; wrapper keeps the parent's cover
 //   - no look-ahead: the 15m/60m candles slotted at a 5m mark are the last COMPLETED ones (analysis-builder), so the

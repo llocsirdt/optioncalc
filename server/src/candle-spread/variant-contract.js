@@ -39,6 +39,8 @@ const NOT_ENGINE_OPTS = new Set([
   // (index.buildEngineDeps), never from the roster, so no variant "carries" them and there is nothing for a
   // backtest consumer to forward — a backtest has no control plane and must not pretend to.
   'blockNewOpens', 'controlMode', 'controlRestrict',
+  // ARMING GUARD, not strategy: a simulate-only run (v20 / v21) can never be armed or sent (index.js effectiveDryRun).
+  'simulateOnly',
 ]);
 
 /**
