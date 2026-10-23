@@ -252,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.11.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.12.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
@@ -337,8 +337,9 @@ const BT_BASE = FORCE_BASE || (IS_LOCAL_ORIGIN ? LOCAL_BASE : PROD_BASE);
 const PROXY_URL = BT_BASE;
 
 // v9sg / v9ob: feature-test copies of v9 (user, 2026-10-19) — rows right under their parent.
+// v12 / v13: natural-cover families (copies of the v6 shape; 2026-10-23, simulate-only), after the v9 rows.
 // v20 / v21: the opens-only BB-fade families (2026-10-23, simulate-only), below everything else.
-const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9','v9sg','v9ob','v20','v21'];
+const FAMILIES = ['v0','v1','v2','v3','v4','v5','v6','v7','v8','v9','v9sg','v9ob','v12','v13','v20','v21'];
 // v21 carries a PRICE TARGET after the width (v21-10-f55, v21-10-f55-unc), so it gets ONE ROW PER TARGET — v21 f50 /
 // f55 / f60 — under the same width columns; every other family is one row. A row names its family and optional tag,
 // and variantFor() builds the variant from (row, column): family-W[-cATM][-fNN][-unc].
@@ -879,7 +880,7 @@ async function ensureBaselines() {
 // actually happened — so the definition travels with the header instead of living in someone's memory.
 const BT_COLS = [
   { k: 'variant', h: 'variant', t: 's',
-    d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement). Suffix -fNN (v21) = price target: the strike priced closest to NN% of width. v20 / v21 = opens-only BB fade (no covers or hedges, held to the close), simulate-only.' },
+    d: 'Strategy id: signal family + spread width in points. Suffix -unc = uncapped twin (identical strategy with the day-loss governor off, so the pair shows what the cap costs). Suffix -cATM = ATM-centered control (fixed strikes instead of adaptive placement). Suffix -fNN (v21) = price target: the strike priced closest to NN% of width. v20 / v21 = opens-only BB fade (no covers or hedges, held to the close), simulate-only. v12 / v13 = natural cover (v6 opens; reversal-opens at the prior short instead of per-position covers; v13 adds covers after 30 min), simulate-only.' },
   // WHAT IT IS TESTING — put directly after the name so the table doubles as the index of which variant
   // carries which experiment. Sortable like everything else, which is the point: sort by giveUp and the
   // five give-up variants group together with their results already beside them, instead of being

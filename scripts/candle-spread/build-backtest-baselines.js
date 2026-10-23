@@ -208,9 +208,24 @@ function assertSlipArmed() {
   }
 }
 
+// NDX-RTH CONTEXT for the natural-cover families (v12 / v13, opts.natural): 8 prior RTH sessions of the pricing series per
+// day, the SAME construction the v12/v13 sweep used (backtest-target.rthContextsForDataset). Built once, only when a
+// natural variant is on the roster, and passed ONLY to those runs — every other variant's opts are untouched.
+let _rthCtx = null;
+function rthCtxFor(d) {
+  if (!_rthCtx) {
+    const TG = require('../../server/src/candle-spread/backtest/backtest-target');
+    const priceOf = (b) => b.px || { open: b.analysis['5m'].open, close: b.analysis['5m'].close, high: b.analysis['5m'].high, low: b.analysis['5m'].low };
+    const isoOf = (x) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(x.date); return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`; };
+    const built = TG.rthContextsForDataset(days, { dir: DIR, sub1mDir: SUB1M_DIR, priceOf, isoOf });
+    _rthCtx = { get: (x) => built.ctx.get(isoOf(x)) };
+  }
+  return _rthCtx.get(d);
+}
+
 function computeVariant(run) {
   const fn = wrap(run), opts = optsFor(run);
-  const results = days.map(d => runDay5m(d.bars, fn, opts));
+  const results = days.map(d => runDay5m(d.bars, fn, opts.natural ? { ...opts, rthCtx: rthCtxFor(d) } : opts));
   const daily = results.map(r => r.terminal);
   const s = stats(daily);
   // RISK/POTENTIAL metrics averaged across days: risk-curve extremes + trades/day + real capital deployed.

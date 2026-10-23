@@ -40,7 +40,8 @@ const parentOf = (name) => { const m = /^v2[01]-(\d+)(-cATM)?/.exec(name); retur
   for (const w of [10, 20, 40]) for (const f of ['f50', 'f55', 'f60']) want.push(`v21-${w}-${f}`, `v21-${w}-${f}-unc`);
   ok(want.length === 28 && NEW.length === 28, `28 new variants (${NEW.length})`);
   ok(want.every((n) => by.has(n)), `exactly the backtested names (missing: ${want.filter((n) => !by.has(n)).join(', ')})`);
-  ok(RUNS.length === 124, `roster 96 + 28 = 124 (${RUNS.length})`);
+  // 124 when v20/v21 landed; + 16 natural-cover v12/v13 (2026-10-23, candle-spread-natural-live) = 140
+  ok(RUNS.length === 140, `roster 96 + 28 + 16 = 140 (${RUNS.length})`);
   const OFF_ABSENT = ['coverGiveUp', 'giveUpPoints', 'stallCoverMin', 'lateFloorAfterMin', 'floorRaise', 'wingConvert', 'flyConvert',
     'proactiveCoverFrac', 'reopenOnCover', 'coverToOpenWait', 'coverLadder', 'floorRatchet', 'trendFloor', 'stackGate', 'openTrendBlock',
     'creditCapitalTrigger', 'continuousCoverMinLockFrac', 'coverGeometry', 'giveUpGeometry', 'coverRangeInside', 'floorRaiseWings'];

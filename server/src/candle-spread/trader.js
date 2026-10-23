@@ -36,6 +36,7 @@ const store = require('./store');
 const OM = require('./order-manager');   // isOpenKind — which order rows are an open's
 const FG = require('./funds-guard');   // net-spend budget + debit/credit flip on a buying-power rejection
 const PT = require('./price-target');   // v21 price-target strike pick — SHARED with the backtest geo (pickByPrice)
+const NCM = require('./natural-cover');   // v12 / v13 natural-cover rules — SHARED with runDay5m (one implementation)
 
 let nextPositionSeq = 1;
 function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`; }
@@ -178,6 +179,15 @@ function resolveLegs(legs, getLeg) {
 // reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
 // machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
 async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note, minLock, st) {
+  // NATURAL COVER BACKSTOP (v12 / v13): runDay5m places no signal, proactive or cover-to-stack cover under natural
+  // cover, and v13's continuous cover only through placeContinuousCovers' age rule. Every caller is gated already;
+  // this refuses (and records) anything that gets here regardless.
+  const natMode = NCM.modeOf(deps);
+  if (natMode && !(natMode === 'v13' && (note === 'continuous' || note === 'restrike'))) {
+    decisions.push({ action: 'cover-skip-natural', positionId: pos.id, mode: natMode, source: note || 'signal',
+      note: natMode === 'v12' ? 'v12 places no per-position covers' : 'v13 covers only through the continuous cover after coverAfterMin' });
+    return;
+  }
   const W = cfg.spreadWidth, tick = cfg.tickIncrement;
   // minLock (price units, 0 unless the caller is CONTINUOUS COVERING): the resting target is the price
   // that still LOCKS A REAL PROFIT, not bare break-even. Resting at break-even (W − openCost) fills the
@@ -823,7 +833,8 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
     sentNet, sentLimit, sentLegs,   // exactly what hit the broker, debit or credit
-    ...(st._restrikeN ? { restrikeN: st._restrikeN } : {})   // a re-strike re-place: its place in the chain
+    ...(st._restrikeN ? { restrikeN: st._restrikeN } : {}),   // a re-strike re-place: its place in the chain
+    ...(st._natTag || {})   // natural cover (v12 / v13): natural 'rev' | 'guard', natPair, natAdd — set by the caller for this one open
   };
   st._restrikeN = 0;
   st.positions.push(pos);
@@ -1719,7 +1730,168 @@ function attachLedger(st, deps) {
   return deps && deps._ledger;
 }
 
+// ── NATURAL COVER (v12 / v13; deps.natural) — the live half of natural-cover.js ──────────────────────────────────────
+// Every rule is in natural-cover.js, the ONE implementation runDay5m also runs. This side supplies the live book, the
+// REAL-chain pricing (buildOpenAtStrikes) and the NDX RTH context index.js builds per tick (deps.natCtx), and records
+// every decision on the candle (action 'natural' + the signal trace) so the debug page can audit it.
+// A LIVE position in the natural sense: filled, a bull/bear spread (not a hedge or manual), not covered, not offset by
+// a REV, not a jump guard. openEpoch = when it FILLED (runDay5m books a position on its fill bar).
+function naturalLive(st) {
+  return st.positions.filter((p) => p && p.filled && !p.hedge && !p.manual && !p.covered && !p.natOffset && p.natural !== 'guard'
+    && (p.side === 'bull' || p.side === 'bear'))
+    .map((p) => ({ side: p.side, openEpoch: p.fillEpoch != null ? p.fillEpoch : (p.openEpoch || 0), shortStrike: p.shortStrike, limit: p.limit, id: p.id }));
+}
+// Black-Scholes legs mark / expiry payoff — the backtest-v4 pair runDay5m uses (lazy: a pure-pricing module).
+const bsLegs = () => require('./backtest/backtest-v4');
+// One REV candidate priced on the REAL chain: buildOpenAtStrikes with no price ceiling (the shared rule applies capF x W).
+function naturalPriceAt(side, legs, cfg, getLeg, underlying) {
+  const ks = legs.map((l) => l.strike), lo = Math.min(...ks), hi = Math.max(...ks);
+  const r = buildOpenAtStrikes(side, lo, hi, { ...cfg, capFrac: 1, openWalkCapFrac: null }, getLeg, underlying);
+  if (r.error || r.declined || !(r.limit > 0)) return null;
+  return { legs: r.legs, shortStrike: r.shortStrike, mark: r.mark, limit: r.limit, lower: lo, upper: hi };
+}
+// The candle's natural-cover read on top of the v6 signal (runDay5m naturalStep's order: a REV first, else the ADD gate).
+// Returns { rec (the audit record), rev: { side, res, pairId } | null, refuse: 'blocked' | 'capped' | null, add }.
+function naturalDecide(st, cfg, deps, openSide) {
+  const NC = NCM.configOf(deps);
+  const A = deps.A || {};
+  const S = deps.underlying != null ? deps.underlying : st.lastUnderlying;
+  const ctx = deps.natCtx || null;
+  const nowEpoch = st.lastCandleEpoch != null ? st.lastCandleEpoch : (deps.nowMs != null ? deps.nowMs : Date.now());
+  const live = naturalLive(st);
+  const working = st.pendingOpenId ? st.positions.find((p) => p.id === st.pendingOpenId && !p.filled) : null;
+  const rec = { action: 'natural', mode: NCM.modeOf(deps), signalOpen: openSide || null, live: live.map((p) => `${p.side}:${p.id}`),
+    ctx: ctx ? (ctx.error ? { error: ctx.error } : { priorSessions: ctx.priorUsed, todayBars: ctx.todayBars, oneMin: ctx.oneMin, last1m: ctx.last1m,
+      r5: !!ctx.r5, r15: !!ctx.r15, r60: !!ctx.r60, zz: ctx.zz ? { dir: ctx.zz.dir, piv: ctx.zz.piv, ext: ctx.zz.ext, last: ctx.zz.last } : null })
+      : { error: 'no RTH context this tick' } };
+  const out = { rec, rev: null, refuse: null, add: false };
+  if (!(S > 0) || !A['5m'] || !A['15m'] || !A['60m']) { rec.outcome = 'no-data'; return out; }
+  const usable = ctx && !ctx.error;
+  const rc = NCM.revCheck(NC, { live, A, S, c5Close: A['5m'].close, r5: usable ? ctx.r5 : null, r15: usable ? ctx.r15 : null, r60: usable ? ctx.r60 : null,
+    zz: usable && ctx.zz ? ctx.zz : NCM.newZigzag(), nowEpoch, revWorking: !!(working && working.natural) });
+  rec.rev = { ...rc, pair: rc.pair ? rc.pair.id : undefined };
+  if (rc.fire) {
+    const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, getLeg = deps.getLeg;
+    const tau = bs.tauFromTime(deps.nowMs != null ? deps.nowMs : nowEpoch);
+    const nowMin = etMinutesOf(st.lastCandleTime);
+    const b15 = A['15m'];
+    const ivBase = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * (nowMin != null ? IIV.ivMultAt(nowMin) : 1);
+    const book = st.positions.filter((p) => p.filled !== false);
+    const r = NCM.pickRevStrike(NC, { revSide: rc.revSide, pair: rc.pair, W, incr, capF: cfg.capFrac != null ? cfg.capFrac : 0.55,
+      S, sigPts: S * ivBase * Math.sqrt(tau), qty: cfg.quantity || 1, payoff: bsLegs().legsPayoff,
+      price: (K) => naturalPriceAt(rc.revSide, NCM.revLegs(rc.revSide, K, W), cfg, getLeg, S),
+      fallback: () => { const g = cfg.adaptiveGeo ? buildOpenAdaptive(rc.revSide, S, cfg, getLeg) : buildOpen(rc.revSide, S, cfg, getLeg);
+        return g && !g.error && !g.declined && g.legs && g.limit > 0 ? g : null; },
+      curve: (sp) => { const { xs } = FR.samplePoints(S, sp, incr, null); return { xs, base: xs.map((x) => RC.bookPnl(book, x)) }; } });
+    rec.strike = { fail: r.fail, via: r.via || null, sameHit: r.sameHit, total: r.total != null ? r.total : null, pairShort: rc.pair.shortStrike,
+      pairLimit: rc.pair.limit, tried: r.tried, pick: r.pick ? { shortStrike: r.pick.shortStrike, mark: r.pick.mark, limit: r.pick.limit } : null };
+    if (r.pick) {
+      // The order: the picked strikes priced with the variant's real ceiling + walk cap (a placement fallback is already one).
+      const ks = r.pick.legs.map((l) => l.strike);
+      const res = r.via === 'placement' ? r.pick : buildOpenAtStrikes(rc.revSide, Math.min(...ks), Math.max(...ks), cfg, getLeg, S);
+      if (res && !res.error && !res.declined && res.limit > 0) { out.rev = { side: rc.revSide, res, pairId: rc.pair.id }; rec.outcome = 'rev'; }
+      else rec.outcome = `rev-unpriceable: ${res && (res.error || res.reason)}`;
+    } else rec.outcome = r.fail === 'total' ? 'rev-skip-total' : 'rev-skip-no-strike';
+  } else rec.outcome = rc.evaluated ? `rev-${rc.why}` : `no-rev-${rc.why}`;
+  if (!out.rev && openSide) {
+    const g = NCM.addGate(NC, openSide, live, A['15m']);
+    rec.add = g;
+    if (g.kind === 'blocked' || g.kind === 'capped') { out.refuse = g.kind; rec.outcome += ` · add-${g.kind}`; }
+    else if (g.kind === 'add') { out.add = true; rec.outcome += ' · add'; }
+    else rec.outcome += ' · first-open';
+  }
+  // v13: which live positions still wait for their cover, and why (offset / guard positions never get one).
+  if (NCM.modeOf(deps) === 'v13') {
+    const ms = NCM.coverAfterMsOf(deps), now = deps.nowMs != null ? deps.nowMs : nowEpoch;
+    rec.v13 = st.positions.filter((p) => p && p.filled && !p.hedge && !p.manual && !p.covered && !p.pendingCover && (p.side === 'bull' || p.side === 'bear'))
+      .map((p) => ({ id: p.id, ageMin: Math.round((now - (p.fillEpoch || p.openEpoch || now)) / 6000) / 10,
+        hold: NCM.v13CoverHold({ offset: p.natOffset, guard: p.natural === 'guard' }, now - (p.fillEpoch || p.openEpoch || now), ms) }));
+  }
+  return out;
+}
+// Fold the natural read into the candle's signal trace (debug page Signals panel): one row per rule with each condition.
+function naturalTrace(trace, rec) {
+  if (!trace || !rec || !rec.rev) return trace;
+  const rv = rec.rev, t = rv.touch || {};
+  const rows = [{ id: 'nat-rev', label: 'natural cover: REV (reversal-open)', enabled: true, side: rv.revSide || null, active: !!rv.fire,
+    parts: [{ name: 'book bias', ok: !!rv.bias, value: rv.bias ? `${rv.bias} (${rv.nBull} bull / ${rv.nBear} bear)` : 'flat' },
+      { name: 'no REV working', ok: rv.why !== 'rev-working' },
+      ...(rv.evaluated ? [
+        { name: `outer touch (${t.mode})`, ok: !!rv.touchOk, value: ['rth5', 'nq60', 'nq5', 'nq15', 'rth15', 'rth60'].filter((k) => t[k]).join('+') || 'none' },
+        { name: `last ${rv.bias} open within ${rv.windowMin} min`, ok: !!rv.winOk, value: `${rv.ageMin} min` },
+        { name: 'zigzag run', ok: !!rv.runOk, value: rv.run != null ? `${rv.run} / ${rv.runNeed != null ? rv.runNeed : '-'} pt${rv.lineNear ? ' (line at extreme)' : ''}` : 'off' },
+        { name: 'not a mid / 9EMA-only touch', ok: !rv.midOnly }] : []),
+      ...(rec.strike ? [{ name: 'REV strike (same short)', ok: !!rec.strike.pick, value: rec.strike.pick ? `${rec.strike.pick.shortStrike} @ ${rec.strike.pick.limit} (${rec.strike.via}), pair+REV ${rec.strike.total}` : rec.strike.fail }] : [])] }];
+  if (rec.add) rows.push({ id: 'nat-add', label: 'natural cover: ADD gate', enabled: true, side: rec.signalOpen, active: rec.add.kind === 'add' || rec.add.kind === 'first',
+    parts: [{ name: `${rec.signalOpen} positions held`, ok: true, value: rec.add.same },
+      ...(rec.add.kind !== 'first' ? [{ name: 'NQ 15m at its outer band', ok: !!rec.add.at15 }, { name: 'adds < max', ok: rec.add.kind !== 'capped' }] : [])] });
+  const fired = trace.firedAll || (trace.fired ? [trace.fired] : []);
+  return { ...trace, triggers: (trace.triggers || []).concat(rows),
+    firedAll: fired.concat(rec.outcome === 'rev' ? ['nat-rev'] : []).concat(rec.add && rec.add.kind === 'add' ? ['nat-add'] : []) };
+}
+// A REV FILLED: its pair is naturally covered (offset) unless the pair was covered first — runDay5m's commitOpen rule.
+function naturalOnFill(st, pos, decisions) {
+  if (!pos || pos.natural !== 'rev' || !pos.natPair) return;
+  const pair = st.positions.find((p) => p && p.id === pos.natPair);
+  if (pair && !pair.covered) { pair.natOffset = true; pair.natOffsetBy = pos.id; decisions.push({ action: 'natural-offset', positionId: pair.id, by: pos.id, side: pair.side }); }
+  else decisions.push({ action: 'natural-offset-skip', positionId: pos.natPair, by: pos.id, reason: pair ? 'pair already covered' : 'pair not found' });
+}
+// JUMP GUARD (runDay5m jumpGuardStep): the book's BS mark at spot +- X through the guard limit -> the protective vertical
+// with the best expiry floor over the jump region, sent as an open (it skips the governor's open gate only when it raises
+// the floor). Live differences: priced on the real chain, and it rests as an order behind any working open.
+async function naturalGuard(st, cfg, deps, decisions, candleTime, rec) {
+  const NC = NCM.configOf(deps);
+  if (!NC || !NC.jumpGuard) return;
+  const book = st.positions.filter((p) => p && p.filled !== false && p.legs);
+  if ((st.natGuardN || 0) >= NC.guardMaxPerDay || !book.length) return;
+  const A = deps.A || {}, S = deps.underlying;
+  if (!(S > 0) || !A['15m']) return;
+  const b15 = A['15m'], m = etMinutesOf(candleTime);
+  const ivOfA = () => bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close);
+  const X = NCM.guardX(NC, m, ivOfA);
+  const tau = bs.tauFromTime(deps.nowMs != null ? deps.nowMs : (st.lastCandleEpoch || Date.now()));
+  const iv = ivOfA() * (m != null ? IIV.ivMultAt(m) : 1);
+  const E = bsLegs();
+  const markAt = (Sx) => { let t = 0; for (const p of book) { t += (E.legsMark(p.legs, Sx, tau, iv) - (p.limit || 0)) * (p.quantity || cfg.quantity || 1);
+    if (p.covered && p.coverLegs) t += (E.legsMark(p.coverLegs, Sx, tau, iv) - (p.coverLimit || 0)) * (p.quantity || cfg.quantity || 1); } return t * 100; };
+  const up = markAt(S + X), dn = markAt(S - X);
+  const lim = NCM.guardLimit(deps.guardAt, deps.lossTarget, deps.lossMax);
+  const br = NCM.guardBreach(up, dn, lim);
+  const g = { X: round2(X), markUp: Math.round(up), markDown: Math.round(dn), limit: Number.isFinite(lim) ? -lim : null, breach: br.breach };
+  if (rec) rec.guard = g;
+  if (!br.breach) return;
+  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10;
+  const { best } = NCM.guardPick({ side: br.side, S, X, W, incr, capF: cfg.capFrac != null ? cfg.capFrac : 0.55, payoff: E.legsPayoff, qty: cfg.quantity || 1,
+    base: (x) => RC.bookPnl(book, x), price: (legs) => naturalPriceAt(br.side, legs, cfg, deps.getLeg, S) });
+  if (!best) { decisions.push({ action: 'natural-guard-skip', reason: 'no vertical raises the floor over the jump region', side: br.side, ...g }); return; }
+  if (deps.blockNewOpens) { decisions.push({ action: 'natural-guard-skip', reason: 'strategy-control is blocking new opens', side: br.side, ...g }); return; }
+  const extra = { filled: true, legs: best.legs, limit: best.limit, quantity: cfg.quantity, covered: false };
+  const fNow = govFloor(st, deps), fWith = govFloor(st, deps, extra);
+  if (deps.lossMax != null && Number.isFinite(deps.lossMax) && -fWith > deps.lossMax && !(fWith > fNow)) {
+    decisions.push({ action: 'natural-guard-skip', reason: 'would breach lossMax without raising the floor', side: br.side, floorNow: round2(fNow), floorWith: round2(fWith), ...g });
+    return;
+  }
+  const ks = best.legs.map((l) => l.strike);
+  const res = buildOpenAtStrikes(br.side, Math.min(...ks), Math.max(...ks), cfg, deps.getLeg, S);
+  if (res.error || res.declined || !(res.limit > 0)) { decisions.push({ action: 'natural-guard-skip', reason: res.error || res.reason || 'unpriceable', side: br.side, ...g }); return; }
+  const n0 = st.positions.length, dir0 = st.direction;
+  st._natTag = { natural: 'guard' };
+  await openPosition(st, res, br.side, cfg, deps, decisions, null);
+  st._natTag = null;
+  st.direction = dir0;   // runDay5m books the guard without moving the held stance
+  const placed = st.positions.length > n0;
+  if (placed) st.natGuardN = (st.natGuardN || 0) + 1;
+  decisions.push({ action: placed ? 'natural-guard' : 'natural-guard-skip', side: br.side, shortStrike: best.K, limit: res.limit, floorBefore: round2(fNow), floorWith: round2(fWith),
+    ...(placed ? {} : { reason: 'open not placed (see the open decision above)' }), ...g });
+}
+
 async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying, only) {
+  // NATURAL COVER: v12 places no per-position cover at all; v13 only on a live position once it is coverAfterMin old
+  // (natural-cover.v13CoverHold — runDay5m's rule). The per-candle 'natural' decision lists who waits and why.
+  const natMode = NCM.modeOf(deps);
+  if (natMode === 'v12') return;
+  const natAfterMs = natMode === 'v13' ? NCM.coverAfterMsOf(deps) : null;
+  const natNow = deps && deps.nowMs != null ? deps.nowMs : Date.now();
   attachLedger(st, deps);
   // DYNAMIC minLock (deps.minLockRamp, default OFF = the constant it has always been). The live port of
   // the backtest's ramp — same four knobs, same linear interpolation on the ET minute, so the two engines
@@ -1759,6 +1931,8 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
     || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
   for (const pos of only || st.positions) {
     if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;   // manual: a hedge, never covered
+    if (natMode === 'v13' && !pos.coverCarry
+      && NCM.v13CoverHold({ offset: pos.natOffset, guard: pos.natural === 'guard' }, natNow - (pos.fillEpoch || pos.openEpoch || natNow), natAfterMs)) continue;
     // A RE-STRUCK cover (range or give-up, see restrikeCover) is re-placed at its chosen strike carrying the
     // ladder's price; it was already working, so the underwater refusal below does not apply to it.
     const carry = pos.coverCarry || null;
@@ -1820,6 +1994,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   //     per-side held state in, { openSide, cover | coverSide } out. Everything below (open/cover/
   //     resting-fill machinery) is SHARED. See [[project_candle_spread_live_order_wiring]].
   let openSide = null, coverSet = [], portedSig = null, portedTrace = null;
+  let nat = null;   // natural cover (v12 / v13): this candle's naturalDecide result
   // The trend context is computed once per candle (index.js, from the signal series) and KEPT on the state:
   // the 30s sub-bar worker has no `A`, and give-up urgency must read the same trend between candles.
   if (deps && deps.trendCtx) st.trendCtx = deps.trendCtx;
@@ -1915,6 +2090,22 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         trend: TS.state(st.trendCtx, deps.openTrendBlock), ctx: st.trendCtx });
       openSide = null;
     }
+    // NATURAL COVER (deps.natural 'v12' | 'v13'; natural-cover.js — runDay5m naturalStep at the same point: after the trend
+    // block, before the cover set and the trend-floor open slot). A REV takes the candle's open (and drops the signal's
+    // cover); otherwise a same-side open is an ADD and must pass the gate. Recorded every candle (action 'natural').
+    if (NCM.modeOf(deps)) {
+      nat = naturalDecide(st, cfg, deps, openSide);
+      decisions.push(nat.rec);
+      if (nat.rev) {
+        openSide = nat.rev.side;
+        portedSig = { ...portedSig, openSide: nat.rev.side, cover: false, coverSide: null, reason: `natural-rev (signal: ${portedSig.reason || 'none'})` };
+      } else if (nat.refuse) {
+        decisions.push({ action: 'open-skip-natural-add', side: openSide, reason: nat.refuse, same: nat.rec.add.same, at15: nat.rec.add.at15,
+          note: nat.refuse === 'blocked' ? 'an ADD needs the NQ 15m candle at its outer band' : 'max adds on this side reached' });
+        openSide = null;
+      }
+      portedTrace = naturalTrace(portedTrace, nat.rec);
+    }
     // coverSide ('bull'|'bear'|'both') covers just that side (v7 per-side); legacy cover:true = both.
     coverSet = portedSig.coverSide
       ? (portedSig.coverSide === 'both' ? ['bull', 'bear'] : [portedSig.coverSide])
@@ -1972,7 +2163,13 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // An unfilled REOPEN (reopenAfterCover) belongs to the 15m window that made it: at the next 15m close it gives way,
       // so it never blocks that close's own open (one working open at a time).
       const reopenExpired = !!pos.reopenOf && deps.isFifteen !== false;
-      const reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side) || reopenExpired;
+      let reversed = (openSide && openSide !== pos.side) || coverSet.includes(pos.side) || reopenExpired;
+      // NATURAL COVER: a working REV (or guard) is not cancelled by the v6 signal turning back (runDay5m's rule).
+      if (reversed && !reopenExpired && pos.natural && !(nat && nat.rev)) {
+        decisions.push({ action: 'natural-open-kept', positionId: pos.id, side: pos.side, kind: pos.natural,
+          signalOpen: openSide || null, coverSides: coverSet.slice(), note: 'a working natural open is not cancelled by the signal' });
+        reversed = false;
+      }
       if (reversed) {
         pos.orderStatus = 'cancelled';
         // AND CANCEL IT AT THE BROKER. This deleted the position locally and left the order working at
@@ -2056,7 +2253,13 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   if (coverSignal) {
     // Exclude positions that already have a resting cover working (don't re-select them). In ported
     // mode cover ONLY the side(s) the signal targeted (v7 per-side coverSide); classic covers all.
-    const uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover && !p.manual && (!ported || coverSet.includes(p.side)));
+    let uncovered = st.positions.filter(p => p.filled && !p.covered && !p.pendingCover && !p.manual && (!ported || coverSet.includes(p.side)));
+    // NATURAL COVER: no signal covers (runDay5m toCover = []); the stance reset below still happens.
+    if (NCM.modeOf(deps) && uncovered.length) {
+      decisions.push({ action: 'cover-skip-natural', source: 'signal', sides: coverSet.slice(), positions: uncovered.map((p) => p.id),
+        note: 'natural cover places no signal covers' });
+      uncovered = [];
+    }
     const plans = selectCovers(uncovered, cfg, deps.getLeg, { underlying, reversedDir: simpleDir, bbOverride: !!(coverContext && coverContext.bbOverride) });
     for (const plan of plans) {
       if (plan.error) { decisions.push({ action: 'cover-skip', positionId: plan.positionId, error: plan.error }); continue; }
@@ -2107,7 +2310,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // (3b) v8 PROACTIVE DEEP-ITM COVER (ported, opts.proactiveCoverFrac): rest a tent cover on any
   // uncovered leader whose spread now marks >= frac×width (deep ITM → a good tent locks cheaply).
   // This locks winners and, via the cap logic below, stops them counting toward the at-risk churn cap.
-  if (ported && deps.proactiveCoverFrac != null) {
+  if (ported && deps.proactiveCoverFrac != null && !NCM.modeOf(deps)) {
     for (const pos of st.positions) {
       if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;
       const m = coverMarkNow(pos.legs, deps.getLeg);
@@ -2142,7 +2345,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
         decisions.push({ action: 'c2o-escalate', positionId: x.pos.id, side: openSide, mark: x.mark, paid: x.paid });
       }
     }
-    if (uw.length) c2oWait = uw;
+    if (uw.length && !(nat && nat.rev)) c2oWait = uw;   // a natural REV does not wait (runDay5m: !sig._natural)
   }
   // STACK GATE (deps.stackGate 'nqNotAgainst'; v9sg, 2026-10-19 — backtest parity: runDay5m opts.stackGate, default
   // scope 'uncovered'): an ADD — the side already holds an uncovered, non-hedge position (a working open counts) — is
@@ -2176,13 +2379,17 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       underwater: c2oWait.map((x) => ({ id: x.pos.id, mark: x.mark, paid: x.paid })) });
   } else if (openSide && stackBlock) {
     decisions.push({ action: 'open-skip-stack-gate', side: openSide, gate: deps.stackGate, nq15: stackBlock.t15, nq60: stackBlock.t60 });
-  } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none') {
+  } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none' && !(nat && nat.rev)) {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
   } else if (openSide) {
     // adaptiveGeo (per-variant, default OFF -> byte-identical to the fixed placement) walks the strike
     // to the most ITM placement still inside the ceiling instead of taking or declining a single one.
     // v21 (cfg.openPriceTarget): the strike is picked by PRICE on the real chain (buildOpenPriceTarget).
-    let res = cfg.openPriceTarget != null
+    // NATURAL REV: its strikes ARE the decision (natural-cover.pickRevStrike, priced on the real chain).
+    // NATURAL TAG: the open carries what it is (rev + its pair, or an add) — set for this one openPosition call.
+    st._natTag = nat && nat.rev ? { natural: 'rev', natPair: nat.rev.pairId } : nat && nat.add ? { natAdd: true } : null;
+    let res = nat && nat.rev ? nat.rev.res
+      : cfg.openPriceTarget != null
       ? buildOpenPriceTarget(openSide, underlying, cfg, deps.getLeg)
       : cfg.adaptiveGeo
         ? buildOpenAdaptive(openSide, underlying, cfg, deps.getLeg)
@@ -2235,7 +2442,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       }
       return { res: out, legStyle: rr.style, skipped: false };
     };
-    const first = resolveLegUniqueness(res);
+    // A natural REV skips the leg-uniqueness re-resolve and the never-start-OTM rule (runDay5m: both written for initial
+    // opens; the REV's strikes are its decision). The ledger still records its legs when it is sent.
+    const first = nat && nat.rev ? { res, legStyle: null, skipped: false } : resolveLegUniqueness(res);
     res = first.res;
     let legStyle = first.legStyle;
     const legSkipped = first.skipped;
@@ -2277,8 +2486,12 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // sequential cover-to-stack path when a single lock isn't enough or the spreads can't combine cleanly.
       // The broker refusal lives INSIDE tryComboLockAndOpen (it returns false and we fall through to the
       // sequential path), so there is one place that decides rather than a guard per call site.
-      if (deps.comboOrders) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
-      if (!opened && deps.coverToStack) {
+      // NATURAL COVER: no cover-to-stack / combo lock (runDay5m lockDeepWinners returns nothing under natural cover).
+      if (NCM.modeOf(deps) && (deps.comboOrders || deps.coverToStack)) {
+        decisions.push({ action: 'cover-skip-natural', source: 'cover-to-stack', side: openSide, note: 'natural cover never locks a winner to make room' });
+      }
+      if (deps.comboOrders && !NCM.modeOf(deps)) opened = await tryComboLockAndOpen(st, res, openSide, cfg, deps, decisions, candleTime);
+      if (!opened && deps.coverToStack && !NCM.modeOf(deps)) {
         await coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime);
         if (capState(st, res, openSide, cfg, deps).ok) {
           // RE-RESOLVE AGAINST THE LEDGER AS IT NOW STANDS. The covers just placed reserved their strikes,
@@ -2304,6 +2517,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     // PLACEHOLDER: neutral candle handling — no trade today; likely to add logic here.
     decisions.push({ action: 'neutral', simpleDir });
   }
+  st._natTag = null;
+  // NATURAL JUMP GUARD (runDay5m: end of the bar, after the opens) — its read goes on this candle's 'natural' record.
+  if (nat) await naturalGuard(st, cfg, deps, decisions, candleTime, nat.rec);
 
   // PLACEHOLDER: coverTiming === 'each-candle' — cover the prior uncovered position on every
   // candle (not just reversals). Exact semantics (which side, continuing vs reversing) TBD.
@@ -3167,6 +3383,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       OM.clearReject(st, OM.rejectKey(o.kind, null)); OM.clearReject(st, OM.rejectKey(o.kind, pos.id));
       decisions.push({ action: 'open-fill', source: 'broker', positionId: pos.id, side: pos.side,
         limit: pos.limit, sentNet: pos.sentNet, brokerPrice: px, cashDeployed: st.cashDeployed });
+      naturalOnFill(st, pos, decisions);   // a natural REV fill offsets its pair (v12 / v13)
       continue;
     }
     if (/cover/.test(o.kind || '')) {
@@ -3940,6 +4157,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
       markLow: pos.markLow, markLowBid: pos.markLowBid, markLowAsk: pos.markLowAsk,
       looks: pos.looks, atOrThrough: pos.atOrThrough, restedSince: pos.openTime,
       quote: (pos.fillQuote = fillEvidence(sentCredit ? pos.sentLegs : pos.legs, deps.getLeg, chk, pos)) });
+    naturalOnFill(st, pos, decisions);   // a natural REV fill offsets its pair (v12 / v13)
     st.pendingOpenId = null;
     return 1;
   }

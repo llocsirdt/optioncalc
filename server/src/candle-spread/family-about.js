@@ -36,6 +36,26 @@ const FAMILY = {
   v9ob: { name: 'v9 + open block', what: 'v9 that never opens against the trend.',
     open: 'v9\'s, except an open against trend A (15m structural trend agreeing with the last completed hourly candle) is dropped.',
     cover: 'v9\'s (a dropped open\'s cover side still acts).' },
+  // NATURAL COVER (2026-10-17 backtest ef8b80c; live SIMULATE-ONLY 2026-10-23). v6 with the book protected by OPENS
+  // instead of per-position covers; every rule in natural-cover.js (shared by the live trader and the backtest).
+  v12: { name: 'natural cover', what: 'v6 opens, no per-position covers: the book is protected by reversal-opens (REVs) at the '
+      + 'prior short strike and a jump guard. Simulate-only — runs to be watched, not traded.',
+    open: 'v6\'s. An ADD (the side already holds a live position) needs the NQ 15m candle at its outer band, max 3 adds a side. '
+      + 'A REV opens the other side when the book\'s bias side touched an outer band (NDX RTH 5m or NQ 60m), its last open is '
+      + '<= 30 min old and the zigzag run (20 pt, NDX 1m) is >= 40 pt (60 without a band/EMA line at the extreme); struck at '
+      + 'the paired position\'s short, pair + REV <= 1.15 W. Jump guard: book mark at spot +- the 15-min p95 move through '
+      + '-lossMax opens the protective vertical.',
+    cover: 'None per position (no continuous, signal, proactive or cover-to-stack cover). A filled REV marks its pair offset. '
+      + 'Hedges (floor raise, wings, offsets) and the governor are v6\'s.',
+    shared: 'Shared with v6: day-loss governor, placement G, open ladder, floor raise / wings / offsets, late-day guard. '
+      + 'Not used: continuous covers, give-up and stall cover (they act on covers, of which there are none).' },
+  v13: { name: 'natural cover + late covers', what: 'v12 plus the roster\'s continuous cover, placed only once a live position is '
+      + '30 minutes old. Simulate-only — runs to be watched, not traded.',
+    open: 'v12\'s (REVs, ADD gate, jump guard).',
+    cover: 'v6\'s continuous cover + ladder, only on a position that is not offset by a REV, not a guard, and >= 30 min since '
+      + 'its fill. No signal, proactive or cover-to-stack covers.',
+    shared: 'Shared with v6: day-loss governor, placement G, open ladder, continuous cover + ladder / give-up / stall cover on '
+      + 'the covers it does place (after 30 min), floor raise / wings / offsets, late-day guard.' },
   // OPENS-ONLY BB FADE (2026-10-21 backtest; live SIMULATE-ONLY 2026-10-23). None of the shared machinery below applies.
   v20: { name: 'BB fade, opens only', what: 'Fades a 5-minute close beyond both the 15m and 60m Bollinger bands; opens only, '
       + 'every position held to the close. Simulate-only — runs to be watched, not traded.',

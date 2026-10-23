@@ -145,6 +145,7 @@ function skewMultAt(z) {
 // produces NaN silently. (legsMark and buildOpen accept either form themselves.)
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
 const FR = require('../floor-raise');
+const NCM = require('../natural-cover');   // v12 / v13 natural-cover decisions (shared with the live trader)
 const GC = require('../giveup-candle');
 const TF = require('../trend-floor');     // trend-side floor (live trader uses the same module)   // candle give-up trigger (live trader uses the same module)   // shared floor-raise planner (live trader uses the same module)
 
@@ -353,17 +354,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   //   the book's mark at spot +- X (the 15-min p95 move by time of day x IV / median IV) is through -lossMax.
   // opts.natural 'v13': v12 + the rostered continuous cover, placed only once a position is coverAfterMin old.
   // opts.perPositionCovers === false (no natural): the per-position covers alone switched off (the reference arm).
-  const natural = opts.natural === 'v12' || opts.natural === 'v13' ? opts.natural : null;
+  // The decisions themselves live in ../natural-cover.js — ONE implementation, shared with the live trader.
+  const natural = NCM.modeOf(opts);
   const noPpc = !!natural || opts.perPositionCovers === false;
-  const coverAfterMs = natural === 'v13' ? (opts.coverAfterMin != null ? opts.coverAfterMin : 30) * 60000 : null;
-  const NC = natural ? { addGate: opts.addGate !== false, maxAdds: opts.maxAdds != null ? opts.maxAdds : 3, revTouch: opts.revTouch || 'rth5|nq60',
-    revWindowMs: opts.revWindowMin === false ? null : (opts.revWindowMin != null ? opts.revWindowMin : 30) * 60000,
-    revRun: opts.revRun === false ? null : (opts.revRun != null ? opts.revRun : 40), revStrike: opts.revStrike || 'same', revMaxTotal: 1.15,
-    jumpGuard: opts.jumpGuard !== false, guardMult: opts.guardMult != null ? opts.guardMult : 1, guardFixed: opts.guardFixed != null ? opts.guardFixed : null,
-    guardMedianIv: opts.guardMedianIv, guardMaxPerDay: opts.guardMaxPerDay != null ? opts.guardMaxPerDay : 6, theta: 20, lineTol: 12, touchTol: 3 } : null;
+  const coverAfterMs = NCM.coverAfterMsOf(opts);
+  const NC = NCM.configOf(opts);
   const ncC = { natLegSkip: 0, natCapBlocked: 0, revReach: 0, adds: 0, addBlocked: 0, addCapped: 0, rev: 0, revPlaced: 0, revFilled: 0, revSameHit: 0, revSkipTotal: 0, revNoStrike: 0, revTouch: 0, revWindow: 0, revRun: 0,
     revMidOnly: 0, guard: 0, guardSkip: 0, guardNoRaise: 0 };
-  const zz = { dir: 0, hi: null, lo: null, ext: null, piv: null, last: null };
+  const zz = NCM.newZigzag();
   let ncR5 = null, ncR15 = null, ncR60 = null;
   const ceilTk = (p) => Math.round(Math.ceil((p / TICK) - 1e-9) * TICK * 100) / 100;
   const TGT = (touchOn || stackGate || natural) ? require('./backtest-target') : null;   // lazy: backtest-target requires this module
@@ -825,93 +823,40 @@ function runDay5m(bars, signalFn, opts = {}) {
     if (-floorNow() > lossMax) { const n = buyFloorOffsets(lossMax, S, tau, iv, true); if (!floorOffset) frCapCount += n; }
   }
 
-  // ── NATURAL COVER helpers (opts.natural; see the setup block above) ─────────────────────────────────────────
+  // ── NATURAL COVER helpers (opts.natural; see the setup block above). Every rule is in ../natural-cover.js (shared with
+  // the live trader); this engine supplies the book, the BS pricing and the counters.
   const ncLive = () => st.positions.filter((p) => !p.hedge && !p.covered && !p._offset && p._nat !== 'guard');
-  // REV strike: 'same' = the paired position's short (else one strike cheaper/dearer to fit the price cap, else the
-  // v6 geometry); 'cost' = pair cost + REV cost closest to <= W; 'curve' = max book floor (expiry) over spot +- 1 sigma.
-  // Any pick must keep pair + REV <= 1.15 W.
+  const ncCapF = () => (G.capFrac != null ? G.capFrac : 0.55);
   function buildRev(revSide, pair, S, tau, iv, sigPts) {
-    const W = G.WIDTH, incr = legIncr, capF = G.capFrac != null ? G.capFrac : 0.55;
-    const vert = (K) => (revSide === 'bull' ? [{ side: 'long', type: 'C', strike: K - W }, { side: 'short', type: 'C', strike: K }]
-      : [{ side: 'long', type: 'P', strike: K + W }, { side: 'short', type: 'P', strike: K }]);
-    const mk = (K) => { const legs = vert(K), m = legsMark(legs, S, tau, iv); return { legs, shortStrike: K, mark: m, limit: Math.max(TICK, ceilTk(m)) }; };
-    const fits = (c) => c.mark > 0 && c.mark <= capF * W + 1e-9;
-    const cheaper = revSide === 'bull' ? incr : -incr, K0 = pair.shortStrike;
-    let pick = null, sameHit = false;
-    if (NC.revStrike === 'same') {
-      const c0 = mk(K0);
-      if (fits(c0)) { pick = c0; sameHit = true; }
-      else { const c1 = mk(K0 + cheaper), c2 = mk(K0 - cheaper); pick = fits(c1) ? c1 : fits(c2) ? c2 : null; }
-      if (!pick) { const g = G.buildOpen(revSide, S, tau, iv); if (g && !g.skip && g.legs) pick = { legs: g.legs, shortStrike: g.shortStrike, limit: g.limit }; }
-    } else if (NC.revStrike === 'cost') {
-      let best = null;
-      for (let j = -4; j <= 4; j++) { const c = mk(K0 + j * incr); if (!fits(c)) continue; const tot = pair.limit + c.limit;
-        const score = tot <= W + 1e-9 ? W - tot : 1000 + tot - W; if (!best || score < best.score) best = { c, score }; }
-      pick = best && best.c;
-    } else {
-      const { xs } = FR.samplePoints(S, sigPts, incr, null), base = xs.map((x) => bookAt(x, null));
-      const ctr = Math.round(S / incr) * incr, nK = Math.max(2, Math.ceil(sigPts / incr));
-      let best = null;
-      for (let j = -nK; j <= nK; j++) {
-        const c = mk(ctr + j * incr); if (!fits(c)) continue;
-        let mn = Infinity; for (let q = 0; q < xs.length; q++) { const v = base[q] + (legsPayoff(c.legs, xs[q]) - c.limit) * 100 * QTY; if (v < mn) mn = v; }
-        if (!best || mn > best.mn) best = { c, mn };
-      }
-      pick = best && best.c;
-    }
-    if (!pick) { ncC.revNoStrike++; return null; }
-    if (pair.limit + pick.limit > NC.revMaxTotal * W + 1e-9) { ncC.revSkipTotal++; return null; }
-    if (sameHit) ncC.revSameHit++;
-    return { legs: pick.legs, shortStrike: pick.shortStrike, limit: pick.limit, _natural: 'rev', _pair: pair };
+    const W = G.WIDTH;
+    const r = NCM.pickRevStrike(NC, { revSide, pair, W, incr: legIncr, capF: ncCapF(), S, sigPts, qty: QTY, payoff: legsPayoff,
+      price: (K) => { const legs = NCM.revLegs(revSide, K, W), m = legsMark(legs, S, tau, iv); return { legs, shortStrike: K, mark: m, limit: Math.max(TICK, ceilTk(m)) }; },
+      fallback: () => G.buildOpen(revSide, S, tau, iv),
+      curve: (sp) => { const { xs } = FR.samplePoints(S, sp, legIncr, null); return { xs, base: xs.map((x) => bookAt(x, null)) }; } });
+    if (r.fail === 'no-strike') { ncC.revNoStrike++; return null; }
+    if (r.fail === 'total') { ncC.revSkipTotal++; return null; }
+    if (r.sameHit) ncC.revSameHit++;
+    return { legs: r.pick.legs, shortStrike: r.pick.shortStrike, limit: r.pick.limit, _natural: 'rev', _pair: pair };
   }
   // The bar's natural-cover decision on top of the v6 signal: a REV takes priority; otherwise a same-side open is an ADD
   // and must pass the 15m band gate and the per-side cap.
   function naturalStep(sig, A, S, tau, iv, c5, nowEpoch, sigPts) {
-    const live = ncLive(), nB = live.filter((p) => p.side === 'bull').length, nR = live.length - nB;
-    let bias = nB > nR ? 'bull' : nR > nB ? 'bear' : null;
-    if (!bias && live.length) bias = live.reduce((a, p) => (p.openEpoch >= a.openEpoch ? p : a)).side;
-    const tol = NC.touchTol;
-    const outer = (c, d) => !!(c && c.bbupper != null && (d > 0 ? c.high >= c.bbupper - tol : c.low <= c.bblower + tol));
-    const outerR = (r, d) => !!(r && r.upper != null && (d > 0 ? r.high >= r.upper - tol : r.low <= r.lower + tol));
-    if (bias && !(st.pendingOpen && st.pendingOpen.o && st.pendingOpen.o._natural)) {
-      const d = bias === 'bull' ? 1 : -1, revSide = bias === 'bull' ? 'bear' : 'bull';
-      const tRth5 = outerR(ncR5, d), tNq60 = outer(A['60m'], d);
-      const anyOuter = tRth5 || tNq60 || outer(A['5m'], d) || outer(A['15m'], d) || outerR(ncR15, d) || outerR(ncR60, d);
-      const touchOk = NC.revTouch === 'off' ? true : NC.revTouch === 'any' ? anyOuter : (tRth5 || tNq60);
-      const inR = (lo, hi, v) => v != null && lo <= v && v <= hi;
-      const midOnly = !anyOuter && ((ncR5 && (inR(ncR5.low, ncR5.high, ncR5.mid) || inR(ncR5.low, ncR5.high, ncR5.ema)))
-        || inR(A['5m'].low, A['5m'].high, A['5m'].bbmiddle) || inR(A['5m'].low, A['5m'].high, A['5m'].ema));
-      const lastSame = Math.max(...live.filter((p) => p.side === bias).map((p) => p.openEpoch));
-      const winOk = NC.revWindowMs == null || nowEpoch - lastSame <= NC.revWindowMs;
-      let runOk = true;
-      if (NC.revRun != null) {
-        let run = 0, ext = null;
-        if (zz.dir === d) { run = Math.abs(zz.ext - zz.piv); ext = zz.ext; } else if (zz.last && zz.last.dir === d) { run = zz.last.len; ext = zz.last.ext; }
-        if (ext == null) runOk = false;
-        else {
-          const basis = c5.close - S, lines = [];
-          for (const tf of ['5m', '15m', '60m']) for (const k of ['bbupper', 'bbmiddle', 'bblower', 'ema']) if (A[tf][k] != null) lines.push(A[tf][k] - basis);
-          for (const r of [ncR5, ncR15, ncR60]) if (r) for (const k of ['upper', 'mid', 'lower', 'ema']) if (r[k] != null) lines.push(r[k]);
-          runOk = run >= (lines.some((L) => Math.abs(L - ext) <= NC.lineTol) ? NC.revRun : NC.revRun + 20);
-        }
-      }
-      if (touchOk) ncC.revTouch++; if (winOk) ncC.revWindow++; if (runOk) ncC.revRun++;
-      if (touchOk && winOk && runOk) {
-        if (midOnly) ncC.revMidOnly++;
-        else {
-          const pair = live.filter((p) => p.side === bias).reduce((a, p) => (p.openEpoch >= a.openEpoch ? p : a));
-          const o = buildRev(revSide, pair, S, tau, iv, sigPts);
-          if (o) { ncC.rev++; return { ...sig, openSide: revSide, cover: false, coverSide: null, reason: 'natural-rev', _natural: 'rev', _o: o }; }
-        }
+    const live = ncLive();
+    const rc = NCM.revCheck(NC, { live, A, S, c5Close: c5.close, r5: ncR5, r15: ncR15, r60: ncR60, zz, nowEpoch,
+      revWorking: !!(st.pendingOpen && st.pendingOpen.o && st.pendingOpen.o._natural) });
+    if (rc.evaluated) {
+      if (rc.touchOk) ncC.revTouch++; if (rc.winOk) ncC.revWindow++; if (rc.runOk) ncC.revRun++;
+      if (rc.why === 'mid-only') ncC.revMidOnly++;
+      else if (rc.fire) {
+        const o = buildRev(rc.revSide, rc.pair, S, tau, iv, sigPts);
+        if (o) { ncC.rev++; return { ...sig, openSide: rc.revSide, cover: false, coverSide: null, reason: 'natural-rev', _natural: 'rev', _o: o }; }
       }
     }
     if (sig && sig.openSide && !sig._natural) {
-      const same = live.filter((p) => p.side === sig.openSide).length;
-      if (same >= 1) {
-        if (NC.addGate && !outer(A['15m'], sig.openSide === 'bull' ? 1 : -1)) { ncC.addBlocked++; return { ...sig, openSide: null }; }
-        if (same - 1 >= NC.maxAdds) { ncC.addCapped++; return { ...sig, openSide: null }; }
-        return { ...sig, _add: true };
-      }
+      const g = NCM.addGate(NC, sig.openSide, live, A['15m']);
+      if (g.kind === 'blocked') { ncC.addBlocked++; return { ...sig, openSide: null }; }
+      if (g.kind === 'capped') { ncC.addCapped++; return { ...sig, openSide: null }; }
+      if (g.kind === 'add') return { ...sig, _add: true };
     }
     return sig;
   }
@@ -920,29 +865,18 @@ function runDay5m(bars, signalFn, opts = {}) {
   // the governor only when it raises the book floor.
   function jumpGuardStep(S, tau, iv, A, nowEpoch, m, commitOpen) {
     if (ncC.guard >= NC.guardMaxPerDay || !st.positions.length) return;
-    const p95 = m < 600 ? 150 : m < 660 ? 120 : m < 840 ? 85 : m < 900 ? 80 : 85;
-    const X = NC.guardFixed != null ? NC.guardFixed : p95 * (NC.guardMedianIv > 0 ? ivOf(A) / NC.guardMedianIv : 1) * NC.guardMult;
+    const X = NCM.guardX(NC, m, () => ivOf(A));
     const markAt = (Sx) => { let t = 0; for (const p of st.positions) { t += legsMark(p.legs, Sx, tau, iv) - p.limit;
       if (p.covered && p.coverLegs) t += legsMark(p.coverLegs, Sx, tau, iv) - p.coverLimit; } return t * 100 * QTY; };
     const up = markAt(S + X), dn = markAt(S - X);
     // threshold: -lossMax (the spec; the governor already holds the expiry floor there, so a long-debit book's mark
     // rarely gets below it) | opts.guardAt 'target' = -lossTarget | a dollar number.
-    const gLim = opts.guardAt === 'target' ? lossTarget : (typeof opts.guardAt === 'number' ? opts.guardAt : lossMax);
-    if (!Number.isFinite(gLim) || (up >= -gLim && dn >= -gLim)) return;
-    const side = up < dn ? 'bull' : 'bear', W = G.WIDTH, incr = legIncr, capF = G.capFrac != null ? G.capFrac : 0.55;
-    const lo = side === 'bull' ? S : S - X, hi = side === 'bull' ? S + X : S;
-    const xs = []; for (let x = lo; x <= hi + 1e-9; x += 5) xs.push(x);
-    const base = xs.map((x) => bookAt(x, null)), f0 = Math.min(...base);
-    let best = null;
-    for (let K = Math.floor(lo / incr) * incr - W; K <= Math.ceil(hi / incr) * incr + W; K += incr) {
-      const legs = side === 'bull' ? [{ side: 'long', type: 'C', strike: K - W }, { side: 'short', type: 'C', strike: K }]
-        : [{ side: 'long', type: 'P', strike: K + W }, { side: 'short', type: 'P', strike: K }];
-      const mk = legsMark(legs, S, tau, iv); if (!(mk > 0) || mk > capF * W) continue;
-      const limit = Math.max(TICK, ceilTk(mk));
-      let mn = Infinity; for (let q = 0; q < xs.length; q++) { const v = base[q] + (legsPayoff(legs, xs[q]) - limit) * 100 * QTY; if (v < mn) mn = v; }
-      if (!best || mn > best.mn) best = { legs, K, limit, mn };
-    }
-    if (!best || !(best.mn > f0)) { ncC.guardNoRaise++; return; }
+    const br = NCM.guardBreach(up, dn, NCM.guardLimit(opts.guardAt, lossTarget, lossMax));
+    if (!br.breach) return;
+    const side = br.side;
+    const { best } = NCM.guardPick({ side, S, X, W: G.WIDTH, incr: legIncr, capF: ncCapF(), base: (x) => bookAt(x, null), payoff: legsPayoff, qty: QTY,
+      price: (legs) => { const mk = legsMark(legs, S, tau, iv); return { mark: mk, limit: Math.max(TICK, ceilTk(mk)) }; } });
+    if (!best) { ncC.guardNoRaise++; return; }
     const fNow = floorNow(), fWith = floorOf({ legs: best.legs, limit: best.limit, covered: false });
     if (Number.isFinite(lossMax) && -fWith > lossMax && !(fWith > fNow)) { ncC.guardSkip++; return; }
     commitOpen(side, { legs: best.legs, shortStrike: best.K, limit: best.limit, reason: 'jump-guard', sigEpoch: nowEpoch, _natural: 'guard' }, best.legs, false);
@@ -1000,15 +934,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         // ZIGZAG on the pricing series' 1m closes (the 5m close where no 1m candles exist), theta = NC.theta
         if (_m >= 575) {
           const closes = bars[i].sub1m && bars[i].sub1m.length ? bars[i].sub1m.map((c1) => c1.close) : [S];
-          for (const c of closes) {
-            if (zz.hi == null) { zz.hi = c; zz.lo = c; continue; }
-            if (zz.dir === 0) {
-              if (c > zz.hi) zz.hi = c; if (c < zz.lo) zz.lo = c;
-              if (zz.hi - c >= NC.theta) { zz.dir = -1; zz.piv = zz.hi; zz.ext = c; } else if (c - zz.lo >= NC.theta) { zz.dir = 1; zz.piv = zz.lo; zz.ext = c; }
-            } else if (zz.dir === 1) {
-              if (c > zz.ext) zz.ext = c; else if (zz.ext - c >= NC.theta) { zz.last = { dir: 1, len: zz.ext - zz.piv, ext: zz.ext }; zz.dir = -1; zz.piv = zz.ext; zz.ext = c; }
-            } else if (c < zz.ext) zz.ext = c; else if (c - zz.ext >= NC.theta) { zz.last = { dir: -1, len: zz.piv - zz.ext, ext: zz.ext }; zz.dir = 1; zz.piv = zz.ext; zz.ext = c; }
-          }
+          NCM.zigzagFeed(zz, closes, NC.theta);
         }
       }
       if (stackGate) {   // trend reads: price vs completed 9EMA + its slope, the backtest-target.js read
@@ -1223,7 +1149,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       for (const pos of st.positions) {
         if (pos.covered || pos.pendingCover || pos.hedge) continue;
         // v13: the rostered cover only on a LIVE position (not offset by a REV) once it is coverAfterMin old
-        if (natural === 'v13' && (pos._offset || pos._nat === 'guard' || nowEpoch - pos.openEpoch < coverAfterMs)) continue;
+        if (natural === 'v13' && NCM.v13CoverHold({ offset: pos._offset, guard: pos._nat === 'guard' }, nowEpoch - pos.openEpoch, coverAfterMs)) continue;
         const posMinLock = asymDef && opts.coverPatientMinLock != null && withTrend(pos.side) ? opts.coverPatientMinLock * G.WIDTH : minLock;
         const tgt = round2(G.WIDTH - pos.limit - posMinLock);
         // THE `tgt <= 0` REFUSAL IS GONE. It silently placed NO cover at all whenever the open cost plus

@@ -231,7 +231,9 @@ const v7Trace = (A, p, c) => lineageTrace('v7', A, p, c);
 // v20 / v21 (opens-only BB fade) trace their own signal: bb-fade.bbFadeTrace, whose `fired` IS bbFadeSide.
 const { bbFadeTrace } = require('./bb-fade');
 const FAMILY_OF = { v0: classicTrace, v1: classicTrace, v2: classicTrace, v3: classicTrace, v4: v4Trace, v5: v5Trace,
-  v6: v6Trace, v7: v7Trace, v8: v6Trace, v9: v7Trace, v9sg: v7Trace, v9ob: v7Trace, v20: bbFadeTrace, v21: bbFadeTrace };
+  v6: v6Trace, v7: v7Trace, v8: v6Trace, v9: v7Trace, v9sg: v7Trace, v9ob: v7Trace, v20: bbFadeTrace, v21: bbFadeTrace,
+  // v12 / v13 (natural cover, 2026-10-23) run v6's signal; the trader appends the natural-cover rows to this trace.
+  v12: v6Trace, v13: v6Trace };
 function traceFor(variant) { const m = /^(v\d+[a-z]*)-/.exec(String(variant || '')); return (m && FAMILY_OF[m[1]]) || null; }
 
 module.exports = { v4Trace, v5Trace, v6Trace, v7Trace, classicTrace, traceFor };

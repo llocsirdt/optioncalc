@@ -1545,6 +1545,43 @@ function buildOpensOnlyFamilies(list) {
   return out;
 }
 
+// ── NATURAL-COVER FAMILIES v12 / v13 (backtest ef8b80c 2026-10-17; live SIMULATE-ONLY 2026-10-23) ─────────────────────
+// User: watch them in real sessions to confirm they act on the intended signals, even though they backtest poorly.
+// Both are the v6 strategy (signal, placement, governor, hedges, ladder) with the book protected by OPENS instead of
+// per-position covers — every rule in natural-cover.js, the ONE implementation runDay5m and the trader both call:
+//   v12: no per-position covers; ADD gate (NQ 15m at its outer band, <= 3 adds a side); REV = the other side at the
+//        prior short after an outer-band touch (RTH 5m / NQ 60m) + within 30 min of the last same-side open + a 40/60 pt
+//        zigzag run; a filled REV marks its pair offset; jump guard at -lossMax.
+//   v13: v12 + the roster's continuous cover, only on a live (not offset / guard) position once it is 30 min old.
+// The sweep defined them on v6-10/20/40 only; the family convention (feedback_feature_family_naming) needs the complete
+// parent shape, so the clone covers every finished v6 variant: 10/20/40, -unc 10/20/40, -cATM 20/40 = 8 each, 16 total.
+// guardMedianIv = the median 15m-band IV of the 821-day combined set (the sweep's MEDIAN_IV, meta.medianIv15mBand),
+// pinned here so the live guard and the baselines scale X by the same number. SIMULATE-ONLY: never armed.
+const NATURAL_MEDIAN_IV = 0.198593702534246;
+const NATURAL_FAMILIES = [
+  { fam: 'v12', label: 'natural cover v12 (REV opens, no per-position covers)', flags: { natural: 'v12', guardMedianIv: NATURAL_MEDIAN_IV } },
+  { fam: 'v13', label: 'natural cover v13 (REV opens + covers after 30 min)', flags: { natural: 'v13', coverAfterMin: 30, guardMedianIv: NATURAL_MEDIAN_IV } },
+];
+function buildNaturalFamilies(list) {
+  const out = [];
+  for (const nf of NATURAL_FAMILIES) {
+    for (const v of list) {
+      const m = /^v6-(\d+.*)$/.exec(v.variant);
+      if (!m) continue;
+      const c = { ...v };
+      for (const k of Object.keys(c)) {   // one level deeper so no nested config object is shared with the parent
+        if (Array.isArray(c[k])) c[k] = c[k].slice();
+        else if (c[k] && typeof c[k] === 'object' && Object.getPrototypeOf(c[k]) === Object.prototype) c[k] = { ...c[k] };
+      }
+      c.variant = `${nf.fam}-${m[1]}`;
+      c.variantLabel = `${nf.label} — ${v.variantLabel}`;
+      Object.assign(c, nf.flags, { simulateOnly: true, dryRun: true });
+      out.push(c);
+    }
+  }
+  return out;
+}
+
 const VARIANTS = reportArming(validateSelectors((() => {
   const base = [
     ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
@@ -1552,7 +1589,8 @@ const VARIANTS = reportArming(validateSelectors((() => {
     ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
   ];
   return [...base, ...buildFeatureFamilies(base),   // v9sg-*, v9ob-* (complete copies of v9)
-    ...buildOpensOnlyFamilies(base)];               // v20-*, v21-* (opens-only BB fade, simulate-only)
+    ...buildOpensOnlyFamilies(base),                // v20-*, v21-* (opens-only BB fade, simulate-only)
+    ...buildNaturalFamilies(base)];                 // v12-*, v13-* (natural cover, simulate-only)
 })()));
 
 // Expand base runs × variants into the concrete run list.
@@ -2245,6 +2283,12 @@ function buildEngineDeps(run, live) {
       trendFloorMaxPerDay: run.trendFloorMaxPerDay,
       // Feature-test families (2026-10-19): v9ob = open block against trend 'A'; v9sg = stack gate 'nqNotAgainst'.
       openTrendBlock: run.openTrendBlock || null, stackGate: run.stackGate || null,
+      // NATURAL COVER (v12 / v13, 2026-10-23; natural-cover.js): the mode + every knob the shared config reads (unset = its
+      // default). guardMedianIv scales the jump guard's X the way the baselines do.
+      natural: run.natural || null, coverAfterMin: run.coverAfterMin, guardMedianIv: run.guardMedianIv,
+      addGate: run.addGate, maxAdds: run.maxAdds, revTouch: run.revTouch, revWindowMin: run.revWindowMin, revRun: run.revRun,
+      revStrike: run.revStrike, jumpGuard: run.jumpGuard, guardMult: run.guardMult, guardFixed: run.guardFixed,
+      guardMaxPerDay: run.guardMaxPerDay, guardAt: run.guardAt,
       minLockRamp: run.minLockRamp, minLockRampStart: run.minLockRampStart, minLockRampEnd: run.minLockRampEnd,
       minLockRampFrom: run.minLockRampFrom, minLockRampTo: run.minLockRampTo,
       // WING CONVERSION — peak->floor. Read off `deps`, so like everything else here it MUST be listed
@@ -2350,6 +2394,27 @@ function initRunSafe(cfg, tradeDate, where) {
     console.error(`[candle-spread] ${where}: cannot open the record for ${cfg.variant} — ${e && e.message}`);
     console.error('  this variant is SKIPPED this pass; the others continue. Fix the file, do not delete it.');
     return null;
+  }
+}
+
+// NDX 1m for the natural-cover context: the prior sessions are fetched ONCE per trade day (16 calendar days covers the
+// 8 sessions the RTH lines need), today's 1m on every tick. ~6k candles in memory; a failed fetch is not cached, and the
+// natural record then says 'no RTH context' (the REV needs it; the ADD gate reads NQ and still runs).
+let NAT_PRIOR = { day: null, candles: null };
+async function naturalContext(priceSymbol, T) {
+  try {
+    const NCM = require('./natural-cover');
+    const TG = require('./backtest/backtest-target');
+    const day = TG.etIso(T);
+    if (NAT_PRIOR.day !== day || !NAT_PRIOR.candles) {
+      const deep = await DEPS.getRaw1m(priceSymbol, { days: 16, rth: true, endDate: T });
+      NAT_PRIOR = { day, candles: (deep || []).filter((c) => TG.etIso(c.datetime) < day) };
+    }
+    const today = (await DEPS.getRaw1m(priceSymbol, { days: 1, rth: true })) || [];
+    return NCM.liveContext(NAT_PRIOR.candles.concat(today.filter((c) => TG.etIso(c.datetime) === day)), T);
+  } catch (e) {
+    console.error('[candle-spread] natural-cover context failed:', e && e.message);
+    return { error: (e && e.message) || 'context failed' };
   }
 }
 
@@ -2481,6 +2546,11 @@ async function processGroup(runs, kind) {
     harvestIv = bs.ivFromRelBandWidth((b15.bbupper - b15.bblower) / b15.close) * IIV.ivMultAt(etm);
   } catch (e) { /* leave 0 → observer skips */ }
 
+  // NATURAL COVER CONTEXT (v12 / v13): the pricing symbol's NDX RTH lines (5m/15m/60m BB + 9EMA over 8 prior sessions +
+  // today) and the zigzag over today's 1m closes — built once per tick for every natural run (natural-cover.liveContext,
+  // the same tracker the backtest feeds). Fetched only when a natural run is in this group.
+  const natCtx = runs.some((r) => r.natural) ? await naturalContext(priceSymbol, T) : null;
+
 // Feed every ported variant the SAME live A + underlying + chain (apples-to-apples).
   for (const run of runs) {
     try {
@@ -2494,6 +2564,7 @@ async function processGroup(runs, kind) {
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
         getLeg, placeOrder, replaceOrder, cancelOrder: makeCancelOrder(run, record),
         A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol, trendCtx,
+        ...(run.natural ? { natCtx } : {}),
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
       // (first time / how often), and what would the far-side hedge REALLY cost on the live chain (mid vs

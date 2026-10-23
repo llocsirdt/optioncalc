@@ -59,19 +59,8 @@ const isoOf = (d) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d.date);
 const era = days.map((d) => (d.bars.some((b) => b.px) ? '2026' : 'pre'));
 
 // ── NDX-RTH context: dataset sessions + raw-1m NDX sessions the dataset lacks (2026-07-06..07-20) ──
-let settles = {};
-try { settles = JSON.parse(fs.readFileSync(path.join(DIR, 'settles.json'), 'utf8')); } catch (e) { /* none */ }
-const sessions = [];
-const have = new Set();
-for (const d of days) { const iso = isoOf(d); const s = TG.sessionFromBars(iso, d.bars, priceOf, settles); if (s) { sessions.push(s); have.add(iso); } }
-let rawAdded = 0;
-if (fs.existsSync(SUB1M)) {
-  for (const f of fs.readdirSync(SUB1M)) {
-    const mm = /^NDX-(\d{4}-\d{2}-\d{2})\.json$/.exec(f); if (!mm || have.has(mm[1])) continue;
-    try { const s = TG.sessionFrom1m(mm[1], JSON.parse(fs.readFileSync(path.join(SUB1M, f), 'utf8')).candles, settles); if (s) { sessions.push(s); rawAdded++; } } catch (e) { /* skip */ }
-  }
-}
-const CTX = TG.buildRthContexts(sessions, 8);
+// (one implementation: backtest-target.rthContextsForDataset, also used by the baselines build for v12 / v13)
+const { ctx: CTX, rawAdded } = TG.rthContextsForDataset(days, { dir: DIR, sub1mDir: SUB1M, priceOf, isoOf });
 // MEDIAN 15m-band IV over every RTH bar of the dataset (the jump guard's IV scale; runDay5m ivOf = ivFromRelBandWidth)
 const MEDIAN_IV = (() => { const bsP = require('../../server/src/candle-spread/bs-pricer'), v = [];
   for (const d of days) for (const b of d.bars) { const m = etMin(b.dt); if (m >= 575 && m <= 955) { const a = b.analysis['15m']; v.push(bsP.ivFromRelBandWidth((a.bbupper - a.bblower) / a.close)); } }

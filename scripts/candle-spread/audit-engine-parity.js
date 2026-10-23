@@ -60,6 +60,14 @@ const liveDeps = new Set([...namesFrom(TRADER, 'deps'), ...namesFrom(TRADER, 'cf
 for (const m of INDEX.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*):\s*run\.[A-Za-z_][A-Za-z0-9_]*/g)) liveDeps.add(m[1]);
 // cfg is a spread of the run, so any variant field is live-visible by name.
 for (const m of INDEX.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*):\s*f\.[A-Za-z_][A-Za-z0-9_]*/g)) liveDeps.add(m[1]);
+// SHARED OPTION READERS: a module BOTH engines hand their options object to, which reads the knobs itself — the
+// backtest passes `opts`, the trader passes `deps`, the module reads them as its own parameter name. Every name it
+// reads is therefore visible to BOTH engines by construction (one implementation). natural-cover.js (v12 / v13,
+// 2026-10-23): runDay5m calls configOf(opts) / coverAfterMsOf(opts), the trader configOf(deps) / coverAfterMsOf(deps).
+for (const [file, param] of [['natural-cover.js', 'o']]) {
+  const names = namesFrom(fs.readFileSync(path.join(SRC, file), 'utf8'), param);
+  for (const n of names) { btOpts.add(n); liveDeps.add(n); }
+}
 
 // NOT-APPLICABLE: present in one engine by design. Each needs a REASON, not just an entry.
 const NA = {

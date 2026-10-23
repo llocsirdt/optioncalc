@@ -602,4 +602,24 @@ function buildRthContexts(sessions, nPrior = 8) {
   return out;
 }
 
-module.exports = { makeRthLines, v11Setup, nqSlope, DEFAULT_COVER, COVER_KEYS, runDayTarget, buildRthContexts, sessionFromBars, sessionFrom1m, aggregate, linesOf, trendOf, probLoss, etMin, etIso, DEFAULTS, CAP_BY_W, CAPFRAC_BY_W };
+// RTH CONTEXTS FOR A DATASET (moved here 2026-10-23 from sweep-v10.js so the baselines build gets the SAME context for the
+// natural-cover v12 / v13 variants): the dataset's own sessions (pricing series via priceOf) plus the raw-1m NDX sessions
+// it lacks (signal-lab-data/raw-1m NDX-YYYY-MM-DD.json), then 8 prior sessions per day. days = load5mDays output.
+function rthContextsForDataset(days, { dir, sub1mDir, priceOf, isoOf }) {
+  const fs = require('fs'), path = require('path');
+  let settles = {};
+  try { settles = JSON.parse(fs.readFileSync(path.join(dir, 'settles.json'), 'utf8')); } catch (e) { /* none */ }
+  const sessions = [];
+  const have = new Set();
+  for (const d of days) { const iso = isoOf(d); const s = sessionFromBars(iso, d.bars, priceOf, settles); if (s) { sessions.push(s); have.add(iso); } }
+  let rawAdded = 0;
+  if (sub1mDir && fs.existsSync(sub1mDir)) {
+    for (const f of fs.readdirSync(sub1mDir)) {
+      const mm = /^NDX-(\d{4}-\d{2}-\d{2})\.json$/.exec(f); if (!mm || have.has(mm[1])) continue;
+      try { const s = sessionFrom1m(mm[1], JSON.parse(fs.readFileSync(path.join(sub1mDir, f), 'utf8')).candles, settles); if (s) { sessions.push(s); rawAdded++; } } catch (e) { /* skip */ }
+    }
+  }
+  return { ctx: buildRthContexts(sessions, 8), sessions, settles, rawAdded };
+}
+
+module.exports = { rthContextsForDataset, makeRthLines, v11Setup, nqSlope, DEFAULT_COVER, COVER_KEYS, runDayTarget, buildRthContexts, sessionFromBars, sessionFrom1m, aggregate, linesOf, trendOf, probLoss, etMin, etIso, DEFAULTS, CAP_BY_W, CAPFRAC_BY_W };

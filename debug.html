@@ -184,7 +184,7 @@
 </style>
 
 <header>
-  <h1>Strategy Debug <span class="ver">v3.10.9</span></h1>
+  <h1>Strategy Debug <span class="ver">v3.12.0</span></h1>
   <div class="ctl">
     <label>variant <select id="variant"></select></label>
     <label>date <input type="date" id="date"></label>
@@ -525,6 +525,16 @@ function render() {
       ['cover-to-stack locks', n('cover-to-stack') + (lockedByStack ? ` (${lockedByStack} winner${lockedByStack === 1 ? '' : 's'})` : '')],
       ['combo 4-leg orders', n('combo-lock-open')],
       ['credit-sent opens', (st.positions || []).filter((p) => p.sentNet === 'CREDIT').length],
+      // NATURAL COVER (v12 / v13, 2026-10-23): what the REV / ADD gate / jump guard did today. Only on natural runs; the
+      // per-candle conditions are on the Signals panel (nat-rev / nat-add rows) and the 'natural' decision of each candle.
+      ...((record.config || {}).natural ? [
+        ['natural: REVs placed / filled', `${d.filter((x) => x.action === 'natural' && x.outcome === 'rev').length} / ${n('natural-offset')}`],
+        ['natural: REV refused (strike / total)', `${d.filter((x) => x.action === 'natural' && /rev-skip-no-strike/.test(x.outcome || '')).length} / ${d.filter((x) => x.action === 'natural' && /rev-skip-total/.test(x.outcome || '')).length}`],
+        ['natural: ADDs refused (no 15m band / max)', `${d.filter((x) => x.action === 'open-skip-natural-add' && x.reason === 'blocked').length} / ${d.filter((x) => x.action === 'open-skip-natural-add' && x.reason === 'capped').length}`],
+        ['natural: REVs kept through a flip', n('natural-open-kept')],
+        ['natural: jump guards / skipped', `${n('natural-guard')} / ${n('natural-guard-skip')}`],
+        ['natural: covers refused', n('cover-skip-natural')],
+      ] : []),
       ['realized (locked) floor', usd(st.realizedPnl)],
       ['peak capital deployed', st.peakCashDeployed != null ? usd(st.peakCashDeployed) : '—'],
     ];

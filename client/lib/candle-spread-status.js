@@ -34,7 +34,8 @@
   // v9sg / v9ob: feature-test copies of v9 (2026-10-19), listed right under their parent.
   // v20 / v21: opens-only BB-fade families (2026-10-23, simulate-only). v21's price target sits after the width
   // (v21-10-f55), so it gets one row per target — the same layout as the compare page (variantFor there).
-  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob', 'v20', 'v21'];
+  // v12 / v13: natural-cover families (copies of the v6 shape; 2026-10-23, simulate-only), after the v9 rows.
+  const FAMILIES = ['v0', 'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v9sg', 'v9ob', 'v12', 'v13', 'v20', 'v21'];
   const PRICE_TAGS = { v21: ['f50', 'f55', 'f60'] };
   const ROWS = FAMILIES.flatMap((f) => (PRICE_TAGS[f] ? PRICE_TAGS[f].map((t) => ({ fam: f, tag: t, label: `${f} ${t}` }))
     : [{ fam: f, tag: null, label: f }]));
