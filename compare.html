@@ -226,7 +226,7 @@
   /* Column headers double as sort controls, so the explanation is a native title tooltip rather than a
      second click target that would fight the sort. The dotted underline is the only hint needed. */
   /* STRATEGY ABOUT POPOVER — click (or tap) a variant id in the backtest table */
-  table.bt td.v .vinfo { cursor:pointer; text-decoration:underline dotted rgba(125,125,125,.65); text-underline-offset:3px; }
+  table.bt td.v .vinfo, table.grid th.rowh .vinfo { cursor:pointer; text-decoration:underline dotted rgba(125,125,125,.65); text-underline-offset:3px; }
   #aboutPop { position:absolute; z-index:50; max-width:min(420px, calc(100vw - 32px)); background:var(--bg, #fff); color:inherit;
     border:1px solid rgba(125,125,125,.45); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.25); padding:10px 12px; font-size:12px; line-height:1.45; }
   #aboutPop h4 { margin:0 0 6px; font-size:13px; }
@@ -252,7 +252,7 @@
 <body>
 <header>
   <div class="hrow hrow-text">
-    <h1>Risk Curves <span class="ver">v3.12.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
+    <h1>Risk Curves <span class="ver">v3.13.0</span><span id="sessionBadge" class="liveBadge" hidden></span></h1>
     <span class="meta" id="hmeta">—</span>
     <span id="replayRange" class="meta"></span>
     <a href="#" id="btTableBtn" class="btlink">Backtest table ▾</a>
@@ -650,7 +650,10 @@ function render() {
 
   let html = '<thead><tr><th class="rowh"></th>' + SPEC.cols.map((c) => `<th>${c.h}</th>`).join('') + '</tr></thead><tbody>';
   for (const f of SPEC.rows) {
-    html += `<tr><th class="rowh">${f.label}</th>`;
+    // Variant mode: the row heading opens the same ABOUT popover as the backtest table, at family level.
+    const rowh = GRID_MODE === 'date' ? f.label
+      : `<span class="vinfo" data-fam="${f.key}" role="button" tabindex="0" title="what this strategy family does">${f.label}</span>`;
+    html += `<tr><th class="rowh">${rowh}</th>`;
     for (const c of SPEC.cols) {
       const v = SPEC.cellKey(f, c), d = cells[v];
       if (!d) { html += '<td class="empty"></td>'; continue; }
@@ -1661,11 +1664,25 @@ async function ensureVariantCfg() {
   const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   let pop = null;
   const close = () => { if (pop) { pop.remove(); pop = null; } };
-  const open = (el) => {
+  const keyOf = (el) => el.getAttribute('data-v') || `fam:${el.getAttribute('data-fam')}`;
+  // A grid ROW heading is a family (or family + price tag): describe it from its first variant the server
+  // describes, without the per-cell width / suffix — those belong to the cells.
+  const famHtml = (row) => {
+    const v = row && COLUMNS.map((c) => variantFor(row, c.k)).find((x) => variantAbout[x]), a = v && variantAbout[v];
+    if (!a) return `<h4>${esc(row ? row.label : '')}</h4><p class="muted">No description from this server yet.</p>`;
+    return `<h4>${esc(row.label)} — ${esc(a.name)}</h4><p>${esc(a.what)}</p>`
+      + `<p><span class="k">Opens:</span> ${esc(a.open)}</p><p><span class="k">Covers:</span> ${esc(a.cover)}</p>`
+      + (row.tag && a.suffix ? `<p><span class="k">This row:</span> ${esc(a.suffix)}</p>` : '')
+      + `<p class="muted">${esc(a.shared)}</p>`;
+  };
+  const open = async (el) => {
     close();
+    if (!Object.keys(variantAbout).length) { try { await ensureVariantCfg(); } catch (e) { /* older server */ } }
+    close();
+    const fam = el.getAttribute('data-fam');
     const v = el.getAttribute('data-v'), a = variantAbout[v];
-    pop = document.createElement('div'); pop.id = 'aboutPop';
-    pop.innerHTML = a
+    pop = document.createElement('div'); pop.id = 'aboutPop'; pop.dataset.v = keyOf(el);
+    pop.innerHTML = fam != null ? famHtml(ROWS.find((r) => r.key === fam)) : a
       ? `<h4>${esc(v)} — ${esc(a.name)} (${esc(a.width)}-wide)</h4><p>${esc(a.what)}</p>`
         + `<p><span class="k">Opens:</span> ${esc(a.open)}</p><p><span class="k">Covers:</span> ${esc(a.cover)}</p>`
         + (a.suffix ? `<p><span class="k">This row:</span> ${esc(a.suffix)}</p>` : '')
@@ -1678,7 +1695,7 @@ async function ensureVariantCfg() {
   };
   document.addEventListener('click', (e) => {
     const el = e.target.closest && e.target.closest('.vinfo');
-    if (el) { e.stopPropagation(); if (pop && pop.dataset.v === el.getAttribute('data-v')) { close(); return; } open(el); if (pop) pop.dataset.v = el.getAttribute('data-v'); return; }
+    if (el) { e.stopPropagation(); if (pop && pop.dataset.v === keyOf(el)) { close(); return; } open(el); return; }
     if (pop && !pop.contains(e.target)) close();
   });
   document.addEventListener('keydown', (e) => {
