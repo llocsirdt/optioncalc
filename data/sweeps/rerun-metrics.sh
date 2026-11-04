@@ -1,0 +1,4 @@
+cd /Users/tdriscoll/Documents/surf/optioncalc
+COMMON="--revalArms --openFillModel ladder --subBarFill 1m --sub1m signal-lab-data/raw-1m --workers 8 --dataDir tests/backtest/backtest-data-5m-combined"
+node scripts/candle-spread/sweep-loss-cap.js $COMMON --arms "roster,minLock 0.05,minLock 0.02,geo halfway,geo halfway ml 0.05,geo halfway ml 0.02,geo offset1,geo offset1 ml 0.05,geo offset1 ml 0.02,geo offset2,geo offset2 ml 0.05,geo offset2 ml 0.02" --variants "v0-10,v1-10,v2-10,v3-10,v4-10,v5-10,v6-10,v7-10,v8-10,v9-10" --out data/sweeps/condor-2026-10-12 > data/sweeps/condor-2026-10-12/run.log 2>&1
+node scripts/candle-spread/sweep-loss-cap.js $COMMON --arms "roster,ladder adverse,restrike replace,restrike replace x1,adverse + replace" --variants "v0-10,v0-20,v1-10,v1-20,v2-10,v2-20,v3-10,v3-20,v4-10,v4-20,v5-10,v5-20,v6-10,v6-20,v7-10,v7-20,v8-10,v8-20,v9-10,v9-20" --out data/sweeps/ladder-restrike-2026-10-12 > data/sweeps/ladder-restrike-2026-10-12/run.log 2>&1
