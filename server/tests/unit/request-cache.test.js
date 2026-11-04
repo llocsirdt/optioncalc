@@ -108,6 +108,30 @@ const tick = () => new Promise((r) => setImmediate(r));
     ok(keyFromQuery('chains', '') === 'chains|', 'an empty query still yields a stable key');
   }
 
+  // ── PER-DAY COUNTS (2026-11-04): 29k /chains errors since boot could not be placed on a day ──────────
+  // Days are ET trade dates (the 20:30 ET error below is the SAME day though UTC has rolled over), the
+  // distinct messages are kept so an expired-expiration 400 reads differently from an outage, capped.
+  {
+    let t = Date.parse('2026-11-03T15:00:00Z');
+    const c = makeRequestCache('t', { now: () => t });
+    const bad = (m) => () => Promise.reject(new Error(m));
+    await c.run('a', 0, () => Promise.resolve(1));
+    await c.run('a', 0, bad('400 - Check Param Values')).catch(() => {});
+    t = Date.parse('2026-11-04T01:30:00Z');   // 20:30 ET on 11/03
+    await c.run('a', 0, bad('400 - Check Param Values')).catch(() => {});
+    t = Date.parse('2026-11-04T15:00:00Z');
+    for (let i = 0; i < 7; i++) await c.run('a', 0, bad('msg ' + i)).catch(() => {});
+    const h = c.health();
+    ok(h.byDay['2026-11-03'] && h.byDay['2026-11-03'].fetches === 3 && h.byDay['2026-11-03'].errors === 2,
+      `11/03 ET: 3 fetches, 2 errors incl. the post-midnight-UTC one (${JSON.stringify(h.byDay['2026-11-03'])})`);
+    ok(h.byDay['2026-11-03'].messages['400 - Check Param Values'] === 2, 'messages counted per day');
+    const m4 = h.byDay['2026-11-04'].messages;
+    ok(Object.keys(m4).length === 6 && m4['(other)'] === 2, `message map capped at 5 + (other) (${JSON.stringify(m4)})`);
+    ok(h.errors === 9 && h.lastError && h.lastError.message === 'msg 6', 'totals and lastError still kept');
+    for (let d = 5; d <= 25; d++) { t = Date.parse(`2026-11-${String(d).padStart(2, '0')}T15:00:00Z`); await c.run('a', 0, () => Promise.resolve(1)); }
+    ok(Object.keys(c.health().byDay).length === 14 && !c.health().byDay['2026-11-03'], 'only the last 14 days are kept');
+  }
+
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

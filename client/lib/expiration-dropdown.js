@@ -87,7 +87,9 @@ async function loadExpirations() {
     const expirations = await getOptionExpirationsFromSchwab(chainsSymbol);
     
     if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
-      availableExpirations = expirations.expirationList;
+      // Past dates are dropped: a saved selection on yesterday's expiration falls through to today / nearest.
+      availableExpirations = expirations.expirationList.filter((exp) =>
+        !(typeof isPastExpiration === 'function' && isPastExpiration(exp.expirationDate)));
       populateExpirationDropdown(availableExpirations);
       
       // Try to restore previously selected expiration first

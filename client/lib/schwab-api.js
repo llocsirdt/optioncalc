@@ -894,12 +894,27 @@ function mapSymbolForAPI(displaySymbol, endpoint) {
 // Global variables for tracking current symbol and expirations
 let currentSymbolForExpirations = null;
 let cachedExpirations = null;
+let cachedExpirationsDay = null;   // ET date the cached list was fetched on
+let dropdownReloadedDay = null;    // ET date the dropdown was last reloaded for a day change (once per day)
+
+// PAST EXPIRATIONS ARE NEVER REQUESTED (2026-11-04). A page left open past midnight kept yesterday's 0DTE as its
+// selection (and first in the cached list) and asked Schwab for that chain every 2 s; each one came back
+// 400 "Check Param Values" — 29,132 /chains errors on prod between 10/29 and 11/04. Dates are ET trade dates.
+function todayEtIso() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+function isPastExpiration(expirationDate) {
+  return !!expirationDate && String(expirationDate).slice(0, 10) < todayEtIso();
+}
+window.todayEtIso = todayEtIso;
+window.isPastExpiration = isPastExpiration;
 
 // Clear cached expirations (useful when switching symbols or refreshing)
 function clearExpirationCache() {
   console.log('🗑️ Clearing expiration cache');
   currentSymbolForExpirations = null;
   cachedExpirations = null;
+  cachedExpirationsDay = null;
 }
 
 // Update calculator with live Schwab data
@@ -960,6 +975,13 @@ async function updateCalculatorWithLiveData(symbol) {
     let expirations = cachedExpirations;
     const chainsSymbol = mapSymbolForAPI(symbol, 'chains'); // Define here for use later
     
+    // A new ET day invalidates the list: yesterday's expiration is gone and must not be requested. The dropdown
+    // is reloaded too, so a selection left on yesterday moves to today's (or the nearest) expiration.
+    const todayEt = todayEtIso();
+    if (expirations && cachedExpirationsDay !== todayEt) {
+      expirations = null;
+      if (dropdownReloadedDay !== todayEt && typeof loadExpirations === 'function') { dropdownReloadedDay = todayEt; loadExpirations(); }
+    }
     if (!expirations || currentSymbolForExpirations !== symbol) {
       // console.log('🔄 Symbol changed or no cached expirations, loading expirations for:', symbol);
       // console.log('🔗 DEBUG: chainsSymbol for API call:', chainsSymbol);
@@ -970,15 +992,20 @@ async function updateCalculatorWithLiveData(symbol) {
       if (expirations) {
         cachedExpirations = expirations;
         currentSymbolForExpirations = symbol;
+        cachedExpirationsDay = todayEt;
         // console.log('💾 Cached expirations for symbol:', symbol);
       }
     } else {
       // console.log('📋 Using cached expirations for symbol:', symbol);
     }
     
-    if (expirations && expirations.expirationList && expirations.expirationList.length > 0) {
-      // Check if user has selected an expiration from dropdown
-      const selectedExpiration = getSelectedExpiration ? getSelectedExpiration() : null;
+    const liveExpirations = expirations && expirations.expirationList
+      ? expirations.expirationList.filter((exp) => !isPastExpiration(exp.expirationDate)) : [];
+    if (liveExpirations.length > 0) {
+      expirations = { ...expirations, expirationList: liveExpirations };
+      // Check if user has selected an expiration from dropdown (a past one is ignored -> today / nearest)
+      let selectedExpiration = getSelectedExpiration ? getSelectedExpiration() : null;
+      if (isPastExpiration(selectedExpiration)) selectedExpiration = null;
       
       let targetExpiration = null;
       
@@ -1017,6 +1044,8 @@ async function updateCalculatorWithLiveData(symbol) {
         }
       }
       
+      // Belt and braces: never send a chain request for a date that has already expired.
+      if (!targetExpiration || isPastExpiration(targetExpiration.expirationDate)) return;
       const chainData = await getOptionsChainFromSchwab(chainsSymbol, targetExpiration.expirationDate, {
         strike_count: 75
       });

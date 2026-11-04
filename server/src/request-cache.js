@@ -24,13 +24,32 @@
  *
  * ERRORS ARE NEVER CACHED. A rejection resolves the inflight entry and leaves the cache untouched, so a
  * transient upstream failure is retried rather than pinned for the TTL.
+ *
+ * PER-DAY COUNTS (2026-11-04). The totals above run from boot, so a burst of 29k /chains errors could not be
+ * placed on a day. `byDay` keeps the last DAYS_KEPT ET trade dates: upstream fetches, errors, the last error
+ * time, and the distinct error messages (capped) so an expired-expiration 400 can be told from an outage.
  */
+const DAYS_KEPT = 14, MSGS_KEPT = 5;
+const _etDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
 
 function makeRequestCache(name, opts = {}) {
   const maxEntries = opts.maxEntries || 60;
   const cache = new Map();      // key -> { at, data }
   const inflight = new Map();   // key -> Promise<data>
   const stats = { name, hits: 0, misses: 0, coalesced: 0, errors: 0, evictions: 0 };
+  const byDay = new Map();      // ET date -> { fetches, errors, lastErrorAt, messages: { msg: n } }
+  let lastError = null;         // { at, message }
+  const now = opts.now || Date.now;
+  function dayRow() {
+    const d = _etDay.format(new Date(now()));
+    let row = byDay.get(d);
+    if (!row) {
+      row = { fetches: 0, errors: 0, lastErrorAt: null, messages: {} };
+      byDay.set(d, row);
+      while (byDay.size > DAYS_KEPT) byDay.delete(byDay.keys().next().value);
+    }
+    return row;
+  }
 
   /**
    * @param key    cache key — must include EVERY parameter that changes the response
@@ -47,6 +66,7 @@ function makeRequestCache(name, opts = {}) {
     if (pending) { stats.coalesced++; return pending; }
 
     stats.misses++;
+    dayRow().fetches++;
     const p = (async () => {
       const data = await fn();
       // Only a SUCCESS is cached; see the header note on errors.
@@ -63,6 +83,11 @@ function makeRequestCache(name, opts = {}) {
       return await p;
     } catch (e) {
       stats.errors++;
+      const row = dayRow(), at = new Date(now()).toISOString();
+      const msg = String((e && e.message) || e).slice(0, 160);
+      row.errors++; row.lastErrorAt = at; lastError = { at, message: msg };
+      if (row.messages[msg] != null || Object.keys(row.messages).length < MSGS_KEPT) row.messages[msg] = (row.messages[msg] || 0) + 1;
+      else row.messages['(other)'] = (row.messages['(other)'] || 0) + 1;
       throw e;
     } finally {
       inflight.delete(key);
@@ -70,7 +95,8 @@ function makeRequestCache(name, opts = {}) {
   }
 
   function health() {
-    return { ...stats, entries: cache.size, inFlight: inflight.size, maxEntries };
+    return { ...stats, entries: cache.size, inFlight: inflight.size, maxEntries, lastError,
+      byDay: Object.fromEntries(byDay) };
   }
 
   return { run, health, _cache: cache, _inflight: inflight };
