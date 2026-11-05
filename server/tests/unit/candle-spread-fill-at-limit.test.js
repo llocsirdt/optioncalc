@@ -46,13 +46,12 @@ const bullCall = [{ side: 'long', type: 'C', strike: 30900 }, { side: 'short', t
   const no = trader.markFill(bullCall, 4.5, g, 0.05, { simFillAtLimit: true });
   ok(!no.fillable, 'and a limit the market has not reached still does not fill');
 
-  // ── 1d. wide-quote gate (sim only) ──────────────────────────────────────────────────────────────
+  // ── 1d. NO quoted-width gate (removed 2026-11-04): a market quoted wider than the spread fills on its MARK ─────
+  // (11/04: 10W quotes ran a median 15.9 wide and the old 1.0 x W gate refused every 10W fill all day.)
   {
     const wide = (t, k) => { const q = chain(4.15)(t, k); return q && { ...q, bid: q.mid - 9, ask: q.mid + 9 }; };   // 18-wide market
     const w1 = trader.markFill(bullCall, 5.5, wide, 0.05, { simFillAtLimit: true, simMaxQuoteWidthFrac: 1 });
-    ok(!w1.fillable && w1.wideQuote, 'a simulated fill off a market wider than the spread is refused');
-    const w2 = trader.markFill(bullCall, 5.5, wide, 0.05, { simFillAtLimit: true, simMaxQuoteWidthFrac: 1, fillSource: 'broker' });
-    ok(w2.fillable, 'real (broker) orders are not gated');
+    ok(w1.fillable && !w1.wideQuote && w1.fill === 5.5, `a simulated fill off a market wider than the spread books on its mark (${w1.fill})`);
   }
 
   // ── 1c. roster ───────────────────────────────────────────────────────────────────────────────────

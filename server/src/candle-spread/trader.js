@@ -3677,12 +3677,10 @@ function markFill(legs, limit, getLeg, tick, deps, net) {
   const mark = q.mark;
   const base = { mark, bid: q.bid, ask: q.ask, underlying: deps && deps.underlying != null ? deps.underlying : null };
   if (mark == null || limit == null || !(limit > 0)) return { ...base, fillable: false, fill: null };
-  // WIDE-QUOTE GATE for SIMULATED fills (deps.simMaxQuoteWidthFrac; see resolveRestingCovers): a mid of a market
-  // wider than the structure's own width is not a tradeable price. Real orders (broker) are untouched.
-  if (deps && deps.simMaxQuoteWidthFrac != null && deps.fillSource !== 'broker' && q.bid != null && q.ask != null) {
-    const ks = legs.map((l) => l.strike); const w = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
-    if (w > 0 && (q.ask - q.bid) > deps.simMaxQuoteWidthFrac * w) return { ...base, fillable: false, fill: null, wideQuote: true };
-  }
+  // NO QUOTED-WIDTH GATE (removed 2026-11-04, user). The quoted ask - bid of a 0DTE NDX vertical is routinely wider
+  // than the spread itself and real orders fill at the mid through it; what matters is the MARK, and a bad mark is
+  // caught by the gates below plus the two-look rule (simOpenFillMinLooks / simCoverFillMinLooks). The 1.0 x W gate
+  // (1dbf235, 10/08) refused every 10W fill on 11/04 (quoted width median 15.9): 25 of 36 10W runs never filled.
   // STRUCTURAL GATE, BEFORE the price comparison. `mark > limit` is the only test this used to make, and
   // an IMPOSSIBLE mark passes it trivially: a debit spread marked -32.20 is not above any positive limit,
   // so it read as fillable, and the fill price then clamped to one tick. That is how 154 covers across 55
@@ -4692,19 +4690,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
       const cw = ks.length ? Math.max(...ks) - Math.min(...ks) : 0;
       return round2(cw - mark);
     };
-    // WIDE-QUOTE GATE (simulated fills only; cfg.simMaxQuoteWidthFrac). A mark that is the midpoint of a market
-    // wider than the spread itself is not a price anyone trades at: 2026-10-08 v9-10 booked a cover at 4.20 off
-    // a -4.30 / 12.60 quote on a 10-wide (8% of the week's simulated cover fills came from quotes wider than W).
-    // Keep resting; the next look tries again.
-    if (cfg.simMaxQuoteWidthFrac != null && !(deps && deps.fillSource === 'broker')) {
-      const qq = twinQuoted ? sentQ : quote;
-      const ks0 = (pc.legs || []).map((l) => l.strike);
-      const w0 = ks0.length ? Math.max(...ks0) - Math.min(...ks0) : cfg.spreadWidth;
-      if (qq && qq.bid != null && qq.ask != null && (qq.ask - qq.bid) > cfg.simMaxQuoteWidthFrac * w0) {
-        decisions.push({ action: 'cover-wide-quote', positionId: pos.id, bid: qq.bid, ask: qq.ask, mark, note: 'quote wider than the spread — not a tradeable mid' });
-        miss(); continue;
-      }
-    }
+    // No quoted-width gate on covers either (removed 2026-11-04, see markFill): the mark decides; a briefly bad mark
+    // is refused by the badquote / parity gates and the two-look rule, not by how wide the market is quoted.
     if (creditRest) {
       if (!(creditOffered() >= pc.sentCredit + thru - 1e-9)) { miss(); continue; }   // market has not come up to our ask yet
       // BOTH CHAINS AT THE PRICE (strict, 2026-10-17). The twin's own credit reaching the ask is not enough: the debit

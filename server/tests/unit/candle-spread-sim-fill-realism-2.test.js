@@ -136,16 +136,16 @@ const resolve = (p, g, deps, d = []) => { const st = { positions: [p], realizedP
     const cl = [{ side: 'long', type: 'C', strike: 29630 }, { side: 'short', type: 'C', strike: 29650 }];
     const mk = (target) => ({ id: 'v9', side: 'bull', filled: true, covered: false, quantity: 1, limit: 5, legs: cl, shortStrike: 29650,
       pendingCover: { legs: cl, target, openCost: 5, minLock: 0, placedEpoch: 1, sentNet: 'DEBIT' } });
-    const cfg20 = { ...base, spreadWidth: 20, simMaxQuoteWidthFrac: 1.0 };
+    const cfg20 = { ...base, spreadWidth: 20 };
     const run = (p, deps) => { const d = []; trader.resolveRestingCovers({ positions: [p], realizedPnl: 0, cashDeployed: 0 }, cfg20, g, d,
-      { strikeIncrement: 10, underlying: 29662, simMaxQuoteWidthFrac: 1.0, parityGateTolFrac: 0.25, ...deps }); return d; };
+      { strikeIncrement: 10, underlying: 29662, parityGateTolFrac: 0.25, ...deps }); return d; };
     let p = mk(10.0);
     const d = run(p, { simFillStrict: true });
     const bad = d.find((x) => x.action === 'cover-badquote');
     ok(!p.covered && bad && /parity-fair 13\.7/.test(bad.reason), `strict: mark 9.85 vs parity-fair 13.7 -> refused (${bad && bad.reason})`);
     p = mk(10.0);
     run(p, {});
-    ok(p.covered, 'control: every older gate (width <= W, parity residual 25%, cheapOutlier floor 40%) let it through');
+    ok(p.covered, 'control: every older gate (parity residual 25%, cheapOutlier floor 40%) let it through');
     // Same strikes with the ITM legs AT parity: fills.
     legs.C29630 = q(34.0, 32.0, 36.0); legs.C29650 = q(20.3, 18.3, 22.3);
     p = mk(13.8);

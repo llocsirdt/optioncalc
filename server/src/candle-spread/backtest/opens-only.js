@@ -70,7 +70,7 @@ const ROSTER_KEEP = [
   'ladderStepSeconds', 'ladderStepPoints', 'ladderSteps', 'ladderStepDollars',
   'bidirectional', 'firstActionMin', 'lossMax',
   // live mark-path fill realism (simulated fills only; the backtest's counterpart is its open fill model)
-  'simOpenFillMinLooks', 'simFillAtLimit', 'simMaxQuoteWidthFrac',
+  'simOpenFillMinLooks', 'simFillAtLimit',
   // the cover plumbing names (inert: an opens-only run never places a cover)
   'coverSelector', 'coverFillModel',
 ];

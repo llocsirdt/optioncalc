@@ -1005,9 +1005,7 @@ function applySimFillRealism(v) {
   // Simulated fills (opens, covers, hedges) book AT their limit, never better (2026-10-06: simulated covers
   // +$765 vs live +$7 on the same 8 v7-10 positions, almost all of it booked price improvement).
   if (v.simFillAtLimit == null) v.simFillAtLimit = true;
-  // Simulated fills refuse marks from quotes wider than the structure itself (2026-10-08: 8% of simulated cover
-  // fills, e.g. v9-10's 4.20 off a -4.30/12.60 market). Real orders are unaffected.
-  if (v.simMaxQuoteWidthFrac == null) v.simMaxQuoteWidthFrac = 1.0;
+  // (simMaxQuoteWidthFrac — refusing a mark because ask - bid > W — removed 2026-11-04: the mark decides.)
 }
 
 // SIM FILL REALISM, PART 2 (2026-10-17) — the 10/16 audit of simulated fills against real quotes. Defaults for
@@ -2198,7 +2196,6 @@ function buildEngineDeps(run, live) {
       fillSource: fillSourceFor(run),
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
-      simMaxQuoteWidthFrac: run.simMaxQuoteWidthFrac != null ? run.simMaxQuoteWidthFrac : null,
       // SIM FILL REALISM, PART 2 (2026-10-17; trader.js, the block above simDwell). Mark path only — every rule is
       // inert under fillSource 'broker'. CANDLE_SPREAD_SIM_FILL=legacy turns them all off with the rest.
       ...simFillRealismDeps(run),
