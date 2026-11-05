@@ -23,10 +23,10 @@ const FAMILY = {
   v7: { name: 'be-wrong', what: 'v6 that can be wrong without going flat: opens the opposite side while still holding, without covering the loser.',
     open: 'v6\'s, plus a "be-wrong" opposite open on a 15m reversal candle that breaks the prior extreme.',
     cover: 'v6\'s, per side: only the wrong-way side is covered.' },
-  v8: { name: 'proactive', what: 'v6 signal with proactive covering. (Its $3,000 at-risk "churn" cap was turned off 2026-10-14.)',
-    open: 'v6\'s.', cover: 'v6\'s, plus a cover on any position marking >= 70% of the width.' },
-  v9: { name: 'be-wrong + proactive', what: 'v7 signal with proactive covering.',
-    open: 'v7\'s.', cover: 'v7\'s, plus a cover on any position marking >= 80% of the width.' },
+  v8: { name: 'proactive', what: 'v6 signal with proactive covering and reopen-after-cover. (Its $3,000 at-risk "churn" cap was turned off 2026-10-14.)',
+    open: 'v6\'s, plus a re-open at the same strikes when a cover fills inside the same 15m window.', cover: 'v6\'s, plus a cover on any position marking >= 80% of the width.' },
+  v9: { name: 'be-wrong + proactive', what: 'v7 signal with proactive covering and reopen-after-cover.',
+    open: 'v7\'s, plus a re-open at the same strikes when a cover fills inside the same 15m window.', cover: 'v7\'s, plus a cover on any position marking >= 80% of the width.' },
   // FEATURE-TEST FAMILIES (user, 2026-10-19): a complete copy of the parent family with ONE feature added, named
   // v<parent><tag>. Everything not stated here is the parent's.
   v9sg: { name: 'v9 + stack gate', what: 'v9 with a stack gate: no adding to a side while the NQ trend points against it.',
@@ -74,7 +74,7 @@ const FAMILY = {
 };
 // Everything below the signal is shared by every strategy (see docs/strategies/README.md).
 const SHARED = 'Shared by all: day-loss governor, placement G (deepest ITM inside a price band), open ladder, '
-  + 'continuous covers + ladder, give-up, stall cover (15 min), late-day guard (15:00), floor raise (spreads first, 3:1; '
+  + 'continuous covers + ladder, give-up, stall cover (15 min), late-day guard (15:00), floor raise (spreads first, 4:1 near / 8:1 far, trend-sided 3:1 with the trend / 5:1 against; '
   + 'also the must-fix past the loss cap and peak-banking wings with an upside term).';
 
 // v<n>[tag]-W[-cATM][-fNN][-unc] — e.g. v9-20-cATM, v9sg-10-unc, v20-40-cATM-unc, v21-10-f55-unc.
