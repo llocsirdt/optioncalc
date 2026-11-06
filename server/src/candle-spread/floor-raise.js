@@ -30,6 +30,14 @@ function samplePoints(spot, band, incr, bookStrikes) {
   }
   const xs = [];
   for (let x = a; x <= b; x += incr) xs.push(x);
+  // Every book strike is a kink of the payoff, so it is sampled exactly. On a uniform grid they are already in xs; on
+  // a sparse day (2026-11-05) a 25-pt sample would step over the 10-pt strikes of positions opened earlier and misread
+  // the floor between them.
+  if (bookStrikes && bookStrikes.length) {
+    const have = new Set(xs);
+    const extra = bookStrikes.filter((k) => Number.isFinite(k) && k >= a && k <= b && !have.has(k));
+    if (extra.length) { xs.push(...new Set(extra)); xs.sort((p, q) => p - q); }
+  }
   return { lo, hi, xs };
 }
 
@@ -41,7 +49,7 @@ function candidates(lo, hi, incr) {
     const L = (k) => ({ side: 'long', type: T, strike: k }), S = (k) => ({ side: 'short', type: T, strike: k });
     const dir = T === 'P' ? -1 : 1;   // a put spread's short leg sits BELOW its long; a call spread's above
     out.push({ kind: 'long', legs: [L(K)] });
-    for (const w of [10, 20]) {
+    for (const w of [incr, 2 * incr]) {   // one and two strikes: 10/20 on the 10-pt grid, 25/50 on a 25-pt one (2026-11-05)
       out.push({ kind: 'vertical', legs: [L(K), S(K + dir * w)] });
       out.push({ kind: 'fly', legs: [L(K - w), S(K), S(K), L(K + w)] });
     }

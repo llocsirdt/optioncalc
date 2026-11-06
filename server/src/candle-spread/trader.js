@@ -38,6 +38,84 @@ const FG = require('./funds-guard');   // net-spend budget + debit/credit flip o
 const PT = require('./price-target');   // v21 price-target strike pick — SHARED with the backtest geo (pickByPrice)
 const NCM = require('./natural-cover');   // v12 / v13 natural-cover rules — SHARED with runDay5m (one implementation)
 
+const SG = require('./strike-grid');   // the strikes really listed near the money -> the width a variant may open at
+
+// ── FALLBACK WIDTHS ON A SPARSE STRIKE GRID (2026-11-05) ──────────────────────────────────────────────────────────────
+// When the chain lists no 10-pt strikes near the money, a 20W variant opens 25W and a 40W opens 50W on the 25-pt grid
+// (strike-grid.openWidthFor). Everything width-relative must then follow the POSITION's width, not the variant's: a book
+// can hold a 20W opened at 09:30 and a 25W opened at noon, and each is covered, laddered and given up at its own width.
+//
+// widthCtx returns { cfg, deps } scaled to (W2, incr2) from the variant's BASE config: the width and grid themselves,
+// plus every knob the 2026-11-05 audit found in strike STEPS or POINTS (fractions of W need nothing). Dollar caps
+// (lossMax, lossTarget, budgets) are book-level risk limits and are deliberately NOT scaled. A position at the base
+// width gets the base objects back unchanged, so a normal day is byte-identical.
+const SCALED = new WeakMap();   // base object -> Map(key -> scaled copy)
+function stepsFor(n, baseIncr, r, incr2, min = 0) {
+  return n == null ? n : Math.max(min, Math.round((n * baseIncr * r) / incr2));
+}
+function scaledCopy(base, key, make) {
+  let m = SCALED.get(base);
+  if (!m) { m = new Map(); SCALED.set(base, m); }
+  if (!m.has(key)) {
+    const out = make();
+    Object.defineProperty(out, '_base', { value: base, enumerable: false });   // never persisted with a record
+    m.set(key, out);
+  }
+  return m.get(key);
+}
+function baseOf(x) { return (x && x._base) || x; }
+function widthCtx(cfg, deps, W2, incr2) {
+  const bc = baseOf(cfg), bd = baseOf(deps);
+  if (!bc || !(W2 > 0) || (W2 === bc.spreadWidth && (incr2 || bc.strikeIncrement) === bc.strikeIncrement)) return { cfg: bc, deps: bd };
+  const W = bc.spreadWidth, b = bc.strikeIncrement || 10, i2 = incr2 || b, r = W2 / W, key = `${W2}/${i2}`;
+  const c = scaledCopy(bc, key, () => ({ ...bc, spreadWidth: W2, strikeIncrement: i2,
+    spreadShift: bc.spreadShift ? Math.floor((bc.spreadShift * r) / i2) * i2 : bc.spreadShift,
+    maxItmStrikes: stepsFor(bc.maxItmStrikes != null ? bc.maxItmStrikes : 3, b, r, i2),
+    maxOtmStrikes: bc.maxOtmStrikes ? stepsFor(bc.maxOtmStrikes, b, r, i2, 1) : bc.maxOtmStrikes,
+    coverKCap: stepsFor(bc.coverKCap != null ? bc.coverKCap : 5, b, r, i2, 1),
+    fallbackWidth: { from: W, incrFrom: b } }));
+  if (!bd) return { cfg: c, deps: bd };
+  const d = scaledCopy(bd, key, () => ({ ...bd, strikeIncrement: i2,   // deps.spreadWidth stays the variant's (book-level)
+    giveUpPoints: bd.giveUpPoints != null ? bd.giveUpPoints * r : bd.giveUpPoints,
+    ladderStepPoints: bd.ladderStepPoints != null ? bd.ladderStepPoints * r : bd.ladderStepPoints,
+    stallCoverPts: bd.stallCoverPts != null ? bd.stallCoverPts * r : bd.stallCoverPts,
+    legMaxShift: stepsFor(bd.legMaxShift != null ? bd.legMaxShift : 6, b, r, i2, 1),
+    legMaxWing: stepsFor(bd.legMaxWing != null ? bd.legMaxWing : 8, b, r, i2, 1),
+    coverRangeBeyond: stepsFor(bd.coverRangeBeyond, b, r, i2),
+    coverStartK: bd.coverStartK != null ? Math.sign(bd.coverStartK) * stepsFor(Math.abs(bd.coverStartK), b, r, i2) : bd.coverStartK,
+    coverStepInTo: bd.coverStepInTo != null ? Math.sign(bd.coverStepInTo) * stepsFor(Math.abs(bd.coverStepInTo), b, r, i2) : bd.coverStepInTo,
+    // premium per strike of re-strike, as a fraction of W: a 25-pt step is a bigger share of a 25W than 10 of a 20W.
+    coverRangePremium: bd.coverRangePremium != null ? bd.coverRangePremium * (i2 / b) / r : bd.coverRangePremium }));
+  return { cfg: c, deps: d };
+}
+// The width/grid a position trades on: recorded at open (pos.width / pos.incr). Older records carry neither and are
+// at the variant's base width by construction.
+function posCtx(cfg, deps, pos) {
+  if (!pos || !(pos.width > 0)) return { cfg: baseOf(cfg), deps: baseOf(deps) };
+  return widthCtx(cfg, deps, pos.width, pos.incr);
+}
+function posCfg(cfg, pos) { return posCtx(cfg, null, pos).cfg; }
+// BOOK-LEVEL HEDGES (floor raise, wings, offsets, flies) are built on the strikes that EXIST this tick: on a 25-pt grid
+// a raise searched on the 10-pt grid finds nothing to buy. Same width (these are book structures, not the variant's
+// spread) — only the grid they are built and sampled on. Unchanged on a normal grid.
+function hedgeCtx(cfg, deps) {
+  const g = deps && deps.strikeGrid, bc = baseOf(cfg), bd = baseOf(deps);
+  const i2 = g && g.incr > (bc.strikeIncrement || 10) ? g.incr : null;
+  if (!i2) return { cfg: bc, deps: bd };
+  return { cfg: scaledCopy(bc, `h/${i2}`, () => ({ ...bc, strikeIncrement: i2 })),
+    deps: bd ? scaledCopy(bd, `h/${i2}`, () => ({ ...bd, strikeIncrement: i2 })) : bd };
+}
+// The width THIS tick's opens use, from the grid the index read off the chain (deps.strikeGrid). No grid reading
+// (backtests, unit tests, an old caller) = the base width, unchanged.
+function openCtx(cfg, deps) {
+  const g = deps && deps.strikeGrid;
+  const bc = baseOf(cfg);
+  if (!g || !bc) return { cfg: bc, deps: baseOf(deps) };
+  const w = SG.openWidthFor(bc.spreadWidth, bc.strikeIncrement, g.incr);
+  if (!w.width) return { none: true, reason: w.reason, grid: g.incr };
+  return { ...widthCtx(cfg, deps, w.width, w.incr), fallback: w.fallback, grid: g.incr };
+}
+
 let nextPositionSeq = 1;
 function nextId(prefix) { return `${prefix}-${Date.now()}-${nextPositionSeq++}`; }
 
@@ -179,6 +257,7 @@ function resolveLegs(legs, getLeg) {
 // reversal cover step and v8's proactive deep-ITM cover. In dry-run this only logs; the state
 // machine books the fill via resolveRestingCovers (decoupled); the poller reports the real fill.
 async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, note, minLock, st) {
+  ({ cfg, deps } = posCtx(cfg, deps, pos));   // the POSITION's width and grid (fallback widths, strike-grid.js)
   // NATURAL COVER BACKSTOP (v12 / v13): runDay5m places no signal, proactive or cover-to-stack cover under natural
   // cover, and v13's continuous cover only through placeContinuousCovers' age rule. Every caller is gated already;
   // this refuses (and records) anything that gets here regardless.
@@ -447,7 +526,7 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
 function capState(st, res, openSide, cfg, deps) {
   const nd = res.limit * 100 * cfg.quantity;
   const deepFrac = deps.proactiveCoverFrac;
-  const isDeep = pos => deepFrac != null && !pos.covered && (coverMarkNow(pos.legs, deps.getLeg) || 0) >= deepFrac * cfg.spreadWidth;
+  const isDeep = pos => deepFrac != null && !pos.covered && (coverMarkNow(pos.legs, deps.getLeg) || 0) >= deepFrac * posCfg(cfg, pos).spreadWidth;
   const uncov = st.positions.filter(p => p.filled && !p.covered && !p.stackLocked);
   let totalUncov = 0, atRisk = 0;
   // A MANUAL position (manual-absorb.js) counts against the cap at its worst settlement loss: a credit structure's
@@ -480,7 +559,7 @@ async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, c
     const cands = st.positions
       .filter(p => p.filled && !p.covered && !p.pendingCover && !p.stackLocked && !p.manual && !tried.has(p.id))
       .map(p => ({ p, mark: coverMarkNow(p.legs, deps.getLeg) }))
-      .filter(x => x.mark != null && x.mark >= lockMin)
+      .filter(x => x.mark != null && x.mark >= minFrac * posCfg(cfg, x.p).spreadWidth)   // the position's own width
       .sort((a, b) => b.mark - a.mark);              // deepest ITM first: cheapest cover, biggest lock
     if (!cands.length) break;                        // no winner deep enough → the open will be skipped
     const { p } = cands[0];
@@ -833,6 +912,9 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
     openTime: st.lastCandleTime || null,   // the CANDLE time (for plotting the trade on the NQ chart timeline)
     openEpoch: st.lastCandleEpoch || null, // 5m-mark epoch ms (robust chart-candle match, no ET parsing)
     sentNet, sentLimit, sentLegs,   // exactly what hit the broker, debit or credit
+    // FALLBACK WIDTH (strike-grid.js): opened at a width other than the variant's because the chain had no strikes
+    // on its own grid. Every later step on this position reads it back through posCtx.
+    ...(cfg._base ? { width: cfg.spreadWidth, incr: cfg.strikeIncrement, fallbackFrom: cfg._base.spreadWidth } : {}),
     ...(st._restrikeN ? { restrikeN: st._restrikeN } : {}),   // a re-strike re-place: its place in the chain
     ...(st._natTag || {})   // natural cover (v12 / v13): natural 'rev' | 'guard', natPair, natAdd — set by the caller for this one open
   };
@@ -854,6 +936,7 @@ async function openPosition(st, res, openSide, cfg, deps, decisions, legStyle) {
   // itmStrikes/placementsTried are present only under adaptive placement — recording WHICH placement was
   // taken is what makes maxItmStrikes answerable from live data instead of only from the backtest.
   decisions.push({ action: 'open', positionId: pos.id, side: openSide, legs: res.legs, mark: res.mark, cap: res.cap, limit: res.limit, filled: pos.filled, sentNet, cashDeployed: st.cashDeployed,
+    ...(pos.width ? { width: pos.width, incr: pos.incr, fallbackFrom: pos.fallbackFrom } : {}),
     ...(res.itmStrikes != null ? { itmStrikes: res.itmStrikes, placementsTried: res.placementsTried } : {}),
     ...(res.priceTarget != null ? { priceTarget: res.priceTarget, targetPrice: res.targetPrice, fracOfWidth: res.fracOfWidth,
       candidatesPriced: res.candidatesPriced, walkCap: res.cap } : {}),
@@ -1069,7 +1152,9 @@ async function buyFloorOffsets(st, cfg, deps, decisions, candleTime, limit, forc
   const minRatio = force ? (deps.floorOffsetForceMinRatio != null ? deps.floorOffsetForceMinRatio : 1)
     : (deps.floorOffsetMinRatio != null ? deps.floorOffsetMinRatio : 3);
   const maxCount = (deps.floorOffsetMaxPerDay != null ? deps.floorOffsetMaxPerDay : 6) * (force ? 3 : 1);
-  const widths = deps.floorOffsetWidths || [20, 40, 60];
+  // 2/4/6 strikes: 20/40/60 on the 10-pt grid, 50/100/150 on a 25-pt one (hedgeCtx, 2026-11-05) — fixed points would
+  // land between the strikes that exist and find nothing to buy.
+  const widths = deps.floorOffsetWidths || [2, 4, 6].map((k) => k * (cfg.strikeIncrement || 10));
   const depth = deps.floorOffsetDepth != null ? deps.floorOffsetDepth : 8;
   const slip = deps.floorOffsetSlip != null ? deps.floorOffsetSlip : 0.25;
   const budget = deps.floorOffsetBudget != null ? deps.floorOffsetBudget : Infinity;
@@ -1864,7 +1949,7 @@ async function naturalGuard(st, cfg, deps, decisions, candleTime, rec) {
   const { best } = NCM.guardPick({ side: br.side, S, X, W, incr, capF: cfg.capFrac != null ? cfg.capFrac : 0.55, payoff: E.legsPayoff, qty: cfg.quantity || 1,
     base: (x) => RC.bookPnl(book, x), price: (legs) => naturalPriceAt(br.side, legs, cfg, deps.getLeg, S) });
   if (!best) { decisions.push({ action: 'natural-guard-skip', reason: 'no vertical raises the floor over the jump region', side: br.side, ...g }); return; }
-  if (deps.blockNewOpens) { decisions.push({ action: 'natural-guard-skip', reason: 'strategy-control is blocking new opens', side: br.side, ...g }); return; }
+  if (deps.blockNewOpens) { decisions.push({ action: 'natural-guard-skip', reason: deps.gridBlock || 'strategy-control is blocking new opens', side: br.side, ...g }); return; }
   const extra = { filled: true, legs: best.legs, limit: best.limit, quantity: cfg.quantity, covered: false };
   const fNow = govFloor(st, deps), fWith = govFloor(st, deps, extra);
   if (deps.lossMax != null && Number.isFinite(deps.lossMax) && -fWith > deps.lossMax && !(fWith > fNow)) {
@@ -1906,7 +1991,8 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
   // IT IS NOT A FREE WIN AND IS NOT A FLEET DEFAULT: uncapped it trades floor for those fills and loses
   // on 18 of 29 variants (-$1.1M aggregate). It only pays where a tight day-loss cap already bounds the
   // floor, which is why it ships ON for v7-10 (lossMax $1,000) and OFF everywhere else. See index.js.
-  let minLock = (deps.continuousCoverMinLockFrac || 0) * cfg.spreadWidth;
+  // minLock as a FRACTION of width here; each position takes it at its own width (fallback widths, strike-grid.js).
+  let minLockFrac = deps.continuousCoverMinLockFrac || 0;
   if (deps.minLockRamp) {
     const a = deps.minLockRampStart != null ? deps.minLockRampStart : 9 * 60 + 30;
     const b = deps.minLockRampEnd != null ? deps.minLockRampEnd : 12 * 60 + 30;
@@ -1916,7 +2002,7 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
     // No clock (a malformed candle time) must not silently mean "ask for nothing" — fall back to the
     // full constant lock, the safe end of the ramp.
     const prog = now == null ? 1 : (b > a ? Math.max(0, Math.min(1, (now - a) / (b - a))) : 1);
-    minLock = minLock * (from + (to - from) * prog);
+    minLockFrac = minLockFrac * (from + (to - from) * prog);
   }
   // ARMING (deps.continuousCoverArmFrac / continuousCoverOppRatio) — unset keeps the original
   // behaviour: rest a cover on EVERY position the instant it opens, which maximises locking but decides
@@ -1929,8 +2015,11 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
   const armFrac = deps.continuousCoverArmFrac, oppRatio = deps.continuousCoverOppRatio;
   const armedByRisk = armFrac == null
     || (deps.lossTarget != null && -bookFloorNow(st) >= armFrac * deps.lossTarget);
+  const cfgIn = cfg, depsIn = deps;
   for (const pos of only || st.positions) {
     if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;   // manual: a hedge, never covered
+    const { cfg, deps } = posCtx(cfgIn, depsIn, pos);   // eslint-disable-line no-shadow — this position's width and grid
+    const minLock = minLockFrac * cfg.spreadWidth;
     if (natMode === 'v13' && !pos.coverCarry
       && NCM.v13CoverHold({ offset: pos.natOffset, guard: pos.natural === 'guard' }, natNow - (pos.fillEpoch || pos.openEpoch || natNow), natAfterMs)) continue;
     // A RE-STRUCK cover (range or give-up, see restrikeCover) is re-placed at its chosen strike carrying the
@@ -1975,6 +2064,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   // LEG-UNIQUENESS (deps.enforceLegUniqueness): a per-day ledger of each leg's traded side, persisted on
   // run state (this run record IS one trade day) so a leg is never both bought- and sold-to-open.
   attachLedger(st, deps);
+  // THE WIDTH THIS CANDLE'S OPENS USE (strike-grid.js): the variant's own, a fallback (20W -> 25W, 40W -> 50W on a 25-pt
+  // grid), or none. Positions already on the book keep their own width (posCtx); only new opens read this.
+  const oc = openCtx(cfg, deps);
+  const ocfg = oc.none ? cfg : oc.cfg, odeps = oc.none ? deps : oc.deps;
   // BEFORE ANY SIGNAL READS THE BOOK. The poller has been writing fills onto the order rows between
   // candles; this is where they become positions, cash and locked floors. Inert unless fillSource is
   // 'broker' (see applyBrokerFills), so simulated variants and every backtest are untouched.
@@ -2039,19 +2132,20 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       const base = xs.map((x) => RC.bookPnl(tfBook, x));
       const cands = [];
       const againstSide = dir > 0 ? 'bear' : 'bull';
-      const allow = (deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05) * W;
+      const allowFrac = deps.giveUpMaxLoss != null ? deps.giveUpMaxLoss : 0.05;
       for (const p of tfBook) {
         if (p.covered || p.hedge || p.side !== againstSide || !p.pendingCover || p.trendCover) continue;
         const pc = p.pendingCover, mk = coverMarkNow(pc.legs, deps.getLeg);
         if (mk == null) continue;
         const openCost = pc.openCost != null ? pc.openCost : p.limit;
-        const px = round2(L.roundToTick(Math.min(round2(mk + tick), round2(W - openCost + allow)), tick));
+        const pW = posCfg(cfg, p).spreadWidth;   // the position's own width (fallback widths, strike-grid.js)
+        const px = round2(L.roundToTick(Math.min(round2(mk + tick), round2(pW - openCost + allowFrac * pW)), tick));
         if (!(px >= mk)) continue;   // the give-up price cannot reach the market — it would not fill
         cands.push({ kind: 'cover', pos: p, cost: px * 100 * qty, pay: (x) => FR.payoff(pc.legs, x, qty) - px * 100 * qty });
       }
-      if (!st.pendingOpenId) {
+      if (!st.pendingOpenId && !oc.none) {
         const side = dir > 0 ? 'bull' : 'bear';
-        const o = cfg.adaptiveGeo ? buildOpenAdaptive(side, spot, cfg, deps.getLeg) : buildOpen(side, spot, cfg, deps.getLeg);
+        const o = ocfg.adaptiveGeo ? buildOpenAdaptive(side, spot, ocfg, deps.getLeg) : buildOpen(side, spot, ocfg, deps.getLeg);
         if (o && !o.declined && !o.error && o.legs && o.limit > 0) cands.push({ kind: 'open', side, cost: o.limit * 100 * qty, pay: (x) => FR.payoff(o.legs, x, qty) - o.limit * 100 * qty });
       }
       const r = TF.pick({ dir, xs, base, spot, cands, minRatio: deps.trendFloorMinRatio != null ? deps.trendFloorMinRatio : 1,
@@ -2094,7 +2188,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     // block, before the cover set and the trend-floor open slot). A REV takes the candle's open (and drops the signal's
     // cover); otherwise a same-side open is an ADD and must pass the gate. Recorded every candle (action 'natural').
     if (NCM.modeOf(deps)) {
-      nat = naturalDecide(st, cfg, deps, openSide);
+      nat = naturalDecide(st, ocfg, odeps, openSide);
       decisions.push(nat.rec);
       if (nat.rev) {
         openSide = nat.rev.side;
@@ -2314,7 +2408,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     for (const pos of st.positions) {
       if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;
       const m = coverMarkNow(pos.legs, deps.getLeg);
-      if (m != null && m >= deps.proactiveCoverFrac * cfg.spreadWidth) {
+      if (m != null && m >= deps.proactiveCoverFrac * posCfg(cfg, pos).spreadWidth) {
         const plan = selectCoverFixedMark(pos, cfg, deps.getLeg);
         if (!plan.error && cfg.coverFillModel === 'resting') await placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, 'proactive-deep-itm', undefined, st);
       }
@@ -2381,7 +2475,14 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     decisions.push({ action: 'open-skip-stack-gate', side: openSide, gate: deps.stackGate, nq15: stackBlock.t15, nq60: stackBlock.t60 });
   } else if (openSide && !bidir && openSide !== st.direction && st.direction !== 'none' && !(nat && nat.rev)) {
     decisions.push({ action: 'open-skip-conflict', side: openSide, heldDirection: st.direction });
+  } else if (openSide && oc.none) {
+    // NO WIDTH ON THIS GRID (strike-grid.openWidthFor): e.g. a 10W when only 25-pt strikes are listed, or anything when
+    // only 100-pt strikes are. The signal is recorded; the book keeps being worked.
+    decisions.push({ action: 'open-skip-grid', side: openSide, grid: oc.grid, width: cfg.spreadWidth, reason: oc.reason });
   } else if (openSide) {
+    // FROM HERE THE OPEN IS BUILT, GATED AND SENT AT THE OPEN WIDTH (ocfg / odeps) — the variant's own on a normal grid.
+    const cfg = ocfg, deps = odeps;   // eslint-disable-line no-shadow
+    if (oc.fallback) decisions.push({ action: 'open-fallback-width', side: openSide, grid: oc.grid, from: baseOf(cfg).spreadWidth, width: cfg.spreadWidth });
     // adaptiveGeo (per-variant, default OFF -> byte-identical to the fixed placement) walks the strike
     // to the most ITM placement still inside the ceiling instead of taking or declining a single one.
     // v21 (cfg.openPriceTarget): the strike is picked by PRICE on the real chain (buildOpenPriceTarget).
@@ -2462,10 +2563,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       // govFloor: under the broker, against the book as it may be once its working orders fill.
       const projected = round2(govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }));
       decisions.push({ action: 'open-skip-governor', side: openSide, projectedFloor: projected, lossMax: deps.lossMax, limit: res.limit });
-    } else if (lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth) != null
-        && govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth)) {
+    } else if (lateFloorLimit(st, deps, etMinutesOf(candleTime), baseOf(cfg).spreadWidth) != null   // book-level: the variant's width
+        && govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < lateFloorLimit(st, deps, etMinutesOf(candleTime), baseOf(cfg).spreadWidth)) {
       // LATE-DAY FLOOR GUARD — after lateFloorAfterMin an open may not take the floor below the late limit.
-      decisions.push({ action: 'open-skip-late', side: openSide, limit: res.limit, lateLimit: round2(lateFloorLimit(st, deps, etMinutesOf(candleTime), cfg.spreadWidth)),
+      decisions.push({ action: 'open-skip-late', side: openSide, limit: res.limit, lateLimit: round2(lateFloorLimit(st, deps, etMinutesOf(candleTime), baseOf(cfg).spreadWidth)),
         projectedFloor: round2(govFloor(st, deps, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false })), reference: st.lateFloorRef });
     } else if (ratchetLimit(st, deps, etMinutesOf(candleTime)) != null
         && bookFloorNow(st, { filled: true, legs: res.legs, limit: res.limit, quantity: cfg.quantity, covered: false }) < ratchetLimit(st, deps, etMinutesOf(candleTime))) {
@@ -2519,7 +2620,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   }
   st._natTag = null;
   // NATURAL JUMP GUARD (runDay5m: end of the bar, after the opens) — its read goes on this candle's 'natural' record.
-  if (nat) await naturalGuard(st, cfg, deps, decisions, candleTime, nat.rec);
+  if (nat) await naturalGuard(st, ocfg, oc.none ? { ...deps, blockNewOpens: true, gridBlock: `strike grid: ${oc.reason}` } : odeps, decisions, candleTime, nat.rec);
 
   // PLACEHOLDER: coverTiming === 'each-candle' — cover the prior uncovered position on every
   // candle (not just reversals). Exact semantics (which side, continuing vs reversing) TBD.
@@ -2536,8 +2637,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   await reopenAfterCover(st, cfg, deps, decisions);
   // Hedges placed earlier in THIS tick get their first look here; anything still working is re-tested by
   // the 30s sub-bar pass and by every later candle until it fills or expires.
-  await walkRaiseOrders(st, deps && deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg, deps, decisions);
-  resolvePendingHedges(st, cfg, deps, decisions);
+  // Book-level hedges work on the grid that is there this tick (hedgeCtx; the base objects on a normal grid).
+  const { cfg: hcfg, deps: hdeps } = hedgeCtx(cfg, deps);
+  await walkRaiseOrders(st, hdeps && hdeps.floorRaiseCfg ? { ...hcfg, ...hdeps.floorRaiseCfg } : hcfg, hdeps, decisions);
+  resolvePendingHedges(st, hcfg, hdeps, decisions);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
   // covers resolve so a cover that just filled already counts toward the floor. Locking winners is the
@@ -2549,22 +2652,22 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     const floorNow = () => RC.bookFloor(st.positions.filter((p) => p.filled !== false), null, 10);
     // (1) is legacy floorOffset only: under the floor-raise fold its 3:1 pass covers the target.
     if (deps.floorOffset === true && deps.lossTarget != null && -floorNow() > deps.lossTarget) {
-      await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossTarget, false);
+      await buyFloorOffsets(st, hcfg, hdeps, decisions, candleTime, deps.lossTarget, false);
     }
     if (deps.lossMax != null && -floorNow() > deps.lossMax) {
-      await buyFloorOffsets(st, cfg, deps, decisions, candleTime, deps.lossMax, true);
+      await buyFloorOffsets(st, hcfg, hdeps, decisions, candleTime, deps.lossMax, true);
     }
   }
   // WING CONVERSION runs after the reduction ladder and is its mirror image: the ladder repairs a floor
   // that is through the target, this banks a floor that is already good. Deliberately NOT gated on the
   // governor — a book can be worth converting while nowhere near the cap, which is the case floorOffset
   // structurally cannot reach.
-  await convertWings(st, cfg, deps, decisions, candleTime);
+  await convertWings(st, hcfg, hdeps, decisions, candleTime);
   // FLY/CONDOR VALLEY REPAIR runs alongside wings and is their complement, not their competitor: wings
   // buy OTM premium to bank a peak (late-day economics), a fly sells the body to fund its wings and
   // repairs a valley (early/mid-day economics). Both are ungated by the governor for the same reason.
-  await convertFlies(st, cfg, deps, decisions, candleTime);
-  await raiseFloor(st, cfg, deps, decisions, candleTime, portedSig);
+  await convertFlies(st, hcfg, hdeps, decisions, candleTime);
+  await raiseFloor(st, hcfg, hdeps, decisions, candleTime, portedSig);
 
   // FLOOR RATCHET — record the bar's high-water floor LAST, once every floor-moving action above has run.
   // Placed here rather than at the open gate on purpose: the open on the next bar is then measured against
@@ -2573,8 +2676,12 @@ async function processCandleClose(record, candle, priorCandle, deps) {
 
   // Snapshot the strike window around the PRICING underlying (NDX) so past days can be replayed
   // and new cover geometries re-scored offline (we don't store historical option chains otherwise).
+  // ON THE GRID THAT IS THERE (strike-grid.js): on 2026-11-05 a 10-pt sample of a 25-pt chain recorded only the 50s
+  // and looked like a dead market. Sample at the tick's grid when it is coarser than the variant's.
+  const snapIncr = deps.strikeGrid && deps.strikeGrid.incr > cfg.strikeIncrement ? deps.strikeGrid.incr : cfg.strikeIncrement;
   const chainSnapshot = cfg.captureChain === false ? null
-    : snapshotChain(deps.getLeg, underlying, cfg.strikeIncrement, cfg.snapshotStrikes || 16);
+    : snapshotChain(deps.getLeg, underlying, snapIncr, cfg.snapshotStrikes || 16);
+  if (chainSnapshot && snapIncr !== cfg.strikeIncrement) chainSnapshot.incr = snapIncr;
 
   store.appendEvent(record, {
     type: 'candle_close',
@@ -2847,6 +2954,7 @@ function buildOpenAtStrikes(side, lower, upper, cfg, getLeg, underlying, opt = {
 }
 
 function buildCover(pos, cfg, getLeg, coverShort) {
+  cfg = posCfg(cfg, pos);
   // Default debit-offset cover. (credit style parked — needs its own pricing rule.)
   // `coverShort` moves the cover's short leg off the position's own strike (the non-tent geometries).
   // Only the LEGS move; the pricing below is untouched, so geometry and price stay separable.
@@ -2884,6 +2992,7 @@ function coverGeometryLabel(coveredSide, shortStrike, longStrike, width) {
 
 // Price one candidate cover (skew-aware: real chain mark + 1 tick, no sub-market cap).
 function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
+  cfg = posCfg(cfg, pos);
   const legs = L.candidateCoverLegs(coveredSide, longStrike, cfg.spreadWidth);
   const { resolved, longMid, shortMid, error } = resolveLegs(legs, getLeg);
   if (error) return { error, positionId: pos.id, longStrike };
@@ -2910,6 +3019,7 @@ function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
 // the same capped pricing as before, so the only thing that changes is WHERE the cover sits.
 // v0/v3 carry geometry 'tent', so this is a no-op for them and their baselines are unmoved.
 function selectCoverFixed(pos, cfg, getLeg, underlying) {
+  cfg = posCfg(cfg, pos);
   const geometry = cfg.coverGeometry || 'tent';
   const coverShort = (geometry === 'tent' || !(underlying > 0))
     ? pos.shortStrike
@@ -2931,6 +3041,7 @@ function selectCoverFixed(pos, cfg, getLeg, underlying) {
 // geometry: v3 vs v1/v2 is an apples-to-apples geometry comparison (all mark-priced), while
 // V0 stays capped as the optimistic-instant-fill reference for the future fill-tracking work.
 function selectCoverFixedMark(pos, cfg, getLeg) {
+  cfg = posCfg(cfg, pos);
   const tentLong = pos.side === 'bull' ? pos.shortStrike + cfg.spreadWidth : pos.shortStrike - cfg.spreadWidth;
   const plan = priceCoverCandidate(pos.side, pos, tentLong, cfg, getLeg); // geometry === 'tent'
   if (plan.error) return { error: plan.error, positionId: pos.id };
@@ -2950,6 +3061,7 @@ function selectCoverFixedMark(pos, cfg, getLeg) {
 // priceCoverCandidate takes a LONG strike, and candidateCoverLegs' convention puts the cover's short at
 // long∓width, so the long is the geometry's short strike offset by the width on the covered side.
 function selectCoverGeometric(pos, cfg, getLeg, underlying) {
+  cfg = posCfg(cfg, pos);
   const geometry = cfg.coverGeometry || 'tent';
   if (geometry === 'tent' || !(underlying > 0)) return selectCoverFixedMark(pos, cfg, getLeg);
   const coverShort = L.coverShortFor(geometry, pos.side, pos.shortStrike, underlying, cfg.strikeIncrement);
@@ -2969,9 +3081,11 @@ function selectCoverGeometric(pos, cfg, getLeg, underlying) {
 const kDirOf = (side) => (side === 'bull' ? 1 : -1);
 function coverKInsideMax(cfg) { return Math.max(0, Math.round(cfg.spreadWidth / cfg.strikeIncrement) - 1); }
 function coverLegsAtK(pos, k, cfg) {
+  cfg = posCfg(cfg, pos);
   return L.coverLegsAtShort(pos.side, pos.shortStrike + kDirOf(pos.side) * k * cfg.strikeIncrement, cfg.spreadWidth);
 }
 function coverKOf(pos, legs, cfg) {
+  cfg = posCfg(cfg, pos);
   const sh = (legs || []).find((l) => l.side === 'short');
   return sh && pos.shortStrike != null ? Math.round((sh.strike - pos.shortStrike) / cfg.strikeIncrement) * kDirOf(pos.side) : 0;
 }
@@ -2993,6 +3107,7 @@ function giveUpKFor(deps, cfg) {
 // The candidate closest to filling at its own price — tent-equivalent price eqPx + k x premium — ties to the
 // wider plateau. Candidates whose quote is missing or impossible are skipped; null when none is quotable.
 function pickCoverK(pos, eqPx, cfg, deps) {
+  ({ cfg, deps } = posCtx(cfg, deps, pos));
   const lo = -Math.min(coverKInsideMax(cfg), deps.coverRangeInside || 0), hi = deps.coverRangeBeyond || 0;
   const prem = coverRangePrem(deps, cfg);
   let best = null;
@@ -3006,6 +3121,7 @@ function pickCoverK(pos, eqPx, cfg, deps) {
 }
 // A cover plan at a chosen k, priced like every other candidate.
 function planCoverAtK(pos, k, cfg, getLeg) {
+  cfg = posCfg(cfg, pos);
   const short = pos.shortStrike + kDirOf(pos.side) * k * cfg.strikeIncrement;
   const longStrike = pos.side === 'bull' ? short + cfg.spreadWidth : short - cfg.spreadWidth;
   const plan = priceCoverCandidate(pos.side, pos, longStrike, cfg, getLeg);
@@ -3032,6 +3148,7 @@ function releaseCoverLegs(st, legs) {
 // cancel clears it (order-manager.clearDeadOrderState) and placeContinuousCovers re-places at `carry` on the next
 // pass. Simulated / paper: cleared and re-placed now. `carry` keeps the ladder's progress across the move.
 async function restrikeCover(st, pos, cfg, deps, decisions, carry, why) {
+  ({ cfg, deps } = posCtx(cfg, deps, pos));
   const pc = pos.pendingCover;
   pos.coverCarry = carry;
   const fromK = pc.k != null ? pc.k : coverKOf(pos, pc.legs, cfg);
@@ -3060,6 +3177,7 @@ function upsideLambda(cfg, ctx) {
 // box for an un-retraced last open (cheap box beats an ATM tent) and the tent/deeper for deep
 // stacked opens (both cheap, so the upside bonus tips it).
 function selectCoverGreedy(pos, cfg, getLeg, ctx) {
+  cfg = posCfg(cfg, pos);
   const longs = L.coverCandidateLongs(pos.side, pos.shortStrike, ctx.underlying, cfg.strikeIncrement, cfg.coverKCap || 5);
   const priced = longs.map(Ls => priceCoverCandidate(pos.side, pos, Ls, cfg, getLeg)).filter(p => !p.error);
   if (!priced.length) return { error: `no chain quotes for any cover candidate of ${pos.id}`, positionId: pos.id };
@@ -3241,13 +3359,16 @@ async function reopenAfterCover(st, cfg, deps, decisions) {
   if (st.reopenBar5 !== bar5) { st.reopenBar5 = bar5; st.reopenN5 = 0; }
   const per5 = cfg.reopenPer5m != null ? cfg.reopenPer5m : 2;
   if (st.reopenN5 >= per5) return 0;
-  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, tick = cfg.tickIncrement || 0.05;
   const src = st.positions.filter((p) => p && p.filled && p.covered && !p.hedge && !p.raise && !p.manual && !p.reopened
     && (p.side === 'bull' || p.side === 'bear') && p.coverFilledAt != null && p.coverFilledAt >= sig.at
     && !(sig.coverSides || []).includes(p.side)
     && (sig.openSide === p.side || (p.placedEpoch != null && p.placedEpoch >= sig.at)))
     .sort((a, b) => b.coverFilledAt - a.coverFilledAt)[0];
   if (!src) return 0;
+  const lateW = baseOf(cfg).spreadWidth;   // the late-day give-back is book-level, in the variant's widths
+  // A reopen is the same spread again: at the source position's width and grid (fallback widths, strike-grid.js).
+  ({ cfg, deps } = posCtx(cfg, deps, src));
+  const W = cfg.spreadWidth, incr = cfg.strikeIncrement || 10, tick = cfg.tickIncrement || 0.05;
   const side = src.side;
   const strikes = src.legs.map((l) => l.strike);
   const lo0 = Math.min(...strikes), hi0 = Math.max(...strikes);
@@ -3282,7 +3403,7 @@ async function reopenAfterCover(st, cfg, deps, decisions) {
   const ex = { filled: true, legs: res.legs, limit, quantity: cfg.quantity, covered: false };
   const nowMin = etMinNow(deps);
   if (govOn(deps) && -govFloor(st, deps, ex) > deps.lossMax) return done('governor', { projectedFloor: round2(govFloor(st, deps, ex)) });
-  const late = lateFloorLimit(st, deps, nowMin, W);
+  const late = lateFloorLimit(st, deps, nowMin, lateW);
   if (late != null && govFloor(st, deps, ex) < late) return done('late-day floor');
   const rat = ratchetLimit(st, deps, nowMin);
   if (rat != null && bookFloorNow(st, ex) < rat) return done('floor ratchet');
@@ -3341,7 +3462,6 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       continue;
     }
     const qty = cfg.quantity || 1;
-    const W = cfg.spreadWidth;
     // A FILL ON THE OTHER SIDE IS NOT A FILL WE UNDERSTAND. order-manager derives o.fillSide from the legs
     // that actually EXECUTED (signed by instruction), independently of what we asked for; o.net is what we
     // sent. When they disagree, booking either interpretation is a guess: the direction below comes from
@@ -3371,7 +3491,8 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       if (!pos) { unbookedFill(o, 'no-position', null, decisions); continue; }
       if (pos.filled) { unbookedFill(o, 'already', pos, decisions); continue; }
       const credit = pos.sentNet === 'CREDIT';
-      if (credit) { pos.sentLimit = round2(px); pos.limit = round2(W - px); }
+      // Parity at the POSITION's width: a 25W fallback's credit twin books 25 - credit, not 20 - credit.
+      if (credit) { pos.sentLimit = round2(px); pos.limit = round2(posCfg(cfg, pos).spreadWidth - px); }
       else { pos.limit = round2(px); }
       pos.filled = true; pos.orderStatus = 'filled';
       pos.brokerFill = { price: px, side: o.fillSide || null, orderId: o.orderId, at: Date.now() };
@@ -3394,7 +3515,8 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       const pc = pos.pendingCover;
       if (!pc || !pc.legs) { unbookedFill(o, 'no-pending', pos, decisions); continue; }
       const ck = pc.legs.map((l) => l.strike);
-      const cw = ck.length ? Math.max(...ck) - Math.min(...ck) : W;
+      const posW = posCfg(cfg, pos).spreadWidth;   // the position's own width (fallback widths, strike-grid.js)
+      const cw = ck.length ? Math.max(...ck) - Math.min(...ck) : posW;
       // Translate a credit cover's received credit back to the debit-canonical booking, exactly as the
       // mark path does: the record stays canonical so floor and settlement arithmetic is unchanged.
       const credit = pc.sentNet === 'CREDIT';
@@ -3413,7 +3535,7 @@ function applyBrokerFills(st, cfg, deps, decisions) {
       delete pos.coverCarry;   // a re-strike's cancel lost the race: the old cover filled, exactly as sent
       // THE FLOOR IS min(openWidth, coverWidth) MINUS WHAT BOTH COST — the same rule the mark path uses,
       // because a wider cover does not raise the guarantee.
-      const floorW = Math.min(W, cw);
+      const floorW = Math.min(posW, cw);
       const floor = round2((floorW - pos.limit - bookLimit) * 100 * qty);
       st.realizedPnl = round2(st.realizedPnl + floor);
       noteCash(st, (credit ? -px : px) * 100 * qty);
@@ -4111,6 +4233,7 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   if (!st.pendingOpenId) return 0;
   const pos = st.positions.find(p => p.id === st.pendingOpenId);
   if (!pos || pos.filled) { st.pendingOpenId = null; return 0; }
+  ({ cfg, deps } = posCtx(cfg, deps, pos));   // the working open's own width and grid (fallback widths, strike-grid.js)
   // TEST THE ORDER THAT IS ACTUALLY RESTING. For a capital-recapture credit twin that is the CREDIT
   // spread at sentLimit, not the debit-canonical record — see the direction note in markFill. The record
   // stays debit-canonical either way; only the fill TEST follows the sent order.
@@ -4372,6 +4495,7 @@ function replaceTookEffect(r) {
 }
 
 async function concedeCover(pos, pc, to, from, cfg, deps, decisions, kind, extra, st) {
+  ({ cfg, deps } = posCtx(cfg, deps, pos));
   const tick = cfg.tickIncrement;
   // THE GOVERNOR JUDGES THE NEW PRICE TOO. governRestingCovers judges a resting cover at the price it rests
   // at, but the ladder and give-up then RAISE that price, and under the broker the fill comes back through
@@ -4466,15 +4590,20 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
   // Either mechanism can be enabled alone: the ladder walks price on a schedule, give-up reacts to the
   // position turning. They compose — give-up supersedes the ladder for a position it fires on.
   if (!deps.coverLadder && !deps.coverGiveUp) return;
-  const tick = cfg.tickIncrement, W = cfg.spreadWidth;
-  const guK = giveUpKFor(deps, cfg), rangeOn = coverRangeOn(deps), prem = coverRangePrem(deps, cfg);
-  const opts = {
-    stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
-    steps: deps.ladderSteps, lossCapFrac: deps.ladderLossCapFrac,
-    stepDollars: deps.ladderStepDollars,   // width-neutral step sizing (see cover-ladder)
-  };
+  const tick = cfg.tickIncrement;
+  // Everything width-relative is per POSITION (fallback widths, strike-grid.js): a 20W and a 25W on one book each
+  // ladder, re-strike and give up at their own width and grid.
+  const cfgIn = cfg, depsIn = deps;
   for (const pos of st.positions) {
     if (!pos.filled || pos.covered || !pos.pendingCover) continue;
+    const { cfg, deps } = posCtx(cfgIn, depsIn, pos);   // eslint-disable-line no-shadow
+    const W = cfg.spreadWidth;
+    const guK = giveUpKFor(deps, cfg), rangeOn = coverRangeOn(deps), prem = coverRangePrem(deps, cfg);
+    const opts = {
+      stepSeconds: deps.ladderStepSeconds, stepPoints: deps.ladderStepPoints,
+      steps: deps.ladderSteps, lossCapFrac: deps.ladderLossCapFrac,
+      stepDollars: deps.ladderStepDollars,   // width-neutral step sizing (see cover-ladder)
+    };
     const pc = pos.pendingCover;
     // Being pulled (governRestingCovers): do not walk a price toward an order we have asked to cancel.
     if (cancelUnderWay(st, pc.orderId, pc)) continue;
@@ -4607,7 +4736,10 @@ async function workRestingCovers(st, cfg, decisions, deps, underlying) {
 
 function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
   const tick = cfg.tickIncrement;
+  const cfgIn = cfg, depsIn = deps;
   for (const pos of st.positions) {
+    // The position's own width and grid (fallback widths, strike-grid.js); the base objects on a normal position.
+    const { cfg, deps } = posCtx(cfgIn, depsIn, pos);   // eslint-disable-line no-shadow
     // POST-FILL OBSERVATION: a cover that has already booked keeps being watched (see the note where
     // filledCover is set) so we can tell a graze from a decisive fill after the fact.
     if (pos.filled && !pos.pendingCover && pos.filledCover) {
@@ -4821,7 +4953,7 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
         decisions.push({ action: 'cover-defer-governor', positionId: pos.id, floorIfBooked: round2(f1), floorNow: round2(f0), lossMax: deps.lossMax });
         continue;
       }
-      const late = lateFloorLimit(st, deps, null, cfg.spreadWidth);
+      const late = lateFloorLimit(st, deps, null, baseOf(cfg).spreadWidth);   // book-level: the variant's width
       if (late != null && f1 < f0 && f1 < late) {
         decisions.push({ action: 'cover-defer-late', positionId: pos.id, floorIfBooked: round2(f1), floorNow: round2(f0), lateLimit: late });
         continue;
@@ -4909,6 +5041,8 @@ function resolveRestingCovers(st, cfg, getLeg, decisions, deps) {
 }
 
 module.exports = {
+  // fallback widths on a sparse strike grid (strike-grid.js)
+  widthCtx, posCtx, posCfg, openCtx, hedgeCtx,
   walkRaiseOrders, buildOpenFallback, openFallbackApplies,
   buildOpenPriceTarget, priceTargetAtStrikes,   // v21 price-target strike pick on the real chain (2026-10-23)
   noteCash,

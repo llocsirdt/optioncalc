@@ -389,7 +389,23 @@
   function renderBanner(s) {
     const b = bannerNode();
     const t = s && s.tradability;
-    // Only speak when the engine is NOT trading. A tradable market needs no announcement.
+    // SPARSE STRIKE GRID (2026-11-05): the engine IS trading, but on fallback widths because the chain lists no 10-pt
+    // strikes near the money. Calm tone — this is the rule working, not a fault — but visible, since it changes what
+    // every variant opens.
+    const g = t && t.ok !== false && t.strikeGrid;
+    if (g && !t.stale && g.incr !== 10 && g.incr !== 5) {
+      const what = g.incr === 25 ? '20W opens 25W, 40W opens 50W, 10W paused'
+        : g.incr === 50 ? '40W opens 50W; 10W and 20W paused'
+          : 'no new opens at any width';
+      const [gbg, gfg] = TONES.info;
+      b.style.background = gbg; b.style.color = gfg;
+      b.innerHTML = `<b>SPARSE STRIKES</b> &mdash; ${g.incr == null ? 'no strike grid' : `only ${g.incr}-pt strikes`} near the money: `
+        + `${what}; open positions are managed as usual<span style="opacity:.7;font-weight:400">${t.mark ? ` &middot; ${t.mark}` : ''}</span>`;
+      b.style.display = 'block';
+      document.body.style.paddingTop = b.offsetHeight + 'px';
+      return;
+    }
+    // Otherwise only speak when the engine is NOT trading. A tradable market needs no announcement.
     if (!t || (t.ok !== false && t.reason !== 'not-checked-yet')) { b.style.display = 'none'; document.body.style.paddingTop = ''; return; }
     const copy = GATE_COPY[t.reason] || { t: 'NOT TRADING', tone: 'bad', why: t.detail || t.reason };
     const tone = t.stale && t.reason !== 'not-checked-yet' ? 'stale' : copy.tone;

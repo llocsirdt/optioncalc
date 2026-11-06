@@ -26,6 +26,14 @@
  *      was structurally present and completely untradable. So the check is whether enough strikes NEAR THE
  *      MONEY carry real two-sided quotes — which is what "there is a market" actually means.
  *
+ *      COUNT THE STRIKES THAT ARE LISTED, NOT A GRID WE ASSUME (2026-11-05). This sampled a 10-point grid of 17
+ *      strikes around the money. NDX fell ~1,370 points that day and left the band where 10-point strikes are
+ *      listed; on the 25/100-point strikes that remained the sample found 3-4 quoted, under the threshold of 4,
+ *      and the gate skipped 49 of 78 ticks of an open market — positions included. Now the gate counts every
+ *      quoted strike the chain actually lists within MAX_REACH points, at whatever spacing (strike-grid.js), and
+ *      needs only MIN_QUOTED_STRIKES of them. A sparse grid is a placement problem the strategies handle
+ *      (strike-grid.openWidthFor); it is never a reason to stop ticking. The holiday chain had zero quotes.
+ *
  * Today the engine survived this only because getLeg() returns null for a null mid, so an open could not
  * be assembled. That is incidental crash-avoidance downstream, not a decision, and it would have surfaced
  * as a mysterious failed open rather than a clear "the market is closed" record.
@@ -34,8 +42,11 @@
 // A price this stale cannot be the current market. Two 5m marks: tolerant of one missed/late bar, but a
 // closed session (hours or days stale) is caught immediately.
 const MAX_PRICE_AGE_MS = 10 * 60 * 1000;
-// How many strikes around the money must carry a real two-sided quote before we call it a market.
-const MIN_QUOTED_STRIKES = 4;
+// How many listed strikes within MAX_REACH of the money must carry a real quote before we call it a market. Low on
+// purpose: a closed market quotes NOTHING (2026-09-07: 0 of 17), while an open one far from its 10-point band may
+// list only 100-point strikes — still a market, and positions there still need managing.
+const MIN_QUOTED_STRIKES = 2;
+const MAX_REACH = 300;
 
 function isQuoted(leg) {
   if (!leg) return false;
@@ -50,7 +61,7 @@ function isQuoted(leg) {
  */
 function quotedNearMoney(chainSnapshot, underlying, window) {
   if (!chainSnapshot || !Array.isArray(chainSnapshot.strikes)) return 0;
-  const w = window != null ? window : 200;   // points either side — the region we would ever place in
+  const w = window != null ? window : MAX_REACH;   // points either side
   let n = 0;
   for (const s of chainSnapshot.strikes) {
     if (!(Math.abs(s.strike - underlying) <= w)) continue;
@@ -63,7 +74,8 @@ function quotedNearMoney(chainSnapshot, underlying, window) {
  * @param o.underlying      the pricing instrument's current value
  * @param o.priceAsOfMs     when that value was last actually observed to change/print (null = unknown)
  * @param o.nowMs           the tick's mark
- * @param o.chainSnapshot   the recorded chain snapshot for the traded expiration
+ * @param o.quotedStrikes   every strike the chain lists with a usable quote (strike-grid.quotedStrikes) — preferred
+ * @param o.chainSnapshot   legacy: a {strikes:[{strike,call,put}]} snapshot, used only when quotedStrikes is absent
  * @param o.lastUnderlying  the previous tick's underlying, for the frozen-price tell (optional)
  * @returns {ok, reason, detail} — ok:false means DO NOT open or send on this tick.
  */
@@ -80,18 +92,23 @@ function assess(o) {
     }
   }
 
-  const quoted = quotedNearMoney(o.chainSnapshot, o.underlying, o.strikeWindow);
+  const reach = o.strikeWindow != null ? o.strikeWindow : MAX_REACH;
+  const byList = Array.isArray(o.quotedStrikes);
+  const quoted = byList
+    ? o.quotedStrikes.filter((k) => Math.abs(k - o.underlying) <= reach).length
+    : quotedNearMoney(o.chainSnapshot, o.underlying, reach);
   if (quoted < MIN_QUOTED_STRIKES) {
     // Distinguish "no chain at all" from "a chain with no market" — they look identical downstream but
     // mean different things when reading the log later.
-    const listed = o.chainSnapshot && Array.isArray(o.chainSnapshot.strikes) ? o.chainSnapshot.strikes.length : 0;
+    const listed = byList ? (o.listedStrikes != null ? o.listedStrikes : o.quotedStrikes.length)
+      : (o.chainSnapshot && Array.isArray(o.chainSnapshot.strikes) ? o.chainSnapshot.strikes.length : 0);
     return { ok: false, reason: listed ? 'chain-not-quoted' : 'no-chain',
       detail: listed
-        ? `${listed} strikes listed but only ${quoted} near the money carry a two-sided quote (need ${MIN_QUOTED_STRIKES}) — the market is not open`
+        ? `${listed} strikes listed but only ${quoted} within ${reach} pts of the money carry a quote (need ${MIN_QUOTED_STRIKES}) — the market is not open`
         : 'no option chain returned for this expiration' };
   }
 
-  return { ok: true, reason: 'tradable', detail: `${quoted} quoted strikes near the money` };
+  return { ok: true, reason: 'tradable', detail: `${quoted} quoted strikes within ${reach} pts of the money` };
 }
 
-module.exports = { assess, quotedNearMoney, isQuoted, MAX_PRICE_AGE_MS, MIN_QUOTED_STRIKES };
+module.exports = { assess, quotedNearMoney, isQuoted, MAX_PRICE_AGE_MS, MIN_QUOTED_STRIKES, MAX_REACH };

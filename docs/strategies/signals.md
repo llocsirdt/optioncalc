@@ -85,7 +85,8 @@ Checked after the signal decides to open. The first gate that refuses records it
 
 | ID | Gate (decision) | Refuses an open when | Families |
 |---|---|---|---|
-| **B1** | Tradability | There's no live-quote evidence of a market, so the whole tick is skipped (this covers holidays, half-days and halts alike) | all |
+| **B1** | Tradability | No live price, or **fewer than 2 quoted strikes listed within ±300 pts** at any spacing, so the whole tick is skipped (holidays, halts, dead feed). A sparse strike grid is **not** a reason: since 2026-11-05 the gate counts the strikes the chain really lists, not a 10-pt sample. | all |
+| **B1b** | Strike grid (`open-skip-grid`) | The chain lists no strikes near the money on a grid this width can use (`strike-grid.openWidthFor`). On a 25-pt grid: **10W stops opening, 20W opens 25W, 40W opens 50W** (`open-fallback-width`). On a 50-pt grid only 40W opens (as 50W). On a 100-pt grid nothing opens. Existing positions are managed at their own width. | all |
 | **B2** | Control halt / no-open (`open-skip-control`) | Operator control file says halt or no-open; covers and hedges keep running | all (per variant) |
 | **B3** | Open trend block (`open-skip-trend-block`) | The open is **against trend "A"**. Trend A = the 15m structural trend AND the last completed hourly candle agreeing; neutral (blocks nothing) when they disagree. Applies to **any** open, first or add. | v9ob |
 | **B4** | Natural ADD gate (`open-skip-natural-add`) | An add (the side already holds a live position) without the NQ 15m candle at its outer band, or more than 3 adds on a side | v12, v13 |
@@ -273,6 +274,10 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 ---
 
 ## Changelog
+
+- **2026-11-05 (later)** — B1 rewritten and B1b added after the 11/05 session. NDX left the band of listed 10-pt
+  strikes, the old 10-pt sample skipped 49 of 78 ticks, and no 10/20/40-wide spread could be built. Fallback widths
+  and the grid-aware tradability gate are in `strike-grid.js` and `trader.posCtx`.
 
 - **2026-11-05** — Created. Replaces the README's 2026-10-12 "Trigger catalog" and extends it to v9sg, v9ob, v12,
   v13, v20 and v21, with the engine-level opens (E1–E4), the new gates (B3–B6), the plateau/range/credit cover

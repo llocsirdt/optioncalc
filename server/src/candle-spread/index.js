@@ -17,6 +17,7 @@ const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
 const VC = require('./variant-contract');
 const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)
+const SG = require('./strike-grid');   // which strikes are really listed near the money; fallback widths
 const setups = require('./setups');             // named start-of-day setups (informational; never trades)
 const chartSeries = require('./../chart-series');
 
@@ -1875,7 +1876,7 @@ function makeReplaceOrder(run, record) {
     const isTest = mode === 'test';
     // Same rule as the place path: a replace is an order too, and a walked price that cannot be proven
     // unfillable is still walked at the broker rather than dropped on the floor.
-    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, orderWidthOf(meta, run), run.tickIncrement) : null;
     if (isTest && !testOrd) {
       store.appendEvent(record, { type: 'order_simulated', by: 'no-price', meta, payload,
         note: `no usable price on a ${payload.orderType} replace (${payload.price}) — leaving the order where it is` });
@@ -2075,7 +2076,7 @@ function makePlaceOrder(run, record) {
     // unfillable — which suppressed exactly the case worth seeing (a broken chain) and made "orders sent"
     // stop matching "orders intended". It now sends at the extreme the instrument admits and records that
     // the guarantee is weak; residual exposure in that case is ONE TICK.
-    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, run.spreadWidth, run.tickIncrement) : null;
+    const testOrd = isTest ? om.unfillableOrder(payload, TEST_FRAC, orderWidthOf(meta, run), run.tickIncrement) : null;
     if (isTest && !testOrd) {
       // No usable price on the payload at all — there is no order to send in any mode.
       store.appendEvent(record, { type: 'order_simulated', by: 'no-price', meta, payload,
@@ -2170,6 +2171,15 @@ function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`;
 // nothing live while the backtest showed it working. Because it is now a pure function of `run`, start()
 // can replay it for every variant and assert that nothing in the config falls through — see assertDeps().
 // `live` carries the per-tick values (chain accessor, order fn, the analysis objects).
+// THE ORDER'S OWN WIDTH for the test-mode credit cap (a credit vertical is worth at most its width). A fallback-width
+// order (strike-grid.js: a 20W variant trading 25W) capped at the variant's 20 would demand 19.95 on a spread worth
+// up to 25 — fillable. Two-leg verticals use their strike span; anything else keeps the variant's width.
+function orderWidthOf(meta, run) {
+  const ks = meta && Array.isArray(meta.legs) && meta.legs.length === 2 ? meta.legs.map((l) => Number(l.strike)) : null;
+  const w = ks && ks.every(Number.isFinite) ? Math.abs(ks[0] - ks[1]) : null;
+  return w > 0 ? w : run.spreadWidth;
+}
+
 function buildEngineDeps(run, live) {
   // ── REMOTE CONTROL, APPLIED HERE SO ONE PLACE DECIDES ─────────────────────────────────────────────
   // `mode` selects dryRun and `restrict: 'no-open'` blocks new opens. Both are resolved at deps-build time
@@ -2491,17 +2501,25 @@ async function processGroup(runs, kind) {
   // See tradability.js for why this gates on EVIDENCE (can we see a price, is there a two-sided market)
   // rather than on a holiday calendar.
   currentSetups(priceSymbol).catch(() => { /* cached failure is reported in status(); never blocks a tick */ });
+  // STRIKE GRID (strike-grid.js, 2026-11-05): the strikes the chain really lists and quotes, and the finest spacing
+  // around the money. The gate counts THESE (any spacing), and every variant reads the grid to pick the width it may
+  // open at — a 20W on a 25-point grid trades 25W. A sparse grid never skips the tick.
+  const strikeGrid = SG.assess(chainData, expiration, underlying);
   const tradeGate = tradability.assess({
     underlying,
     nowMs: T,
-    chainSnapshot: trader.snapshotChain(trader.makeLegAccessor(chainData, expiration), underlying,
-      sample.strikeIncrement, sample.snapshotStrikes || 16),
+    quotedStrikes: strikeGrid.strikes,
+    listedStrikes: strikeGrid.listed,
   });
+  const gridNote = { incr: strikeGrid.incr, quotedNear: strikeGrid.quoted, near: strikeGrid.near };
+  if (strikeGrid.incr !== sample.strikeIncrement && strikeGrid.incr !== 5) {
+    console.warn(`[candle-spread] strike grid near ${Math.round(underlying)} is ${strikeGrid.incr == null ? 'absent' : strikeGrid.incr + '-pt'} at ${markOf(T)} — variants open at fallback widths (strike-grid.openWidthFor)`);
+  }
   // Publish the verdict either way, so the UI can show a live "not trading, and here is why" state
   // rather than the operator having to infer it from an absence of orders. An absence looks identical to
   // a quiet signal day, which is exactly the confusion that let a whole holiday session go unnoticed.
   LAST_TRADABILITY = { ...tradeGate, at: Date.now(), mark: markOf(T), markMs: T,
-    symbol: priceSymbol, expiration, underlying };
+    symbol: priceSymbol, expiration, underlying, strikeGrid: gridNote };
   if (!tradeGate.ok) {
     // Log once per tick, not per variant, and keep it visible: this is the difference between "we chose
     // not to trade" and "something is broken", and the two must never be confused in the record.
@@ -2560,7 +2578,7 @@ async function processGroup(runs, kind) {
       const replaceOrder = makeReplaceOrder(run, record);
       await trader.processCandleClose(record, candle, null, buildEngineDeps(run, {
         getLeg, placeOrder, replaceOrder, cancelOrder: makeCancelOrder(run, record),
-        A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol, trendCtx,
+        A, priorA, isFifteen, underlying, priceBar, signalSymbol, priceSymbol, trendCtx, strikeGrid: gridNote,
         ...(run.natural ? { natCtx } : {}),
       }));
       // RISK-HARVEST OBSERVER (read-only, ALL variants): does this book's risk curve go lopsided, when
@@ -2699,6 +2717,12 @@ async function runRestingWork() {
     const chainData = await DEPS.getOrFetchChainData(first.priceSymbol || first.symbol, first.expiration);
     if (!chainData) return;
     const getLeg = trader.makeLegAccessor(chainData, first.expiration);
+    // The grid for this pass (strike-grid.js): a reopen or a re-placed open picks its width from it, like the tick.
+    let gridNote = null;
+    for (const { record } of pending) {
+      const u = record.state && record.state.lastUnderlying;
+      if (u > 0) { const g = SG.assess(chainData, first.expiration, u); gridNote = { incr: g.incr, quotedNear: g.quoted, near: g.near }; break; }
+    }
     for (const { run, cfg, record } of pending) {
       const st = record.state;
       const decisions = [];
@@ -2708,7 +2732,7 @@ async function runRestingWork() {
       // moved, and resolveRestingCovers then booked fills at prices that order never asked for. The
       // worker runs every 30s against the tick's ~5 minutes, so it is where most repricing happens —
       // measured on v7-10 for 2026-09-23, 14 of 39 cover repricings (36%) never left the process.
-      const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying,
+      const deps = buildEngineDeps(run, { getLeg, nowMs: Date.now(), underlying: st.lastUnderlying, strikeGrid: gridNote,
         placeOrder: makePlaceOrder(run, record), replaceOrder: makeReplaceOrder(run, record),
         cancelOrder: makeCancelOrder(run, record) });
       trader.attachLedger(st, deps);   // the worker places covers too; it must see and record the same ledger
@@ -2718,8 +2742,11 @@ async function runRestingWork() {
         // next bar. Idempotent (each order applies once), so both call sites is correct, not double.
         trader.applyBrokerFills(st, cfg, deps, decisions);
         await trader.resolvePendingOpen(st, cfg, deps, decisions);
-        await trader.walkRaiseOrders(st, deps.floorRaiseCfg ? { ...cfg, ...deps.floorRaiseCfg } : cfg, deps, decisions);
-        trader.resolvePendingHedges(st, cfg, deps, decisions);
+        { // book-level hedges on the grid that is there (trader.hedgeCtx; the run's own objects on a normal grid)
+          const h = trader.hedgeCtx(cfg, deps);
+          await trader.walkRaiseOrders(st, h.deps.floorRaiseCfg ? { ...h.cfg, ...h.deps.floorRaiseCfg } : h.cfg, h.deps, decisions);
+          trader.resolvePendingHedges(st, h.cfg, h.deps, decisions);
+        }
         // COVER ON FILL (2026-10-11, user): place the continuous cover the moment the open's fill is confirmed, not
         // at the next 5m close (up to five minutes uncovered). Same function and rules as the candle close's step 2b.
         if (cfg.coverFillModel === 'resting' && run.continuousCover === true && typeof run.signalFn === 'function') {

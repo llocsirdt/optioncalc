@@ -138,6 +138,21 @@ at or under the cap is taken; the 0.45 × W floor labels a placement, it never d
 the cap → **open fallback** (signals.md E1) places one anyway at a known-good price. `-cATM` controls use fixed
 centred strikes gated at capFrac 0.65. v21 instead takes the vertical whose real mark is closest to f × W.
 
+**Sparse strike grid (2026-11-05).** When the chain lists no 10-pt strikes near the money (a big move leaves the band
+the exchange listed them in), `strike-grid.js` reads the grid that is there and the variant opens a fallback width:
+
+| Grid near the money | 10W | 20W | 40W |
+|---|---|---|---|
+| 5 or 10 pt | 10W | 20W | 40W |
+| 25 pt | no opens | **25W** | **50W** |
+| 50 pt | no opens | no opens | **50W** |
+| 100 pt / none | no opens | no opens | no opens |
+
+A fallback position records `width`/`incr`, and every later step (covers, ladder, give-up, re-strike, reopen,
+broker-fill parity) works it at its own width. Fractions of W and strike-step knobs scale with it; **dollar caps do
+not** (book-level). Live only: the backtest chain is always full. The UI shows a calm "SPARSE STRIKES" banner while it
+is active.
+
 Quote gates while building the open (`buildOpenAtStrikes`) — a failing placement is skipped, not sent: `saneMark`
 (0 ≤ debit ≤ W), `chainMonotonic` (call mids fall / put mids rise with strike), `cheapOutlier` (a vertical marked
 below a spread further OTM, or ≥ 1 strike ITM yet < 40% W, is a bad quote).
