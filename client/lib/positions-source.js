@@ -378,7 +378,7 @@
     const box = el('ps-autorefresh');
     const on = getPositionsSource() === 'strategy' && box && box.checked;
     if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-    if (on) autoTimer = setInterval(() => { if (typeof isMarketHours !== 'function' || isMarketHours()) pullStrategyPositions(false); }, 45000);
+    if (on) autoTimer = setInterval(() => { if (!document.hidden && (typeof isMarketHours !== 'function' || isMarketHours())) pullStrategyPositions(false); }, 45000);
   }
 
   function init() {

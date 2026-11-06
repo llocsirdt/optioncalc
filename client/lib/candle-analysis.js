@@ -550,7 +550,10 @@ function startCandleAnalysisUpdates(symbol, intervalMs = 60000) {
   updateAllCandleAnalysis(symbol);
   
   // Set up recurring updates
+  // HIDDEN TABS DO NOT POLL (2026-11-06): a background tab skips its turn. Coming back refreshes at once through
+  // oc.js, whose visibility listener restarts the live loop and with it this one (its only caller).
   candleAnalysisInterval = setInterval(() => {
+    if (document.hidden) return;
     console.log(`🕯️ Updating candle analysis for ${symbol}...`);
     updateAllCandleAnalysis(symbol);
   }, intervalMs);

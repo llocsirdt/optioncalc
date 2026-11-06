@@ -852,6 +852,7 @@
   // Fast poll: refetch only the on-screen timeframes (not all 5 every tick) and redraw if changed.
   async function refreshTick() {
     if (histMode) return;               // frozen on a historical window until the user clicks LIVE
+    if (document.hidden) return;        // a background tab does not poll; visibilitychange catches it up
     try {
       const tfs = [...liveTfs()];
       const results = await Promise.all(tfs.map(async tf => {
@@ -900,6 +901,8 @@
     load(true);
     startRefresh();
     window.addEventListener('resize', () => render());
+    // HIDDEN TABS DO NOT POLL (2026-11-06): refresh the moment the tab is shown again.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && refreshTimer) refreshTick(); });
   }
 
   // jumpToDate is exported so a host page pinned to ONE session (the debug view) can park the chart on

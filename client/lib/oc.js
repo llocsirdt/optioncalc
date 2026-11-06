@@ -2389,6 +2389,12 @@ function startLiveDataUpdates() {
       liveDataLoopActive = false;
       return;
     }
+    // HIDDEN TABS DO NOT POLL (2026-11-06): the loop parks while the tab is hidden; the visibilitychange
+    // listener below restarts it (with an immediate fetch) when the tab is shown again.
+    if (document.hidden) {
+      liveDataLoopActive = false;
+      return;
+    }
     const startedAt = Date.now();
     try {
       await updateCalculatorWithLiveData(currentSymbol);
@@ -2407,6 +2413,10 @@ function startLiveDataUpdates() {
 
   runCycle(); // immediate first fetch
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && liveDataEnabled && currentSymbol && schwabConnected && !liveDataLoopActive) startLiveDataUpdates();
+});
 
 // Stop live data updates
 function stopLiveDataUpdates() {

@@ -501,7 +501,9 @@
 
   window.addEventListener('DOMContentLoaded', () => {
     poll();
-    setInterval(poll, POLL_MS);
+    // HIDDEN TABS DO NOT POLL (2026-11-06): skip while hidden, catch up the moment the tab is shown.
+    setInterval(() => { if (!document.hidden) poll(); }, POLL_MS);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
     // Both hosts open the popover — once the stats move to their own line, clicking them must still work
     // or the affordance silently moves out from under the text people actually read.
     for (const host of [el(), inlineEl()]) {
