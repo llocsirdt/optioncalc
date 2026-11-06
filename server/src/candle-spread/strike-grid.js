@@ -75,7 +75,10 @@ function localIncrement(strikes, underlying, opt = {}) {
   return null;
 }
 
-/** The grid reading for one tick: { incr, quoted (strikes within +-reach), near: [lo, hi] }. */
+/**
+ * The grid reading for one tick: { incr, quoted (count of quoted strikes within +-reach), listed (strikes the chain
+ * lists, quoted or not), strikes (every quoted strike, ascending), near: [lo, hi] of the quoted ones within reach }.
+ */
 function assess(chainData, expiration, underlying, opt = {}) {
   const strikes = quotedStrikes(chainData, expiration);
   const reach = opt.reach != null ? opt.reach : 300;

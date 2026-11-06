@@ -809,7 +809,7 @@
       // Check if spreads overlap
       // Bull put: short at bullPutShortStrike, long at bullPutLongStrike (bullPutLongStrike < bullPutShortStrike)
       // Bear put: long at bearPutLongStrike, short at bearPutShortStrike (bearPutLongStrike < bearPutShortStrike)
-      // Same overlap test as calculateBullPutProfitMetrics's mirror scenario (line ~624) —
+      // Same overlap test as calculateBullPutProfitMetrics's mirror scenario (SCENARIO 1, line ~632) —
       // this used to only check bearPutLongStrike against the bull put's range and ignored
       // bearPutShortStrike entirely, misclassifying genuinely-overlapping spreads as non-overlapping.
       const spreadsOverlap = bullPutShortStrike > bearPutShortStrike && bullPutLongStrike < bearPutLongStrike;

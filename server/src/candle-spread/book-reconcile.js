@@ -2,9 +2,12 @@
 /**
  * BOOK RECONCILIATION — what the engine believes it holds, against what the broker says it holds.
  *
- * WHY THIS EXISTS. The state machine books a fill when `markFill` judges the chain mark to have reached
- * the limit. It has never consulted the broker: trader.js contains no reference to liveOrders at all. The
- * order-manager tracks real orders ALONGSIDE that, and the two have simply never been compared.
+ * WHY THIS EXISTS. When it was written (2026-09) the state machine booked every fill when `markFill` judged
+ * the chain mark to have reached the limit, without consulting the broker; the order-manager tracked real
+ * orders ALONGSIDE that and the two were never compared. That is still how a run on fillSource 'mark' books
+ * (simulate, test, or a live-roster variant held at paper). A run on fillSource 'broker' (index.js
+ * fillSourceFor: effectively live + isProd + armed) now books from the broker's fills instead
+ * (trader.applyBrokerFills over st.liveOrders), so this report is its cross-check rather than its only link.
  *
  * In dry-run that is right — there is no broker. In TEST mode it is right by construction — orders are
  * sent at deliberately unfillable prices, so the broker book is empty on purpose while the strategy book
@@ -57,7 +60,7 @@ function brokerBook(record) {
  * Per-position disagreement. This is the part that matters: a COUNT can match by coincidence while the
  * individual positions disagree, so every discrepancy is named.
  *
- * Four kinds, and they are not equally dangerous:
+ * Five kinds, and they are not equally dangerous:
  *   phantom-open    the engine holds a position the broker never filled  -> it is trading on nothing
  *   missing-open    the broker filled an order the engine did not book   -> an unmanaged real position
  *   phantom-cover   the engine booked a lock the broker never gave it    -> an overstated floor
@@ -137,7 +140,9 @@ function positionDiffs(record, opts) {
   return diffs;
 }
 
-// The whole report. `mode` is the run's dryRun, because what counts as a PROBLEM depends on it.
+// The whole report. `mode` is the run's record.config.dryRun, because what counts as a PROBLEM depends on it.
+// NOTE: that is the ROSTER value, not index.js effectiveDryRun (which a strategy-control entry can lower), so a
+// live-roster variant held at paper/test is still labelled 'LIVE' here.
 function reconcileBook(record, opts) {
   const cfg = (record && record.config) || {};
   const engine = engineBook(record);
@@ -174,7 +179,8 @@ function reconcileBook(record, opts) {
 //   - a fill whose order id we lost (a crash between send and record, a replace whose new id never landed)
 //   - an assignment or early exercise
 //   - a position that survived from a PRIOR session while our record did not — the local-disk durability
-//     gap in store.js, which is the one that turns catastrophic with real money
+//     gap store.js described (narrowed since 2026-09-29 by the S3 write-through in run-archive.js, which is
+//     only active when CANDLE_SPREAD_S3_BUCKET is set)
 // All three look identical from the order rows: nothing there at all. Only the broker's POSITION list has
 // them, so this compares the legs we believe we hold against the legs the broker says we hold.
 //
@@ -182,11 +188,12 @@ function reconcileBook(record, opts) {
 // we are reading the wrong account, and repairing a book from a source you have not validated is worse
 // than knowing it disagrees.
 //
-// *** THE RESPONSE SHAPE HERE IS UNVALIDATED. *** Every order this system has ever sent was test-mode
-// unfillable against an unfunded account, so no real position has ever existed to read. The Schwab
-// position shape (securitiesAccount.positions[] with longQuantity/shortQuantity/instrument.symbol) is from
-// the documentation, not from a response this code has seen. Until a real position exists, treat a
-// disagreement reported here as "the reconciler or the account is wrong" first.
+// *** THE RESPONSE SHAPE WAS WRITTEN UNVALIDATED. *** When this was written every order sent had been
+// test-mode unfillable against an unfunded account, so no real position existed to read. The Schwab
+// position shape (securitiesAccount.positions[] with longQuantity/shortQuantity/instrument.symbol) came from
+// the documentation. The account has been funded since 2026-10-01 and has held real positions (first live
+// fill 2026-10-02; seedLedgerFromAccount below acts on this parse live), but this file records no explicit
+// validation of the shape — still treat a disagreement here as "the reconciler or the account is wrong" first.
 //
 // SYMBOLS ARE PARSED, NEVER CONSTRUCTED. The engine stores legs as {side, type, strike} with no symbol,
 // and the obvious repair — build one from config.symbol — is wrong: NDX options trade under the root

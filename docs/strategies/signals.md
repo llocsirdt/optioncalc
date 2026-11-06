@@ -5,7 +5,8 @@ order on the candle-spread engine. Part 1 is the catalog with exact conditions; 
 table** (the "which strategy actually uses what" view). Per-family pages ([v0](v0.md) … [v21](v21.md)) explain *why*
 each family is configured the way it is; this page is *what* each rule does.
 
-**Written 2026-11-05 against `main` at `d9f6a6a` (prod build `a6bfb3d`), from three sources, in this order:**
+**Written 2026-11-05 against `main` at `d9f6a6a` (prod build `a6bfb3d`); re-checked 2026-11-06 against `main` at
+`a746989` (roster re-dumped, Part 2 rows re-verified). Sources, in this order:**
 1. The code — `server/src/candle-spread/signals/*.js` (`signal-trace.js` evaluates every candle trigger with its
    exact condition), `trader.js` (live engine), `natural-cover.js`, `signals/bb-fade.js`, `trend-state.js`,
    `index.js` (roster), `backtest/backtest-v6-5m.js` + `backtest/opts-for.js` (backtest).
@@ -36,7 +37,8 @@ is described here and the disagreement is listed in [Part 3](#part-3--live-vs-ba
   covers filling. v7, v9, v9sg, v9ob, v20, v21 are *bidirectional*: held = a filled position of that side whose cover
   has not filled.
 - **Shapes.** Every family runs as `-10/-20/-40` (governed), `-W-unc` (no day-loss governor; diagnostic, not
-  tradable) and `-20-cATM/-40-cATM` (strikes centred at the money instead of placement G). v21 adds `-f50/-f55/-f60`.
+  tradable) and `-20-cATM/-40-cATM` (strikes centred at the money instead of placement G; not on v21; v20 also has
+  `-cATM-unc` twins). v21 replaces placement with `-f50/-f55/-f60`.
   A shape never changes the signal — only the mechanisms marked by width in Part 2.
 
 ---
@@ -75,7 +77,7 @@ Part 2 isn't mistaken for an omission:
 | ID | Mechanism (decision `action`) | What it does | Families |
 |---|---|---|---|
 | **E1** | Open fallback (`open-fallback`) | "Always place on a signal". If no placement can be priced (every one over the cap, or the quotes refused), it places anyway: short strike nearest the underlying, starting at the low end of a known-good band and walking to the high end. At 09:30 the band is bull 0.50–0.55 × W and bear 0.47–0.52 × W; after that, the variant's own band, 0.45 × W up to its walk cap. Active until 15:55. | all |
-| **E2** | Reopen after a quick cover (`reopenAfterCover`) | When an open's cover fills **inside the same 15m signal window**, the underlying is still between its strikes, and the decision still wants that side: re-open at the same strikes, never above the price paid. At most 2 per 5m bar; every open gate still applies. Modelled in the backtest since 2026-11-06. | v0–v9 (every shape), v9sg, v9ob |
+| **E2** | Reopen after a quick cover (`reopenAfterCover`) | When an open's cover fills **inside the same 15m signal window** (after the latest 15m decision, no cover signal against that side since), the underlying is still between its strikes, and that decision opened it or still wants that side: re-open at the same strikes at min(price paid, mark) — or, when the mark is below what was paid, the deepest-ITM same-width strikes that still cost no more — never above the price paid. At most `reopenPer5m` (default 2) per 5m bar; one working open at a time; every open gate still applies. Modelled in the backtest since 2026-11-06. | v0–v9 (every shape), v9sg, v9ob |
 | **E3** | Natural REV (`natural-rev`) | Opens the **other** side when the book's bias side has touched an outer band (NDX RTH 5m or NQ 60m), its last open is ≤ 30 min old, and the zigzag run (20-pt, NDX 1m) is ≥ 40 pts (60 without a band/EMA line at the extreme). It's struck at the paired position's short strike, with pair + REV ≤ 1.15 × W. A filled REV marks its pair offset. | v12, v13 |
 | **E4** | Natural jump guard (`natural-guard`) | If the book's mark at spot ± the 15-minute p95 move would go through −lossMax, it opens the protective vertical. | v12, v13 |
 
@@ -120,7 +122,7 @@ fill are C1's, worked by C5–C8.
 | **C9** | Plateau cover (10W) | Cover geometry `offset1` (a condor plateau instead of a tent peak), minLock 0.05, give-up returns the cover to the tent. The settled default for every 10W strategy from v4 up. | v4+ at 10W (incl. `-unc`) |
 | **C10** | Cover range re-strike (`cover-restrike`) | 20W/40W: every 5 min a resting cover moves to whichever strike in a range is closest to filling at the tent-equivalent price + k × 0.02 × W. The range runs from one strike inside the open's long leg to 2 beyond the tent. Not on v0–v2 since 2026-11-06 (`COVER_GEOMETRY_BASELINES`): their own geometry places the cover. | 20W/40W, every family with covers except v0–v2 |
 | **C11** | Credit-cover thermostat | Sends the cover as a **credit** spread (collapsing the pair to a butterfly and releasing capital) once cash deployed ≥ the trigger (scaled by width), and debits below it. Same P&L, less capital. | v0–v9, v9sg, v9ob, v12, v13 |
-| **C12** | Cover-to-stack (`cover-to-stack`) | **Configured but never fires live.** It runs only when a soft, hard or risk cap blocks an open, and all three are off on every variant (v8's soft cap was removed 2026-10-14). When it does run, it locks the deepest winners (≥ 0.65 × W) to make room. The **backtest** also runs it when the *governor* would block an open; live does not. See Part 3. | configured v0–v13; fires nowhere live |
+| **C12** | Cover-to-stack (`cover-to-stack`) | **Configured but a no-op in both engines.** Live (`trader.js` `coverToStackFreeBudget`) runs only when a soft, hard or risk cap blocks an open (`capState`), and all three are null on every variant (v8's soft cap was removed 2026-10-14); a governor block is just `open-skip-governor`. The **backtest** calls `lockDeepWinners` on governor blocks too, but it skips any position that already has a resting cover, and continuous cover gives every position one: a 250-day on/off A/B was byte-identical with zero locks (2026-11-06 journal). When it does run, it locks the deepest winners (≥ 0.65 × W). See Part 3. | configured v0–v9, v9sg, v9ob, v12, v13; fires nowhere |
 | **C13** | Cover after 30 min | C1 only on a position ≥ 30 min since its fill, not offset by a REV, and not a guard | v13 |
 | **C14** | Natural cover (no per-position covers) | No continuous, signal, proactive or cover-to-stack cover; the book is protected by E3/E4 opens instead. v13 adds C13 back. | v12 (all), v13 (all but C13) |
 | — | Opens-only | No covers of any kind; every position is held to the 16:00 NDX settle | v20, v21 |
@@ -129,7 +131,7 @@ fill are C1's, worked by C5–C8.
 
 | ID | Mechanism | What it does | Families |
 |---|---|---|---|
-| **H1** | Floor raise (`raise`) | At a candle close, at most once per 15 min and ≤ 8 a day: buys the best floor lift per dollar in the 2σ band, spreads first. Minimum lift per dollar: **4:1 near / 8:1 far** from the money. Under trend A, a valley on the side the trend is heading toward needs **3:1 / 6:1**, and one on the side it is leaving needs **5:1 / 10:1**. Flies and condors may only use strikes inside the book's range. It never takes a floor ≥ 0 below 0, and never goes past −lossMax or the late-day limit. | v0–v13 |
+| **H1** | Floor raise (`raise`) | At a candle close, one pass per 15 min (`floorRaiseEveryMin`), up to 2 raises a pass and ≤ 8 a day: buys the best floor lift per dollar in the 2σ band, spreads first. Minimum lift per dollar: **4:1 near / 8:1 far** from the money. Under trend A, a valley on the side the trend is heading toward needs **3:1 / 6:1**, and one on the side it is leaving needs **5:1 / 10:1**. Flies and condors may only use strikes inside the book's range. It never takes a floor ≥ 0 below 0, and never goes past −lossMax or the late-day limit. | v0–v13 |
 | **H2** | Floor offsets (`offset`) | Floor < −lossTarget → a far-side 20/40/60-wide at ≥ 3:1, ≤ 6 a day. Floor < −lossMax → must-fix at ≥ 1:1, ≤ 18 a day. | v0–v13 governed shapes |
 | **H3** | Wings (`wing`) | Book peak > 0 → a wing at ≥ 3:1, budget 10% of the peak, ≤ 6 a day | v0–v13 |
 | **M1** | Open ladder (`open-reprice`) | A resting open walks placement + steps × $0.05 (per 120 s or 10 pts) up to its walk cap, never above the debit mark; refused if it would push the floor through lossMax | all |
@@ -151,7 +153,7 @@ removed 2026-11-04 in `a6bfb3d` because 0DTE NDX fills at the mid through wide q
 - **gov** — governed shapes only (not `-unc`)
 - **10W / 20·40W** — only that width
 - **eval** — evaluated (shows in the trace) but never places an order
-- **◌** — configured but never fires live (see C12)
+- **◌** — configured but never fires, live or in the backtest (see C12)
 - **·** — not used
 
 Rows O\*, C3 and the reason column come from the 2026-11-04 traces; every other row is generated from the live roster.
@@ -245,13 +247,15 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 
 ## Part 3 — live vs backtest, and known gaps
 
-1. **Cover-to-stack on a governor block — backtest only.** The backtest (`backtest-v6-5m.js`, `opts-for.js` sets
-   `coverToStackVsRisk`) locks deep winners (≥ 0.65 × W) when the governor would block an open, then opens. Live
-   (`trader.js capState` → `coverToStackFreeBudget`) only reacts to soft/hard/risk caps, which are all off, so a
-   governor block is just `open-skip-governor`. The backtest's lock (`lockDeepWinners`) takes only winners with
-   **no cover working**, and continuous covers rest on nearly every position, so the difference rarely bites. It
-   can bite on v3 (positions not yet armed) or wherever a continuous cover failed to place. Not measured; flagged
-   2026-11-05.
+1. **Cover-to-stack does nothing in either engine** (corrected 2026-11-06; the 11-05 edition said the backtest
+   still locked winners on a governor block). Live, `coverToStackFreeBudget` is reached only from the `capState`
+   branch (soft/hard/risk caps, all null since 10/14); it was never ported to the governor (09-04), so a governor
+   block is just `open-skip-governor`. The backtest (`backtest-v6-5m.js` governed `needRoom`, plus `reduceRisk`)
+   does call `lockDeepWinners` on a governor block, but that skips any position with a resting cover
+   (`pendingCover`), and continuous covers rest on every position: a 250-day run with it on and off was
+   byte-identical with zero locks, although v9-20 hit 804 governor blocks. In principle v3's not-yet-armed
+   positions have no resting cover and could be locked in the backtest only; not separately measured. The user
+   decided 2026-11-06 to fix it (the held open waits for the locks to fill); nothing is built yet.
 2. **Signal covers are mostly starved** (see the note in 1d). C3 and C4 skip any position that already has a cover
    working; on every family but v3, C1 has nearly always placed one.
 3. **"Held" is a stance on v0–v6, v8, v12, v13.** It's set by every open (even before it fills) and cleared only by a
@@ -266,7 +270,8 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 8. **Reopen after cover (E2) is in the backtest since 2026-11-06** (`backtest-v6-5m.js` ports
    `trader.reopenAfterCover`; `opts-for.js` forwards `reopenOnCover` / `reopenPer5m`). Limits: it runs at the close
    of the bar the cover filled in and the order works from the next bar, so at most one bar later than live; an
-   unfilled reopen expires at the next 15m close (as live). The baselines quoted in these docs predate it.
+   unfilled reopen expires at the next 15m close (as live). The baselines quoted in these docs (rebuilt 2026-11-06)
+   include it.
 9. **v9sg / v9ob are simulate-only since 2026-11-06** (`buildFeatureFamilies` sets `simulateOnly`). Before that,
    "never armed" was only a convention and `armableReason` would have accepted their capped shapes.
 10. **Removed 2026-11-04:** the simulated-fill quoted-width gate (`simMaxQuoteWidthFrac`). It refused every 10W fill
@@ -275,6 +280,10 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 ---
 
 ## Changelog
+
+- **2026-11-06 (later)** — Docs review against `a746989`: C12 / Part 3 note 1 corrected (cover-to-stack is a no-op in
+  the backtest too, not only live); E2 and H1 conditions tightened to the code; Part 2 rows re-checked against a
+  fresh roster dump (no cell changed).
 
 - **2026-11-06** — C10 (and C6's inside re-strike) no longer apply to v0–v2, so their geometry places covers at
   20W/40W again; E2 on every v0–v9 shape (v9sg/v9ob inherit it) and modelled in the backtest (note 8); v9sg/v9ob

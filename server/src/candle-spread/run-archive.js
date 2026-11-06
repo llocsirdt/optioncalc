@@ -13,7 +13,9 @@
  * SYNCHRONOUS — the engine depends on that — so this module is used two ways only:
  *   1. WRITE-THROUGH, fire-and-forget, after each local write (store.writeRun).
  *   2. REHYDRATE, once, awaited during startup before the first tick (candle-spread start()).
- * Nothing on a tick path ever awaits S3.
+ * (Beyond run records it also serves raw objects: the seed bundle (getObjectToFile / headObject ETag) and the
+ * strategy-control file (getObjectRaw / putObjectRaw), which the ORDER POLL awaits each pass behind a
+ * timeout — see strategy-control.refresh.) Nothing on a tick path ever awaits S3.
  *
  * FAILURE IS ALWAYS DEGRADATION, NEVER AN EXCEPTION. Every function here resolves; none reject into the
  * caller. An unreachable bucket, a missing IAM permission, an absent SDK or an unset bucket name all leave
@@ -300,7 +302,7 @@ async function headObject(key) {
  * Read a small object by RAW KEY and return its body as a string. getRun keys off a runId and getObjectToFile
  * streams to disk; the strategy-control file is neither a run nor large, so it needs this.
  *
- * quietMissing is the normal case here: an absent control file means "everything simulates", which is a valid
+ * quietMissing is the normal case here: an absent control file means "every variant at its roster mode", which is a valid
  * state and must not sit on /health as a permanent error.
  */
 async function getObjectRaw(key, opts) {

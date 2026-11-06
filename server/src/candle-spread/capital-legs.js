@@ -12,7 +12,7 @@
  * self-test below (P&L equal across all representations at every settle price; only cash differs).
  *
  * Pure leg constructors + signed cash/risk accounting, pricing injected (legsMark for backtest, real chain
- * for live) so the SAME logic ports to the live trader. Run `node scripts/candle-spread/capital-legs.js`
+ * for live) so the SAME logic ports to the live trader. Run `node server/src/candle-spread/capital-legs.js`
  * to execute the parity + cash self-test.
  */
 

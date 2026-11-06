@@ -1,7 +1,8 @@
 /**
  * Pure, deterministic logic for the candle-spread trader (no I/O — unit-testable).
  *
- * Strategy summary (see project spec): on each 15-min candle close, open a $W debit
+ * Strategy summary (the ORIGINAL v0 project spec — current variants take their open/cover decisions from
+ * signals/*.js inside trader.js; these helpers remain the shared geometry/pricing): on each 15-min candle close, open a $W debit
  * spread centered on the close (bull call on a green candle, bear put on a red one),
  * and on a direction reversal cover the prior uncovered spreads with an offsetting
  * spread that shares the short strike. All the "why" behaviors are commented so they
@@ -84,7 +85,9 @@ function centerStrike(close, strikeIncrement) {
 }
 
 // The two strikes of a spread centered on centerStrike. spreadWidth must be an even
-// multiple of strikeIncrement so both legs land on the grid (validated at run config).
+// multiple of strikeIncrement for both legs to land on the grid. NOTE: nothing validates this today —
+// validateWidth (below) is exported but has no caller, and live opens place strikes via
+// spreadStrikesShifted / trader.buildOpenAdaptive rather than this function.
 function spreadStrikes(center, spreadWidth) {
   const half = spreadWidth / 2;
   return { lower: center - half, upper: center + half };
@@ -249,7 +252,8 @@ function roundToTick(price, tick) {
 
 // Cover limit under the new (skew-aware) pricing: pay the real spread mark + 1 tick toward
 // the ask so it fills, bounded by a loose sanity ceiling (width − 1 tick) and a tick floor.
-// No sub-market cap (unlike debitLimit's width/2×1.05, which suppressed fills on ATM spreads).
+// No sub-market cap (an older debitLimit capped at width/2×1.05, which suppressed fills on ATM spreads;
+// debitLimit now only REPORTS exceedsCap and limits at the mark).
 function coverLimitFromMark(mark, spreadWidth, tick) {
   // REFUSE, DO NOT CLAMP. A cover is a vertical: it cannot be worth less than nothing or more than its
   // width, so a mark outside [0, W] is a broken quote and not a price to be tidied into range. The old
@@ -282,7 +286,8 @@ function round2(n) {
 }
 
 // spreadWidth must be a positive, even multiple of strikeIncrement so both legs land on
-// the grid and the center offset (width/2) is itself a grid step.
+// the grid and the center offset (width/2) is itself a grid step. UNUSED: no caller anywhere in server/src
+// (it would reject every one-step width — 10W on the 10-pt grid, 25W/50W fallbacks on a 25/50-pt grid).
 function validateWidth(spreadWidth, strikeIncrement) {
   if (!(spreadWidth > 0) || !(strikeIncrement > 0)) return false;
   const steps = spreadWidth / strikeIncrement;

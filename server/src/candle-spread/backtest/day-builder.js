@@ -64,9 +64,10 @@ async function buildDualDay(date, priceHistory, opts) {
   const dayBars = allBars.filter((b) => etDay(b.datetime) === date);
   if (!dayBars.length) return null;
 
-  // NDX price per bar: the 1m candle whose step-bucket this bar closes. Bars with no NDX print (pre-open
-  // or a data gap) carry px:null and runDay5m falls back to the signal series for them, exactly as a
-  // dataset-built bar with a missing px would.
+  // NDX price per bar: the 1m candles whose step-bucket this bar closes. Bars with no NDX print (pre-open
+  // or a data gap) are DROPPED by the filter below, so every returned bar carries a px. No 16:00 official-close
+  // bar is added (load5mDays does that only from a dataset's settles.json), so an on-demand day settles at its
+  // last bucket's close (the 15:59 NDX 1m close), not the official index close.
   const stepMs = step * 60000;
   const byBucket = new Map();
   for (const c of ndxRaw) {

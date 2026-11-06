@@ -25,8 +25,9 @@ const { marketClient } = require('./persistence/market-client');
 
 const TTL_MS = 15000;                 // recompute at most this often during RTH (basis drifts slowly)
 const RTH_START = 570, RTH_END = 960; // NDX regular hours: 9:30 (570) .. 16:00 (960) ET, in minutes
-// Durable across deploys on EB (/tmp is proven-writable and survives deploys — see .ebextensions);
-// on local dev this lands in the OS temp dir so the offset persists between restarts there too.
+// On EB, .ebextensions/persistence.config sets NQ_NDX_BASIS_PATH=/var/optioncalc-data/nq-ndx-basis.json
+// (root disk, survives deploys — /tmp there is a RAM-backed tmpfs). Unset (local dev) it lands in the OS
+// temp dir so the offset persists between restarts there too.
 const BASIS_PATH = process.env.NQ_NDX_BASIS_PATH || path.join(os.tmpdir(), 'nq-ndx-basis.json');
 
 let held = null;          // { basis, asOf, ndx, nq } — last GOOD regular-hours basis (also persisted)

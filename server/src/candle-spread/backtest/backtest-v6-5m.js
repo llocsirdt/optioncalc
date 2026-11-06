@@ -107,7 +107,8 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 // captured chains (scripts/candle-spread/calibrate-intraday-iv.js -> shared/intraday-iv-correction.json).
 // When enabled, the per-bar band-IV is multiplied by ivMult(timeOfDay) BEFORE it flows into every
 // legsMark/bsPrice call (opens, covers, cap checks, cover-to-stack, settlement), so BS reprices ALL
-// moneyness consistently off one corrected IV. Default OFF -> byte-identical to the current baseline.
+// moneyness consistently off one corrected IV. Engine default OFF (the pre-correction flat-IV model); optsFor
+// turns it on for every roster variant (canonical since 2026-09-04), so the committed baselines carry it.
 // LIMITATION: single-IV (NO skew) correction calibrated on ATM vol; covers at other moneyness receive
 // the SAME time-of-day IV mult (best single-IV approximation; moneyness skew is a later refinement).
 // MONEYNESS (SKEW) CORRECTION (opts.ivSkew) — shared/iv-skew-correction.json. Real index vol is a smile with
@@ -115,7 +116,8 @@ const legsPayoff = eng.legsPayoff, legsMark = eng.legsMark, buildOpen = eng.buil
 // 15,028 real chain quotes, flat vol under-prices bull call spreads by $69/contract and over-prices bear
 // put spreads by $50. The correction multiplies the base vol per leg by skewMult(z), z in expected-move
 // units, which reduces those to +$1 and +$8. It removes BIAS, not dispersion (~$100 |err| either way).
-// Default OFF -> byte-identical to the flat-IV baselines.
+// Engine default OFF -> byte-identical to the flat-IV baselines. Every roster variant sets ivSkew (BASE_RUNS),
+// which optsFor forwards, so the committed baselines carry it.
 let _skew = null;
 function loadSkew() {
   if (_skew) return _skew;
@@ -144,10 +146,10 @@ function skewMultAt(z) {
 // bs.bsPrice() DIRECTLY has to resolve it per leg first — handing the function straight in as sigma
 // produces NaN silently. (legsMark and buildOpen accept either form themselves.)
 const volFn = iv => (typeof iv === 'function' ? iv : () => iv);
-const FR = require('../floor-raise');
+const FR = require('../floor-raise');     // shared floor-raise planner (live trader uses the same module)
 const NCM = require('../natural-cover');   // v12 / v13 natural-cover decisions (shared with the live trader)
-const GC = require('../giveup-candle');
-const TF = require('../trend-floor');     // trend-side floor (live trader uses the same module)   // candle give-up trigger (live trader uses the same module)   // shared floor-raise planner (live trader uses the same module)
+const GC = require('../giveup-candle');   // candle give-up trigger (live trader uses the same module)
+const TF = require('../trend-floor');     // trend-side floor (live trader uses the same module)
 
 let _ivCorr = null;   // lazy-loaded { minutes:[...], mults:[...] } sorted by bucket-start minute-of-day
 // Delegated to shared/intraday-iv.js so the LIVE engine and the backtest read the SAME calibration from
@@ -159,9 +161,9 @@ const ivMultAt = IIV.ivMultAt;
 const CL = require('../capital-legs');   // proven debit/credit leg + signed-cash foundation
 const LL = require('../leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const RH = require('../risk-harvest');   // v11 risk-harvest hedge search (far-side loss-zone lock)
-const WG = require('../wing-convert');
+const WG = require('../wing-convert');   // peak->floor wing conversion (knee-anchored)
 const FY = require('../fly-convert');   // valley repair: flies/condors (opt-in)
-const LAD = require('../cover-ladder');   // work the cover instead of resting it once   // peak->floor wing conversion (knee-anchored)
+const LAD = require('../cover-ladder');   // work the cover instead of resting it once
 
 // 5m-step run for one day. Prices off A['5m'].close; cover fills off the 5m candle's extreme.
 // signalFn(A, prior, { heldDir, isFifteen }) → { openSide, cover }.
@@ -230,7 +232,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   const trackCap = opts.trackCapital === true;
   const creditFrac = opts.creditCoverFrac != null ? opts.creditCoverFrac : 0.65;
   const altEvery = opts.openAlternateEvery || 3;   // alternate open type debit/credit every N opens
-  // CAPITAL TRIGGER (opts.creditCapitalTrigger, dollars; 0/unset = off, so baselines are byte-identical).
+  // CAPITAL TRIGGER (opts.creditCapitalTrigger, dollars; 0/unset = off). Cash accounting only (trackCapital) — it never
+  // touches P&L or the floor. The roster sets it on every governed family (250/500/1000).
   // When set it REPLACES both hand-set rules above. Neither was ever measured, and both decide debit-vs-
   // credit on something other than the thing they exist to control: `altEvery` alternates on a COUNT and
   // `creditFrac` fires on how deep the position is. The purpose of a credit order here is to RECLAIM
@@ -340,13 +343,14 @@ function runDay5m(bars, signalFn, opts = {}) {
   const touchCov = opts.touchCover && opts.touchCover !== 'off' ? opts.touchCover : null;
   const touchFilt = opts.touchFilter && opts.touchFilter !== 'off' ? opts.touchFilter : null;
   const touchOn = !!(touchCov || touchFilt);
-  // STACK GATE (backtest-only, 2026-10-17; default off): an ADD on side X (the book already holds a same-side position —
+  // STACK GATE (2026-10-17; default off; the 'nqNotAgainst' form is live-ported for the simulate-only v9sg family,
+  // trader.js deps.stackGate — the other forms are backtest-only): an ADD on side X (the book already holds a same-side position —
   // opts.stackScope 'uncovered' (default) or 'any') must pass a trend read: 'notAgainst' (neither RTH 15m nor 60m against),
   // 'oneWith' (>= 1 RTH TF with, none against), 'rth15' / 'rth60' (that TF not against), 'nqNotAgainst' (NQ 15m/60m).
   const stackGate = opts.stackGate && opts.stackGate !== 'off' ? opts.stackGate : null;
   const stackScopeAny = opts.stackScope === 'any';
   let stackBlocked = 0, stackBothBlocked = 0, stackAdds = 0, sgRt15 = 0, sgRt60 = 0, sgNq15 = 0, sgNq60 = 0;
-  // ══ NATURAL COVER (v12 / v13; backtest-only, 2026-10-17; default OFF = byte-identical) ═════════════════════════
+  // ══ NATURAL COVER (v12 / v13; 2026-10-17; default OFF = byte-identical; live-ported as simulate-only runs) ═══════
   // opts.natural 'v12': NO per-position covers; a same-side ADD needs the last completed NQ 15m candle at the outer band
   //   (opts.addGate, maxAdds per side); a REVERSAL-OPEN (REV) on the other side of the book's live bias when an outer-band
   //   touch (opts.revTouch), speed (opts.revWindowMin of the last same-side open) and a zigzag run (opts.revRun) all hold,
@@ -369,8 +373,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   const rthLines = (touchOn || stackGate || natural) ? TGT.makeRthLines(opts.rthCtx && opts.rthCtx.priorBars) : null;
   let setupNow = null, setupPrev = null, touchMidNow = null, touchMidPrev = null, touchSNow = null, touchSPrev = null;
   let touchHits = 0, touchCoverFills = 0, touchBlocked = 0, touchSetupBars = 0;
-  // Cover-fill check: default uses the intrabar EXTREME (optimistic, ~a true resting-order fill); the LIVE
-  // engine (resolveRestingCovers) books at the candle-CLOSE mark. opts.coverFillAtClose matches live.
+  // Cover-fill check: default uses the intrabar EXTREME (~a true resting-order fill). opts.coverFillAtClose tests only
+  // the bar-close point — a pessimistic bound (see FILL MODEL below), NOT a live match: the LIVE engine
+  // (trader.resolveRestingCovers) tests the real chain mark at the candle close AND on every ~30 s sub-bar pass.
   const coverAtClose = opts.coverFillAtClose === true;
 
   // ══ DAY-LOSS GOVERNOR (opts.lossTarget / opts.lossMax) ═══════════════════════════════════════════
@@ -509,7 +514,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   const wingBudgetFrac = opts.wingBudgetFrac != null ? opts.wingBudgetFrac : 0.10;   // of the current peak
   let wingCount = 0, wingSpent = 0, wingLastBar = -99;
   const lockMode = opts.lockCoverMode || 'rest';
-  // COVER LADDER (off by default so every committed baseline reproduces byte-for-byte).
+  // COVER LADDER (engine default off = the pre-ladder fixed-target model). The roster turns it on for every
+  // per-position-covering variant (optsFor coverLadder), so the committed baselines run WITH it.
   const ladderOn = opts.coverLadder === true;
   const ladderOpts = {
     stepSeconds: opts.ladderStepSeconds != null ? opts.ladderStepSeconds : LAD.DEFAULTS.stepSeconds,
@@ -532,7 +538,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   let geoSkip = 0;   // opens declined by the adaptive geometry's price ceiling
   let openLowBand = 0;   // opens booked under the band floor (placed at the mark and walked; the floor no longer refuses)
   // OPEN LADDER MODEL (opts.openFillModel 'ladder') — the live resting open: one working order, walked like
-  // the cover ladder (trader.resolvePendingOpen, bd8f2d0), cancelled on a reversal. Off = byte-identical.
+  // the cover ladder (trader.resolvePendingOpen, bd8f2d0), cancelled on a reversal. Engine default off ('immediate');
+  // build-backtest-baselines passes 'ladder' by default since 2026-10-05, so the committed baselines use it.
   const openLadderModel = opts.openFillModel === 'ladder';
   // FILL-THROUGH TICKS (opts.fillThroughTicks, or per side fillThroughTicksOpen / fillThroughTicksCover;
   // default 0 = touch fills, byte-identical to before). A working order counts as filled only when the
@@ -542,7 +549,8 @@ function runDay5m(bars, signalFn, opts = {}) {
   // FLOOR RAISE (see the bar-loop block) — off unless opts.floorRaise.
   const floorRaiseOn = opts.floorRaise === true;
   // FLOOR REPAIR FOLD (2026-10-09; see index.js applyFloorRepairFold): offsets' must-fix and wing conversion run
-  // as stages OF floor raise. floorRaiseCapFix = must-fix past lossMax; floorRaiseWings = the wing planner on a
+  // as stages OF floor raise. The roster fold is OFF by default since 2026-10-09 (CANDLE_SPREAD_FLOOR_FOLD=on enables
+  // it), so roster variants normally reach this engine with floorOffset / wingConvert instead of these two flags. floorRaiseCapFix = must-fix past lossMax; floorRaiseWings = the wing planner on a
   // floor-raise pass that found nothing, priced off the mid (one tick per leg) like every raise.
   const frCapFix = floorRaiseOn && opts.floorRaiseCapFix === true;
   const frWings = floorRaiseOn && opts.floorRaiseWings === true;
@@ -621,11 +629,11 @@ function runDay5m(bars, signalFn, opts = {}) {
   let openRestruck = 0, restrikeReplaced = 0;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
-  let openMissed = 0, openTried = 0, openWalkGov = 0;
+  let openMissed = 0, openTried = 0, openWalkGov = 0;   // openFillModel 'resting': how often a placed open never filled
   // REOPEN AFTER A QUICK COVER (opts.reopenOnCover) — backtest port of trader.reopenAfterCover (2026-11-06).
   const reopenOn = opts.reopenOnCover === true;
   let lastSig15 = null;   // the latest 15m decision: { at, openSide, coverSides } (live: st.lastSignal15)
-  const reo = { placed: 0, filled: 0, expired: 0, outside: 0, gov: 0, late: 0, ratchet: 0, cap: 0, leg: 0, c2oWait: 0, deeper: 0 };   // openFillModel 'resting': how often a placed open never filled
+  const reo = { placed: 0, filled: 0, expired: 0, outside: 0, gov: 0, late: 0, ratchet: 0, cap: 0, leg: 0, c2oWait: 0, deeper: 0 };   // reopen telemetry: placed / filled / expired, and why a source was not reopened
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
   let gateCutoff = 0, gateFloor = 0, gateUnderwater = 0, gateC2oWait = 0, c2oFires = 0, c2oChasing = 0;   // opens blocked by the stop-opening gates
@@ -645,6 +653,12 @@ function runDay5m(bars, signalFn, opts = {}) {
   // DROP (measured: 2023-02-21 bar 166→169, floor −$6,695 → −$9,320 purely from bears being covered while
   // 8 naked bulls stayed on). So "cover to reduce risk" is only true position-locally; against the book it
   // has to be checked. Ungoverned callers keep the legacy unconditional behaviour (baseline parity).
+  // WHAT IT ACTUALLY DOES UNDER THE ROSTER (lockCoverMode 'rest', every roster variant): the 'rest' branch below only
+  // stakes a resting cover (src 'lock', target W - open, no minLock) on a winner that has NO pendingCover, then
+  // `continue`s — before the floor gate and before `locked.push` — so it always returns [] and frees nothing this bar.
+  // And continuous covering gives every position a pendingCover from the bar it opens, so the candidate list is
+  // normally empty: effectively a no-op (a 250-day A/B with and without it was byte-identical, 2026-11-06). The
+  // floorAware gate, the leg re-resolve and nCoverToStack only run in 'mark' mode.
   function lockDeepWinners(need, S, tau, iv, floorAware) {
     if (noPpc) return [];   // natural cover / reference arm: no per-position covers
     const lockMin = (opts.coverToStackMinFrac != null ? opts.coverToStackMinFrac : creditFrac) * G.WIDTH;
@@ -770,8 +784,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     return bought;
   }
 
-  // The full reduction ladder, cheapest risk-removal first: lock winners (frees a tail for ~free, often
-  // at a profit), then spend premium on offsets only if the floor is still through `limit`.
+  // (reduceRisk, below) The full reduction ladder, cheapest risk-removal first: lock winners (frees a tail for ~free,
+  // often at a profit — but only in lockCoverMode 'mark'; see lockDeepWinners for why it is a no-op under the
+  // roster's 'rest'), then spend premium on offsets only if the floor is still through `limit`.
   // ── LOCK TELEMETRY (measurement only, no behaviour change) ──────────────────────────────────────
   // Two questions: how often does a day's book reach a GUARANTEED PROFIT (floor >= 0) at the close, and
   // how often does it reach one at ANY point intraday? The gap between those is days that locked a win
@@ -818,7 +833,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   }
 
   function reduceRisk(S, tau, iv) {
-    // (1) FREE first — lock deep-ITM winners, but only those that actually lift the book floor.
+    // (1) FREE first — lock deep-ITM winners, but only those that actually lift the book floor ('mark' mode). Under
+    // 'rest' (the roster) this only rests a cover on an uncovered winner without one and counts nothing. Live has no
+    // counterpart: trader.js's ladder runs offsets only ("locking winners ... is handled by cover-to-stack").
     floorCovers += lockDeepWinners(() => -floorNow() > lossTarget, S, tau, iv, true).length;
     // (2) Ratio-gated offsets toward the WORKING TARGET: outsized risk reduction for a small slice of peak.
     // Legacy floorOffset only: under the floor-raise fold the planner's own 3:1 pass covers the target.
@@ -1036,7 +1053,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         const next = round2(Math.floor(raw / TICK + 1e-9) * TICK);
         // GOVERNOR: a walk is a price raise on a position the governor already counts as filled (design B),
         // so paying more lowers the floor. Refuse a step that would push it down AND through lossMax — the
-        // same rule as a cover (f1 < f0 && -f1 > lossMax). Live: trader.workPendingOpen.
+        // same rule as a cover (f1 < f0 && -f1 > lossMax). Live: trader.resolvePendingOpen (the walk's governor check).
         let govOk = true;
         if (next > po.limit && governed) {
           const f0 = floorOf(null, true); const was = po.pos.limit;
@@ -1304,7 +1321,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       // LADDER: the working limit is not fixed. It starts at the trigger's price and walks up toward the
       // market as the order ages and the underlying travels, capped at a bounded loss. Without the ladder
-      // this is the original fixed-target comparison, so ladderOn:false reproduces the committed baselines.
+      // this is the original fixed-target comparison (ladderOn:false = the pre-ladder model; the roster runs the ladder).
       // GIVE-UP RULE (opts.coverGiveUp). The user's framing, 2026-09-10: "better to fill at a small
       // locked profit or even a small loss than to let an open position expire worthless."
       //
@@ -1451,7 +1468,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         }, patient && opts.coverPatientLossCap != null ? { ...ladderOpts, lossCapFrac: opts.coverPatientLossCap } : ladderOpts).limit;
         if (_kc) workingTarget = round2(workingTarget + _kc * rangePrem);
       }
-      // STALL COVER (opts.stallCoverMin, backtest-only study, 2026-10-07): a position that has NOT moved in our favour
+      // STALL COVER (opts.stallCoverMin; study 2026-10-07, on EVERY roster variant at 15 min since 2026-10-08 — index.js
+      // applyStallCover; live: trader.workRestingCovers deps.stallCoverMin): a position that has NOT moved in our favour
       // by stallCoverPts within stallCoverMin minutes of filling stops waiting for its minLock target — its cover goes
       // to break-even, or to the market + a tick when that is already better. Form the tent early, at almost any
       // profit, to free cap room (the user: a blocked strategy earns nothing). Never lowers the ladder's price.
@@ -1492,6 +1510,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       // average lock -\$236/cover). Lowering is allowed — it just cannot be retroactive.
       // RAISES are immediate (live reprices within ~30 s of a give-up/stall/ladder step, well inside a 5m bar);
       // LOWERS take effect from the next bar (a resting order cannot fill retroactively at a lower price).
+      // NOT LIVE PARITY on lowers: live (trader.workRestingCovers) never lowers a working cover — give-up, stall and the
+      // ladder only ever raise pc.target. On with simFillAtLimit (every roster variant, via optsFor).
       let fillAt = workingTarget;
       if (opts.coverFillAtResting) {
         const resting = pc._resting != null ? pc._resting : pc.target;
@@ -1626,9 +1646,9 @@ function runDay5m(bars, signalFn, opts = {}) {
     }
     if (trackCap) peakUncov = Math.max(peakUncov, uncoveredRisk());   // margin view: at-risk uncovered $ right now
     // (b1) GOVERNOR — WORKING TARGET. Every bar (not just when an open is pending): if the book floor has
-    // fallen through lossTarget, actively work it back — lock deep-ITM winners first, then buy a low-cost
-    // offset. This is the "try to keep risk under the target" half; the hard lossMax gate below is the
-    // "never let an open push it past" half.
+    // fallen through lossTarget, actively work it back — lock deep-ITM winners first (a no-op under the roster's
+    // lockCoverMode 'rest' + continuous covering; see lockDeepWinners), then buy a low-cost offset. This is the "try
+    // to keep risk under the target" half; the hard lossMax gate below is the "never let an open push it past" half.
     if (governed) {
       const f0 = floorNow();
       if (-f0 > lossTarget) { floorBreaches++; reduceRisk(S, tau, iv); }
@@ -1857,7 +1877,8 @@ function runDay5m(bars, signalFn, opts = {}) {
     const heldBull = st.positions.some(p => p.side === 'bull' && !p.covered);
     const heldBear = st.positions.some(p => p.side === 'bear' && !p.covered);
     let sig = signalFn(A, i > 0 ? bars[i - 1].analysis : null, { heldDir: st.dir, heldBull, heldBear, isFifteen: bars[i].fifteen, directionality: directionalityAt(i) });
-    // OPEN TREND BLOCK (opts.openTrendBlock = a trend-state definition; backtest-only control, 2026-10-07): an open
+    // OPEN TREND BLOCK (opts.openTrendBlock = a trend-state definition; control arm 2026-10-07, live-ported 2026-10-19 for
+    // the simulate-only v9ob family, trader.js deps.openTrendBlock): an open
     // AGAINST the trend is dropped (its cover side still acts). The attribution study says counter-trend opens
     // make money on average; this arm measures what strictly refusing them costs or saves at book level.
     if (opts.openTrendBlock && sig && sig.openSide && trendCtx && TS.against(sig.openSide, TS.state(trendCtx, opts.openTrendBlock))) {
@@ -2052,7 +2073,7 @@ function runDay5m(bars, signalFn, opts = {}) {
         const _s = o.legs.map(l => l.strike), _lo = Math.min(..._s), _hi = Math.max(..._s);
         const preferStyle = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
         // openNeverOtm mirrors the live rule: an initial order must not START fully out of the money.
-        // Opt-in so the committed baselines reproduce with it off.
+        // Engine default off; every roster variant sets it (BASE_RUNS openNeverOtm), so the baselines run with it on.
         const legAllow = opts.openNeverOtm ? ((lo, hi) => LL.notFullyOtm(sig.openSide, lo, hi, S)) : undefined;
         const res = LL.resolveOpen(sig.openSide, _lo, _hi, ledger, { incr: legIncr, maxShift: opts.legMaxShift || 6, preferStyle, allow: legAllow });
         if (res.resolution === 'skip') { legSkip++; legSkip1 = true; if (o._natural) ncC.natLegSkip++; }
@@ -2087,6 +2108,11 @@ function runDay5m(bars, signalFn, opts = {}) {
       // GOVERNED: recycle against the projected floor vs lossMax. UNGOVERNED (legacy): against uncovered
       // debit vs the tightest active cap. Only LOCKING runs here (it's free risk removal); paying premium
       // for an offset purely to unblock a new open is left to the (b1) target ladder.
+      // WHAT HAPPENS TODAY (roster: lockCoverMode 'rest' + continuous covering): lockDeepWinners returns [] — at most
+      // it rests a cover on a winner that had none — so nothing is freed and a governor-blocked open stays blocked
+      // this bar (a 250-day A/B with/without this path was byte-identical). NOT LIVE PARITY either way: live runs
+      // cover-to-stack only when riskCap/softCap/hardCap refuse an open (trader capState -> coverToStackFreeBudget),
+      // never on a governor block; and live's stackLocked counts a resting lock as freed for that candle.
       const needRoom = governed
         ? () => opts.coverToStack !== false && -floorOf(candPos) > lossMax
         : () => opts.coverToStack && ctsCap < Infinity && uncoveredRisk() + nd > ctsCap;
@@ -2140,7 +2166,8 @@ function runDay5m(bars, signalFn, opts = {}) {
       const lateOk = _lateLim == null || geoDecline || floorOf({ legs: o.legs, limit: o.limit, covered: false }, openLadderModel) >= _lateLim;
       if (!lateOk) lateBlocked++;
       if (strategyOk && ceilingOk && govOk && ratchetOk && lateOk && !geoDecline) {
-        // OPEN FILL MODEL (opts.openFillModel, default 'immediate' = the historical assumption).
+        // OPEN FILL MODEL (opts.openFillModel, engine default 'immediate' = the historical assumption; the committed
+        // baselines use 'ladder', which places the working order just below and fills it at the top of the bar loop).
         // Until now an open was assumed FILLED AT THE LIMIT, always — the engine simply pushed the
         // position. That is the one order in the system whose execution was never modelled, and it is
         // not obviously safe: we price the open at the mark (+ a tick), so it fills only if the market
@@ -2198,6 +2225,11 @@ function runDay5m(bars, signalFn, opts = {}) {
     // one working open at a time. Each source reopens once (a reopen can itself be reopened).
     // BACKTEST LIMITS: it runs at the bar close of the bar the cover filled in (live: within ~30 s of the fill, on a
     // parity spot), and the order works from the next bar like every ladder open — one bar later than live at most.
+    // KNOWN GAPS vs live (code as of 2026-11-06): (1) lastSig15.coverSides is only the 15m decision's own cover set —
+    // live also unions in every later intra-15m (5m) cover signal (trader st.lastSignal15), so a 5m cover signal does
+    // not close the window here; (2) coverEpoch is the fill BAR's close stamp, so a cover that filled during the 15m
+    // bar itself (before the decision) passes coverEpoch >= lastSig15.at, where live's coverFilledAt would be earlier;
+    // (3) an unpriceable source is marked 'unpriced' for good, where live retries on the next pass.
     if (reopenOn && lastSig15 && !(openLadderModel && st.pendingOpen)) {
       const per5 = opts.reopenPer5m != null ? opts.reopenPer5m : 2;
       for (let n = 0; n < per5 && !(openLadderModel && st.pendingOpen); n++) {
@@ -2295,7 +2327,9 @@ function runDay5m(bars, signalFn, opts = {}) {
   // therefore settles near-the-money positions on the wrong side of their strikes. The live engine already
   // gets this right (it reads the $NDX quote's lastPrice and records settleSource 'index-close'); the
   // backtest had no way to know it, so opts.settlePrice lets a caller supply the real close. Unset keeps
-  // the old behaviour so committed baselines reproduce.
+  // the old behaviour so committed baselines reproduce. SINCE then load5mDays appends a 16:00 bar priced at the official
+  // close whenever the dataset ships settles.json, and the settleBar rule above picks it — so on those datasets the
+  // default settle IS the official close. Days without it (incl. on-demand day-builder days) settle at the last bar.
   const settle = (opts.settlePrice > 0) ? opts.settlePrice : priceOf(settleBar).close;
   // bookPayoff(X): the FINAL EOD book's terminal P&L as a function of a hypothetical settle X — exactly the
   // terminal accumulation below but parameterized on X (same order + per-position round2), so terminal and

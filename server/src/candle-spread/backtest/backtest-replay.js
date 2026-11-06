@@ -30,8 +30,9 @@ const arg = (flag, d) => { const i = process.argv.indexOf(flag); return i >= 0 ?
 const { replayDir } = require('./replay-dir');
 const { optsFor: buildOpts } = require('./opts-for');
 const OUTDIR = replayDir();
-// KNOWN DATASETS, searched in order. NQ is the 2022-2025 Kaggle history (large, local-only); NDX is the
-// Schwab capture (2026, small enough to ship). Their date ranges do not overlap, so a requested date
+// KNOWN DATASETS, searched in order. -nq is the 2022-2025 Kaggle history (large, local-only); -nq-ndx is the
+// 2026 Schwab dual capture (NQ signals, NDX pricing; small enough to ship). backtest-data-5m-combined (the
+// baselines' dataset) is not searched. Their date ranges do not overlap, so a requested date
 // selects its dataset unambiguously — no flag needed, and asking for a date only one host has simply
 // reports which datasets were searched instead of silently replaying the wrong instrument.
 const DATASETS = [
@@ -85,9 +86,9 @@ if (!day) {
 }
 if (!day) { console.error(`no such day: ${want}. Searched: ${loaded.map(p => p.name).join(', ') || '(no datasets present)'}, then tried building it from Schwab 1m history (~48 days back). Use --list.`); process.exit(1); }
 
-// Same opts mapping the baseline builder uses, so a replay is the SAME run the baselines measured.
-// Shared mapping — see opts-for.js for why every hand-copied version of this drifted.
-// Shared mapping — see opts-for.js for why every hand-copied version of this drifted. `day` is the
+// Same opts MAPPING the baseline builder uses (opts-for.js — see it for why every hand-copied version drifted).
+// NOT the same run, though: the builder also passes env openFillModel 'ladder' + subBarFill '1m', and this passes
+// neither, so a replay runs 'immediate' opens and end-of-bar cover fills. `day` is the
 // module-level day being replayed; when its bars carry a separate price series the engine MUST price off
 // it (FOUNDATIONAL: /NQ signals, NDX pricing), so hasPx is read from the data rather than assumed.
 function optsFor(v) {

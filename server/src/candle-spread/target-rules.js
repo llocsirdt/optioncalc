@@ -2,6 +2,9 @@
 /**
  * TARGET RULES (v10 / v11) — the ONE implementation of the target engines' decisions, shared by the backtest
  * (backtest/backtest-target.js runDayTarget) and the live simulate-only trader (target-trader.js).
+ * NOTE (comment review 2026-11-06): there is no target-trader.js in this tree and git history has none; the only
+ * module that requires this file is backtest/backtest-target.js. Every "live:" remark below describes the intended
+ * live port, not code that runs today.
  *
  * Design: docs/journal/2026-10-16.md "v10 / v11 target engines" (backtest 5308054). Live port 2026-10-23.
  *   v10 = hold toward a close target: lean a debit vertical (and, near the target, a fly) toward the NQ 15m 9EMA (the

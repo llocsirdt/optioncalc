@@ -477,10 +477,11 @@ const replaysUrl = () => `${BT_BASE}/api/v1/candle-spread/replays?cb=${Date.now(
 const replayUrl = (d) => `${BT_BASE}/api/v1/candle-spread/replay?date=${encodeURIComponent(d)}&cb=${Date.now()}`;
 // ON-DEMAND backtest for ONE variant on ONE day. This is the route that WORKS ON PROD: the engine moved
 // under server/ so it ships, and the handler passes Schwab priceHistory so it can BUILD a day no
-// pre-built dataset covers (~48 days back). /replay, by contrast, spawns a bundle generator that reads
-// tests/backtest/ — which is gitignored and not in the deploy package, so it 404s on the deployed box
-// forever. debug.html was migrated to this endpoint; compare.html was not, which is the only reason the
-// backtest overlay reported "not available" on the hosted page for a date the server could happily build.
+// pre-built dataset covers (~48 days back). /replay spawns the whole-day bundle generator, which now also
+// builds on demand from Schwab 1m history — but a prod bundle has come back with runs and zero positions
+// (see loadBacktestRuns), so this per-variant route is the fallback that is known to work on prod. It was
+// originally added because compare.html, unlike debug.html, only tried /replay and reported "not available"
+// on the hosted page for a date the server could happily build.
 const btRunUrl = (sym, d, v) => `${BT_BASE}/api/v1/candle-spread/backtest?symbol=${encodeURIComponent(sym)}&date=${encodeURIComponent(d)}&variant=${encodeURIComponent(v)}&cb=${Date.now()}`;
 
 // Load a whole day of BACKTEST run records, keyed by variant.

@@ -7,7 +7,8 @@ does, and where the two still differ. **[signals.md](signals.md) is the catalog 
 trigger and gate, with the strategy × signal table** — start there for "what does v_N actually use". This README
 holds the family index, the baselines and the shared machinery.
 
-**Updated 2026-11-05 against `main` at `d9f6a6a`** (prod build `a6bfb3d`): 16 rostered families, 140 live variants.
+**Updated 2026-11-06 against `main` at `a746989`** (first written 2026-11-05 against `d9f6a6a`; prod build not
+re-checked): 16 rostered families, 140 live variants.
 The 2026-10-06 edition covered v0–v9 only; v9sg, v9ob, v12, v13, v20 and v21 were added 10/19–10/23, and v10/v11
 exist as a backtest-only engine.
 
@@ -42,7 +43,7 @@ verbatim from `server/src/candle-spread/backtest-baselines.csv`.
 | **[v21](v21.md)** | v20 with the strike chosen by price (closest to f × W) | O13 | none | `openPriceTarget` 0.50/0.55/0.60 | **Simulate-only** |
 
 Shapes per family: `-10/-20/-40` (governed), `-W-unc` (uncapped twin, diagnostic), `-20-cATM/-40-cATM` (centred
-strikes; not on v21), and `-f50/-f55/-f60` on v21. Source: `index.js` `FAMILIES`, `buildFeatureFamilies`,
+strikes; not on v21; v20 also has `-20-cATM-unc/-40-cATM-unc`), and `-f50/-f55/-f60` on v21. Source: `index.js` `FAMILIES`, `buildFeatureFamilies`,
 `buildNaturalFamilies`, `buildOpensOnlyFamilies`.
 
 **Reopen after a quick cover (signals.md E2)** is on for every v0–v9 variant at every width, `-unc` and `-cATM`
@@ -50,39 +51,40 @@ included, and v9sg/v9ob inherit it from v9 (2026-11-06; until then v7-10, v8 and
 
 **v0 / v1 / v2 were one strategy at 20W and 40W from 2026-10-13 to 2026-11-06.** Their only difference is cover
 geometry. In that window the cover-range re-strike (signals.md C10) chose the cover strike at 20W/40W for every
-family, so the geometry never acted. In the baselines below (built before the fix), v0/v1/v2 -20, -40 and -40-cATM
-are identical on every row. Live, they placed the same covers at the same strikes on 11/02, 11/03 and 11/04, with one
+family, so the geometry never acted: the 2026-10-23 baselines had v0/v1/v2 -20, -40 and -40-cATM identical on every
+row (the current baselines below are rebuilt with the fix and differ). Live, they placed the same covers at the same strikes on 11/02, 11/03 and 11/04, with one
 small 20W P&L difference on 11/03. Since 2026-11-06 the cover range is not applied to v0–v2 (`index.js`
 `COVER_GEOMETRY_BASELINES`), so their own `coverGeometry` places continuous covers at every width.
 
 ### Baselines
 
 `AVG terminal/day $` and `WORST single day $` per governed variant, copied from `backtest-baselines.csv`. That file
-was rebuilt on `894ce51` (2026-10-23) over 821 trading days (12/27/2022–10/07/2026); the 2026 era (56 days) is priced
-on real NDX, earlier days on NQ. Each family file carries its fuller block.
+was rebuilt on 2026-11-06 (committed in `a635d39`) over 821 trading days (12/27/2022–10/07/2026), with reopen after
+cover modelled and v0–v2 using their own cover geometry at 20W/40W; the 2026 era (56 days) is priced on real NDX,
+earlier days on NQ. Each family file carries its fuller block.
 
 | | 10W avg/day | 20W avg/day | 40W avg/day | 10W worst day | 20W worst day | 40W worst day |
 |---|---|---|---|---|---|---|
-| v0 | 518 | 1159 | 1349 | -1970 | -4380 | -5295 |
-| v1 | 545 | 1159 | 1349 | -1975 | -4380 | -5295 |
-| v2 | 533 | 1159 | 1349 | -2300 | -4380 | -5295 |
-| v3 | 504 | 924 | 1304 | -1970 | -3595 | -6865 |
-| v4 | 546 | 1072 | 1906 | -2000 | -4500 | -6965 |
-| v5 | 627 | 1495 | 2213 | -2315 | -4245 | -7263 |
-| v6 | 537 | 815 | 1841 | -1530 | -2740 | -7347 |
-| v7 | 697 | 1116 | 2047 | -1985 | -3625 | -6824 |
-| v8 | 527 | 788 | 1822 | -1530 | -2740 | -7347 |
-| v9 | 746 | 1920 | 2525 | -2275 | -4795 | -7441 |
-| v9sg | 816 | 1836 | 2362 | -2460 | -4500 | -7205 |
-| v9ob | 508 | 1271 | 1636 | -2000 | -4460 | -7024 |
+| v0 | 524 | 818 | 581 | -1940 | -4605 | -7840 |
+| v1 | 547 | 854 | 651 | -1975 | -4710 | -7770 |
+| v2 | 534 | 854 | 663 | -2300 | -4710 | -7630 |
+| v3 | 502 | 935 | 1555 | -1940 | -3595 | -6543 |
+| v4 | 582 | 1138 | 1973 | -2000 | -4500 | -6943 |
+| v5 | 631 | 1543 | 2451 | -2315 | -4715 | -7435 |
+| v6 | 559 | 881 | 2056 | -1555 | -3440 | -7457 |
+| v7 | 723 | 1144 | 2053 | -1995 | -3920 | -8379 |
+| v8 | 549 | 848 | 1977 | -1555 | -3440 | -7457 |
+| v9 | 804 | 1959 | 3061 | -2275 | -4650 | -7179 |
+| v9sg | 823 | 1904 | 2641 | -2460 | -4500 | -7495 |
+| v9ob | 537 | 1401 | 2097 | -2000 | -4460 | -7187 |
 | v12 | 148 | 179 | 11 | -1930 | -4330 | -6790 |
 | v13 | 179 | 453 | 413 | -1985 | -5385 | -7480 |
 | v20 | -57 | -202 | -374 | -2000 | -4500 | -7470 |
 | v21 (f55) | -84 | -206 | -369 | -2000 | -4500 | -7485 |
 
 **Read with care:** prices are Black-Scholes with bucketed skew, not real quotes, and fills are judged on 5-minute
-bars (1m sub-bars on the 56 NDX days). These baselines predate two 2026-11-06 changes: reopen after cover
-modelled in the backtest, and v0–v2 keeping their own cover geometry at 20W/40W. Backtests are directional: live v7-10 has missed these tables badly. v20/v21
+bars (1m sub-bars on the 56 NDX days). These baselines include the two 2026-11-06 changes (reopen after cover
+modelled in the backtest; v0–v2 keeping their own cover geometry at 20W/40W). Backtests are directional: live v7-10 has missed these tables badly. v20/v21
 are opens-only and simulate-only; they are on the roster to be *watched* on real sessions, not traded.
 
 ---
@@ -198,7 +200,8 @@ open or cover is sent as its credit twin once cash deployed reaches the width-sc
 ### Risk layer
 
 **Day-loss governor** — bounds the **book floor** (worst terminal P&L of the whole day's book), not at-risk debit.
-Caps (`lossMax $`) from the roster as built; `lossTarget = 0.7 × lossMax` on every governed variant:
+Caps (`lossMax $`) from the roster as built; `lossTarget = 0.7 × lossMax` on every governed variant except v20/v21,
+which carry no `lossTarget` (opens-only: no floor offsets):
 
 | Family | 10W | 20W | 40W | 20W-cATM | 40W-cATM |
 |---|---|---|---|---|---|
@@ -224,7 +227,9 @@ have no governor.
   trend-sided 3:1 / 6:1 with trend A and 5:1 / 10:1 against; never below a locked profit or past −lossMax); and
   **wings** (peak → floor, 3:1, budget 10% of the peak). See signals.md H1–H3.
 - **Soft / hard / risk caps** (`softCap`, `hardCap`, `riskCap`) are off on every variant. v8's $3,000 soft cap,
-  the last survivor, was removed 2026-10-14. That is why cover-to-stack (C12) never fires live.
+  the last survivor, was removed 2026-10-14. That is why cover-to-stack (C12) never fires live; in the backtest it
+  runs on governor blocks but finds nothing to lock (every position already has a resting cover), so it is a no-op
+  there too (signals.md C12).
 - **Stand-alone fly repair** (`FLY_LIVE`) is empty since 2026-10-09; flies remain available inside floor raise.
   The floor ratchet is built and off.
 
@@ -271,7 +276,7 @@ cells. The control-cell set is now empty, so all three run the ladder like every
 |---|---|---|
 | 1 | Continuous covering runs before the signal / proactive steps, and they skip any position with a cover working, so on all families with covers but v3 the signal-driven covers mostly do not place orders. The signal still cancels working opens, resets the stance and drives the opposite open. | Open decision |
 | 2 | **v0 / v1 / v2 were identical at 20W, 40W and 40W-cATM** (2026-10-13 to 2026-11-06) (baselines identical on every row; live identical covers 11/02–11/04). The cover-range re-strike sets the strike at 20/40W, so their geometry never acts. Six of their runs duplicated each other. Resolved 2026-11-06: the cover range is no longer applied to v0–v2 (`COVER_GEOMETRY_BASELINES`). | Resolved 2026-11-06 |
-| 3 | **Cover-to-stack parity.** Live runs it only on soft/hard/risk caps (all off), so it never fires. The backtest also runs `lockDeepWinners` when the governor blocks an open. It locks only winners with no cover working, so it rarely bites where continuous covers rest on everything; it can differ on v3 (unarmed positions). | Live/backtest drift (code-read, not measured) |
+| 3 | **Cover-to-stack is a no-op in both engines.** Live runs it only on soft/hard/risk caps (all null since 10/14). The backtest runs `lockDeepWinners` on governor blocks, but it skips positions with a resting cover, and continuous cover gives every position one: a 250-day on/off A/B was byte-identical with zero locks (2026-11-06 journal; the 11-05 edition of this row called it live/backtest drift). Possible exception, not measured: v3's unarmed positions in the backtest. User decided 2026-11-06 to fix it; nothing built yet. | Open decision (code-read + measured) |
 | 4 | **Give-up vs placement G.** G can place the short leg one strike OTM, so give-up can fire on the first cover. Not separately measured. | Suspected interaction |
 | 5 | Give-up and the cover ladder in the sub-bar worker read the **last candle's** NDX, up to 5 min stale between bars. | Documented limitation |
 | 6 | `coverSelector` `greedy`/`joint` are reachable only from the reversal path and set by no family. | Dead axis |

@@ -1,36 +1,38 @@
 /**
  * Candle-spread trader engine.
  *
- * On each 15-min candle close during RTH it runs the per-tick sequence:
- *   (1) cancel any unfilled prior OPEN order
- *   (2) classify the candle
- *   (3) COVER uncovered spreads if the candle's simple direction reversed
- *   (4) OPEN a new centered spread if the candle strictly qualifies
+ * processCandleClose runs on every 5m candle close during RTH (deps.isFifteen marks the 15m closes); the
+ * sub-bar worker in index.js calls the exported resolve/work functions between closes. Per close, roughly:
+ *   (1) book broker fills (applyBrokerFills), work or cancel-on-reversal the resting OPEN
+ *   (2) read the signal (deps.signalFn — every roster family, v0-v3 included, supplies one; the
+ *       spread-logic classifyOpen/shouldCover path runs only when no signalFn is passed)
+ *   (2b) continuous covers, (3) signal covers, (3b) proactive covers
+ *   (4) OPEN through every gate, then resting-cover/hedge work, reopen-after-cover, floor repair
  * See spread-logic.js for the pure pieces and the project spec for the "why".
  *
- * SAFETY: order placement is INTERNAL (never via the dev-gated HTTP proxy) and is
- * gated by config.dryRun. While dryRun is true we build + log the full Schwab order
- * payload but DO NOT send it, and we assume the order fills at its limit so the day's
- * state machine and log play out and can be reviewed. Flipping real sending on is a
- * deliberate future step (see placeOrder()).
+ * SAFETY: order placement is INTERNAL (never via the dev-gated HTTP proxy). This file only calls
+ * deps.placeOrder / replaceOrder / cancelOrder; whether anything reaches Schwab is decided by the senders
+ * in index.js (dryRun per run, plus isProd and CANDLE_SPREAD_LIVE=true for real orders). Simulated runs
+ * book fills off the chain (markFill / resolveRestingCovers); deps.fillSource 'broker' books only the
+ * broker's fills (applyBrokerFills).
  */
 const L = require('./spread-logic');
 const CL = require('./capital-legs');
-const LAD = require('./cover-ladder');   // works a resting cover toward the market (opt-in: deps.coverLadder)   // proven debit/credit leg foundation (capital recapture)
+const LAD = require('./cover-ladder');   // works a resting cover toward the market (deps.coverLadder; on fleet-wide via index.js) — CL above: the debit/credit leg foundation (capital recapture)
 const RC = require('./risk-curve');     // shared exact bookFloor — the quantity the day-loss governor bounds
 const RH = require('./risk-harvest');   // shared hedge-candidate search, used by the floor-offset overlay
 const WC = require('./wing-convert');
 const FR = require('./floor-raise');   // always-on floor raising — SHARED planner with the backtest engine
 const FY = require('./fly-convert');   // valley repair: flies/condors — SHARED with the backtest engine
-const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest   // shared peak->floor wing planner (same module the backtest uses)
+const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — MUST match the backtest (WC above: the shared peak->floor wing planner)
 const bs = require('./bs-pricer');      // band = spot*iv*sqrt(tau), the same expected move the backtest uses
 const LL = require('./leg-ledger');     // intraday leg-uniqueness ledger + placement resolver
 const SQ = require('./spread-quote');
 const GC = require('./giveup-candle');
-const TF = require('./trend-floor');    // trend-side floor, shared with the backtest   // candle give-up trigger, shared with the backtest
+const TF = require('./trend-floor');    // trend-side floor, shared with the backtest (GC above: the candle give-up trigger, also shared)
 const TS = require('./trend-state');   // never fight the trend: 15m + hourly state, shared with the backtest
 const ST = require('./signals/signal-trace');   // what the signal saw: every trigger, for the debug page (observation only)
-const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber   // net spread quotes + mark validation (parity / neighbour / ceiling)
+const BV = require('./book-value');   // shared book valuation — the risk curve, the settle, the scrubber (SQ above: net spread quotes + mark validation)
 const CO = require('./combo-order');    // 4-leg atomic cover+open combo (comboNet / mergeLegs / payload)
 const store = require('./store');
 const OM = require('./order-manager');   // isOpenKind — which order rows are an open's
@@ -513,8 +515,10 @@ async function placeRestingCover(pos, plan, cfg, deps, candleTime, decisions, no
     shift: shift || undefined, minLock: ML || undefined, note });
 }
 
-// v8 risk caps (ported). Returns true if opening `res` (a debit spread, limit=res.limit) stays within
-// the run's caps; false (and logs 'open-skip-cap') if it would breach one:
+// v8 risk caps (ported). LEGACY: riskCap / softCap / hardCap are null on every roster variant since
+// 2026-10-14 (v8's soft cap removed), so capAllowsOpen returns true and capState is always ok — the
+// day-loss governor (below) is the live risk layer. Returns true if opening `res` (a debit spread,
+// limit=res.limit) stays within the run's caps; false (and logs 'open-skip-cap') if it would breach one:
 //   riskCap  — legacy total-uncovered-debit ceiling.
 //   softCap  — "churn" cap on AT-RISK debit (uncovered AND not deep-ITM). exemptTrendStack skips it
 //              when every uncovered position is the SAME side (a trend stack, not chop churn).
@@ -546,8 +550,11 @@ function capAllowsOpen(st, res, openSide, cfg, deps, decisions) {
 
 // COVER-TO-CONTINUE-STACKING (deps.coverToStack): when a cap would block a new open, LOCK the deepest-ITM
 // uncovered winner(s) (mark >= coverToStackMinFrac×width, default 0.65) with a resting cover — freeing
-// their at-risk from the budget — so the stack continues instead of skipping the open. Mirrors
-// backtest-v6-5m's cover-to-stack. The resting cover logs the REAL chain mark (the fill-realism data this
+// their at-risk from the budget — so the stack continues instead of skipping the open. Called ONLY from
+// the legacy cap branch of processCandleClose (riskCap/softCap/hardCap — all null on every variant), so it
+// never fires live today. NOT a full mirror of backtest-v6-5m's cover-to-stack: the backtest also runs
+// lockDeepWinners when the GOVERNOR would block an open (and in its reduceRisk step); live, a governor
+// block is just 'open-skip-governor'. The resting cover logs the REAL chain mark (the fill-realism data this
 // paper study collects); `stackLocked` frees the budget for THIS candle (a cheap deep-ITM cover fills
 // ~immediately — resolveRestingCovers books it later this same candle). Returns how many it locked.
 async function coverToStackFreeBudget(st, res, openSide, cfg, deps, decisions, candleTime) {
@@ -1487,7 +1494,8 @@ async function convertFlies(st, cfg, deps, decisions, candleTime) {
 // locked profit (global floor >= 0) below zero. Measured over 765 days at 2:1: locked-profit days 33.7% ->
 // 37.2% fleet-wide, closing floor +\$286, closing peak not given up.
 //
-// PRICED AT THE MID (+ floorRaiseSlipTicks), not the quoted ask. The older fly/wing ports pay the ask, which
+// PRICED AT THE MID (+ floorRaiseSlipTicks), not the quoted ask. The older fly/wing ports USED TO pay the ask
+// (both moved to mid ± their slip on 2026-10-09 — see convertWings / convertFlies), which
 // on 0DTE NDX makes a fly cost ~2x its mid (2026-10-05: 31060/31080/31100 put fly mid \$2.93, ask \$6.60) and
 // would never clear 2:1. NDX spreads fill near the mid; flies are UNMEASURED, so every placement records the
 // structure's mid AND its quoted ask, and the fill (or expiry) tells us what they really cost.
@@ -1795,7 +1803,7 @@ async function walkRaiseOrders(st, cfg, deps, decisions) {
   return moved;
 }
 
-// "MM/DD HH:MM" -> minutes from ET midnight, for the wing time gate.
+// "MM/DD HH:MM" -> minutes from ET midnight (wing/fly/raise windows, late-day and ratchet gates, open fallback).
 function etMinutesOf(candleTime) {
   const m = /(\d{1,2}):(\d{2})\s*$/.exec(String(candleTime || ''));
   return m ? (+m[1]) * 60 + (+m[2]) : null;
@@ -1990,7 +1998,8 @@ async function placeContinuousCovers(st, cfg, deps, decisions, candleTime, under
   //
   // IT IS NOT A FREE WIN AND IS NOT A FLEET DEFAULT: uncapped it trades floor for those fills and loses
   // on 18 of 29 variants (-$1.1M aggregate). It only pays where a tight day-loss cap already bounds the
-  // floor, which is why it ships ON for v7-10 (lossMax $1,000) and OFF everywhere else. See index.js.
+  // floor. No roster variant sets minLockRamp today (index.js only forwards run.minLockRamp; v7-10 included),
+  // so this block is inert live; the backtest arms it only for a variant that carries the flag (opts-for.js).
   // minLock as a FRACTION of width here; each position takes it at its own width (fallback widths, strike-grid.js).
   let minLockFrac = deps.continuousCoverMinLockFrac || 0;
   if (deps.minLockRamp) {
@@ -2080,9 +2089,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   const simpleDir = L.simpleDirection(candle);
 
   // DECISION SOURCE.
-  //   CLASSIC (v0-v3): close-vs-open + Bollinger/high-low break, via spread-logic.classifyOpen /
-  //     shouldCover on the single 15m `candle`.
-  //   PORTED (v4-v9): the multi-timeframe signal fn drives openSide + which side(s) to cover, off the
+  //   CLASSIC (no deps.signalFn — tests / legacy callers only): close-vs-open + Bollinger/high-low break,
+  //     via spread-logic.classifyOpen / shouldCover on the single 15m `candle`. No roster variant takes
+  //     this path: v0-v3 run signals/classic-signal.js through signalFn (at15) like everyone else.
+  //   PORTED (every roster family, v0-v21): the signal fn drives openSide + which side(s) to cover, off the
   //     live `A` object (deps.A / deps.priorA from analysis-builder). Mirrors backtest-v6-5m.runDay5m:
   //     per-side held state in, { openSide, cover | coverSide } out. Everything below (open/cover/
   //     resting-fill machinery) is SHARED. See [[project_candle_spread_live_order_wiring]].
@@ -2336,14 +2346,13 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     await placeContinuousCovers(st, cfg, deps, decisions, candleTime, underlying);
   }
 
-  // (3) COVER — only on a CONFIRMED reversal (see spread-logic.shouldCover): a candle
-  // closing opposite our held direction that FAILED to extend the prior candle's extreme
-  // (or where the prior trend candle closed outside its Bollinger band). Covers every
-  // filled, uncovered spread 1:1. Can happen in the same candle that also opens (step 4).
+  // (3) COVER — on the signal's cover set (ported: portedSig.cover / coverSide; for v0-v3 that is
+  // classic-signal's confirmed reversal), or spread-logic.shouldCover on the classic no-signalFn path.
+  // Covers the targeted filled, uncovered spreads 1:1. Can happen in the same candle that also opens (step 4).
   //
-  // WHICH cover geometry is chosen is delegated to a pluggable selector (cfg.coverSelector:
-  // 'fixed' = current tent | 'greedy' = best per-position candidate | 'joint' = basket
-  // optimization). This is the seam the 3 shadow variants differ on; everything else is shared.
+  // WHICH cover geometry is chosen is delegated to a pluggable selector (cfg.coverSelector: 'fixed' =
+  // cfg.coverGeometry, used by v0-v3 | 'fixed-mark' = mark-priced tent, v4+ | 'greedy' / 'joint' = set by
+  // no roster variant). In resting mode placeRestingCover prices it (lock target or mark), not plan.limit.
   if (coverSignal) {
     // Exclude positions that already have a resting cover working (don't re-select them). In ported
     // mode cover ONLY the side(s) the signal targeted (v7 per-side coverSide); classic covers all.
@@ -2365,14 +2374,14 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       } else if (deps.fillSource === 'broker') {
         // NOT UNDER A BROKER. The assume-fill model books `covered = true` AND credits plan.floor to
         // realizedPnl the moment the send is accepted — a locked profit claimed for a cover that may never
-        // fill, on the one path where that money is real. All 80 variants are coverFillModel 'resting'
+        // fill, on the one path where that money is real. Every roster variant is coverFillModel 'resting'
         // today, so this is unreachable; it is guarded because the day someone sets it, the failure is
         // silent and shaped exactly like the 2026-09-25 phantom book.
         decisions.push({ action: 'cover-skip-broker', positionId: pos.id,
           note: "coverFillModel 'assume-fill' books a locked floor on send acceptance, which is unsafe "
             + "under broker fills — the position stays uncovered rather than claim a fill it may not have" });
       } else {
-        // ASSUME-FILL model (v0 reference): book the cover immediately at mark+tick.
+        // ASSUME-FILL model (no roster variant uses it; v0 is 'resting'): book the cover immediately at plan.limit.
         const placed = await deps.placeOrder(plan.payload, { kind: 'cover', of: pos.id, legs: plan.legs, limit: plan.limit, mark: plan.mark });
         if (!placed || placed.filled === false) {
           decisions.push({ action: 'cover-not-sent', positionId: pos.id, reason: (placed && placed.error) || 'send failed' });
@@ -2401,9 +2410,11 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     }
   }
 
-  // (3b) v8 PROACTIVE DEEP-ITM COVER (ported, opts.proactiveCoverFrac): rest a tent cover on any
-  // uncovered leader whose spread now marks >= frac×width (deep ITM → a good tent locks cheaply).
-  // This locks winners and, via the cap logic below, stops them counting toward the at-risk churn cap.
+  // (3b) PROACTIVE DEEP-ITM COVER (deps.proactiveCoverFrac: v8 and v9 at 0.80, and the v9sg/v9ob copies):
+  // rest a tent cover on any uncovered leader whose spread now marks >= frac×width (deep ITM → a good tent
+  // locks cheaply). It skips positions that already have a cover working, so with continuous covers on it
+  // rarely places anything. (It also sets capState's deep-ITM test, which no longer matters: the churn
+  // softCap it fed is null on every variant since 2026-10-14.)
   if (ported && deps.proactiveCoverFrac != null && !NCM.modeOf(deps)) {
     for (const pos of st.positions) {
       if (!pos.filled || pos.covered || pos.pendingCover || pos.manual) continue;
@@ -2580,8 +2591,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       decisions.push({ action: 'open-skip-ratchet', side: openSide, projectedFloor: projected,
         peakFloor: round2(st.peakFloor), ratchetFloor: round2(lim), limit: res.limit });
     } else if (ported && !capState(st, res, openSide, cfg, deps).ok) {
-      // A cap blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM winner
-      // and open anyway; else skip (existing v8 behavior). capAllowsOpen logs the FINAL 'open-skip-cap'.
+      // A LEGACY cap (riskCap/softCap/hardCap — null on every variant since 2026-10-14, so this branch is not
+      // reached today) blocks this open. If cover-to-stack is on, try to free budget by locking a deep-ITM
+      // winner and open anyway; else skip. capAllowsOpen logs the FINAL 'open-skip-cap'.
       let opened = false;
       // COMBO first (deps.comboOrders): lock 1 winner + open as ONE atomic 4-leg order. Falls back to the
       // sequential cover-to-stack path when a single lock isn't enough or the spreads can't combine cleanly.
@@ -2610,8 +2622,9 @@ async function processCandleClose(record, candle, priorCandle, deps) {
       }
       if (!opened) capAllowsOpen(st, res, openSide, cfg, deps, decisions);   // logs 'open-skip-cap'
     } else {
-      // In dry-run/paper we assume the fill; a filled open is NOT pending-cancel. If a real (future)
-      // fill hasn't happened, it stays pending so the next candle cancels it (see openPosition).
+      // openPosition sends the open and it RESTS: resolvePendingOpen tests it on this and later looks
+      // (simulated) or applyBrokerFills books the broker's fill. An unfilled open stays working (laddered)
+      // and is cancelled only on a reversal, the stale/re-strike timeouts, or a reopen's window closing.
       await openPosition(st, res, openSide, cfg, deps, decisions, legStyle);
     }
   } else {
@@ -2643,8 +2656,10 @@ async function processCandleClose(record, candle, priorCandle, deps) {
   resolvePendingHedges(st, hcfg, hdeps, decisions);
 
   // RISK-REDUCTION LADDER, cheapest removal first — mirrors the backtest's reduceRisk(), and runs AFTER
-  // covers resolve so a cover that just filled already counts toward the floor. Locking winners is the
-  // free step and is handled by cover-to-stack above; what remains is the premium-spending step:
+  // covers resolve so a cover that just filled already counts toward the floor. NOT a full mirror: the
+  // backtest's reduceRisk() starts with a free step (lockDeepWinners) that live does NOT have — live's
+  // cover-to-stack above runs only on a legacy cap block (null on every variant), never here. What runs
+  // live is the premium-spending step:
   //   (1) ratio-gated offsets toward the WORKING TARGET — outsized risk reduction for a small slice of peak
   //   (2) MUST-FIX toward the HARD CEILING — take the best available lift regardless of ratio, because
   //       lossMax is a ceiling and not a preference.
@@ -2699,7 +2714,7 @@ async function processCandleClose(record, candle, priorCandle, deps) {
     bands,
     coverContext,
     classification: { simpleDir, openSide, firstOfDay },
-    // Ported (v4-v9) provenance: which signal fired and the 5m/15m cadence flag.
+    // Ported (every roster family, v0-v3 included) provenance: which signal fired and the 5m/15m cadence flag.
     signal: ported ? { variant: cfg.variant, reason: portedSig.reason, isFifteen: deps.isFifteen !== false, directionality: deps.directionality,
       ...(portedTrace ? { trace: portedTrace } : {}) } : null,
     direction: st.direction,
@@ -2969,7 +2984,8 @@ function buildCover(pos, cfg, getLeg, coverShort) {
   return { legs, mark, cap, limit, payload: buildOrderPayload(resolved, limit, cfg.quantity, 'DEBIT') };
 }
 
-// --- Cover selection (the seam the 3 shadow variants differ on) ------------
+// --- Cover selection (signal-cover path only: cfg.coverSelector) ----------
+// Roster: 'fixed' (v0-v3, honours coverGeometry) and 'fixed-mark' (v4+). 'greedy' / 'joint' are set by no variant.
 // selectCovers(uncovered, cfg, getLeg, ctx) -> array of cover PLANS (or {error,positionId}).
 // ctx = { underlying (candle close), reversedDir ('bull'|'bear' of the covering candle), bbOverride }.
 // A plan: { positionId, legs, resolved, mark, limit, floor($), peakExtra($), geometry, longStrike, payload }.
@@ -3009,8 +3025,8 @@ function priceCoverCandidate(coveredSide, pos, longStrike, cfg, getLeg) {
   };
 }
 
-// V0 baseline: the fixed geometry priced with the old debitLimit (so V0 reproduces the deployed
-// behavior exactly for a clean A/B against the smarter variants).
+// coverSelector 'fixed' (v0-v3): cfg.coverGeometry priced by buildCover — L.debitLimit's mark rounded to the
+// nearest tick (no ceiling on a cover). Under the resting model (every variant) placeRestingCover re-prices it.
 //
 // GEOMETRY. This selector used to build the TENT unconditionally, but v1 and v2 declare
 // coverGeometry 'halfway' / 'underlying' while riding coverSelector 'fixed' — so every 'fixed' variant
@@ -3036,10 +3052,9 @@ function selectCoverFixed(pos, cfg, getLeg, underlying) {
   };
 }
 
-// Same fixed TENT geometry as V0, but priced at the realistic mark (mark + 1 tick, no
-// sub-market cap) instead of the 0.525×width cap. Isolates the fill-price effect from the
-// geometry: v3 vs v1/v2 is an apples-to-apples geometry comparison (all mark-priced), while
-// V0 stays capped as the optimistic-instant-fill reference for the future fill-tracking work.
+// The TENT, priced at mark + 1 tick (L.coverLimitFromMark; refused when the mark is outside [0, W]).
+// coverSelector 'fixed-mark' (v4+), and the tent branch of selectCoverGeometric, proactive covers and
+// cover-to-stack. (v0-v3 ride 'fixed' instead; none of the selectors caps a cover's price.)
 function selectCoverFixedMark(pos, cfg, getLeg) {
   cfg = posCfg(cfg, pos);
   const tentLong = pos.side === 'bull' ? pos.shortStrike + cfg.spreadWidth : pos.shortStrike - cfg.spreadWidth;
@@ -3049,8 +3064,10 @@ function selectCoverFixedMark(pos, cfg, getLeg) {
   return plan;
 }
 
-// GEOMETRY-AWARE cover plan — the live counterpart of the backtest's coverGeometry. WHERE the offsetting
-// spread sits is the axis v0-v3 differ on:
+// GEOMETRY-AWARE cover plan — the live counterpart of the backtest's coverGeometry, used by continuous
+// covers when no cover range / strike ladder is on (v0-v2 at every width, every 10W). WHERE the offsetting
+// spread sits is the axis v0-v2 differ on; 10W v4+ use 'offsetN' (offset1, the plateau cover — a condor N
+// strikes beyond the tent, spread-logic.coverShortFor):
 //   'tent'       shares the covered position's short strike (butterfly: one peak, cheapest cover,
 //                biggest locked floor, least upside) — identical to selectCoverFixedMark, so v0 is
 //                untouched and 'tent' is a no-op relative to the previous behaviour;
@@ -3072,8 +3089,9 @@ function selectCoverGeometric(pos, cfg, getLeg, underlying) {
   return plan;
 }
 
-// ── COVER STRIKE CHOICE (2026-10-12/13) — the live port of backtest-v6-5m's coverRange / giveUpGeometry /
-// (same names on deps). The backtest's coverRoll is NOT ported — rejected by the user 2026-10-13. A cover is named by k = strikes from the position's own short strike toward
+// ── COVER STRIKE CHOICE (2026-10-12/13) — the live port of backtest-v6-5m's coverRange / giveUpGeometry
+// (same names on deps). index.js sets the range on 20W/40W of v3 and up; v0-v2 skip it since 2026-11-06
+// (COVER_GEOMETRY_BASELINES) so their coverGeometry decides. The backtest's coverRoll is NOT ported — rejected by the user 2026-10-13. A cover is named by k = strikes from the position's own short strike toward
 // its profit side: k = 0 the tent, k > 0 a condor, k < 0 inside the open spread (down to one strike inside the
 // open's long leg — every such k keeps the pair's floor at W, so the lock stays W - open - cover). 10W has no
 // inside. Measured over 821 days (data/sweeps/cover-strike-2026-10-12): on 20W/40W the range with a 0.03 x W
@@ -3173,7 +3191,7 @@ function upsideLambda(cfg, ctx) {
   return base * (ctx.bbOverride ? (cfg.convictionMult || 1.5) : 1);
 }
 
-// V1 phase-1: best candidate per position, score = floor + λ·peakExtra. Naturally picks the
+// coverSelector 'greedy' (set by no roster variant): best candidate per position, score = floor + λ·peakExtra. Naturally picks the
 // box for an un-retraced last open (cheap box beats an ATM tent) and the tent/deeper for deep
 // stacked opens (both cheap, so the upside bonus tips it).
 function selectCoverGreedy(pos, cfg, getLeg, ctx) {
@@ -3216,7 +3234,7 @@ function jointScore(chosen, positions, scenarios, cfg) {
   return ev;
 }
 
-// V2 phase-2: optimize the whole covering basket jointly. Price + prune each position's
+// coverSelector 'joint' (set by no roster variant): optimize the whole covering basket jointly. Price + prune each position's
 // candidates to the top-N by greedy score, take the (capped) cartesian product, and pick the
 // combination maximizing expected aggregate P/L under the reversal scenarios. Falls back to
 // greedy per position if any position lacks quotes or the product exceeds the cap.
@@ -3314,7 +3332,7 @@ function snapshotSpreads(getLeg, center, incr, windowStrikes) {
 // (`brokerApplied`), so a poll landing between ticks cannot double-book.
 //
 // ACTIVE ONLY UNDER deps.fillSource === 'broker'. Everything else keeps the mark path byte-identical,
-// which is what lets 78 simulated variants and every backtest comparison stay valid.
+// which is what lets every simulated variant and every backtest comparison stay valid.
 //
 // THE PRICE IS THE BROKER'S, IN THE SPACE THE ORDER WAS SENT IN. A credit twin fills at a CREDIT while
 // the position records a debit-canonical limit, so the fill is translated back through parity rather than
@@ -3340,7 +3358,8 @@ function paritySpot(getLeg, near, incr) {
   return best ? round2(best.spot) : null;
 }
 
-// REOPEN AFTER A QUICK COVER (cfg.reopenOnCover, user 2026-10-14, v7-10). When an open covers inside the current 15m
+// REOPEN AFTER A QUICK COVER (cfg.reopenOnCover; user 2026-10-14 on v7-10, on every v0-v9 variant since 2026-11-06 —
+// v9sg/v9ob inherit it; modelled in backtest-v6-5m.js, one bar later at most). When an open covers inside the current 15m
 // signal window and the underlying is still between its strikes, place it again rather than wait for the next 15m
 // close — the user trades this way by hand: a fast morning tent that locks minLock in minutes is worth repeating, and
 // a covered position adds no risk however many there are.
@@ -3625,23 +3644,25 @@ function computeTerminalPnl(state, cfg, settle, events) {
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
-// Net-debit mark of a cover leg-set from the CURRENT chain (null if any leg is unquoted).
-// ── ONE FILL TEST FOR EVERY ORDER TYPE ───────────────────────────────────────────────────────────────
+// (coverMarkNow, further down: net-debit mark of a cover leg-set from the CURRENT chain — null if any leg is
+// unquoted or the mark is impossible.)
+// ── ONE FILL TEST FOR EVERY ORDER TYPE (markFill, further down) ─────────────────────────────────────
 // Opens, offsets/hedges and wings used to book `filled: true` unconditionally: the position appeared in
 // the book whether or not any price supported it, and a missing or unquotable leg still produced a fill.
 // Only resting covers were ever price-tested. Every order type now goes through this, so "filled" means
 // the same thing everywhere — an observed mark reached the limit we placed.
 //
-// DEBIT-CANONICAL, like the rest of the engine: `mark <= limit` fills a BUY. Fill price is
-// min(limit, mark + tick) so a mark already through the limit books at the cheap side rather than
-// pretending we paid the full limit.
+// DEBIT-CANONICAL, like the rest of the engine: `mark <= limit` fills a BUY (a CREDIT-sent order is tested
+// in its own direction). Fill price is the LIMIT when deps.simFillAtLimit (the roster sets it for every
+// variant since 2026-10-06); otherwise max(mark, min(limit, mark + tick)).
 //
 // HONEST LIMIT: `mark` here is Schwab's mark, or the midpoint when it is absent (see makeLegAccessor).
 // A resting buy fills when someone trades at the price, and the mid touching our limit is necessary but
 // not sufficient — the ask has to come to us. This test is therefore still optimistic; it is a real
 // market observation rather than a model, which is the improvement, but it is not broker confirmation.
 // ORDER_SLIP_TICKS is what buys the extra confidence: see openSlip below.
-// SHOULD THIS ORDER BE SENT AS CREDIT? One answer, called from all five decision sites, because this is
+// SHOULD THIS ORDER BE SENT AS CREDIT? (creditPreferred, just below openFundsCredit.) One answer, called from
+// every decision site, because this is
 // precisely the shape that has drifted here before: a rule implemented per-site ends up meaning five
 // slightly different things and nobody notices until the telemetry disagrees with itself.
 //
@@ -3970,12 +3991,15 @@ function coverMarkNow(legs, getLeg) {
   return saneMark(legs, round2(v));
 }
 
-// RESTING-cover fill model (see the cover step): a working cover fills when its real mark reaches
-// its target (= width − openCost). Fill price = min(target, mark + tick) → cross cheap when the
-// cover is already below target (deep-ITM lock), else fill at the resting target. Books the locked
-// floor (width − open − fill) at the actual fill price. Live analog of the backtest's two-mode fill;
-// here the fill check uses the real per-candle chain mark instead of the pricer/wick.
-// WORK THE RESTING COVERS (deps.coverLadder, default OFF). Recompute what limit each live cover order
+// ── The notes below describe functions defined further down: resolveRestingCovers, workRestingCovers,
+// resolvePendingOpen, resolvePendingHedges and noteMarkLow, in that order of the notes. ──
+// RESTING-cover fill model (resolveRestingCovers): a working cover fills when its real mark reaches
+// its target (the lock target, or the laddered / give-up price it was walked to). Fill price = the target
+// under simFillAtLimit (every roster variant); otherwise max(mark, min(target, mark + tick)). Books the
+// locked floor (width − open − fill) at the fill price. Live analog of the backtest's two-mode fill;
+// here the fill check uses the real chain mark instead of the pricer/wick.
+// WORK THE RESTING COVERS (deps.coverLadder — engine default OFF, but index.js applyLadderCfg turns it on for
+// every v0-v9 variant; no-ladder control cells are empty since 2026-10-09). Recompute what limit each live cover order
 // should be showing given how long it has rested and how far the underlying has moved, and REPLACE the
 // order at the broker when that has changed by at least a tick.
 //
@@ -3986,8 +4010,8 @@ function coverMarkNow(legs, getLeg) {
 //
 // COUNTER-EVIDENCE, recorded honestly: the backtest sweep of this ladder raised fill from 47% to 83% and
 // LOST $461k-$863k across all 36 arms, because paying up to fill an order the market was going to come
-// to anyway is a worse trade than waiting. That result is why this ships DEFAULT OFF. It is wired so it
-// can be enabled deliberately and measured live, not because the backtest endorses it.
+// to anyway is a worse trade than waiting. That result is why the ENGINE default is OFF; the roster turned it
+// on fleet-wide anyway (2026-09-15, with the reduced minLock; $0.05 / 120 s / 10 pts since 2026-10-02).
 // Try to FILL a resting open against the current chain, and work it toward the market if it will not.
 // Split out of processCandleClose so the LIVE sub-bar worker can call it between candles: the candle tick
 // prices an open and tests it in the same snapshot, which can only ever say yes, while a pass seconds
@@ -3999,8 +4023,9 @@ function coverMarkNow(legs, getLeg) {
 // books only when a LATER observation shows the mark at or through the limit we sent.
 //
 // Why these need it as much as opens did: an offset is priced from the same mids it was then tested
-// against, and a wing or fly is priced at the ASK while the test reads the MID — so each was priced at or
-// above its own mark and asked whether the mark was at or below its price. None could ever be refused.
+// against, and a wing or fly was then priced at the ASK (mid ± slip since 2026-10-09) while the test reads the
+// MID — so each was priced at or above its own mark and asked whether the mark was at or below its price.
+// None could ever be refused.
 //
 // THEY EXPIRE, unlike a cover. A cover is worth having whenever it finally fills; a hedge was chosen for
 // the shape of the risk curve at one moment, and that reason goes stale. Working one for the rest of the
@@ -4101,9 +4126,9 @@ function resolvePendingHedges(st, cfg, deps, decisions) {
     // `deps` IS NOT OPTIONAL HERE. markFill reads deps.strikeIncrement to find each leg's neighbours for
     // the chain-monotonicity gate, and deps.underlying to stamp the check. Omitting it — as this and the
     // three hedge-placement sites did — fell back to a hardcoded increment of 10, so the gate that refuses
-    // a broken chain was probing strikes that need not exist and abstaining. Every live variant happens to
-    // use 10 today, which is exactly why this could not be noticed: the argument that would have made it
-    // wrong was the one nobody had varied. Hedges are the structures whose value lives at ONE strike, so
+    // a broken chain was probing strikes that need not exist and abstaining. Every variant's BASE grid is
+    // 10, which is exactly why this could not be noticed: the argument that would have made it wrong was the
+    // one nobody had varied. Since 2026-11-05 it does vary: hedgeCtx / posCtx carry a 25-pt grid on a sparse chain. Hedges are the structures whose value lives at ONE strike, so
     // they are the last place to run a weaker quote check than an open gets.
     const chk = markFill(pos.legs, ph.limit, deps.getLeg, cfg.tickIncrement, deps);
     noteMarkLow(pos, chk, ph.limit, 'DEBIT');
@@ -4355,7 +4380,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // often does not make the ladder walk faster. The sub-bar pass changes how often we LOOK, not how
   // quickly we chase — which is the whole point of it.
   // Same reasoning for the step: $0.25 (and $0.10 at W=40) was fitted to covers over 765 days, and there
-  // is no result behind it for opens. Separately settable, same default.
+  // is no result behind it for opens. Separately settable, same default. (0.25 is only the engine fallback:
+  // the roster sets ladderStepDollars $0.05 on every width since 2026-10-02, applyLadderCfg.)
   const step = deps.openLadderStepDollars != null ? deps.openLadderStepDollars
     : (deps.ladderStepDollars != null ? deps.ladderStepDollars : 0.25);
   const ceiling = pos.cap != null ? pos.cap : Infinity;
@@ -4371,7 +4397,8 @@ async function resolvePendingOpen(st, cfg, deps, decisions) {
   // W - limit, which is how placeRestingCover keeps the two economically identical by construction.
   const ladderMark = sentCredit ? spreadQuote(pos.legs, deps.getLeg).mark : chk.mark;
   if (ladderMark == null) return 0;
-  // PACED LIKE THE COVER LADDER (user, 2026-10-02: "match the covers, 300s/5pts"). This stepped +step on
+  // PACED LIKE THE COVER LADDER (user, 2026-10-02: "match the covers, 300s/5pts"; the shared roster pace is now
+  // 120 s / 10 pts, applyLadderCfg). This stepped +step on
   // EVERY call, which was once per candle when it was written; the 30s sub-bar worker made it up to ten
   // steps a bar — live on 10-02 it repriced 1.2s after placement. A step is now EARNED by elapsed time
   // since the first placement OR underlying movement since then, whichever is further along, through the
@@ -5057,7 +5084,7 @@ module.exports = {
 
   processCandleClose,
   reopenAfterCover, paritySpot,   // REOPEN AFTER A QUICK COVER — the candle close AND the sub-bar worker
-  pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / give-up re-strike / roll)
+  pickCoverK, coverLegsAtK, coverKOf, restrikeCover,   // cover strike choice (range / step-in / give-up re-strike; no roll)
   attachLedger,           // the leg ledger on deps — every order-placing path, candle close and worker
   placeContinuousCovers,   // continuous cover placement — the candle close AND the sub-bar worker (on fill)
   lateFloorLimit,                // LATE-DAY FLOOR GUARD
@@ -5065,7 +5092,7 @@ module.exports = {
   markFill,                      // FILL TEST — exported so its DIRECTION (debit vs credit) can be tested
   structureBounds, simDwell, quoteAgeCheck,   // SIM FILL REALISM part 2 (2026-10-17) — exported for their tests
   placeRestingCover,
-  coverToStackFreeBudget, capState,   // CAP ACCOUNTING — exported so stackLocked's effect can be tested             // COVER PLACEMENT — exported so credit/debit price PARITY can be tested
+  coverToStackFreeBudget, capState,   // CAP ACCOUNTING — exported so stackLocked's effect can be tested (placeRestingCover above: exported so credit/debit price PARITY can be tested)
   buildCreditOpenOrder,          // CREDIT TWIN — exported so its parity check can be tested directly
   workRestingCovers,
   // Exported for the sub-bar worker. workRestingCovers WALKS a resting cover; this is what FILLS it, and

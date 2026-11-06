@@ -27,6 +27,11 @@
  *     CEILING. Never pay more than ~65% of width for a long debit spread — above that the risk/reward
  *     isn't there. This one is a STRATEGY limit rather than a quote check: the right response is to
  *     decline or move strikes, NOT to book at the cap (booking `min(cap, mark)` pays below market).
+ *
+ *  WHAT THE LIVE ENGINE ACTUALLY CALLS (trader.js): netQuote, bull/bearPutLegs, verticalSanity, quoteUsable,
+ *  chainMonotonic, cheapOutlier, parityDeviation, parityFairCombo. parityCheck / neighbourCheck / validateOpen
+ *  (the three-check open gate described above) have no caller outside tests/unit/spread-quote.test.js.
+ *  `incr` arguments default to 10 when a caller omits them.
  */
 
 const r2 = (n) => Math.round(n * 100) / 100;
@@ -168,6 +173,7 @@ function cheapOutlier(legs, getLeg, opts) {
 
 /**
  * The full gate for an OPEN. Combines all three checks and returns the price to actually use.
+ * (Not called by the engine today — unit tests only; live opens use trader.buildOpenAtStrikes' own gates.)
  *   ok:false + reason 'ceiling'  → the trade itself is too expensive (decline, or move strikes)
  *   ok:false + reason 'parity'/'neighbour' → the MARK is suspect; `limit` is the parity-derived fair price
  * `limit` is never above the observed mid — we do not invent a better price than the market shows, and we
@@ -302,8 +308,9 @@ function quoteUsable(legs, q) {
  * allows). It is here to catch a book that has fallen apart, NOT to judge whether a fill is realistic —
  * NDX 0DTE quotes wide and still trades near the mid, and a tight gate here would repeat the mistake the
  * width test already made. UNMEASURED on live data: run records store the NET quote, not the per-leg
- * quotes, so the residual distribution cannot be recovered after the fact. Record parityResidual on
- * orders, measure it over a few sessions, then tighten. Until then it should only ever catch the obvious.
+ * quotes, so the residual distribution cannot be recovered after the fact. The plan was to record
+ * parityResidual on orders, measure it over a few sessions, then tighten — nothing records parityResidual
+ * yet. Until then it should only ever catch the obvious.
  */
 function parityDeviation(lo, hi, getLeg, opts) {
   const o = opts || {};

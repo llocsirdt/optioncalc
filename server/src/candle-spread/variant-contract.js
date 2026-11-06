@@ -2,9 +2,10 @@
 /**
  * VARIANT CONTRACT — fail loudly when a consumer silently drops a variant capability.
  *
- * The variant config in index.js is the single source of truth, but every consumer re-enumerates it BY
- * HAND: the live `deps` object, and each analysis script's optsFor. None of them fail when a newly added
- * field is missing from the list — the feature just quietly does nothing. That has now happened four times
+ * The variant config in index.js is the single source of truth, but its consumers enumerate it BY HAND: the
+ * live `deps` object (index.js), and the backtest mapping (backtest/opts-for.js, now shared by the baselines
+ * builder, run-day-record and backtest-replay; some sweep scripts still keep their own). None of them fail when
+ * a newly added field is missing from the list — the feature just quietly does nothing. That has now happened four times
  * in one day: floorOffset never reached live, two cover-arming flags never reached `deps`, exemptTrendStack
  * was dropped by a sweep, and all eleven wing flags were dropped by the baselines builder. Each looked like
  * a clean null result until the output turned out byte-identical to the control.

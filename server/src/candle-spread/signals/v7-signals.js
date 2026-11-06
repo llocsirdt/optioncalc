@@ -1,5 +1,9 @@
 'use strict';
 /**
+ * v7 SIGNAL (v7Signal) = the v6 signal below PLUS per-side held state and BE-WRONG: it may hold BOTH sides at
+ * once, opening the opposite side early as a hedge without covering the underwater side (see (0b) in v7Signal).
+ * The rest of this header is the v6 description it was copied from, kept as the lineage:
+ *
  * v6 = v5 + a FASTER trend read (v5 is frozen as the baseline). v5's trend-flip cover uses the 15m
  * midline (a ~5h/20-bar average) which LAGS badly on two-sided days (8/14: v5 kept opening bears into
  * the afternoon base because the 15m midline was still "down" long after price turned — see the 8/14

@@ -6,7 +6,8 @@
 // skew correction there, real chain mids here).
 //
 // The rules, exactly as the user set them:
-//   - Search everything near the money: single longs, verticals (10/20 wide) and flies (10/20 wings), puts
+//   - Search everything near the money: single longs, verticals and flies one and two strikes wide (10/20 on the
+//     10-pt grid, 25/50 on a 25-pt one — candidates() takes the grid as `incr`), puts
 //     and calls, across [spot - band, spot + band] where band = sigmas x the expected remaining move.
 //   - Score = NET lift of the BAND floor (the min P&L the market can plausibly reach, after paying) per
 //     dollar spent. Buy the best while it clears minRatio — "risk $500 to raise the floor by at least $500"
@@ -57,7 +58,7 @@ function candidates(lo, hi, incr) {
   return out;
 }
 
-// VALLEY-SIZED STRUCTURES (2026-10-07). The fixed menu above (10/20-wing flies) cannot cover a WIDE valley:
+// VALLEY-SIZED STRUCTURES (2026-10-07). The fixed menu above (1-2 strike wings) cannot cover a WIDE valley:
 // v7-10 at 13:50 had a flat 60-point stretch (31060-31120) at -1,538, and the best fly lifted one point of it
 // and sank the rest by its premium. The user's rule: size the fly / condor to the valley AND look a strike or
 // two WIDER, so the cost is absorbed by the rising profit slope beyond the valley's edges.

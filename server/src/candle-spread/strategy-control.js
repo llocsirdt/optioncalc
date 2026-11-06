@@ -24,14 +24,17 @@
  *     }
  *   }
  *
- * ANY VARIANT NOT LISTED IS SIMULATION ONLY. That is what keeps the file short — only exceptions appear — and
- * it is also the fail-safe direction: an empty file, a deleted file, or a file this code cannot read all mean
- * "nothing trades for real", which is the state you want when in doubt.
+ * ANY VARIANT NOT LISTED RUNS AT ITS ROSTER MODE (the environment's CANDLE_SPREAD_ARMED / _ARMED_MODE; see
+ * `baseline` and forVariant below) — 'simulate' for every variant the environment has not armed. That keeps the
+ * file short: only exceptions appear. It is NOT a global off switch: an empty or absent file leaves an env-armed
+ * variant at its roster mode (paper or live), and an unreadable/malformed file keeps the LAST GOOD state in force
+ * (or, with none, every variant at its roster mode). To stand an env-armed variant down, list it.
  *
  *   mode      'simulate' (default) | 'paper' | 'live'
  *   restrict  optional: 'no-open' | 'halt'          — orthogonal to mode, subtracts from it
- *   until     optional YYYY-MM-DD (ET). Past that date the entry is IGNORED and the variant reverts to
- *             simulate. So a live arming you forget about expires instead of running for a month.
+ *   until     optional YYYY-MM-DD (ET). Past that date the entry is IGNORED and the variant reverts to its
+ *             roster mode (simulate unless the environment armed it). A control-file arming you forget about
+ *             expires; an env arming does not.
  *
  * ── TWO SEPARATE QUESTIONS, DELIBERATELY ────────────────────────────────────────────────────────────
  * `mode` is what the strategy IS. `restrict` is what it may DO right now. They are orthogonal because the
@@ -55,8 +58,8 @@ const MODE_RANK = { simulate: 0, paper: 1, live: 2 };
  * A variant's ceiling is the ROSTER's mode, set from the environment (CANDLE_SPREAD_ARMED_MODE). The file can
  * ask for less and never for more.
  *
- * WHY, CONCRETELY. The three order senders and fillSourceFor all read `run.dryRun` — the ROSTER value — not the
- * effective mode. So a file entry of 'live' against a roster of 'test' produced a split engine: the trader
+ * WHY, CONCRETELY. The three order senders and fillSourceFor used to read `run.dryRun` — the ROSTER value — not
+ * the effective mode (they now read index.js effectiveDryRun). So a file entry of 'live' against a roster of 'test' produced a split engine: the trader
  * believed dryRun === false while the senders still rewrote every price to something unfillable and fillSource
  * stayed 'mark'. Harmless in outcome but a lie in the display, which is the same failure as reporting
  * "SIMULATE" for an env-armed paper variant, mirrored.
@@ -137,8 +140,8 @@ function normalise(file, knownVariants, opts = {}) {
       out.rejected.push({ variant: name, why: `unknown restrict ${JSON.stringify(entry.restrict)}` });
       continue;
     }
-    // EXPIRY IS FAIL-SAFE. Past `until` the entry stops applying entirely, so an arming you forget about
-    // reverts to simulate instead of running for a month.
+    // EXPIRY IS FAIL-SAFE. Past `until` the entry stops applying entirely, so the variant reverts to its roster
+    // mode (forVariant) — simulate unless the environment armed it.
     const until = entry.until ? String(entry.until).slice(0, 10) : null;
     if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
       out.rejected.push({ variant: name, why: `until is not YYYY-MM-DD: ${JSON.stringify(entry.until)}` });
@@ -406,7 +409,7 @@ function health() {
  *
  * Three shapes, all going through the same validation:
  *   { variant, mode, restrict?, note?, until? }   set or replace one entry
- *   { variant, remove: true }                     delete one entry (back to simulate)
+ *   { variant, remove: true }                     delete one entry (back to the roster mode)
  *   { variants: {...} }                           replace the whole map
  *
  * READ-MODIFY-WRITE, LAST WRITE WINS. There is one operator, so a compare-and-swap would be machinery for a
@@ -464,9 +467,7 @@ async function applyPatch(patch, deps = {}) {
     return { ok: false, status: 400, error: 'nothing to do: send { variant, mode } or { variants: {...} }' };
   }
 
-  // VALIDATE THE RESULT, not the patch. liveAllowed:true here on purpose — we are storing an intent, and the
-  // downgrade to paper happens at READ time against the environment the engine is actually running in.
-  // liveAllowed true here on purpose — we store an INTENT; the clamp against the roster and the environment
+  // VALIDATE THE RESULT, not the patch. liveAllowed true here on purpose — we store an INTENT; the clamp against the roster and the environment
   // both happen at read time, against the environment the engine is actually running in.
   const check = normalise(next, deps.knownVariants, { liveAllowed: true, baseline: state.baseline });
   if (check.armedRejected) return { ok: false, status: 400, error: check.armedRejected };

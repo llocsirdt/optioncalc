@@ -2,7 +2,8 @@
 // positions dataset the calculator is showing, so Fidelity CSV imports and the live Strategy (paper) book
 // never comingle. Owns: the selected source (persisted per symbol), the source-scoped localStorage cache
 // key (so multiple datasets coexist per symbol+expiration), the Strategy pull from the candle-spread runs
-// API + auto-refresh, and the timestamps store the future NQ-chart trade overlay will read.
+// API + 45s auto-refresh (market hours, visible tab), and the open/cover trade markers it pushes to the NQ chart
+// (NQChart.setTrades).
 //
 // oc.js calls window.positionsCacheKey() for save/restore; everything else is wired here.
 (function () {

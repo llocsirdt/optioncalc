@@ -7,6 +7,9 @@
  * - S3 backup for cross-instance state sharing
  * - Local caching for performance
  * - Graceful degradation for S3 failures
+ *
+ * NOT IN USE (checked 2026-11-06): nothing in server/ requires this module. The running server uses
+ * persistence.js (PersistenceManager); candle-spread run durability is candle-spread/run-archive.js (S3).
  */
 
 const fs = require('fs').promises;

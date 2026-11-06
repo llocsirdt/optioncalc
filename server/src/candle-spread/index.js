@@ -15,7 +15,7 @@ const summary = require('./summary');
 const ab = require('./analysis-builder');
 const bs = require('./bs-pricer');
 const RH = require('./risk-harvest');   // read-only risk-harvest OBSERVER (measures lopsidedness + real fills)
-const VC = require('./variant-contract');
+const VC = require('./variant-contract');   // fails the boot when a variant flag is not forwarded to the engine
 const tradability = require('./tradability');   // is there a market to trade at all? (holiday/halt/dead feed)
 const SG = require('./strike-grid');   // which strikes are really listed near the money; fallback widths
 const setups = require('./setups');             // named start-of-day setups (informational; never trades)
@@ -50,6 +50,10 @@ const chartSeries = require('./../chart-series');
 //
 // The `-unc` twins of these cells are controls too, but the overlay hides `-unc`, so listing them would
 // mark nothing visible while inflating the legend. Capped cells only.
+//
+// NOW STALE IN ITS PREMISE (left for the record): since 2026-10-09 MINLOCK_CONTROL_CELLS is empty (the ladder
+// is on for every variant) and FLY_LIVE is empty (stand-alone flies off), so v1-10 / v2-10 / v6-10 are no
+// longer no-ladder or fly controls — the default list is a plain UI marker with no experiment behind it.
 const WATCHLIST = (process.env.CANDLE_SPREAD_WATCHLIST != null
   ? process.env.CANDLE_SPREAD_WATCHLIST
   : 'v1-10,v2-10,v6-10')
@@ -83,7 +87,7 @@ async function currentSetups(symbol) {
 }
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — same source as the backtest
 // Last tradability verdict, published to /status so the UI can show WHY the engine is standing down.
-let LAST_TRADABILITY = null;   // fails the boot when a variant flag is not forwarded to the engine
+let LAST_TRADABILITY = null;
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
@@ -97,8 +101,10 @@ const at15 = fn => (A, p, ctx) => ctx.isFifteen === false ? { openSide: null, co
 
 // Base run config(s), keyed by (symbol, expiration). NDX 0DTE first. Each base run is
 // fanned out into one shadow run PER VARIANT (see VARIANTS) that share the same live candle
-// and chain snapshot each tick and differ ONLY in cover-selection, so they can be compared.
-// dryRun=true => build + log orders but DO NOT send; assume fills so the day simulates.
+// and chain snapshot each tick and differ in their variant config (signal family, width, geometry, caps,
+// covering policy, experiments), so they can be compared.
+// dryRun=true => build + log orders but DO NOT send; fills are decided by the engine's mark path
+// (trader.markFill), so the day simulates.
 const BASE_RUNS = [
   {
     symbol: 'NDX',             // PRICING instrument: strikes/chain/mark (options settle on NDX)
@@ -207,8 +213,9 @@ const FAMILIES = [
   { key: 'v5', label: 'trend-flip',      signalFn: at15(v5Signal), signalCfg: {}, ...PORTED_COVER },
   // NOTE `testAtBase` is VESTIGIAL — arming is decided solely by ARMED_VARIANT (env, defaulting to
   // v7-10). Nothing reads this flag; it is left only so the v6 family definition matches its history.
-  // All families inherit the day-loss governor from BASE_RUNS ($5k target, width-scaled max) plus the
-  // continuous-covering policy; each also gets an uncapped `-unc` twin via buildUncapped() below.
+  // All families get the day-loss governor (lossMax from TUNED_CAPS or maxCapFor, bounded by the 1.5x-width
+  // floor and the $7,500 ceiling in applyExperiments; lossTarget = 0.7 x lossMax) plus the continuous-covering
+  // policy; each also gets an uncapped `-unc` twin via buildUncapped() below.
   { key: 'v6', label: '5m-harness', signalFn: v6Signal, signalCfg: { fiveMin: true }, testAtBase: true, ...PORTED_COVER },
   { key: 'v7', label: 'be-wrong',   signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, ...PORTED_COVER },
   // v8 = v6 signal + proactive deep-ITM covering, on top of the shared governor.
@@ -218,7 +225,7 @@ const FAMILIES = [
   // a day vs v6-40's 6-27, and it drove most of v8's 20W/40W gap to v6. The feature stays in capState (softCap /
   // exemptTrendStack) — backlogged to revisit whether it still has a purpose.
   { key: 'v8', label: 'proactive', signalFn: v6Signal, signalCfg: { fiveMin: true }, proactiveCoverFrac: 0.80, ...PORTED_COVER },   // 0.70 -> 0.80 (user, 2026-10-14): same as v9
-  // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the $20k backstop — the high-ceiling variant.
+  // v9 = v7 (be-wrong) + proactiveCover 0.80 on top of the shared day-loss governor — the high-ceiling variant.
   // Still paper pending go/no-go ([[project_daily_risk_tolerance]]).
   { key: 'v9', label: 'be-wrong + caps', signalFn: v7Signal, signalCfg: { fiveMin: true, beWrong: true }, bidirectional: true, proactiveCoverFrac: 0.80, ...PORTED_COVER },
 ];
@@ -235,6 +242,8 @@ const FAMILIES = [
 // than fixed everywhere. ⚠️ It rests on MODELED marks; live reads both sides of the chain (call+put sum
 // ~1.05-1.1 × W, anchor on the cheaper), and that read is what should confirm 0.60 over 0.65 — the gap is
 // worth ~$740k on v6-20. capFrac GATES the trade; it never caps the price.
+// NOW (2026-10-05+): on every ADAPTIVE variant this 0.60 is overwritten by PLACEMENT G below (capFrac 0.55 /
+// 0.575 / 0.5875 at 10/20/40W by default), where capFrac IS the most an open pays (openWalkCapFrac = capFrac).
 //
 // maxItmStrikes 3 — MEASURED as the peak. The ladder saturates at 5 (itm5 == itm6 to the dollar), is
 // effectively saturated at 4, and going deeper than 3 adds ~27 opens out of 20,086 (0.13%) whose
@@ -314,8 +323,11 @@ function applyPlacementG(v) {
 // per contract, so it needs more headroom to place even one position:
 //     maxCap = max(2 × width×100, target + width×100)   →   $10 → $6k · $20 → $7k · $40 → $9k
 // (the 2×width term only binds for widths ≥ $50; below that target+width is the greater.)
+// NOW: this is only the builders' STARTING value (LOSS_TARGET / maxCapFor). applyExperiments then applies
+// TUNED_CAPS, the 1.5x-width floor and the $7,500 ceiling, and every cap it sets carries lossTarget = 0.7 x
+// lossMax — so no variant on the current roster runs at the $5,000 target or the $6k/$7k/$9k max.
 // ── WHICH VARIANT IS ARMED (env-driven, no deploy needed) ───────────────────────────────────────────
-//   CANDLE_SPREAD_ARMED       = variant name (default 'v6-20'). Give it a name not on the roster — e.g.
+//   CANDLE_SPREAD_ARMED       = variant name (default 'v7-10'). Give it a name not on the roster — e.g.
 //                               'none' — to arm NOTHING, which is the safe way to stand the pipe down.
 //   CANDLE_SPREAD_ARMED_MODE  = 'test' (default) sends a REAL order at an intentionally unfillable price
 //                               and auto-cancels it; 'live' sends REAL, FILLABLE orders.
@@ -495,6 +507,9 @@ const GIVEUP_LIVE = new Set(GIVEUP_ALL || /^none$/i.test(GIVEUP_ENV) ? []
 // backtest-only, and the backtest's cover-fill model is measurably wrong (75% modelled against 48% live).
 // A live W=40 read is the one way to find out whether the verdict survives contact with real fills; if it
 // does, the width question is settled with evidence rather than by a model we already distrust.
+// NOW: the preset is still applied to the default list below, but all four names are also in TUNED_CAPS,
+// which applyExperiments applies AFTER it, so the 1 x W caps above never survive: today v7-10 $2,000,
+// v3-10 $2,000, v6-20 $4,500, v7-40 $7,500 (TUNED_CAPS / floor / ceiling), each with lossTarget 0.7 x that.
 const CAPPRES_LIVE = new Set(
   (process.env.CANDLE_SPREAD_CAPPRES != null ? process.env.CANDLE_SPREAD_CAPPRES : 'v7-10,v3-10,v6-20,v7-40')
     .split(',').map(s => s.trim()).filter(Boolean));
@@ -1083,6 +1098,7 @@ function applyExperiments(v, { capPreset = true } = {}) {
   if (/^v[0-9]-/.test(String(v.variant)) && v.reopenOnCover == null) v.reopenOnCover = true;
   // COVER TO OPEN, WAIT (user, 2026-10-16): v6, v7 and v8 at every width; v9 stays on today's rules as the control.
   // An open on an underwater side escalates that side's cover to the give-up path and waits (trader.underwaterOnSide).
+  // v12 / v13 also carry it: they are cloned from the finished v6 variants after this runs.
   if (/^v[678]-/.test(String(v.variant)) && v.coverToOpenWait == null) v.coverToOpenWait = true;
   // CAPITAL PRESERVATION — after minLock, since it overrides lossMax/lossTarget outright.
   if (capPreset && CAPPRES_LIVE.has(v.variant)) {
@@ -1096,7 +1112,8 @@ function applyExperiments(v, { capPreset = true } = {}) {
   if (CREDIT_TRIGGER_XW > 0) v.creditCapitalTrigger = Math.round(CREDIT_TRIGGER_XW * v.spreadWidth * 100);
   // MEASURED CAP LAST, so it wins over both the width-derived generic and the CAPPRES preset — it is the
   // only one of the three backed by a 765-day measurement of this exact variant. It moves v7-10 off the
-  // preset's $1,000 to its measured peak $1,500 (+19% P&L, ret/DD 809 -> 850).
+  // preset's $1,000 (first to a measured peak of $1,500, +19% P&L, ret/DD 809 -> 850; since 2026-10-07 to
+  // $2,000, the all-10-wides cap — see TUNED_CAPS).
   //
   // THE v7-40 CLAIM HERE WAS WRONG AND IS LEFT ON THE RECORD DELIBERATELY. It read: "and v7-40 from $4,000
   // DOWN to $3,000, which is both tighter and better (ret/DD 41 -> 59)". The re-run sweep — the one with a
@@ -1111,7 +1128,8 @@ function applyExperiments(v, { capPreset = true } = {}) {
   }
   // THE FLOOR, LAST AND UNCONDITIONAL. After the width-generic default, the CAPPRES preset and the measured
   // TUNED_CAPS — whichever set the value, it cannot end up below one-and-a-half positions' width. Outside the
-  // `capPreset` branch on purpose: the builder that passes capPreset:false still needs the floor.
+  // `capPreset` branch on purpose: the builder that passes capPreset:false still needs the floor (today that is
+  // only buildUncapped, whose lossMax is null, so the block below is skipped for it).
   if (v.lossMax != null && v.spreadWidth) {
     const floor = assertBoundsCoherent(v.spreadWidth);
     // CEILING FIRST, so a value above it is reported as capped rather than as floored, and so the floor has
@@ -1277,6 +1295,9 @@ const maxCapFor = w => Math.max(2 * w * 100, LOSS_TARGET + w * 100);
 //             predecessor → 0.30. v0–v3 (classic) were NOT swept → the safest single value, 0.25.
 //   $40 is UNDER-DETERMINED — the optimistic and conservative fill models point OPPOSITE ways there
 //   (v4-40 wick 0.10 vs close 0.25) — so it takes the safest single value pending the full 765-day run.
+// NOW: these per-family values are only the builders' starting point. applyExperiments overwrites them on
+// every v0-v9 cell with the width rule (minLockByWidth: 0.10 at 10W, 0.20 at 20/40W), and the 10W plateau
+// cover (v4+ at 10W) then sets 0.05 — no variant on the current roster runs at a MIN_LOCK table value.
 const MIN_LOCK = { v0: 0.25, v1: 0.25, v2: 0.25, v3: 0.25, v4: 0.30, v5: 0.30, v6: 0.35, v7: 0.20, v8: 0.35, v9: 0.20 };
 const minLockFor = (key, w) => {
   const base = MIN_LOCK[key] != null ? MIN_LOCK[key] : 0.25;
@@ -1284,9 +1305,9 @@ const minLockFor = (key, w) => {
   return base;
 };
 
-// Cross-product families × widths → concrete variants `${key}-${w}`. Dollar risk caps are ABSOLUTE (a
-// wider spread must not risk more — see BASE_RUNS.hardCap note); families that don't set a cap inherit the
-// $20k baseline from BASE_RUNS. Fraction-of-width knobs (proactiveCoverFrac) are already width-relative.
+// Cross-product families × widths → concrete variants `${key}-${w}`. Each starts at the width-derived
+// maxCapFor(w) lossMax and applyExperiments then sets the real cap (TUNED_CAPS, 1.5x-width floor, $7,500
+// ceiling). Fraction-of-width knobs (proactiveCoverFrac) are already width-relative.
 function buildVariants() {
   const out = [];
   for (const f of FAMILIES) {
@@ -1312,7 +1333,7 @@ function buildVariants() {
       if (f.exemptTrendStack) v.exemptTrendStack = true;
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
       if (f.softCap != null) v.softCap = f.softCap;
-      v.lossMax = maxCapFor(w);                          // lossTarget ($5k) + floorOffset inherit from BASE_RUNS
+      v.lossMax = maxCapFor(w);                          // starting value; applyExperiments sets the real cap + lossTarget (floorOffset inherits from BASE_RUNS)
       v.continuousCoverMinLockFrac = minLockFor(f.key, w);
       // arming is decided by env (see ARMED_VARIANT) so the live pipe can be pointed at a different
       // strategy without a code package + deploy — an EB env-var change is an environment update only.
@@ -1368,10 +1389,10 @@ function buildUncapped() {
       if (f.bidirectional) v.bidirectional = true;
       if (f.exemptTrendStack) v.exemptTrendStack = true;
       if (f.proactiveCoverFrac != null) v.proactiveCoverFrac = f.proactiveCoverFrac;
-      // The live experiments apply to `-unc` twins too — v7-20-unc carries the ladder precisely because
-      // its control (v9-20-unc) is behaviourally identical to it, which the capped set cannot offer once
-      // v9-20 is taken by give-up. `capPreset:false` is the ONE exclusion: a cap preset on an uncapped
-      // twin would delete the twin's reason to exist, so it is refused loudly instead (validateSelectors).
+      // The live experiments apply to `-unc` twins too (ladder, give-up, minLock, floor raise etc. are fleet
+      // defaults on every shape). `capPreset:false` is the ONE exclusion: a cap preset (CAPPRES or TUNED_CAPS)
+      // on an uncapped twin would delete the twin's reason to exist, so it is refused loudly instead
+      // (validateSelectors).
       applyExperiments(v, { capPreset: false });
       out.push(v);
     }
@@ -1382,7 +1403,8 @@ function buildUncapped() {
 // ATM-CENTERED comparators (`-cATM`): the legacy shift-0 / capFrac-0.525 geometry, at the on-grid widths
 // ($20/$40 only — $10 ATM-centered lands off the 10-pt grid). Every family gets a centered twin at each,
 // so the short-ATM default sweep (vX-W) can be measured head-to-head against centered at the SAME width.
-// Absolute caps (inherit BASE $20k unless the family sets one); never testAtBase → always paper.
+// Same governor as the short-ATM sweep (maxCapFor start, then TUNED_CAPS / floor / ceiling). Simulated unless
+// the control page moves the armed slot to one (they are governed NDX variants, so armableReason allows it).
 const ATM_WIDTHS = [20, 40];
 function buildAtmComparators() {
   const out = [];
@@ -1595,11 +1617,12 @@ function buildNaturalFamilies(list) {
 
 const VARIANTS = reportArming(validateSelectors((() => {
   const base = [
-    ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governor $5k target / width-scaled max
+    ...buildVariants(),        // v0-v9 × 10/20/40, short-ATM, governed (TUNED_CAPS / 1.5x-W floor / $7.5k ceiling)
     ...buildUncapped(),        // v0-v9 × 10/20/40, short-ATM, NO caps — the unbounded-potential metric
     ...buildAtmComparators(),  // v0-v9 × 20/40, ATM-centered, same governor
   ];
-  return [...base, ...buildFeatureFamilies(base),   // v9sg-*, v9ob-* (complete copies of v9)
+  // 30 + 30 + 20 base, + 16 feature-test + 28 opens-only + 16 natural = 140 variants.
+  return [...base, ...buildFeatureFamilies(base),   // v9sg-*, v9ob-* (complete copies of v9, simulate-only)
     ...buildOpensOnlyFamilies(base),                // v20-*, v21-* (opens-only BB fade, simulate-only)
     ...buildNaturalFamilies(base)];                 // v12-*, v13-* (natural cover, simulate-only)
 })()));
@@ -1695,7 +1718,7 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 
 // ── WHO DECIDES A FILL ──────────────────────────────────────────────────────────────────────────────
 // 'mark'   — the engine's own read of the chain (markFill). Correct with no broker, and the only honest
-//            answer for the 79 simulated variants. Today's behaviour, everywhere.
+//            answer for every run whose orders cannot really fill (simulated, and test-mode).
 // 'broker' — the broker's reported fill, consumed from the order row by trader.applyBrokerFills.
 //
 // DERIVED, NOT CONFIGURED. A run whose orders can really fill is a run whose fills belong to the broker;
@@ -1732,7 +1755,8 @@ const LIVE_ARMED = process.env.CANDLE_SPREAD_LIVE === 'true';
 // The clamp in strategy-control stops the file raising ABOVE the roster; this makes lowering actually work.
 // Together they are the rule stated from the start: the environment raises, the file lowers.
 function effectiveDryRun(run) {
-  // SIMULATE-ONLY runs (v20 / v21, 2026-10-23) never send: no control entry and no armed slot can move them off paper.
+  // SIMULATE-ONLY runs (v20 / v21 / v12 / v13 since 2026-10-23, v9sg / v9ob since 2026-11-06) never send: no control
+  // entry and no armed slot can move them off simulate.
   if (run && run.simulateOnly === true) return true;
   const c = SC.forVariant(run.variant);
   const fromControl = c.listed ? SC.dryRunFor(run.variant) : undefined;
@@ -1768,7 +1792,7 @@ const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
 // The order placer.
 //
 // dryRun is TRI-STATE:
-//   true    -> SIMULATE: build + log the order, assume filled at limit (no Schwab contact). Default.
+//   true    -> SIMULATE: build + log the order, no Schwab contact; the mark path decides the fill. Default.
 //   'test'  -> REAL SEND at an UNFILLABLE price + auto-cancel (paper-validate the pipe, no fills).
 //   false   -> REAL SEND at the real limit (actual trading).
 //
@@ -1776,11 +1800,13 @@ const ORDER_POLL_MS = Number(process.env.CANDLE_SPREAD_POLL_MS) || 20000;
 //   1. DEPS.isProd === true   — prod process only (dev NEVER sends → no duplicate orders).
 //   2. LIVE_ARMED === true    — the master CANDLE_SPREAD_LIVE switch is deliberately on.
 //   3. tradingClient + accountHash present.
-// Anything short of that is SIMULATED (assumed filled) so the strategy still plays out for review.
+// Anything short of that is SIMULATED (not sent; the mark path decides fills) so the strategy still plays
+// out for review.
 //
-// DECOUPLING: even on a real send we return filled:true so the state machine keeps simulating the
-// INTENDED strategy (the run record stays complete). What actually happens at the broker is tracked
-// separately by the order-manager poller (real fills, test cancels). See order-manager.js.
+// DECOUPLING: a successful send (or a simulated one) returns filled:true, which callers read as "the order
+// exists"; a halt, a send error or a test order with no usable price returns filled:false. Whether the order actually FILLED is decided
+// separately — by the mark path (simulate / test) or by broker fills consumed via the order-manager poller
+// (fillSource 'broker'). See order-manager.js.
 // REPLACE an already-resting order (the cover ladder's send path). Schwab exposes updateOrderById,
 // which cancel/replaces atomically — safer than cancel-then-place, which can leave the book naked in
 // between. Mirrors makePlaceOrder's gating exactly: the same dryRun / isProd / LIVE_ARMED conditions
@@ -2136,9 +2162,6 @@ function makePlaceOrder(run, record) {
   };
 }
 
-// Find the just-closed candle (and its prior) from newest-first candles of the given period.
-// A candle is "closed" when its open time + periodMs <= now. NOTE: assumes candle.datetime is the
-// candle's OPEN time in epoch ms — verify against live Schwab data when enabling.
 // ET minute-of-day of a mark epoch.
 function etMinOfMark(ms) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -2154,6 +2177,9 @@ async function openPriceBar(priceSymbol, T, now = Date.now()) {
   return b && b.close > 0 ? b : null;
 }
 
+// Find the just-closed candle (and its prior) from newest-first candles of the given period.
+// A candle is "closed" when its open time + periodMs <= now. NOTE: assumes candle.datetime is the
+// candle's OPEN time in epoch ms — verify against live Schwab data when enabling.
 function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
   for (let i = 0; i < candles.length; i++) {
     const dt = typeof candles[i].datetime === 'number' ? candles[i].datetime : null;
@@ -2165,8 +2191,6 @@ function pickJustClosed(candles, periodMs = 15 * 60 * 1000, now = Date.now()) {
   return { candle: null, prior: null };
 }
 
-// Group runs that share live data (candles + chain) so we fetch ONCE per (symbol, expiration)
-// per tick instead of once per variant — the variants must not multiply the Schwab load.
 // Compact ET stamp for log lines about a 5m mark.
 function markOf(t) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
@@ -2175,14 +2199,10 @@ function markOf(t) {
   return `${p.month}/${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute} ET`;
 }
 
+// Group runs that share live data (candles + chain) so we fetch ONCE per (symbol, expiration)
+// per tick instead of once per variant — the variants must not multiply the Schwab load.
 function groupKey(run) { return `${run.symbol}|${run.expiration || todayEST()}`; }
 
-// Build the per-tick `deps` the engine reads. Extracted from the call site for ONE reason: it is a
-// hand-maintained enumeration of every capability a variant can carry, and three separate omissions here
-// (floorOffset, the two cover-arming flags, and the wing flags) each shipped a feature that silently did
-// nothing live while the backtest showed it working. Because it is now a pure function of `run`, start()
-// can replay it for every variant and assert that nothing in the config falls through — see assertDeps().
-// `live` carries the per-tick values (chain accessor, order fn, the analysis objects).
 // THE ORDER'S OWN WIDTH for the test-mode credit cap (a credit vertical is worth at most its width). A fallback-width
 // order (strike-grid.js: a 20W variant trading 25W) capped at the variant's 20 would demand 19.95 on a spread worth
 // up to 25 — fillable. Two-leg verticals use their strike span; anything else keeps the variant's width.
@@ -2192,6 +2212,12 @@ function orderWidthOf(meta, run) {
   return w > 0 ? w : run.spreadWidth;
 }
 
+// Build the per-tick `deps` the engine reads. Extracted from the call site for ONE reason: it is a
+// hand-maintained enumeration of every capability a variant can carry, and three separate omissions here
+// (floorOffset, the two cover-arming flags, and the wing flags) each shipped a feature that silently did
+// nothing live while the backtest showed it working. Because it is now a pure function of `run`, start()
+// can replay it for every variant and assert that nothing in the config falls through — see assertDeps().
+// `live` carries the per-tick values (chain accessor, order fn, the analysis objects).
 function buildEngineDeps(run, live) {
   // ── REMOTE CONTROL, APPLIED HERE SO ONE PLACE DECIDES ─────────────────────────────────────────────
   // `mode` selects dryRun and `restrict: 'no-open'` blocks new opens. Both are resolved at deps-build time
@@ -2205,7 +2231,8 @@ function buildEngineDeps(run, live) {
   const ctl = SC.forVariant(run.variant);
   const ctlDryRun = ctl.listed ? SC.dryRunFor(run.variant) : undefined;
   return Object.assign({
-      // simulate-only runs (v20 / v21) are paper whatever the control file says — the same rule as effectiveDryRun.
+      // simulate-only runs (v20 / v21 / v12 / v13 / v9sg / v9ob) simulate whatever the control file says — the same
+      // rule as effectiveDryRun.
       dryRun: run.simulateOnly === true ? true : ctlDryRun !== undefined ? ctlDryRun : run.dryRun,
       // NO-OPEN: work what is already on the book, start nothing new. The safe reflex — a live variant holding
       // an uncovered 0DTE position that stops acting entirely is in the most dangerous state available, so this
@@ -2213,8 +2240,9 @@ function buildEngineDeps(run, live) {
       blockNewOpens: ctl.restrict === 'no-open' || ctl.restrict === 'halt',
       controlMode: ctl.listed ? ctl.mode : null,
       controlRestrict: ctl.restrict || null,
-      // CLOSED-LOOP FILLS — see FILL_SOURCE. 'mark' for every simulated run; 'broker' only for a run whose
-      // orders can really fill, and only when explicitly switched on.
+      // CLOSED-LOOP FILLS — see fillSourceFor ("WHO DECIDES A FILL"). 'mark' for every simulated or test run;
+      // 'broker' only for a run whose orders can really fill (effective dryRun false + isProd + LIVE_ARMED +
+      // client + account hash). Derived, not a separate switch.
       fillSource: fillSourceFor(run),
       // Mark-path fills (opens, covers, hedges) book AT their limit, never better (trader.markFill).
       simFillAtLimit: run.simFillAtLimit === true,
@@ -2239,7 +2267,8 @@ function buildEngineDeps(run, live) {
       // NOT_ENGINE_OPTS as geo-consumed, so it is not contract-checked, but the gate reads it off deps.
       strikeIncrement: run.strikeIncrement,
       signalFn: run.signalFn, signalCfg: run.signalCfg, bidirectional: run.bidirectional,
-      // v8 risk-cap opts (undefined for other variants → cap logic inert)
+      // LEGACY cap opts (riskCap / softCap / hardCap): unset or null on every current variant (v8's softCap was
+      // removed 2026-10-14), so the legacy cap logic is inert; proactiveCoverFrac is v8 / v9 (and their copies).
       riskCap: run.riskCap, softCap: run.softCap, hardCap: run.hardCap,
       proactiveCoverFrac: run.proactiveCoverFrac, exemptTrendStack: run.exemptTrendStack,
       coverToStack: run.coverToStack, coverToStackMinFrac: run.coverToStackMinFrac,
@@ -2263,7 +2292,7 @@ function buildEngineDeps(run, live) {
       floorOffsetMaxPerDay: run.floorOffsetMaxPerDay, floorOffsetWidths: run.floorOffsetWidths,
       floorOffsetDepth: run.floorOffsetDepth, floorOffsetSlip: run.floorOffsetSlip,
       floorOffsetBudget: run.floorOffsetBudget,
-      // COVER ARMING (v1-v3) — when to place the standing cover. NOTE these are read off `deps`, so they
+      // COVER ARMING (v3 only since the 2026-09-06 re-slot) — when to place the standing cover. NOTE these are read off `deps`, so they
       // MUST be listed here; `cfg` is a spread of the whole run and picks up everything automatically,
       // which is exactly why the omission was easy to miss.
       continuousCoverArmFrac: run.continuousCoverArmFrac, continuousCoverOppRatio: run.continuousCoverOppRatio,
@@ -2289,7 +2318,8 @@ function buildEngineDeps(run, live) {
       flyBudget: run.flyBudget, flyMaxPerDay: run.flyMaxPerDay, flyWidths: run.flyWidths,
       flyCondors: run.flyCondors, flyAfterMin: run.flyAfterMin, flyBeforeMin: run.flyBeforeMin,
       // COVER LADDER — work a resting cover toward the market instead of leaving it untouched all day.
-      // Read off `deps`, so it must be listed here. Default OFF; see the note in BASE_RUNS.
+      // Read off `deps`, so it must be listed here. ON for every v0-v9 variant (applyLadderCfg via MINLOCK_FLEET)
+      // and the copies cloned from them; off on the opens-only v20 / v21.
       coverLadder: run.coverLadder, ladderStepSeconds: run.ladderStepSeconds, ladderStepPoints: run.ladderStepPoints,
       ladderSteps: run.ladderSteps, ladderLossCapFrac: run.ladderLossCapFrac,
       ladderStepDollars: run.ladderStepDollars,
@@ -2374,7 +2404,7 @@ function assertDeps(runs) {
 // as a settlement failure, and the boot backfill then quietly repaired the days behind it. An uncaught
 // crash would have been found in an hour; a caught error that something else papers over survived five
 // sessions. Keep these at module scope: every caller is in a different function.
-// ONE BAD RECORD MUST NOT STOP THE OTHER 79. store.initRun now THROWS in a single case — the run file is
+// ONE BAD RECORD MUST NOT STOP THE OTHERS. store.initRun now THROWS in a single case — the run file is
 // corrupt AND could not be moved aside — because writing over it is the failure it exists to prevent. That
 // is correct, but three of the loops below call it once per variant, so an unthrowable throw would abort
 // the whole pass and skip every healthy variant with it. Catch per variant, log loudly, skip that one.
@@ -2463,7 +2493,7 @@ async function processGroup(runs, kind) {
   if (!cur.warm) return { pending: 'analysis-not-warm' };    // retry: 1m/5m/15m/60m not all warm yet
   const A = cur.A;
   // priorA = the PRIOR 5m bar's A — TRUE CONTINUITY. The NQ signal is built from the continuous 24h
-  // Globex series, so even the day's first RTH mark (9:35) has a real prior bar (9:30); we do NOT
+  // Globex series, so even the day's first RTH mark (09:30) has a real prior bar (09:25); we do NOT
   // null it. Falls back to null only if there's genuinely no warm prior (thin/just-started data).
   const prev = ab.analysisAt(series, T - STEP_MS);
   const priorA = prev.warm ? prev.A : null;
@@ -2481,8 +2511,9 @@ async function processGroup(runs, kind) {
   // whose open we simply did not keep. Every "how much of the move did we capture" answer this week was
   // silently anchored at the 09:35 close rather than the session open, and there was no way to tell.
   //
-  // The 09:30-09:35 bar is NOT skipped: FIRST_ACTION_MIN is its CLOSE and the engine acts on it. Only the
-  // record was lossy. Purely additive — nothing reads priceBar yet, so no decision changes.
+  // (Written when the first action was 09:35, the 09:30-09:35 bar's close. Since 2026-10-13 FIRST_ACTION_MIN
+  // defaults to 09:30, where the priceBar is NDX's first 1-minute bar — see below.) Purely additive — priceBar
+  // is only recorded (candle_close.priceCandle, and a last-resort settle fallback), so no decision changes.
   let priceBar = A['5m'] ? { open: A['5m'].open, high: A['5m'].high, low: A['5m'].low, close: A['5m'].close } : null;
   // THE 09:30 TICK: NDX has no completed 5m bar yet (pickJustClosed would hand back YESTERDAY's 15:55 close), so it
   // prices off NDX's first completed 1-minute bar of today. Not there yet -> pending, and attemptTick retries every
@@ -2508,7 +2539,7 @@ async function processGroup(runs, kind) {
 
   // TRADABILITY GATE — is there actually a market to trade right now?
   // Checked HERE, once per tick before any variant is evaluated, so a closed/halted/unquoted market is a
-  // single explicit decision rather than 80 variants each failing somewhere downstream for their own
+  // single explicit decision rather than every variant failing somewhere downstream for their own
   // reasons. Discovered on 2026-09-07 (Labor Day): NDX was closed, /NQ was open, and the engine ran all
   // day on a frozen NDX price with a chain of 17 strikes that carried no quotes at all. Nothing stopped
   // it — both 15m decision points happened to return `neutral`, which is luck, not a safety property.
@@ -2665,11 +2696,6 @@ function attemptTick(kind, retriesLeft) {
     .catch(err => { tickBusy = false; console.error('[candle-spread] tick error:', err && err.message); });
 }
 
-// --- Real order poller ----------------------------------------------------
-// Reconciles every live/test run's outstanding Schwab orders on a fixed interval: records real
-// fills, and cancels test-mode orders (after TEST_CANCEL_MS) and stale working OPENs. Inert
-// unless armed + prod + a run is actually sending real orders (dryRun 'test' | false). Costs
-// nothing in dry-run (no liveOrders to poll).
 // ── SUB-BAR RESTING-ORDER WORKER (LIVE ONLY) ─────────────────────────────────────────────────────────
 // Both engines evaluated resting orders once per 5m CANDLE — workRestingCovers from processCandleClose,
 // and the backtest once per bar. In a backtest that is all the data supports. Live it is a lie about how
@@ -2726,7 +2752,7 @@ async function runRestingWork() {
     }
     if (!pending.length) return;
     // ONE chain read for the whole pass. The 5s freshness window in getOrFetchChainData means every
-    // variant after the first reuses it, so 80 variants cost one request rather than eighty.
+    // variant after the first reuses it, so the whole roster costs one request rather than one per variant.
     const first = pending[0].cfg;
     const chainData = await DEPS.getOrFetchChainData(first.priceSymbol || first.symbol, first.expiration);
     if (!chainData) return;
@@ -2791,6 +2817,12 @@ async function runRestingWork() {
   }
 }
 
+// --- Real order poller ----------------------------------------------------
+// Reconciles every live/test run's outstanding Schwab orders on a fixed interval: records real
+// fills, and cancels test-mode orders (after TEST_CANCEL_MS) and stale working OPENs. Inert
+// unless armed + prod + a run is actually sending real orders (dryRun 'test' | false). Costs
+// nothing in dry-run (no liveOrders to poll).
+//
 // THE THIRD WRITER. The tick and the sub-bar worker already serialize against each other (tickBusy /
 // workBusy) because both mutate the same run records; the poller does not, and it is the one that writes
 // order_filled.
@@ -3123,7 +3155,7 @@ async function eodSettlementInner() {
     }
 
     for (const run of runs) {
-     // ONE VARIANT MUST NOT BE ABLE TO COST THE OTHER 79 THEIR SETTLEMENT. This loop had no per-run guard,
+     // ONE VARIANT MUST NOT BE ABLE TO COST THE OTHERS THEIR SETTLEMENT. This loop had no per-run guard,
      // so a throw anywhere inside it — in computeTerminalPnl, in a write, in the summary — aborted the
      // whole pass and left EVERY run unsettled. That is one of the two shapes that could have produced
      // 2026-09-24/25 (the other was a missed timer, now covered by the window above); neither is
@@ -3608,7 +3640,8 @@ function listVariants() {
       about: FA.describeVariant(v.variant),   // plain-words strategy description (family-about.js)
       giveUp: v.coverGiveUp === true,
       fly: v.flyConvert === true,
-      // v20 / v21 (2026-10-23): opens only (no covers / hedges), simulate-only; v21's price target f.
+      // v20 / v21 (2026-10-23): opens only (no covers / hedges); v21's price target f. simulateOnly is also true on
+      // v12 / v13 / v9sg / v9ob.
       opensOnly: v.opensOnly === true, simulateOnly: v.simulateOnly === true,
       priceTarget: v.openPriceTarget != null ? v.openPriceTarget : null,
     }))
@@ -3673,8 +3706,6 @@ function backtestBaselines() {
   return _baselines;
 }
 
-// Compact live status for the UI to poll — confirms mode/gates and what each strategy is doing today,
-// so you can validate the server is behaving as expected (esp. the prod test-mode session).
 // ── THE CONTROL WRITE PATH, AND ITS AUTHENTICATION ──────────────────────────────────────────────────
 //
 // This is the FIRST authenticated surface on this server. Everything else is either public (status, runs) or
@@ -3691,13 +3722,8 @@ function backtestBaselines() {
 // response latency, and this one guards real money.
 const CONTROL_TOKEN = process.env.CANDLE_SPREAD_CONTROL_TOKEN || null;
 
-// THE ROSTER, WHETHER OR NOT start() HAS RUN. RUNS is populated by start(), so a handler that validated against
-// it directly rejected every variant as "not on the roster" before startup — which in production is masked
-// because start() always has run, and which therefore meant the roster check was never actually exercised by a
-// test. The roster is deterministic, so building it on demand is the same answer; memoised because buildRuns
-// walks and logs the whole fleet.
 // variant -> the mode the ROSTER gives it (from run.dryRun), which is what applies when the control file is
-// silent. Rebuilt each call from RUNS so a re-arm is reflected without a restart; cheap, it is a map over 80.
+// silent. Rebuilt each call from RUNS so a re-arm is reflected without a restart; cheap, it is one map over the roster.
 function rosterBaseline() {
   const out = {};
   const runs = (RUNS && RUNS.length) ? RUNS : buildRuns();
@@ -3705,6 +3731,11 @@ function rosterBaseline() {
   return out;
 }
 
+// THE ROSTER, WHETHER OR NOT start() HAS RUN. RUNS is populated by start(), so a handler that validated against
+// it directly rejected every variant as "not on the roster" before startup — which in production is masked
+// because start() always has run, and which therefore meant the roster check was never actually exercised by a
+// test. The roster is deterministic, so building it on demand is the same answer; memoised because buildRuns
+// walks and logs the whole fleet.
 let _rosterFallback = null;
 function rosterVariants() {
   if (RUNS && RUNS.length) return RUNS.map((r) => r.variant);
@@ -3733,7 +3764,7 @@ function applyArmedSelection() {
 }
 
 // The armed slot may only be pointed at a GOVERNED NDX variant: one with a finite loss cap. An uncapped twin
-// ('-c') can lose without bound, which the daily risk tolerance rules out for real money.
+// ('-unc') can lose without bound, which the daily risk tolerance rules out for real money.
 function armableReason(variant) {
   const run = RUNS.find((r) => r.variant === variant) || buildRuns().find((r) => r.variant === variant);
   if (!run) return `${variant} is not on the roster`;
@@ -3974,6 +4005,8 @@ function controlState() {
   return h;
 }
 
+// Compact live status for the UI to poll — confirms mode/gates and what each strategy is doing today,
+// so you can validate the server is behaving as expected (esp. the prod test-mode session).
 function status() {
   const gates = {
     isProd: !!(DEPS && DEPS.isProd === true),

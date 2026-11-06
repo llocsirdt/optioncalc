@@ -7,7 +7,8 @@
 // content. The EB environment only serves plain HTTP, so we front it with a
 // CloudFront distribution that terminates TLS.
 // ?proxy=local forces the local dev server even when served over http (for testing an
-// http-hosted copy against localhost:3001); otherwise file:// -> localhost, http -> CloudFront.
+// http-hosted copy against localhost:3001); otherwise a local origin (file:// or http://localhost)
+// -> localhost:3001, any other origin -> CloudFront (see IS_LOCAL_ORIGIN below).
 // Backend selection. `?proxy=local` / `?proxy=remote` force it; otherwise the ORIGIN decides.
 // A LOCAL origin means the local server: that covers file:// (the usual dev mode) AND
 // http://localhost:PORT (serving the page from a static server), which the old
@@ -1049,7 +1050,7 @@ async function updateCalculatorWithLiveData(symbol) {
       const chainData = await getOptionsChainFromSchwab(chainsSymbol, targetExpiration.expirationDate, {
         strike_count: 75
       });
-    // console.log('⛓️ Chain data (limited to 50 strikes):', chainData);
+    // console.log('⛓️ Chain data (limited to 75 strikes):', chainData);
       
       if (chainData) {
         lastLiveChainData = {

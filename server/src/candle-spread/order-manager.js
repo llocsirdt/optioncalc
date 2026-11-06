@@ -3,17 +3,17 @@
  * Live order lifecycle for the candle-spread trader.
  *
  * Records every REAL order sent to Schwab (on record.state.liveOrders), polls each one's status,
- * records fills, and auto-cancels (a) test-mode "unfillable" orders after a short delay and
- * (b) stale working OPEN orders that outlived their candle. This is the closed-loop broker layer;
- * it runs ONLY when a real order was actually sent (i.e. it produced an orderId). In dry-run/sim
- * there are no liveOrders and this module is inert — the state machine's assume-fill model is
- * completely untouched.
+ * records fills, and auto-cancels (a) test-mode "unfillable" orders after a short delay (testCancelAfterMs)
+ * and (b) as an orphan backstop only, real working OPEN orders older than staleOpenCancelMs (default 90 min —
+ * see reconcile). It also follows replace pairs and adopts orders hand-edited at Schwab. Its reconcile()
+ * polls whenever a run has liveOrders (rows exist only for sends that produced an orderId); in dry-run/sim
+ * there are no liveOrders and reconcile is inert.
  *
- * DECOUPLING NOTE: today the trader's state machine still assumes fills for its OWN strategy
- * simulation/analysis (so the run record always reflects the intended strategy). This layer tracks
- * what actually happened at the broker ALONGSIDE that. Driving the next strategy decision off real
- * fills (full closed loop) is a deliberate later step; test mode (orders never fill by design) is
- * exactly the safe case where the two are meant to diverge.
+ * CLOSED LOOP: when the run's fillSource is 'broker' (index.js fillSourceFor), the trader books positions,
+ * covers and hedges from the fills recorded here (trader.applyBrokerFills reads o.status/o.fillPrice/o.fillSide)
+ * and clearDeadOrderState below clears a position's pending state when its order dies. Under any other
+ * fillSource the trader's own sim-fill model drives the strategy and this layer only tracks the broker
+ * alongside it (test mode, where orders never fill by design, is that case).
  */
 
 const store = require('./store');
@@ -213,6 +213,7 @@ function extractFillPrice(resp) {
 // the governor count its risk again, and the next bar places a FRESH order instead of repricing a ghost.
 // Leg-ledger entries are deliberately NOT released — same reasoning as the hedge expiry: the backing map
 // has no refcount, so freeing a strike another live order still holds is the worse failure.
+// (The block above documents clearDeadOrderState, further down; wirePrice's own note follows.)
 // EVERY PRICE LEAVES AS CENTS. `roundToTick` is Math.round(x/tick)*tick, which is not exact in binary:
 // 66 ticks of 0.05 is 3.3000000000000003. Schwab rejects that as an invalid price — on 2026-10-02 v7-10's
 // cover for pos-...-122 was refused nine times in a row (14:40-15:20), leaving a real position uncovered
@@ -230,6 +231,7 @@ function wirePrice(payload) {
 // happen (a bad price, buying power, an account restriction) loops silently all day. This counts rejections
 // per position (opens: per working slot; hedges: per kind), keeps Schwab's own reason, alarms at 3 and
 // every 5 after, and resets when that position or slot actually fills. Published on status().
+// (That block documents rejectKey/noteReject/clearReject, just below netOfPayload.)
 // THE SIDE OF AN ORDER, as NET_DEBIT / NET_CREDIT, whatever orderType it was sent with. A single-leg order
 // goes out as LIMIT; recording 'LIMIT' as its side would make applyBrokerFills' wrong-side guard refuse
 // every fill on it. A LIMIT buy is a debit, a LIMIT sell a credit.

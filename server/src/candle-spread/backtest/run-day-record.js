@@ -10,10 +10,10 @@
  * argument for the compare page, but it writes a whole-day bundle for every variant to disk — far too
  * heavy for "show me this one variant, now, while I'm staring at the live run".)
  *
- * The opts mapping is copied from reconcile-day.js DELIBERATELY, not re-derived: reconcile-day is the
- * reference for "run the backtest the way the live engine is configured", and two mappings that drift
- * would make the comparison lie. Note the ALIAS it documents — live's capitalRecapture is the backtest's
- * recaptureAlternate.
+ * The opts mapping is the SHARED one (opts-for.js; see optsFor below) — it used to be a hand copy of
+ * reconcile-day's. Note the ALIAS it documents — live's capitalRecapture is the backtest's recaptureAlternate.
+ * It passes NO env open-fill / sub-bar model, so this runs the engine defaults ('immediate' opens, end-of-bar
+ * cover fills) — NOT the 'ladder' + '1m' models the committed baselines are built with.
  *
  *   const { runDayRecord } = require('./run-day-record');
  *   const { record, model, dataDir } = runDayRecord({ date: '2026-09-09', variant: 'v6-20' });
@@ -254,7 +254,7 @@ async function runDayRecord({ date, variant, symbol, priceHistory }) {
       coverStatus: p.covered ? 'filled' : null, coverEpoch: p.coverEpoch || null, coverTime: p.coverTime || null,
       // markAtPlace is absent by design: the engine does not record the cover's mark at placement, and this
       // module does not get to add it (backtest-v6-5m.js is off-limits). The debug page renders "—" there.
-      // placedMs is carried through (only the `continuous` trigger stamps it) so the synthesized order-log
+      // placedMs is carried through (only the `continuous` and coverPriorOnOpen `ladder` triggers stamp it) so the synthesized order-log
       // row below can time the unfilled cover.
       pendingCover: pc ? { legs: pc.legs, target: pc.target, src: pc.src || null, placedMs: pc.placedMs || null } : null,
       hedge: p.hedge || undefined, wing: p.wing || undefined,
@@ -272,7 +272,7 @@ async function runDayRecord({ date, variant, symbol, priceHistory }) {
   }));
   for (const p of positions) {
     if (!p.pendingCover || !p.pendingCover.legs) continue;
-    // Placement time: only the `continuous` trigger stamps placedMs, so fall back to the position's open —
+    // Placement time: only the `continuous` / `ladder` triggers stamp placedMs, so fall back to the position's open —
     // an unfilled cover is never EARLIER than its open, and a slightly early stamp beats no row at all.
     const ms = p.pendingCover.placedMs || p.openEpoch || null;
     events.push({ type: 'order_simulated', time: ms ? new Date(ms).toISOString() : undefined, variant: v.variant,

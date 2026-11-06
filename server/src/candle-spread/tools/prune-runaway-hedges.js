@@ -26,7 +26,9 @@
  * Dry-run by default: it reports what it WOULD remove and writes nothing without --apply. A timestamped
  * .bak of the original sits beside the record so a bad prune is always reversible.
  *
- * --all [--apply] sweeps every record and is what the DEPLOY HOOK runs (see .ebextensions). It is built
+ * --all [--apply] sweeps every record. It was written for the DEPLOY HOOK; the hook no longer runs it
+ * (server/.ebextensions/persistence.config) — the same sweep now runs at server start via sweepStore
+ * (candle-spread/index.js start()). It is built
  * to be safe in that position rather than thorough: only records over --min-size are even opened (a clean
  * store costs one stat per file and nothing else), anything over --max-size is skipped rather than parsed
  * so a pathological file can never OOM a deploy, and it ALWAYS exits 0 — a cleanup that fails must not
@@ -58,9 +60,10 @@ function collapse(positions) {
   return kept;
 }
 
-// SWEEP MODE — every record, biggest first. Used by the deploy hook.
-// Exported so the suite can drive the collapse rule directly. This runs on EVERY DEPLOY with --apply
-// (see .ebextensions), so a bug here would silently delete real positions rather than duplicates —
+// SWEEP MODE — every record, biggest first. Formerly run by the deploy hook; now run with apply:true at every
+// server start (index.js start() -> sweepStore), and still available by hand via --all.
+// Exported so the suite can drive the collapse rule directly. Because it runs with apply on every boot,
+// a bug here would silently delete real positions rather than duplicates —
 // which makes it the one part of this file that genuinely needs tests.
 
 /**

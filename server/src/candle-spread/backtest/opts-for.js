@@ -101,17 +101,17 @@ function optsFor(v, env) {
   for (const k of ['coverAsymTrend', 'coverPatientMinLock', 'coverPatientLossCap', 'coverPatientGiveUp']) if (v[k] != null) o[k] = v[k];
   if (v.coverNextBar != null) o.coverNextBar = v.coverNextBar;   // backtest-only: no same-bar cover fill (look-ahead)
   if (v.subBarFill != null) o.subBarFill = v.subBarFill;   // backtest-only: '1m' | 'path' sub-bar fill timing
-  if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
+  if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // trend-state definition; live-ported for the simulate-only v9ob
   if (v.noAddUnderwater != null) o.noAddUnderwater = v.noAddUnderwater;   // backtest-only (2026-10-15)
   // REOPEN AFTER A QUICK COVER (live 2026-10-14, backtested 2026-11-06): runDay5m ports trader.reopenAfterCover.
   for (const k of ['reopenOnCover', 'reopenPer5m']) if (v[k] != null) o[k] = v[k];
-  for (const k of ['coverToOpen', 'coverToOpenExtra', 'coverToOpenWait']) if (v[k] != null) o[k] = v[k];   // backtest-only (2026-10-15)
+  for (const k of ['coverToOpen', 'coverToOpenExtra', 'coverToOpenWait']) if (v[k] != null) o[k] = v[k];   // 2026-10-15; coverToOpenWait is live on v6/v7/v8 (trader.underwaterOnSide)
   // A roster coverToOpenWait means the live rule: same side, today's give-up cap (+$0), skip the open while underwater.
   if (v.coverToOpenWait === true && v.coverToOpen == null) { o.coverToOpen = 'same'; if (o.coverToOpenExtra == null) o.coverToOpenExtra = 0; }
   for (const k of ['touchCover', 'touchTarget', 'touchFilter', 'touchAnyTime', 'touchMinDist', 'touchMaxDist', 'stackGate', 'stackScope',
-    'natural', 'perPositionCovers', 'addGate', 'maxAdds', 'revTouch', 'revWindowMin', 'revRun', 'revStrike', 'jumpGuard', 'guardMult', 'guardFixed', 'guardMaxPerDay', 'guardAt', 'coverAfterMin', 'guardMedianIv']) if (v[k] != null) o[k] = v[k];   // backtest-only v11 touch overlay (2026-10-17)
+    'natural', 'perPositionCovers', 'addGate', 'maxAdds', 'revTouch', 'revWindowMin', 'revRun', 'revStrike', 'jumpGuard', 'guardMult', 'guardFixed', 'guardMaxPerDay', 'guardAt', 'coverAfterMin', 'guardMedianIv']) if (v[k] != null) o[k] = v[k];   // v11 touch overlay (backtest-only), stack gate + natural cover (2026-10-17; live-ported as simulate-only v9sg / v12 / v13)
   if (v.openCutoffMin != null) o.openCutoffMin = v.openCutoffMin;   // backtest-only: no signal opens from this ET minute
-  if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // backtest-only study: cover a stalled position at break-even
+  if (v.stallCoverMin != null) o.stallCoverMin = v.stallCoverMin;       // cover a stalled position at break-even (every roster variant, live too, since 2026-10-08)
   if (v.stallCoverPts != null) o.stallCoverPts = v.stallCoverPts;
   if (v.minLockCurve != null) o.minLockCurve = v.minLockCurve;          // backtest study: minLock by time of day
   for (const k of ['lateFloorAfterMin', 'lateFloorGiveW', 'lateFloorKeepLocked']) if (v[k] != null) o[k] = v[k];   // late-day floor guard (live: trader.lateFloorLimit)
@@ -119,7 +119,8 @@ function optsFor(v, env) {
   // at the original target. Shipped live 2026-09-10 in the same batch as give-up, and likewise absent from
   // the 2026-09-09 CSV — the contract guard caught it on the first regeneration after the fact.
   // OPEN FILL MODEL — 'ladder' models the live resting open (one working order, walked like the cover
-  // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster, until baselines adopt it.
+  // ladder, cancelled on a reversal). Set by the CALLER (env), not the roster. build-backtest-baselines passes 'ladder'
+  // by default (since 2026-10-05); run-day-record and backtest-replay pass none, so they run the engine's 'immediate'.
   if (env && env.openFillModel) o.openFillModel = env.openFillModel;
   if (v.signalCoverGiveUp != null) o.signalCoverGiveUp = v.signalCoverGiveUp;   // backtest-only: a signal cover escalates resting covers to give-up
   if (v.firstActionMin != null) o.firstActionMin = v.firstActionMin;

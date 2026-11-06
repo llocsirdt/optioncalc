@@ -72,11 +72,16 @@ function quotedNearMoney(chainSnapshot, underlying, window) {
 
 /**
  * @param o.underlying      the pricing instrument's current value
- * @param o.priceAsOfMs     when that value was last actually observed to change/print (null = unknown)
+ * @param o.priceAsOfMs     when that value was last actually observed to change/print (null = unknown). The
+ *                          PRICE FRESHNESS check (1. above) runs ONLY when this is supplied; the live tick in
+ *                          index.js does not pass it, so today only the chain-quote check gates live ticks.
  * @param o.nowMs           the tick's mark
  * @param o.quotedStrikes   every strike the chain lists with a usable quote (strike-grid.quotedStrikes) — preferred
+ * @param o.listedStrikes   how many strikes the chain lists, quoted or not (strike-grid.listedStrikeCount) — only
+ *                          for telling 'no-chain' from 'chain-not-quoted'
  * @param o.chainSnapshot   legacy: a {strikes:[{strike,call,put}]} snapshot, used only when quotedStrikes is absent
- * @param o.lastUnderlying  the previous tick's underlying, for the frozen-price tell (optional)
+ * @param o.strikeWindow    points either side of the money to count (default MAX_REACH)
+ * (No frozen-price / lastUnderlying tell is implemented here.)
  * @returns {ok, reason, detail} — ok:false means DO NOT open or send on this tick.
  */
 function assess(o) {
