@@ -24,17 +24,17 @@ verbatim from `server/src/candle-spread/backtest-baselines.csv`.
 | Family | What it is (one line) | Open signal | Cover | Δ vs parent | Status |
 |---|---|---|---|---|---|
 | **[v0](v0.md)** | Classic 15m price-action breakout; cover = tent (shares the short strike) | O1: 15m green + new high → bull; red + new low → bear | Continuous tent; classic signal cover | Control / root | Live, paper |
-| **[v1](v1.md)** | v0 with the cover short walked halfway to the underlying | as v0 | as v0, geometry halfway | `coverGeometry:'halfway'` | Live, paper. **Same as v0 at 20W/40W** (see below) |
-| **[v2](v2.md)** | v0 with the cover short at the underlying | as v0 | as v0, geometry at-money | `coverGeometry:'underlying'` | Live, paper. **Same as v0 at 20W/40W** |
+| **[v1](v1.md)** | v0 with the cover short walked halfway to the underlying | as v0 | as v0, geometry halfway | `coverGeometry:'halfway'` | Live, paper. Was the same as v0 at 20W/40W until 2026-11-06 (see below) |
+| **[v2](v2.md)** | v0 with the cover short at the underlying | as v0 | as v0, geometry at-money | `coverGeometry:'underlying'` | Live, paper. Was the same as v0 at 20W/40W until 2026-11-06 |
 | **[v3](v3.md)** | v0 with continuous covering RISK-ARMED instead of at birth | as v0 | armed continuous (C2) | `continuousCoverArmFrac 0.20`, `OppRatio 1.0` | Live, paper |
 | **[v4](v4.md)** | Multi-timeframe read: 1/5/15/60m BB + 9 EMA confluence | O2 overextension, O3 grind, O5 trend continuation | + overext/grind/active-cover signal covers | New signal | Live, paper |
 | **[v5](v5.md)** | v4 + trend flip | v4's + O7 | + trend-flip cover | `trendFlip` | Live, paper |
 | **[v6](v6.md)** | v5 acting every 5 minutes | v5's + O8 5m+15m flip | + 5m early cover | `signalCfg.fiveMin` | Live, paper. Parent of v12/v13 |
 | **[v7](v7.md)** | v6 + be-wrong: open the other side while holding, without covering the loser | v6's + O9 be-wrong | v6's, per side | `beWrong`, `bidirectional` | **v7-10 is the ARMED variant** (test mode) |
-| **[v8](v8.md)** | v6 + proactive cover at 0.80 × W + reopen after cover | v6's + E2 | + C4 proactive | `proactiveCoverFrac 0.80` (soft cap removed 10/14) | Live, paper |
-| **[v9](v9.md)** | v7 + proactive cover at 0.80 × W + reopen after cover | v7's + E2 | + C4 proactive | `proactiveCoverFrac 0.80` | Live, paper. Parent of v9sg/v9ob; the cover-to-open-wait control |
-| **[v9sg](v9sg.md)** | v9 + stack gate | v9's; ADDS blocked while NQ 15m or 60m reads against (B6) | v9's | `stackGate:'nqNotAgainst'` | Live, paper (feature test) |
-| **[v9ob](v9ob.md)** | v9 + open trend block | v9's; ANY open against trend A dropped (B3) | v9's | `openTrendBlock:'A'` | Live, paper (feature test) |
+| **[v8](v8.md)** | v6 + proactive cover at 0.80 × W | v6's | + C4 proactive | `proactiveCoverFrac 0.80` (soft cap removed 10/14) | Live, paper |
+| **[v9](v9.md)** | v7 + proactive cover at 0.80 × W | v7's | + C4 proactive | `proactiveCoverFrac 0.80` | Live, paper. Parent of v9sg/v9ob; the cover-to-open-wait control |
+| **[v9sg](v9sg.md)** | v9 + stack gate | v9's; ADDS blocked while NQ 15m or 60m reads against (B6) | v9's | `stackGate:'nqNotAgainst'` | **Simulate-only** (feature test) |
+| **[v9ob](v9ob.md)** | v9 + open trend block | v9's; ANY open against trend A dropped (B3) | v9's | `openTrendBlock:'A'` | **Simulate-only** (feature test) |
 | **[v10/v11](v10-v11.md)** | Target engines: hold toward a close target / trade intraday touches of RTH lines | target rules | target rules | separate engine | **Backtest only**, not on the roster; live port in progress |
 | **[v12](v12.md)** | v6 opens, book protected by reversal-opens (REV) + jump guard instead of covers | v6's + E3 REV, E4 guard; ADD gate (B4) | none per position (C14) | `natural:'v12'` | **Simulate-only** |
 | **[v13](v13.md)** | v12 + continuous cover once a position is 30 min old | v12's | C1 after 30 min (C13) | `natural:'v13'`, `coverAfterMin 30` | **Simulate-only** |
@@ -45,10 +45,15 @@ Shapes per family: `-10/-20/-40` (governed), `-W-unc` (uncapped twin, diagnostic
 strikes; not on v21), and `-f50/-f55/-f60` on v21. Source: `index.js` `FAMILIES`, `buildFeatureFamilies`,
 `buildNaturalFamilies`, `buildOpensOnlyFamilies`.
 
-**v0 / v1 / v2 are one strategy at 20W and 40W.** Their only difference is cover geometry. At 20W/40W the cover
-strike is chosen by the cover-range re-strike (signals.md C10) for every family, so the geometry never acts. In the
-baselines, v0/v1/v2 -20, -40 and -40-cATM are identical on every row. Live, they placed the same covers at the same
-strikes on 11/02, 11/03 and 11/04, with one small 20W P&L difference on 11/03. They differ at 10W and 20W-cATM only.
+**Reopen after a quick cover (signals.md E2)** is on for every v0–v9 variant at every width, `-unc` and `-cATM`
+included, and v9sg/v9ob inherit it from v9 (2026-11-06; until then v7-10, v8 and v9 only). Not on v12/v13/v20/v21.
+
+**v0 / v1 / v2 were one strategy at 20W and 40W from 2026-10-13 to 2026-11-06.** Their only difference is cover
+geometry. In that window the cover-range re-strike (signals.md C10) chose the cover strike at 20W/40W for every
+family, so the geometry never acted. In the baselines below (built before the fix), v0/v1/v2 -20, -40 and -40-cATM
+are identical on every row. Live, they placed the same covers at the same strikes on 11/02, 11/03 and 11/04, with one
+small 20W P&L difference on 11/03. Since 2026-11-06 the cover range is not applied to v0–v2 (`index.js`
+`COVER_GEOMETRY_BASELINES`), so their own `coverGeometry` places continuous covers at every width.
 
 ### Baselines
 
@@ -76,7 +81,8 @@ on real NDX, earlier days on NQ. Each family file carries its fuller block.
 | v21 (f55) | -84 | -206 | -369 | -2000 | -4500 | -7485 |
 
 **Read with care:** prices are Black-Scholes with bucketed skew, not real quotes, and fills are judged on 5-minute
-bars (1m sub-bars on the 56 NDX days). Backtests are directional: live v7-10 has missed these tables badly. v20/v21
+bars (1m sub-bars on the 56 NDX days). These baselines predate two 2026-11-06 changes: reopen after cover
+modelled in the backtest, and v0–v2 keeping their own cover geometry at 20W/40W. Backtests are directional: live v7-10 has missed these tables badly. v20/v21
 are opens-only and simulate-only; they are on the roster to be *watched* on real sessions, not traded.
 
 ---
@@ -185,8 +191,8 @@ open or cover is sent as its credit twin once cash deployed reaches the width-sc
   10 NDX points, up to break-even, never above the mark.
 - **Give-up** (`coverGiveUp`, every family with covers): NDX **20 points** back through the position's own short
   strike → `min(mark + 1 tick, W − openCost + allowance × W)`, allowance **10W 5% · 20W 7.5% · 40W 10%**. 20W/40W
-  first move the cover inside the open spread; 10W v4+ moves it back to the tent.
-- **Stall cover** at 15 min while losing; **cover range re-strike** every 5 min at 20W/40W (signals.md C7, C10).
+  (not v0–v2) first move the cover inside the open spread; 10W v4+ moves it back to the tent.
+- **Stall cover** at 15 min while losing; **cover range re-strike** every 5 min at 20W/40W, not on v0–v2 (signals.md C7, C10).
 - **Simulated fill**: a cover books only when the market is **1 tick through** its price, at its limit.
 
 ### Risk layer
@@ -227,7 +233,7 @@ have no governor.
 `CANDLE_SPREAD_ARMED` (default **`v7-10`**) selects the single variant that may send. `CANDLE_SPREAD_ARMED_MODE`
 `live` makes its orders real and fillable; the default `test` sends real but unfillable orders, and fills are
 simulated. Sending also requires `isProd` and `CANDLE_SPREAD_LIVE === 'true'`. The S3 control file can only
-**lower** a mode. **Simulate-only** families (v12, v13, v20, v21) can never be armed (`effectiveDryRun`,
+**lower** a mode. **Simulate-only** families (v9sg, v9ob, v12, v13, v20, v21) can never be armed (`effectiveDryRun`,
 `buildEngineDeps`, `applyArmedSelection`, `armableReason`).
 
 ### Watchlist
@@ -254,6 +260,8 @@ cells. The control-cell set is now empty, so all three run the ladder like every
 - **2026-10-23** — v20/v21 opens-only BB fade and v12/v13 natural cover live as simulate-only (→ 140).
 - **2026-10-28** — v10/v11 rules moved into the shared `target-rules.js` (live port step 1; not rostered).
 - **2026-11-04** — simulated-fill quoted-width gate removed (`a6bfb3d`).
+- **2026-11-06** — cover range no longer applied to v0–v2, so their geometry acts at 20W/40W again; reopen after
+  cover on every v0–v9 variant (so v9sg/v9ob too) and modelled in the backtest; v9sg/v9ob made simulate-only.
 
 ---
 
@@ -262,7 +270,7 @@ cells. The control-cell set is now empty, so all three run the ladder like every
 | # | Finding | Kind |
 |---|---|---|
 | 1 | Continuous covering runs before the signal / proactive steps, and they skip any position with a cover working, so on all families with covers but v3 the signal-driven covers mostly do not place orders. The signal still cancels working opens, resets the stance and drives the opposite open. | Open decision |
-| 2 | **v0 / v1 / v2 are identical at 20W, 40W and 40W-cATM** (baselines identical on every row; live identical covers 11/02–11/04). The cover-range re-strike sets the strike at 20/40W, so their geometry never acts. Six of their runs duplicate each other. | Redundant variants (user decision) |
+| 2 | **v0 / v1 / v2 were identical at 20W, 40W and 40W-cATM** (2026-10-13 to 2026-11-06) (baselines identical on every row; live identical covers 11/02–11/04). The cover-range re-strike sets the strike at 20/40W, so their geometry never acts. Six of their runs duplicated each other. Resolved 2026-11-06: the cover range is no longer applied to v0–v2 (`COVER_GEOMETRY_BASELINES`). | Resolved 2026-11-06 |
 | 3 | **Cover-to-stack parity.** Live runs it only on soft/hard/risk caps (all off), so it never fires. The backtest also runs `lockDeepWinners` when the governor blocks an open. It locks only winners with no cover working, so it rarely bites where continuous covers rest on everything; it can differ on v3 (unarmed positions). | Live/backtest drift (code-read, not measured) |
 | 4 | **Give-up vs placement G.** G can place the short leg one strike OTM, so give-up can fire on the first cover. Not separately measured. | Suspected interaction |
 | 5 | Give-up and the cover ladder in the sub-bar worker read the **last candle's** NDX, up to 5 min stale between bars. | Documented limitation |

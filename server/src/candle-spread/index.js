@@ -884,7 +884,13 @@ function applyOpenFallback(v) {
 //     a filled cover is done; rolling it is a butterfly bought on top of a covered tent, paid for with the
 //     premium the first cover locked.)
 // Set any of the fields before applyExperiments to override.
+// NOT v0-v2 (user, 2026-11-06): those three exist to compare cover PLACEMENT — v0 the tent, v1 halfway to the money,
+// v2 at the money. The range search picks its own strike and ignores coverGeometry (live pickCoverK and the
+// backtest's pickK alike), so from 10-13 to 11-06 v0/v1/v2 at 20W and 40W were one strategy: identical backtests,
+// identical live covers 11/02-11/04. They now keep their own placement at every width, as they always had at 10W.
+const COVER_GEOMETRY_BASELINES = /^v[012]-/;
 function applyCoverStrikeChoice(v) {
+  if (COVER_GEOMETRY_BASELINES.test(String(v.variant))) return;
   if (v.spreadWidth >= 20) {
     if (v.coverRangeInside == null) v.coverRangeInside = 9;
     if (v.coverRangeBeyond == null) v.coverRangeBeyond = 2;
@@ -1069,9 +1075,12 @@ function applyExperiments(v, { capPreset = true } = {}) {
     if (ab.ladder) applyLadderCfg(v);
   }
   applyPlateauCover(v);
-  // REOPEN AFTER A QUICK COVER (user, 2026-10-14): v7-10 (live — the user trades it this way by hand) and every v8/v9
-  // variant, so v8 = v6 + proactive cover + reopen and v9 = v7 + the same: a readable comparison.
-  if ((v.variant === 'v7-10' || /^v[89]-/.test(String(v.variant))) && v.reopenOnCover == null) v.reopenOnCover = true;
+  // REOPEN AFTER A QUICK COVER (user, 2026-10-14 on v7-10 + v8/v9; 2026-11-06 "we should have this on for all strategies,
+  // and the backtest should include it"): every v0-v9 variant at every width, -cATM and -unc. The feature-test copies
+  // (v9sg / v9ob) inherit it from v9. Not the natural-cover (v12 / v13) or opens-only (v20 / v21) families: they are
+  // built from finished shapes elsewhere and do not cover positions one by one. Backtested since 2026-11-06
+  // (runDay5m opts.reopenOnCover).
+  if (/^v[0-9]-/.test(String(v.variant)) && v.reopenOnCover == null) v.reopenOnCover = true;
   // COVER TO OPEN, WAIT (user, 2026-10-16): v6, v7 and v8 at every width; v9 stays on today's rules as the control.
   // An open on an underwater side escalates that side's cover to the give-up path and waits (trader.underwaterOnSide).
   if (/^v[678]-/.test(String(v.variant)) && v.coverToOpenWait == null) v.coverToOpenWait = true;
@@ -1474,7 +1483,8 @@ function reportArming(list) {
 // family (every width, -cATM and -unc), named v<parent><tag>, so the parent stays a clean control and every width is
 // tested. Cloned from the FINISHED parent variants (after every builder and applyExperiments), so each copy is the
 // parent in every field — caps, minLock, ladder, give-up, reopen, name-keyed overrides — plus exactly the flags below.
-// Never armed: dryRun is dropped so the base run's simulate default applies.
+// Never armed: dryRun is dropped so the base run's simulate default applies, and every copy is simulateOnly (user,
+// 2026-11-06), the same lock v12/v13/v20/v21 carry — it can never take the armed slot or send an order.
 const FEATURE_FAMILIES = [
   // v9sg: STACK GATE — no ADD on a side while the NQ 15m or 60m trend points against it (stack-gate-2026-10-17,
   // arm nqNotAgainst: on v9 better maxDD30 at 10/40W and end floor at all three widths, total -1..+9%).
@@ -1496,6 +1506,7 @@ function buildFeatureFamilies(list) {
         else if (c[k] && typeof c[k] === 'object' && Object.getPrototypeOf(c[k]) === Object.prototype) c[k] = { ...c[k] };
       }
       delete c.dryRun;
+      c.simulateOnly = true;
       c.variant = `${ff.parent}${ff.tag}-${m[1]}`;
       c.variantLabel = `${v.variantLabel} ${ff.label}`;
       Object.assign(c, ff.flags);
@@ -1574,7 +1585,8 @@ function buildNaturalFamilies(list) {
       }
       c.variant = `${nf.fam}-${m[1]}`;
       c.variantLabel = `${nf.label} — ${v.variantLabel}`;
-      Object.assign(c, nf.flags, { simulateOnly: true, dryRun: true });
+      // reopenOnCover: false — cloned from v6, which carries reopen since 2026-11-06; natural cover does not reopen.
+      Object.assign(c, nf.flags, { simulateOnly: true, dryRun: true, reopenOnCover: false });
       out.push(c);
     }
   }
@@ -2332,6 +2344,8 @@ function assertDeps(runs) {
         // opens-only BB fade (v20 / v21, 2026-10-23): read off cfg by processCandleClose (one-working-open order, the
         // v21 price-target builder)
         'opensOnly', 'openPriceTarget',
+        // reopen after a quick cover: read off cfg by trader.reopenAfterCover (and the sub-bar worker's pending check)
+        'reopenOnCover', 'reopenPer5m',
         // floor raise: read straight off cfg by trader.raiseFloor
         'floorRaise', 'floorRaiseMinRatio', 'floorRaiseBudgetFrac', 'floorRaiseSigmas', 'floorRaiseEveryMin',
         'floorRaiseMaxPerDay', 'floorRaiseSlipTicks', 'floorRaiseObjective', 'floorRaiseMinRatioFar', 'floorRaiseFarSigmas', 'floorRaiseLiftMetric',
@@ -4184,6 +4198,15 @@ module.exports = {
   effectiveDryRun,
   _setDeps: (d) => { DEPS = d; },
   _setRuns: (r) => { RUNS = r; },
+  // LIVE-ENGINE DAY REPLAY (scripts/candle-spread/replay-live-day.js, 2026-11-06): the replay drives the SAME tick,
+  // sub-bar worker and settlement the scheduler does, under a faked clock and file-backed DEPS. Export only — nothing
+  // here changes what the live engine does.
+  _replay: {
+    processGroup,
+    runRestingWork,
+    eodSettlement,
+    markStarted: () => { started = true; },
+  },
   applyArmedSelection, armedVariant,
   _liveArmed: () => LIVE_ARMED,
   tallyRun,

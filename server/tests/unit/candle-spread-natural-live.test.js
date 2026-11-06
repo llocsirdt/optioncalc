@@ -39,13 +39,15 @@ const MEDIAN_IV = 0.198593702534246;   // data/sweeps/v12-v13-2026-10-17 meta.me
   ok(NEW.length === 16 && want.every((n) => by.has(n)), `16 natural variants (${NEW.length}; missing ${want.filter((n) => !by.has(n)).join(', ')})`);
   ok(RUNS.length === 140, `roster 124 + 16 = 140 (${RUNS.length})`);
   ok(RUNS.filter((r) => /^v6-/.test(r.variant)).length === 8, 'the v6 parent has exactly these 8 shapes');
-  const OWN = new Set(['variant', 'variantLabel', 'natural', 'coverAfterMin', 'guardMedianIv', 'simulateOnly', 'dryRun']);
+  const OWN = new Set(['variant', 'variantLabel', 'natural', 'coverAfterMin', 'guardMedianIv', 'simulateOnly', 'dryRun', 'reopenOnCover']);
+  // reopenOnCover is the family's own: false (v6 has it on since 2026-11-06; natural cover never reopens).
   for (const v of NEW) {
     const p = parentOf(v.variant), fam = v.variant.slice(0, 3);
     ok(!!p, `${v.variant}: parent ${v.variant.replace(/^v1[23]/, 'v6')}`);
     ok(v.natural === fam && v.guardMedianIv === MEDIAN_IV && (fam === 'v13' ? v.coverAfterMin === 30 : v.coverAfterMin == null),
       `${v.variant}: natural ${v.natural}, guard IV ${v.guardMedianIv}, coverAfterMin ${v.coverAfterMin}`);
     ok(v.simulateOnly === true && v.dryRun === true, `${v.variant}: simulate-only, paper`);
+    ok(v.reopenOnCover === false, `${v.variant}: no reopen after cover`);
     ok(v.signalFn === p.signalFn, `${v.variant}: the v6 signal function`);
     const diff = [...new Set([...Object.keys(v), ...Object.keys(p)])].filter((k) => !OWN.has(k) && JSON.stringify(v[k]) !== JSON.stringify(p[k]));
     ok(diff.length === 0, `${v.variant}: every other field is v6's (${diff.join(', ')})`);
@@ -70,7 +72,8 @@ const MEDIAN_IV = 0.198593702534246;   // data/sweeps/v12-v13-2026-10-17 meta.me
   const env = { intradayIV: true, hasPx: true, where: 'test', openFillModel: 'ladder', subBarFill: '1m' };
   for (const v of NEW) {
     const p = parentOf(v.variant);
-    const ref = optsFor({ ...p, natural: v.natural, ...(v.coverAfterMin != null ? { coverAfterMin: v.coverAfterMin } : {}) }, env);
+    // reopenOnCover: false — v6 carries reopen since 2026-11-06; the natural families never did (the sweep had none).
+    const ref = optsFor({ ...p, natural: v.natural, reopenOnCover: false, ...(v.coverAfterMin != null ? { coverAfterMin: v.coverAfterMin } : {}) }, env);
     ref.guardMedianIv = MEDIAN_IV;   // sweep-v10: o.guardMedianIv = MEDIAN_IV
     const got = optsFor(v, env);
     ok(Object.keys(ref).sort().join() === Object.keys(got).sort().join(), `${v.variant}: same opt keys as the sweep`);

@@ -75,7 +75,7 @@ Part 2 isn't mistaken for an omission:
 | ID | Mechanism (decision `action`) | What it does | Families |
 |---|---|---|---|
 | **E1** | Open fallback (`open-fallback`) | "Always place on a signal". If no placement can be priced (every one over the cap, or the quotes refused), it places anyway: short strike nearest the underlying, starting at the low end of a known-good band and walking to the high end. At 09:30 the band is bull 0.50–0.55 × W and bear 0.47–0.52 × W; after that, the variant's own band, 0.45 × W up to its walk cap. Active until 15:55. | all |
-| **E2** | Reopen after a quick cover (`reopenAfterCover`) | When an open's cover fills **inside the same 15m signal window**, the underlying is still between its strikes, and the decision still wants that side: re-open at the same strikes, never above the price paid. At most 2 per 5m bar; every open gate still applies. | v7 (**-10 only**), v8, v9, v9sg, v9ob |
+| **E2** | Reopen after a quick cover (`reopenAfterCover`) | When an open's cover fills **inside the same 15m signal window**, the underlying is still between its strikes, and the decision still wants that side: re-open at the same strikes, never above the price paid. At most 2 per 5m bar; every open gate still applies. Modelled in the backtest since 2026-11-06. | v0–v9 (every shape), v9sg, v9ob |
 | **E3** | Natural REV (`natural-rev`) | Opens the **other** side when the book's bias side has touched an outer band (NDX RTH 5m or NQ 60m), its last open is ≤ 30 min old, and the zigzag run (20-pt, NDX 1m) is ≥ 40 pts (60 without a band/EMA line at the extreme). It's struck at the paired position's short strike, with pair + REV ≤ 1.15 × W. A filled REV marks its pair offset. | v12, v13 |
 | **E4** | Natural jump guard (`natural-guard`) | If the book's mark at spot ± the 15-minute p95 move would go through −lossMax, it opens the protective vertical. | v12, v13 |
 
@@ -109,16 +109,16 @@ fill are C1's, worked by C5–C8.
 
 | ID | Trigger (decision `action`) | Exact condition / price | Families |
 |---|---|---|---|
-| **C1** | Continuous cover (`continuous`) | Every filled position with no cover rests one at `W − openCost − minLock × W`, placed on the fill (30 s worker) and re-checked every tick. **minLock:** 10W = 0.10 on v0–v3 and 0.05 on v4+ (plateau, C9); 20W/40W = 0.20. **Geometry:** v0/v3 tent (shares the short strike); v1 halfway to the underlying; v2 at the underlying; v4+ 10W offset1 (C9); 20W/40W chosen from a strike range (C10). | v0–v9, v9sg, v9ob, v13 (**v13: only ≥ 30 min after the fill**, C13) |
+| **C1** | Continuous cover (`continuous`) | Every filled position with no cover rests one at `W − openCost − minLock × W`, placed on the fill (30 s worker) and re-checked every tick. **minLock:** 10W = 0.10 on v0–v3 and 0.05 on v4+ (plateau, C9); 20W/40W = 0.20. **Geometry:** v0/v3 tent (shares the short strike); v1 halfway to the underlying; v2 at the underlying (v0–v2 at every width); v4+ 10W offset1 (C9); 20W/40W on v3+ chosen from a strike range (C10). | v0–v9, v9sg, v9ob, v13 (**v13: only ≥ 30 min after the fill**, C13) |
 | **C2** | Risk-armed continuous | v3 only. C1 waits until the book floor ≤ −0.20 × lossTarget, or the cover would lock ≥ 1.0 × its own cost (`-unc`: only the latter) | v3 |
 | **C3** | Signal cover | The signal's cover side: O1's classic cover (held bull + red 15m that **failed** to make a new high; mirror); O2/O3 against the held side; **active cover** (held bull, close above the 15m midline, ≥ 3-TF cluster ≤ 8 pts above; mirror); O7; O8's 5m early cover. Places a break-even cover only on a filled position with **no** cover working (see note above). | v0–v9, v9sg, v9ob (evaluated on v12/v13 but never places, C14) |
 | **C4** | Proactive cover (`proactive-deep-itm`) | At a candle close, a position marking ≥ 0.80 × W with no cover working rests at break-even | v8, v9, v9sg, v9ob |
 | **C5** | Cover ladder (`cover-reprice`) | Every tick and every 30 s: limit = lock target + steps × $0.05. A step is earned per 120 s or per 10 NDX pts moved (either direction) since placement. Capped at break-even and at the mark; never moves down. | every family with covers |
-| **C6** | Give-up (`cover-giveup`) | NDX ≥ 20 pts back through the position's own short strike → price = min(mark + 1 tick, W − openCost + allowance × W), allowance 10W 5% · 20W 7.5% · 40W 10%. Never lowered; supersedes the ladder and stall. 20W/40W first move the cover **inside** the open spread (cheapest legal cover); 10W v4+ moves it back to the tent. | every family with covers |
+| **C6** | Give-up (`cover-giveup`) | NDX ≥ 20 pts back through the position's own short strike → price = min(mark + 1 tick, W − openCost + allowance × W), allowance 10W 5% · 20W 7.5% · 40W 10%. Never lowered; supersedes the ladder and stall. 20W/40W (not v0–v2) first move the cover **inside** the open spread (cheapest legal cover); 10W v4+ moves it back to the tent. | every family with covers |
 | **C7** | Stall cover (`cover-stall`) | ≥ 15 min since the fill AND NDX on the **losing** side of the fill-time NDX → price min(break-even, mark + 1 tick), if above the working price | every family with covers |
 | **C8** | Late-day / governor cover deferral | A cover fill that would take the floor through −lossMax is declined (sim) or pulled (broker). From 15:00, if the 15:00 floor was ≥ 0, one that takes it below 0 is also declined or pulled. | governed shapes |
 | **C9** | Plateau cover (10W) | Cover geometry `offset1` (a condor plateau instead of a tent peak), minLock 0.05, give-up returns the cover to the tent. The settled default for every 10W strategy from v4 up. | v4+ at 10W (incl. `-unc`) |
-| **C10** | Cover range re-strike (`cover-restrike`) | 20W/40W: every 5 min a resting cover moves to whichever strike in a range is closest to filling at the tent-equivalent price + k × 0.02 × W. The range runs from one strike inside the open's long leg to 2 beyond the tent. | 20W/40W, every family with covers |
+| **C10** | Cover range re-strike (`cover-restrike`) | 20W/40W: every 5 min a resting cover moves to whichever strike in a range is closest to filling at the tent-equivalent price + k × 0.02 × W. The range runs from one strike inside the open's long leg to 2 beyond the tent. Not on v0–v2 since 2026-11-06 (`COVER_GEOMETRY_BASELINES`): their own geometry places the cover. | 20W/40W, every family with covers except v0–v2 |
 | **C11** | Credit-cover thermostat | Sends the cover as a **credit** spread (collapsing the pair to a butterfly and releasing capital) once cash deployed ≥ the trigger (scaled by width), and debits below it. Same P&L, less capital. | v0–v9, v9sg, v9ob, v12, v13 |
 | **C12** | Cover-to-stack (`cover-to-stack`) | **Configured but never fires live.** It runs only when a soft, hard or risk cap blocks an open, and all three are off on every variant (v8's soft cap was removed 2026-10-14). When it does run, it locks the deepest winners (≥ 0.65 × W) to make room. The **backtest** also runs it when the *governor* would block an open; live does not. See Part 3. | configured v0–v13; fires nowhere live |
 | **C13** | Cover after 30 min | C1 only on a position ≥ 30 min since its fill, not offset by a REV, and not a guard | v13 |
@@ -169,7 +169,7 @@ Rows O\*, C3 and the reason column come from the 2026-11-04 traces; every other 
 | O9 be-wrong | · | · | · | · | · | · | · | ✓ | · | ✓ | ✓ | ✓ | · | · | · | · |
 | O13 BB fade | · | · | · | · | · | · | · | · | · | · | · | · | · | · | ✓ | ✓ |
 | E1 open fallback | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| E2 reopen after cover | · | · | · | · | · | · | · | v7-10 only | ✓ | ✓ | ✓ | ✓ | · | · | · | · |
+| E2 reopen after cover | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · |
 | E3 natural REV | · | · | · | · | · | · | · | · | · | · | · | · | ✓ | ✓ | · | · |
 | E4 jump guard | · | · | · | · | · | · | · | · | · | · | · | · | ✓ | ✓ | · | · |
 | B3 open trend block | · | · | · | · | · | · | · | · | · | · | · | ✓ | · | · | · | · |
@@ -188,7 +188,7 @@ B1, B2, B8, B9, B12 and M1–M3 apply to every family. Every family except v21 h
 | | v0 | v1 | v2 | v3 | v4 | v5 | v6 | v7 | v8 | v9 | v9sg | v9ob | v12 | v13 | v20 | v21 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | C1 continuous cover | ✓ | ✓ | ✓ | armed | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | ≥ 30 min | · | · |
-| C1 geometry at 10W | tent | halfway | at-money | tent | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | — | offset1 | — | — |
+| C1 geometry at 10W (v0–v2: every width) | tent | halfway | at-money | tent | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | offset1 | — | offset1 | — | — |
 | C1 minLock at 10W / 20·40W | .10/.20 | .10/.20 | .10/.20 | .10/.20 | .05/.20 | .05/.20 | .05/.20 | .05/.20 | .05/.20 | .05/.20 | .05/.20 | .05/.20 | — | .05/.20 | — | — |
 | C3 classic signal cover | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · | · | · | · | · |
 | C3 overext / grind / active cover | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | eval | eval | · | · |
@@ -200,13 +200,13 @@ B1, B2, B8, B9, B12 and M1–M3 apply to every family. Every family except v21 h
 | C7 stall cover (15 min) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | · | · |
 | C8 governor / late cover deferral | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | · | gov | · | · |
 | C9 plateau cover | · | · | · | · | 10W | 10W | 10W | 10W | 10W | 10W | 10W | 10W | · | 10W | · | · |
-| C10 cover range re-strike | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | · | 20·40W | · | · |
+| C10 cover range re-strike | · | · | · | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | 20·40W | · | 20·40W | · | · |
 | C11 credit-cover thermostat | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | · |
 | C12 cover-to-stack | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | ◌ | · | · | · | · |
 | H1 floor raise | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | · |
 | H2 floor offsets | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | gov | · | · |
 | H3 wings | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | · |
-| Simulate-only (can never be armed) | · | · | · | · | · | · | · | · | · | · | · | · | ✓ | ✓ | ✓ | ✓ |
+| Simulate-only (can never be armed) | · | · | · | · | · | · | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 **Notes on the table:**
 - **v12** has continuous cover, ladder, give-up and stall *configured* in the roster, but natural cover makes
@@ -263,17 +263,22 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 6. **Ladders step on movement in either direction** (C5, M1): a favourable 10-pt move raises the price exactly as an
    adverse one does.
 7. **Re-strike doesn't re-strike** (M2): it only cancels; the next open needs a fresh signal.
-8. **Reopen after cover (E2) is live-only.** `opts-for.js` / `backtest-v6-5m.js` have no reopen, so the baselines
-   for v7-10 and every v8 / v9 / v9sg / v9ob variant do not model it. Its effect can only be read from live sessions.
-9. **v9sg / v9ob are not simulate-only.** The `FEATURE_FAMILIES` comment and the experiments log say "never armed",
-   but neither carries `simulateOnly`, so `armableReason` would accept their capped shapes if
-   `CANDLE_SPREAD_ARMED` named one. Nothing arms them today.
+8. **Reopen after cover (E2) is in the backtest since 2026-11-06** (`backtest-v6-5m.js` ports
+   `trader.reopenAfterCover`; `opts-for.js` forwards `reopenOnCover` / `reopenPer5m`). Limits: it runs at the close
+   of the bar the cover filled in and the order works from the next bar, so at most one bar later than live; an
+   unfilled reopen expires at the next 15m close (as live). The baselines quoted in these docs predate it.
+9. **v9sg / v9ob are simulate-only since 2026-11-06** (`buildFeatureFamilies` sets `simulateOnly`). Before that,
+   "never armed" was only a convention and `armableReason` would have accepted their capped shapes.
 10. **Removed 2026-11-04:** the simulated-fill quoted-width gate (`simMaxQuoteWidthFrac`). It refused every 10W fill
    on a wide-quote day. The backtest never used it.
 
 ---
 
 ## Changelog
+
+- **2026-11-06** — C10 (and C6's inside re-strike) no longer apply to v0–v2, so their geometry places covers at
+  20W/40W again; E2 on every v0–v9 shape (v9sg/v9ob inherit it) and modelled in the backtest (note 8); v9sg/v9ob
+  simulate-only (note 9).
 
 - **2026-11-05 (later)** — B1 rewritten and B1b added after the 11/05 session. NDX left the band of listed 10-pt
   strikes, the old 10-pt sample skipped 49 of 78 ticks, and no 10/20/40-wide spread could be built. Fallback widths

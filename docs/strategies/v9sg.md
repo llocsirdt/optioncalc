@@ -9,7 +9,7 @@ trigger and the strategy × signal matrix: [signals.md](signals.md).
 **Feature-test family** (user convention 2026-10-19): a complete copy of [v9](v9.md) — all 8 shapes (10/20/40,
 -unc 10/20/40, -cATM 20/40) — with exactly one flag added. `buildFeatureFamilies` clones the *finished* v9
 variants (after every builder and `applyExperiments`), so caps, minLock, ladder, give-up, reopen and every
-name-keyed override are v9's; it only renames, relabels, drops `dryRun`, and sets `stackGate`.
+name-keyed override are v9's; it only renames, relabels, drops `dryRun`, sets `simulateOnly: true` (since 2026-11-06), and sets `stackGate`.
 
 ## Intent
 
@@ -58,7 +58,7 @@ never fires live.
 |---|---|---|
 | `stackGate` | **`'nqNotAgainst'`** | unset |
 | everything else | v9's, field for field (roster dump) | — |
-| `simulateOnly` | **unset** (not simulate-only) | unset |
+| `simulateOnly` | **`true`** (since 2026-11-06; can never be armed or send an order) | unset |
 
 ## Baselines
 
@@ -84,9 +84,9 @@ The experiments log records that these baselines reproduce the stack-gate sweep 
 
 ## Open questions / suspected drift
 
-1. **"Never armed" is a convention, not a guard.** The `FEATURE_FAMILIES` comment (`index.js:1476`) and the
-   experiments log say never armed, but v9sg carries no `simulateOnly`; `armableReason` (`index.js:3696`) would
-   accept the capped shapes (finite `lossMax`, NDX).
+1. **Resolved 2026-11-06: "never armed" was a convention, not a guard.** Until then v9sg carried no
+   `simulateOnly` and `armableReason` would have accepted the capped shapes. `buildFeatureFamilies` now sets
+   `simulateOnly: true` on every copy, so `armableReason` refuses it as simulate-only.
 2. **The `index.js:1478-1479` rationale is from the 10/17 sweep** ("better maxDD30 at 10/40W ... total
    -1..+9%"). On the current baselines all three capped widths have a better maxDD30 than v9, and the 20W and 40W
    totals are below v9's by more than the quoted range. The comment predates the rebuilt baselines.

@@ -50,7 +50,7 @@ v9ob blocks nothing.
 |---|---|---|
 | `openTrendBlock` | **`'A'`** | unset |
 | everything else | v9's, field for field (roster dump) | — |
-| `simulateOnly` | **unset** | unset |
+| `simulateOnly` | **`true`** (since 2026-11-06; can never be armed or send an order) | unset |
 
 ## Baselines
 
@@ -78,5 +78,5 @@ reference.
    opens; leash them" — the open block was kept as a control arm only. v9ob is that control, now live-simulated.
 2. **The `index.js:1481-1482` rationale is stale against current baselines.** It says "20/40W maxDD much
    better"; on the current CSV v9ob-20's maxDD30 is worse than v9-20's and v9ob-40's is only slightly better.
-3. **"Never armed" is a convention, not a guard** — same as v9sg: no `simulateOnly`, and `armableReason`
-   (`index.js:3696`) would accept the capped shapes.
+3. **Resolved 2026-11-06: "never armed" was a convention, not a guard** — same as v9sg. `buildFeatureFamilies`
+   now sets `simulateOnly: true`, so `armableReason` refuses it.

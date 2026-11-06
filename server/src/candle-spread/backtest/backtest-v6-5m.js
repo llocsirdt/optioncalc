@@ -621,7 +621,11 @@ function runDay5m(bars, signalFn, opts = {}) {
   let openRestruck = 0, restrikeReplaced = 0;
   let openPlaced = 0, openFilledL = 0, openCanceled = 0, openStale = 0, openExpired = 0, openSkipPending = 0,
     openReprices = 0, openPaidUp = 0;
-  let openMissed = 0, openTried = 0, openWalkGov = 0;   // openFillModel 'resting': how often a placed open never filled
+  let openMissed = 0, openTried = 0, openWalkGov = 0;
+  // REOPEN AFTER A QUICK COVER (opts.reopenOnCover) — backtest port of trader.reopenAfterCover (2026-11-06).
+  const reopenOn = opts.reopenOnCover === true;
+  let lastSig15 = null;   // the latest 15m decision: { at, openSide, coverSides } (live: st.lastSignal15)
+  const reo = { placed: 0, filled: 0, expired: 0, outside: 0, gov: 0, late: 0, ratchet: 0, cap: 0, leg: 0, c2oWait: 0, deeper: 0 };   // openFillModel 'resting': how often a placed open never filled
   let giveUps = 0;   // covers forced to the market because the position turned against us
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
   let gateCutoff = 0, gateFloor = 0, gateUnderwater = 0, gateC2oWait = 0, c2oFires = 0, c2oChasing = 0;   // opens blocked by the stop-opening gates
@@ -962,7 +966,8 @@ function runDay5m(bars, signalFn, opts = {}) {
         const _nd = o.limit * 100 * QTY;
         st.positions.push({ side: side, shortStrike: o.shortStrike, legs: o.legs, limit: o.limit, covered: false, pendingCover: null, coverLegs: null, coverLimit: null, openEpoch: nowEpoch, openTime: nowET,
           openReason: o.reason, sigEpoch: o.sigEpoch, openUnder: S, _openI: i, ...(o._touchLvl != null ? { touchLvl: o._touchLvl } : {}),
-          ...(o._natural ? { _nat: o._natural } : {}) });
+          ...(o._natural ? { _nat: o._natural } : {}), ...(o._reopen ? { reopenOf: true } : {}) });
+        if (o._reopen) reo.filled++;
         if (o._natural === 'rev') { ncC.revFilled++; if (o._pair && !o._pair.covered) o._pair._offset = true; }
         if (o._add && natural) ncC.adds++;
         // LADDER COVERING (opts.coverPriorOnOpen) — the CORRECTED reading of "continuous covering".
@@ -1903,6 +1908,12 @@ function runDay5m(bars, signalFn, opts = {}) {
       }
       if (sig.cover || sig.coverSide === 'both' || sig.coverSide === st.dir) st.dir = 'none';   // reset stance so the flip's opposite open proceeds
     }
+    // REOPEN: the 15m decision the reopen window hangs off, taken before any gate edits sig (live sets st.lastSignal15 at
+    // the same point). A working REOPEN that has not filled by the next 15m close is cancelled (live: reopenExpired).
+    if (reopenOn && bars[i].fifteen) {
+      lastSig15 = { at: nowEpoch, openSide: sig.openSide || null, coverSides: coverSet.slice() };
+      if (st.pendingOpen && st.pendingOpen.o && st.pendingOpen.o._reopen) { st.pendingOpen = null; reo.expired++; markBookDirty(); }
+    }
     // OPEN LADDER — ONE WORKING OPEN (live: openPosition's open-skip-pending) and CANCEL ON A REVERSAL (live:
     // the cancel-open branch): the signal now wants the other side, or wants this side covered.
     if (openLadderModel && st.pendingOpen) {
@@ -2179,6 +2190,71 @@ function runDay5m(bars, signalFn, opts = {}) {
       }   // end if(!legSkip1)
       }   // end else (adaptive geometry did not decline)
     }
+    // REOPEN AFTER A QUICK COVER (opts.reopenOnCover; user 2026-10-14 live, backtest port 2026-11-06). Mirrors
+    // trader.reopenAfterCover: a position whose cover filled after the latest 15m decision — opened by that decision, or
+    // the decision still wants its side, and no cover signal on its side — is placed again at the SAME strikes while the
+    // underlying is still between them, at min(paid, mark); when the mark is below what was paid, the deepest-ITM strikes
+    // of the same width that still cost no more. Ceiling = paid. Every open gate applies; leg-uniqueness without a shift;
+    // one working open at a time. Each source reopens once (a reopen can itself be reopened).
+    // BACKTEST LIMITS: it runs at the bar close of the bar the cover filled in (live: within ~30 s of the fill, on a
+    // parity spot), and the order works from the next bar like every ladder open — one bar later than live at most.
+    if (reopenOn && lastSig15 && !(openLadderModel && st.pendingOpen)) {
+      const per5 = opts.reopenPer5m != null ? opts.reopenPer5m : 2;
+      for (let n = 0; n < per5 && !(openLadderModel && st.pendingOpen); n++) {
+        const src = st.positions.filter((p) => p.covered && !p.hedge && !p.reopened && (p.side === 'bull' || p.side === 'bear')
+          && p.coverEpoch != null && p.coverEpoch >= lastSig15.at && !lastSig15.coverSides.includes(p.side)
+          && (lastSig15.openSide === p.side || (p.openEpoch != null && p.openEpoch >= lastSig15.at)))
+          .sort((a, b) => b.coverEpoch - a.coverEpoch)[0];
+        if (!src) break;
+        const side = src.side, W = G.WIDTH;
+        const ks = src.legs.map((l) => l.strike), lo0 = Math.min(...ks), hi0 = Math.max(...ks);
+        if (S < lo0 || S > hi0) { src.reopened = 'outside'; reo.outside++; continue; }
+        if (opts.coverToOpenWait && st.positions.some((p) => p.side === side && !p.covered && p.filled !== false && !p.hedge
+            && legsMark(p.legs, S, tau, iv) < p.limit)) { src.reopened = 'c2o-wait'; reo.c2oWait++; continue; }
+        const paid = src.limit;
+        const legsAt = (lo, hi) => (side === 'bull'
+          ? [{ side: 'long', type: 'C', strike: lo }, { side: 'short', type: 'C', strike: hi }]
+          : [{ side: 'long', type: 'P', strike: hi }, { side: 'short', type: 'P', strike: lo }]);
+        let pick = { lo: lo0, hi: hi0, mark: legsMark(legsAt(lo0, hi0), S, tau, iv) }, deeper = 0;
+        if (!(pick.mark > 0)) { src.reopened = 'unpriced'; continue; }
+        if (pick.mark < paid) {
+          for (let k = 1; k <= 20; k++) {
+            const d = side === 'bull' ? -k * legIncr : k * legIncr;
+            const m = legsMark(legsAt(lo0 + d, hi0 + d), S, tau, iv);
+            if (!(m > 0) || m > paid) break;
+            pick = { lo: lo0 + d, hi: hi0 + d, mark: m }; deeper = k;
+          }
+        }
+        const limit = round2(Math.min(paid, Math.max(TICK, Math.ceil(pick.mark / TICK - 1e-9) * TICK)));
+        const o = { legs: legsAt(pick.lo, pick.hi), shortStrike: side === 'bull' ? pick.hi : pick.lo, limit, _reopen: true,
+          reason: 'reopen', sigEpoch: nowEpoch };
+        const cand = { legs: o.legs, limit, covered: false };
+        const _m = etMinute(bars[i].dt);
+        if (governed && -floorOf(cand, openLadderModel) > lossMax) { src.reopened = 'governor'; reo.gov++; continue; }
+        const _late = lateFloorLimit(_m);
+        if (_late != null && floorOf(cand, openLadderModel) < _late) { src.reopened = 'late'; reo.late++; continue; }
+        const _rat = ratchetFloorLimit(_m);
+        if (_rat != null && floorOf(cand) < _rat) { src.reopened = 'ratchet'; reo.ratchet++; continue; }
+        const _nd = limit * 100 * QTY, _tu = uncoveredRisk();
+        if (_tu + _nd > riskCap || _tu + _nd > hardCap || _tu + _nd > capCeiling) { src.reopened = 'cap'; reo.cap++; continue; }
+        let resolvedLegs = o.legs;
+        if (enforceLegs) {
+          const preferStyle = recapAlt ? (Math.floor(legOpenN / altEvery) % 2 === 1 ? 'credit' : 'debit') : 'debit';
+          const res = LL.resolveOpen(side, pick.lo, pick.hi, ledger, { incr: legIncr, maxShift: 0, preferStyle });
+          if (res.resolution === 'skip' || res.resolution === 'shift') { src.reopened = 'leg'; reo.leg++; continue; }
+          resolvedLegs = res.legs;
+        }
+        src.reopened = true; reo.placed++; if (deeper) reo.deeper++;
+        if (openLadderModel) {
+          openPlaced++;
+          st.pendingOpen = { side, o, base: limit, limit, cap: paid, placedMs: nowEpoch, placedUnder: S, lastMoveMs: nowEpoch, restrikeN: 0,
+            pos: { legs: o.legs, limit, covered: false, coverLegs: null, coverLimit: null } };
+          if (enforceLegs) { ledger.record(resolvedLegs); legOpenN++; }
+          st.dir = side;
+          markBookDirty();
+        } else commitOpen(side, o, resolvedLegs, true);
+      }
+    }
     // RISK-HARVEST (opts.riskHarvest): after opens/covers, if a REACHABLE loss exists (worse than
     // hvTrigger over ±band = spot·iv·√tau·sigmas) and a ≥hvRatio far-side hedge is available, buy it to lift
     // the reachable floor toward 0 — spending a sliver of the peak. Ratio-gated (fires when lopsided, any
@@ -2287,6 +2363,7 @@ function runDay5m(bars, signalFn, opts = {}) {
     openLadder: openLadderModel ? { placed: openPlaced, filled: openFilledL, canceled: openCanceled, stale: openStale, restruck: openRestruck, restrikeReplaced, walkGovBlocked: openWalkGov,
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
       paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
+    reopen: reopenOn ? reo : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
     // is directly comparable to `terminal` (what continuing to trade produced).

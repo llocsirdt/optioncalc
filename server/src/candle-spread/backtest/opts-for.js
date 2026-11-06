@@ -103,6 +103,8 @@ function optsFor(v, env) {
   if (v.subBarFill != null) o.subBarFill = v.subBarFill;   // backtest-only: '1m' | 'path' sub-bar fill timing
   if (v.openTrendBlock != null) o.openTrendBlock = v.openTrendBlock;   // backtest-only control arm (trend-state definition)
   if (v.noAddUnderwater != null) o.noAddUnderwater = v.noAddUnderwater;   // backtest-only (2026-10-15)
+  // REOPEN AFTER A QUICK COVER (live 2026-10-14, backtested 2026-11-06): runDay5m ports trader.reopenAfterCover.
+  for (const k of ['reopenOnCover', 'reopenPer5m']) if (v[k] != null) o[k] = v[k];
   for (const k of ['coverToOpen', 'coverToOpenExtra', 'coverToOpenWait']) if (v[k] != null) o[k] = v[k];   // backtest-only (2026-10-15)
   // A roster coverToOpenWait means the live rule: same side, today's give-up cap (+$0), skip the open while underwater.
   if (v.coverToOpenWait === true && v.coverToOpen == null) { o.coverToOpen = 'same'; if (o.coverToOpenExtra == null) o.coverToOpenExtra = 0; }

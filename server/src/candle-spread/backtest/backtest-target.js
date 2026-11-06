@@ -196,6 +196,7 @@ function runDayTarget(bars, optsIn = {}) {
     bestCase, worstCase, avgTerminalPotential,
     openLadder: { placed: D.anchorPlaced + D.marketFilled, filled: D.anchorFilled + D.marketFilled, canceled: D.anchorCanceled, stale: 0, restruck: 0, restrikeReplaced: 0,
       walkGovBlocked: 0, expired: 0, skipPending: D.pendingBusy, reprices: 0, paidUp: 0 },
+    reopen: undefined,   // runDay5m's reopen-after-cover counters; the target engine has no reopen
     lock: { traded: positions.length > 0, endBookFloor: endF != null ? Math.round(endF) : null, endFloorNoLoss: positions.length > 0 && endF >= 0,
       endFloorProfit: positions.length > 0 && endF > 0, bestFloor: Number.isFinite(bestFloorSeen) ? Math.round(bestFloorSeen) : null, everPositive },
     capital: { peakReal: Math.round(book.capPeak), avgReal: capN ? round2(capSum / capN) : 0 },

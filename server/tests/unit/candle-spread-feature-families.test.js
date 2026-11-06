@@ -34,12 +34,13 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.log('FAIL:', m); } 
       const keys = new Set([...Object.keys(p), ...Object.keys(c)]);
       const diff = [];
       for (const k of keys) {
-        if (k === 'variant' || k === 'variantLabel' || k === 'dryRun' || k in f) continue;
+        if (k === 'variant' || k === 'variantLabel' || k === 'dryRun' || k === 'simulateOnly' || k in f) continue;
         const a = p[k], b = c[k];
         if (typeof a === 'function' || typeof b === 'function') { if (a !== b) diff.push(k); continue; }
         if (JSON.stringify(a) !== JSON.stringify(b)) diff.push(k);
       }
       ok(diff.length === 0, `${name} equals ${p.variant} apart from the flag (differs on: ${diff.join(', ')})`);
+      ok(c.simulateOnly === true, `${name} is simulateOnly (never armed)`);
       for (const [k, val] of Object.entries(f)) ok(c[k] === val && p[k] == null, `${name}.${k} = ${val}, parent unset`);
       ok(c.dryRun == null || c.dryRun === true, `${name} is never armed`);
       for (const k of Object.keys(c)) if (c[k] && typeof c[k] === 'object') ok(c[k] !== p[k], `${name}.${k} is not shared by reference`);
