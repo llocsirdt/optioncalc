@@ -635,6 +635,7 @@ function runDay5m(bars, signalFn, opts = {}) {
   let lastSig15 = null;   // the latest 15m decision: { at, openSide, coverSides } (live: st.lastSignal15)
   const reo = { placed: 0, filled: 0, expired: 0, outside: 0, gov: 0, late: 0, ratchet: 0, cap: 0, leg: 0, c2oWait: 0, deeper: 0 };   // reopen telemetry: placed / filled / expired, and why a source was not reopened
   let giveUps = 0;   // covers forced to the market because the position turned against us
+  let guTrailLowers = 0;   // opts.giveUpTrail: bars on which a give-up'd cover's working price came down
   let decayStops = 0;   // covers forced to the market because the position decayed past opts.decayStop
   let gateCutoff = 0, gateFloor = 0, gateUnderwater = 0, gateC2oWait = 0, c2oFires = 0, c2oChasing = 0;   // opens blocked by the stop-opening gates
   let flyCount = 0, flySpent = 0;      // valley-repair structures bought
@@ -1496,7 +1497,20 @@ function runDay5m(bars, signalFn, opts = {}) {
         const _tp = roundTick(Math.min(_be, legsMark(pc.legs, touchNow ? pos._touchL : S, tau, iv) + TICK));
         if (_tp > workingTarget) workingTarget = _tp;
       }
-      if (opts.coverNeverLower) {
+      // TRAILING GIVE-UP (opts.giveUpTrail = fraction of W; experiment 2026-11-12, default OFF). Once a give-up has fired
+      // on this position, the working cover may come DOWN with a recovering market: to the cover's mark + trail, never
+      // below the price the normal path computed this bar (the ladder / minLock price, or the give-up price while
+      // give-up is still active), and only from the next bar (coverFillAtResting). A rising mark is handled by the
+      // usual give-up raise. The user's "inverse trailing stop": the bounce fills it at the low + at most the trail.
+      // Off = coverNeverLower pins the give-up high, which is what live does.
+      let _trailed = false;
+      if (opts.giveUpTrail > 0 && pos._gu && pc._working != null) {
+        const trail = roundTick(legsMark(pc.legs, S, tau, iv) + opts.giveUpTrail * G.WIDTH);
+        const next = Math.max(workingTarget, Math.min(pc._working, trail));
+        if (next < pc._working - 1e-9) guTrailLowers++;
+        workingTarget = next; pc._working = next; _trailed = true;
+      }
+      if (opts.coverNeverLower && !_trailed) {
         if (pc._working != null && workingTarget < pc._working) workingTarget = pc._working;
         pc._working = workingTarget;
       }
@@ -1505,13 +1519,15 @@ function runDay5m(bars, signalFn, opts = {}) {
       // THE PRICE THAT WAS RESTING DURING THIS BAR (opts.coverFillAtResting; 2026-10-08). A real order fills at the
       // price it was resting at when the market reached it — not at a price decided from this bar's CLOSE. So the
       // fill test and the booked price use the working price carried INTO the bar; the price computed above
-      // (ladder, give-up, stall: up OR down) only rests from the NEXT bar. This replaces coverNeverLower, which
-      // overcorrected: it pinned a give-up price after the position recovered and booked it at a loss (40-wide
-      // average lock -\$236/cover). Lowering is allowed — it just cannot be retroactive.
+      // (ladder, give-up, stall) only rests from the NEXT bar. Since 2026-11-12 optsFor turns coverNeverLower on
+      // with it for every roster variant (live parity: a working cover is never lowered), so the price computed above
+      // has already been held at its previous high and only RAISES reach this point. (On 10-08 coverNeverLower was
+      // switched off for pinning a give-up after a recovery, 40-wide about -\$236/cover; that is exactly what live does.
+      // Lowering is a trailing give-up experiment on the roadmap.)
       // RAISES are immediate (live reprices within ~30 s of a give-up/stall/ladder step, well inside a 5m bar);
       // LOWERS take effect from the next bar (a resting order cannot fill retroactively at a lower price).
-      // NOT LIVE PARITY on lowers: live (trader.workRestingCovers) never lowers a working cover — give-up, stall and the
-      // ladder only ever raise pc.target. On with simFillAtLimit (every roster variant, via optsFor).
+      // LIVE PARITY on lowers needs coverNeverLower as well (live trader.workRestingCovers never lowers a working cover).
+      // optsFor sets both with simFillAtLimit (every roster variant).
       let fillAt = workingTarget;
       if (opts.coverFillAtResting) {
         const resting = pc._resting != null ? pc._resting : pc.target;
@@ -2398,6 +2414,7 @@ function runDay5m(bars, signalFn, opts = {}) {
       expired: openExpired, skipPending: openSkipPending, reprices: openReprices,
       paidUp: Math.round(openPaidUp * 100 * QTY) } : undefined,
     reopen: reopenOn ? reo : undefined,
+    giveUpTrail: opts.giveUpTrail > 0 ? { trail: opts.giveUpTrail, lowers: guTrailLowers } : undefined,
     // LOCK TELEMETRY: did the day ever reach a guaranteed profit, and what would freezing there have paid?
     // frozenTerminal evaluates the book AS IT STOOD at that moment against the day's ACTUAL settle, so it
     // is directly comparable to `terminal` (what continuing to trade produced).

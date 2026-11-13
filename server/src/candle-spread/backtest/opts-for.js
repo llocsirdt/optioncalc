@@ -133,8 +133,20 @@ function optsFor(v, env) {
   if (v.coverFillThroughTicks != null) o.fillThroughTicksCover = v.coverFillThroughTicks;
   if (v.simFillAtLimit != null) o.simFillAtLimit = v.simFillAtLimit;   // covers book AT their limit
   // A resting cover fills at the price it was RESTING at during the bar (repricing applies from the next bar);
-  // on with the realistic fill model. (coverNeverLower, the first version, overcorrected — kept off.)
-  if (v.simFillAtLimit) o.coverFillAtResting = true;
+  // on with the realistic fill model.
+  // AND IT NEVER WALKS DOWN, LIKE LIVE (user, 2026-11-12: "we should correct this so backtest acts like live does").
+  // trader.workRestingCovers only ever raises a working cover (give-up, stall, ladder). The backtest let a price
+  // computed from a cheaper mark come back down from the next bar, so after a give-up a position that recovered
+  // covered cheaper here than live could. On 10-08 coverNeverLower was turned off for overcorrecting: it pins a
+  // give-up after a recovery and books it at a loss (40W ~ -$236 / cover). That is what live does, so the backtest
+  // now does it too. Letting live lower (a trailing give-up) is a separate experiment (roadmap).
+  // env.coverNeverLower === false reproduces the pre-2026-11-12 baselines.
+  if (v.simFillAtLimit) {
+    o.coverFillAtResting = true;
+    o.coverNeverLower = !(env && env.coverNeverLower === false);
+  }
+  // TRAILING GIVE-UP experiment (backtest-only, default off): a sweep sets it fleet-wide through env.
+  if (env && env.giveUpTrail > 0) o.giveUpTrail = env.giveUpTrail;
   // A floor raise is a resting order everywhere a backtest models the live roster (no live analogue knob:
   // live hedges always rest). env.floorRaiseResting === false reproduces the instant-fill model.
   if (v.floorRaise) o.floorRaiseResting = !(env && env.floorRaiseResting === false);

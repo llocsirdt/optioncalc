@@ -83,7 +83,8 @@ const { optsFor: buildOpts } = require('../../server/src/candle-spread/backtest/
 // this one-argument wrapper, and a full rebuild came back labelled "opens ladder" with instant-fill numbers).
 const optsFor = (v) => buildOpts(v, { intradayIV: INTRADAY_IV, hasPx: HAS_PX, noWings: NO_WINGS,
   where: 'build-backtest-baselines optsFor', ...OPEN_FILL_ENV,
-  ...(typeof ORDER_SLIP !== 'undefined' && ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : {}) });
+  ...(typeof ORDER_SLIP !== 'undefined' && ORDER_SLIP != null ? { orderSlipTicks: ORDER_SLIP } : {}),
+  ...(typeof GIVEUP_TRAIL !== 'undefined' && GIVEUP_TRAIL > 0 ? { giveUpTrail: GIVEUP_TRAIL } : {}) });
 
 const wrap = (v) => (A, p, ctx) => v.signalFn(A, p, { ...ctx, cfg: v.signalCfg || {} });
 
@@ -163,6 +164,14 @@ const SLICE_OUT = soi >= 0 ? process.argv[soi + 1] : null;
 // engine's trader.buildOpenAtStrikes. Absent = this engine's historical rounding, so the committed
 // baselines still reproduce exactly. Set here rather than on the roster so one sweep can move all 80
 // variants without editing the variant contract.
+// --giveUpTrail F — the trailing give-up experiment (fraction of W), fleet-wide. A sweep arm, never the baseline:
+// it requires --tag, so its files get their own suffix and are not archived.
+const gti = process.argv.indexOf('--giveUpTrail');
+const GIVEUP_TRAIL = gti >= 0 ? Number(process.argv[gti + 1]) : null;
+if (gti >= 0 && !(GIVEUP_TRAIL > 0 && TAG)) {
+  console.error('--giveUpTrail needs a positive fraction of W AND --tag <name> (a sweep arm must not overwrite the baseline)');
+  process.exit(1);
+}
 const osi = process.argv.indexOf('--orderSlipTicks');
 const ORDER_SLIP = osi >= 0 ? Number(process.argv[osi + 1]) : null;
 if (osi >= 0 && !(Number.isFinite(ORDER_SLIP) && ORDER_SLIP >= 0)) {
