@@ -88,6 +88,12 @@ async function currentSetups(symbol) {
 const IIV = require('../../shared/intraday-iv');   // time-of-day IV multiplier — same source as the backtest
 // Last tradability verdict, published to /status so the UI can show WHY the engine is standing down.
 let LAST_TRADABILITY = null;
+// PRICE FRESHNESS, SHADOW MODE (2026-11-12; user: "lets discuss" -> log-only for a week, then decide). The tradability
+// gate's check 1 (tradability.js, the 2026-09-07 Labor Day frozen-NDX guard) needs WHEN the pricing instrument last
+// changed, and nothing ever passed it, so only the chain-quote check gated a tick. This remembers the last value and
+// the 5m mark at which it changed. The verdict is published on /status as tradability.priceFreshness and logged when
+// it WOULD block. It never blocks: the real gate below is unchanged.
+let PX_SEEN = { symbol: null, value: null, changedAt: null };
 const alias = require('./variant-alias');   // pre-2026-09-03 run names -> the current canonical roster
 const { classicSignal } = require('./signals/classic-signal');
 const { v4Signal } = require('./signals/v4-signals');
@@ -2557,6 +2563,16 @@ async function processGroup(runs, kind) {
     listedStrikes: strikeGrid.listed,
   });
   const gridNote = { incr: strikeGrid.incr, quotedNear: strikeGrid.quoted, near: strikeGrid.near };
+  // PRICE FRESHNESS (shadow; see PX_SEEN). The first observation of a symbol counts as a change, so a restart can
+  // never read as stale.
+  if (PX_SEEN.symbol !== priceSymbol || PX_SEEN.value !== underlying) PX_SEEN = { symbol: priceSymbol, value: underlying, changedAt: T };
+  const freshGate = tradability.assess({ underlying, nowMs: T, priceAsOfMs: PX_SEEN.changedAt,
+    quotedStrikes: strikeGrid.strikes, listedStrikes: strikeGrid.listed });
+  const priceFreshness = { mode: 'shadow', asOfMs: PX_SEEN.changedAt, ageMin: Math.round((T - PX_SEEN.changedAt) / 60000),
+    wouldBlock: freshGate.reason === 'stale-price', detail: freshGate.reason === 'stale-price' ? freshGate.detail : null };
+  if (priceFreshness.wouldBlock) {
+    console.warn(`[candle-spread] PRICE FRESHNESS (shadow, NOT blocking) at ${markOf(T)}: ${priceSymbol} ${underlying} unchanged for ${priceFreshness.ageMin}m — ${freshGate.detail}`);
+  }
   if (strikeGrid.incr !== sample.strikeIncrement && strikeGrid.incr !== 5) {
     console.warn(`[candle-spread] strike grid near ${Math.round(underlying)} is ${strikeGrid.incr == null ? 'absent' : strikeGrid.incr + '-pt'} at ${markOf(T)} — variants open at fallback widths (strike-grid.openWidthFor)`);
   }
@@ -2564,7 +2580,7 @@ async function processGroup(runs, kind) {
   // rather than the operator having to infer it from an absence of orders. An absence looks identical to
   // a quiet signal day, which is exactly the confusion that let a whole holiday session go unnoticed.
   LAST_TRADABILITY = { ...tradeGate, at: Date.now(), mark: markOf(T), markMs: T,
-    symbol: priceSymbol, expiration, underlying, strikeGrid: gridNote };
+    symbol: priceSymbol, expiration, underlying, strikeGrid: gridNote, priceFreshness };
   if (!tradeGate.ok) {
     // Log once per tick, not per variant, and keep it visible: this is the difference between "we chose
     // not to trade" and "something is broken", and the two must never be confused in the record.
