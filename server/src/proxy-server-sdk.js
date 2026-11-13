@@ -383,8 +383,19 @@ app.all('/api/v1/marketdata/*', async (req, res) => {
       console.log(`[${timestamp}] Analyzing candles for: ${symbol}${timeframe ? ` (${timeframe})` : ''}`);
       // Keyed on symbol + timeframe, which is everything that changes the answer here.
       const freshA = /[?&]fresh=(1|true)\b/.test(query || '');
-      result = await analysisCache.run(`candleanalysis|${symbol}|${timeframe || 'default'}`,
-        freshA ? 0 : ANALYSIS_TTL_MS, () => analyzeCandles(symbol, options));
+      // AN ERROR IS NOT CACHED (2026-11-12). analyzeCandles catches its own failures and RESOLVES with
+      // { status: 'error' }, so the cache saw a success and served that error as a 200 for the whole TTL. Thrown here
+      // so request-cache treats it as a failure (not cached, counted as an error), then unwrapped below so the caller
+      // still gets exactly the error body it always got.
+      try {
+        result = await analysisCache.run(`candleanalysis|${symbol}|${timeframe || 'default'}`,
+          freshA ? 0 : ANALYSIS_TTL_MS, () => analyzeCandles(symbol, options).then((r) => {
+            if (r && r.status === 'error') { const e = new Error(r.message || r.error || 'candle analysis failed'); e.analysisResult = r; throw e; }
+            return r;
+          }));
+      } catch (e) {
+        if (e && e.analysisResult) result = e.analysisResult; else throw e;
+      }
 
     } else if (path.startsWith('/chartseries')) {
       // Deep, chart-ready OHLC + Bollinger(20,2) + 9EMA per timeframe, independent of the

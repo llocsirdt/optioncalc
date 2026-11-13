@@ -16,14 +16,19 @@
  * fetch and ONE allocation that all ten share. That is pure win with no staleness at all: every caller gets the
  * same live result they would have got anyway.
  *
- * THE TTL IS SIZED AT OR BELOW THE CLIENT'S OWN POLL INTERVAL (~4s, measured in the access log as requests
- * every 1-4s). That is the property worth stating: a single client polling every 4s with a 3s TTL will miss the
- * cache almost every time and sees NO added staleness. The cache only ever collapses *concurrent* polls — extra
- * tabs, extra devices, CloudFront fanning one page across edges. It trades nothing a lone user can observe for
- * the thing that took the box down.
+ * WHAT THE TTL DOES, PER ENDPOINT (corrected 2026-11-12 against the client's real poll intervals). A cache
+ * entry only answers a LONE tab if its next poll lands inside the TTL:
+ *   /candleanalysis — 4 s TTL vs a 10 s poll: a lone tab never hits; only concurrent tabs/devices share an entry.
+ *   /chains         — 3 s TTL vs a >= 2 s poll: a lone tab is served from cache about every other poll, so it can
+ *                     be up to ~3 s staler than an uncached read.
+ * So the protection against the 2026-10-01 failure is the coalescing above plus collapsing concurrent tabs,
+ * extra devices and CloudFront edges. It does not reduce a single tab's own load. Raising a TTL above the poll
+ * interval would, at the cost of that much staleness; that trade is a backlog item, not a default.
  *
  * ERRORS ARE NEVER CACHED. A rejection resolves the inflight entry and leaves the cache untouched, so a
- * transient upstream failure is retried rather than pinned for the TTL.
+ * transient upstream failure is retried rather than pinned for the TTL. This only covers a REJECTION. A fetcher
+ * that resolves with an error object has to throw it itself (proxy-server-sdk's /candleanalysis does, since
+ * 2026-11-12).
  *
  * PER-DAY COUNTS (2026-11-04). The totals above run from boot, so a burst of 29k /chains errors could not be
  * placed on a day. `byDay` keeps the last DAYS_KEPT ET trade dates: upstream fetches, errors, the last error
