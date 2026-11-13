@@ -360,25 +360,21 @@ class PersistenceManager {
   /**
    * Cache option chain data to separate file
    */
+  // IN MEMORY ONLY (2026-11-12). This wrote every fetched chain to disk as pretty-printed JSON and then rewrote
+  // server-state.json: every /chains miss (a UI page polls every ~2-4 s) and every engine chain read (each 5m tick
+  // and 30 s sub-bar pass). Nothing used the files. The engine's getOrFetchChainData looked for a `timestamp` field
+  // the file never had, so it never got a hit and always refetched. The UI (raw Schwab shape) and the engine
+  // (call/put shape) also overwrote each other's file under the same key. Kept in memory so getChainCache /
+  // getCachedChainData answer exactly as they did; no disk write, no saveState per fetch.
   async cacheChainData(symbol, expiration, chainData) {
     const key = `${symbol}_${expiration}`;
     const timestamp = new Date().toISOString();
-    const filename = `${key}.json`;
-    const filepath = path.join(CHAIN_CACHE_DIR, filename);
-    
+
     try {
-      // Ensure cache directory exists
-      await this.initializeChainCache();
-      
-      // Save chain data to separate file
-      const chainFileData = {
-        symbol,
-        expiration,
-        data: chainData,
-        cachedAt: timestamp
-      };
-      
-      await fs.writeFile(filepath, JSON.stringify(chainFileData, null, 2), 'utf8');
+      if (!this._chainMem) this._chainMem = new Map();
+      this._chainMem.delete(key);   // re-insert so the newest key is last
+      this._chainMem.set(key, { symbol, expiration, data: chainData, cachedAt: timestamp });
+      while (this._chainMem.size > 12) this._chainMem.delete(this._chainMem.keys().next().value);   // bounded: old expirations drop out
       
       // Update metadata in main state
       if (!this.state.chains.cachedKeys.includes(key)) {
@@ -387,12 +383,6 @@ class PersistenceManager {
       this.state.chains.lastUpdated[key] = timestamp;
       this.state.chains.cacheCount = this.state.chains.cachedKeys.length;
       
-      console.log(`💾 Cached option chain for ${symbol} ${expiration} (${Object.keys(chainData.call || {}).length + Object.keys(chainData.put || {}).length} contracts)`);
-      
-      // Auto-save metadata after caching
-      this.saveState().catch(error => {
-        console.error('Failed to save state after caching chain:', error.message);
-      });
       
     } catch (error) {
       console.error(`❌ Failed to cache chain data for ${key}:`, error.message);
@@ -433,6 +423,8 @@ class PersistenceManager {
    */
   async getCachedChainData(symbol, expiration) {
     const key = `${symbol}_${expiration}`;
+    const mem = this._chainMem && this._chainMem.get(key);
+    if (mem) return mem.data;
     const filename = `${key}.json`;
     const filepath = path.join(CHAIN_CACHE_DIR, filename);
     
@@ -484,6 +476,9 @@ class PersistenceManager {
    * Get cached chain data for a specific key
    */
   getChainCache(cacheKey) {
+    // In memory since 2026-11-12 (see cacheChainData). Same object shape as the old file, so callers behave as before.
+    const mem = this._chainMem && this._chainMem.get(cacheKey);
+    if (mem) return mem;
     const cacheFile = path.join(CHAIN_CACHE_DIR, `${cacheKey}.json`);
     try {
       const data = require('fs').readFileSync(cacheFile, 'utf8');
