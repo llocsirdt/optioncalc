@@ -94,7 +94,35 @@ function stampIssuedAt(issuedAt) {
   fs.writeFileSync(envPath, contents, 'utf8');
   const expires = new Date(Date.parse(issuedAt) + 7 * 86400000).toISOString();
   console.log(`Token issued ${issuedAt} — expires ~${expires}`);
-  console.log('NOTE: set the SAME two vars on Elastic Beanstalk (its SCHWAB_REFRESH_TOKEN is separate from local .env).');
+  console.log('Prod gets the same token through the control API (pushToServer) when CANDLE_SPREAD_CONTROL_TOKEN is in .env.');
+}
+
+// PUSH TO THE SERVER (2026-11-12). The same renewal also updates prod, through the control API
+// (schwab-token-store.js), instead of editing the EB environment by hand. Needs CANDLE_SPREAD_CONTROL_TOKEN in the
+// local .env (the same value the control page uses). --no-push skips it. Never fails the local renewal: .env is
+// already updated by the time this runs.
+async function pushToServer() {
+  if (process.argv.includes('--no-push')) { console.log('Skipping the server push (--no-push).'); return; }
+  const freshEnv = require('dotenv').parse(fs.readFileSync(path.resolve(repoRoot, '.env')));
+  const ctl = freshEnv.CANDLE_SPREAD_CONTROL_TOKEN || process.env.CANDLE_SPREAD_CONTROL_TOKEN;
+  const token = freshEnv.SCHWAB_REFRESH_TOKEN;
+  if (!ctl) {
+    console.log('Server NOT updated: add CANDLE_SPREAD_CONTROL_TOKEN to .env to push renewals to prod (or use the control page).');
+    return;
+  }
+  const base = process.env.SCHWAB_PROXY_URL || 'https://d1kbxyxn33vpw2.cloudfront.net';
+  try {
+    const r = await fetch(`${base}/api/v1/candle-spread/control/schwab-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-control-token': ctl },
+      body: JSON.stringify({ token: ctl, refreshToken: token }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) console.log(`Server updated: token ${j.fingerprint}, S3 ${j.s3}; it restarts to load it (check /health in ~20 s).`);
+    else console.error(`Server NOT updated: HTTP ${r.status} ${j.error || ''}`);
+  } catch (e) {
+    console.error(`Server NOT updated: ${e.message}`);
+  }
 }
 
 function updateEnvToken(newToken) {
@@ -153,6 +181,7 @@ if (redirectedUrl) {
     updateEnvToken(data.refresh_token);
     console.log('SCHWAB_REFRESH_TOKEN updated in .env file.');
     if (newTokenLooksValid()) {
+      await pushToServer();
       restartServer();
     } else {
       console.error('New token failed validation — server not restarted.');
@@ -161,11 +190,12 @@ if (redirectedUrl) {
   })();
 } else {
   const child = spawn(process.execPath, [cliPath], { cwd: repoRoot, env, stdio: 'inherit' });
-  child.on('exit', (code) => {
+  child.on('exit', async (code) => {
     if (code === 0 && newTokenLooksValid()) {
       // The CLI already wrote the token; stamp the time it did so. Without this the interactive path —
       // the one actually used in practice — leaves the age unknowable.
       stampIssuedAt(new Date().toISOString());
+      await pushToServer();
       restartServer();
     } else {
       console.error('\nToken renewal did not produce a valid SCHWAB_REFRESH_TOKEN — server not restarted.');

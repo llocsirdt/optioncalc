@@ -79,6 +79,21 @@
   <div class="msg" id="armmsg"></div>
 </div>
 
+<!-- SCHWAB REFRESH TOKEN (2026-11-12). "Sign in" opens Schwab's authorize page. Schwab redirects to the GitHub Pages
+     UI with ?code=…, the UI offers "Update server token" and sends the code here in the URL HASH (#schwab-code=…; a
+     hash is never sent to a server or logged), and this page POSTs it to the server, which exchanges it, stores the
+     token and restarts. The code is single-use and lives about 30 s, so this is automatic once a control token is
+     saved on this device. -->
+<div class="card">
+  <div class="lbl">Schwab token</div>
+  <div class="state" id="stok" style="font-size:18px">…</div>
+  <div class="sub" id="stokdetail"></div>
+  <div class="row">
+    <button class="b-dim" id="schwabsignin">SIGN IN TO SCHWAB</button>
+  </div>
+  <div class="msg" id="stokmsg"></div>
+</div>
+
 <div class="card">
   <div class="lbl">Token</div>
   <input id="tok" type="password" inputmode="text" autocomplete="off"
@@ -233,8 +248,52 @@
     tokenState();
   });
 
+  // ── SCHWAB TOKEN ───────────────────────────────────────────────────────────────────────────────────────────
+  var SCHWAB_AUTHORIZE = 'https://api.schwabapi.com/v1/oauth/authorize?client_id=oTpuJT5dMsRPI4hV4U19LYrRXSa19LiBiir9F7tMpElQs1zB'
+    + '&redirect_uri=' + encodeURIComponent('https://llocsirdt.github.io/optioncalc/');
+  function schwabStatus(){
+    fetch('/health?t=' + Date.now(), { cache:'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(h){
+        var t = h && h.schwabToken;
+        if (!t) { $('stok').textContent = '?'; return; }
+        $('stok').textContent = (t.state || '?').toUpperCase() + (t.daysLeft != null ? ' · ' + t.daysLeft + ' days left' : '');
+        $('stokdetail').textContent = (t.fingerprint ? 'token ' + t.fingerprint + ' · ' : '') + (t.issuedAt ? 'issued ' + t.issuedAt : '')
+          + (t.expiresAt ? ' · expires ' + t.expiresAt : '');
+      })
+      .catch(function(e){ $('stok').textContent = 'UNREACHABLE'; $('stokdetail').textContent = String(e); });
+  }
+  function sendSchwabCode(code){
+    var tok = localStorage.getItem(KEY) || '';
+    if (!tok) { show('Schwab code received, but no control token is saved on this device. Save it below, then sign in again (codes expire in ~30 s).', true, 'stokmsg'); return; }
+    show('Sending the Schwab code to the server…', false, 'stokmsg');
+    fetch(API + '/schwab-token', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'content-type':'application/json', 'x-control-token': tok },
+      body: JSON.stringify({ token: tok, code: code })
+    })
+    .then(function(r){ return r.json().then(function(j){ return { s:r.status, j:j }; }); })
+    .then(function(o){
+      if (o.s === 200) {
+        show('Token renewed (' + o.j.fingerprint + ', S3 ' + o.j.s3 + '). The server is restarting; status refreshes in ~20 s.', false, 'stokmsg');
+        setTimeout(schwabStatus, 20000);
+      } else show('HTTP ' + o.s + ' — ' + (o.j && o.j.error ? o.j.error : 'failed'), true, 'stokmsg');
+    })
+    .catch(function(e){ show('Request failed: ' + e, true, 'stokmsg'); });
+  }
+  $('schwabsignin').addEventListener('click', function(){ window.location.href = SCHWAB_AUTHORIZE; });
+  // A code handed over by the UI arrives in the hash. Take it out of the URL straight away (it is single-use, and a
+  // reload must not resend it), then send it.
+  (function(){
+    var m = /(?:^|[#&])schwab-code=([^&]+)/.exec(window.location.hash || '');
+    if (!m) return;
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    sendSchwabCode(decodeURIComponent(m[1]));
+  })();
+
   tokenState();
   refresh();
+  schwabStatus();
   setInterval(refresh, 20000);   // matches the engine's own control poll
 })();
 </script>

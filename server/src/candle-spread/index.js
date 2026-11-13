@@ -4228,6 +4228,7 @@ module.exports = {
   handleControlWrite,
   handleControlPreset,
   handleControlArm,
+  controlAuthOk,   // the control token check, shared with the Schwab token renewal route (schwab-token-store.js)
   CONTROL_PRESETS,
   controlState,
   VARIANTS,

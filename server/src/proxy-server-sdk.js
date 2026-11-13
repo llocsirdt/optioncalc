@@ -6,6 +6,10 @@ const os = require('os');
 const path = require('path');
 const { MarketApiClient, TradingApiClient } = require('schwab-client-js');
 require('dotenv').config({ path: '../.env' });
+// A REMOTELY RENEWED SCHWAB TOKEN (schwab-token-store.js) goes into process.env HERE: after dotenv, before ANY module
+// below constructs a Schwab client (candle-analyzer -> market-client builds its singletons at require time).
+const schwabTokenStore = require('./schwab-token-store');
+try { schwabTokenStore.applyStoredTokenSync(); } catch (e) { console.error('[schwab-token] stored token not applied:', e && e.message); }
 
 // Import persistence manager
 const PersistenceManager = require('./persistence/persistence');
@@ -1165,6 +1169,24 @@ app.get('/api/v1/candle-spread/control', (req, res) => {
   catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
 });
 
+// RENEW THE SCHWAB REFRESH TOKEN (schwab-token-store.js). Body { code } from the Schwab OAuth redirect (the server
+// exchanges it) or { refreshToken } from scripts/renew-schwab-token.js. Same auth as every control write. Stores the
+// token, then restarts the process so the Schwab clients are rebuilt with it. Registered BEFORE the :preset route.
+app.post('/api/v1/candle-spread/control/schwab-token', async (req, res) => {
+  try {
+    const out = await schwabTokenStore.handleUpdate(req, {
+      authOk: candleSpread.controlAuthOk,
+      archive: require('./candle-spread/run-archive'),
+      restart: (ms) => setTimeout(() => { console.log('[schwab-token] restarting to load the renewed token'); process.exit(1); }, ms),
+    });
+    res.set('cache-control', 'no-store');
+    res.status(out.status).json(out.body);
+  } catch (e) {
+    console.error('[schwab-token] update error:', e && e.message);
+    res.status(500).json({ ok: false, error: 'token update failed' });
+  }
+});
+
 // MOVE THE ARMED SLOT to another strategy ({ variant, when: 'now' | 'next-session' }). Registered BEFORE the
 // :preset route, which would otherwise capture 'arm' as a preset name.
 app.post('/api/v1/candle-spread/control/arm', async (req, res) => {
@@ -1591,6 +1613,11 @@ async function startServer() {
 
     app.listen(PORT, () => {
       console.log(`🚀 Schwab SDK Proxy Server running on http://localhost:${PORT}`);
+      // A replaced instance has an empty state dir: take a newer renewed token from S3 (restarts once if so).
+      schwabTokenStore.reconcileFromS3(require('./candle-spread/run-archive'),
+        (ms) => setTimeout(() => process.exit(1), ms))
+        .then((r) => { if (r && r.error) console.error('[schwab-token] S3 check failed:', r.error); })
+        .catch((e) => console.error('[schwab-token] S3 check failed:', e && e.message));
       console.log(`📊 Health check: http://localhost:${PORT}/health`);
       console.log(`🗄️ State Management: http://localhost:${PORT}/api/v1/admin/state`);
       console.log(` Chains Cache: http://localhost:${PORT}/api/v1/admin/chains`);
