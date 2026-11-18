@@ -23,6 +23,15 @@
  * A code is single-use: whichever of the two paths uses it first consumes it.
  *
  * The token itself is never logged and never returned; responses carry only its fingerprint.
+ *
+ * ENCRYPTED AT REST, EVERYWHERE THIS STORE WRITES IT (2026-11-18, user: "is it safe to have the refresh token in plain
+ * text in S3?"). Both the disk file and the S3 copy are AES-256-GCM envelopes. The key is derived (HKDF-SHA256) from
+ * SCHWAB_CLIENT_SECRET, which lives only in the environment and is required anyway to use a refresh token. So a
+ * stored copy is useless to anyone who does not already hold the secret, and this store adds no exposure beyond the
+ * env var itself. Readable: only issuedAt, source and the fingerprint (bound to the ciphertext as AAD, so they
+ * cannot be edited). A copy that will not decrypt (wrong or rotated secret, tampering) is ignored, and the env token
+ * stands. Rotating the client secret makes old copies unreadable: the server falls back to the env token and you
+ * renew once.
  */
 const fs = require('fs');
 const path = require('path');
@@ -42,19 +51,47 @@ function stateDir() {
 function filePath() { const d = stateDir(); return d ? path.join(d, FILE_NAME) : null; }
 function fingerprint(token) { return token ? crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 12) : null; }
 
+function keyFor(secret) {
+  if (!secret) return null;
+  return Buffer.from(crypto.hkdfSync('sha256', Buffer.from(String(secret)), Buffer.from('optioncalc'),
+    Buffer.from('schwab-refresh-token v1'), 32));
+}
+function aadOf(env) { return Buffer.from(`v1|${env.issuedAt}|${env.fingerprint}|${env.source || ''}`); }
+/** { refreshToken, issuedAt, source } -> the sealed envelope written to disk / S3. Throws without a client secret. */
+function seal(rec, secret = process.env.SCHWAB_CLIENT_SECRET) {
+  const key = keyFor(secret);
+  if (!key) throw new Error('SCHWAB_CLIENT_SECRET is not set: cannot encrypt the stored token');
+  const env = { v: 1, alg: 'aes-256-gcm', issuedAt: rec.issuedAt, source: rec.source || null, fingerprint: fingerprint(rec.refreshToken) };
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  c.setAAD(aadOf(env));
+  const ct = Buffer.concat([c.update(JSON.stringify({ refreshToken: rec.refreshToken }), 'utf8'), c.final()]);
+  return { ...env, iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), ct: ct.toString('base64') };
+}
+/** The sealed envelope -> { refreshToken, issuedAt, source }, or null when it will not open (wrong secret, tampered, not sealed). */
+function open(env, secret = process.env.SCHWAB_CLIENT_SECRET) {
+  try {
+    const key = keyFor(secret);
+    if (!key || !env || env.v !== 1 || !env.ct || !Number.isFinite(Date.parse(env.issuedAt))) return null;
+    const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(env.iv, 'base64'));
+    d.setAAD(aadOf(env));
+    d.setAuthTag(Buffer.from(env.tag, 'base64'));
+    const j = JSON.parse(Buffer.concat([d.update(Buffer.from(env.ct, 'base64')), d.final()]).toString('utf8'));
+    if (!j.refreshToken || fingerprint(j.refreshToken) !== env.fingerprint) return null;
+    return { refreshToken: j.refreshToken, issuedAt: env.issuedAt, source: env.source };
+  } catch (e) { return null; }
+}
+
 function readFileSafe() {
   const f = filePath();
   if (!f) return null;
-  try {
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return j && j.refreshToken && Number.isFinite(Date.parse(j.issuedAt)) ? j : null;
-  } catch (e) { return null; }
+  try { return open(JSON.parse(fs.readFileSync(f, 'utf8'))); } catch (e) { return null; }
 }
 function writeFileSafe(rec) {
   const f = filePath();
   if (!f) throw new Error('no writable state dir for the Schwab token (set SCHWAB_TOKEN_STATE_DIR)');
   const tmp = `${f}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(rec), { encoding: 'utf8', mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify(seal(rec)), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, f);
 }
 
@@ -124,7 +161,7 @@ async function persist(refreshToken, source, archive) {
   let s3 = 'not configured';
   if (archive && archive.enabled && archive.enabled()) {
     // The file is the primary; the S3 copy is the backup. putObjectRaw reports failure in its result, not by throwing.
-    try { const r = await archive.putObjectRaw(S3_KEY, JSON.stringify(rec), 'application/json'); s3 = r && r.ok ? 'copied' : `copy failed: ${(r && (r.error || r.reason)) || 'unknown'}`; }
+    try { const r = await archive.putObjectRaw(S3_KEY, JSON.stringify(seal(rec)), 'application/json'); s3 = r && r.ok ? 'copied' : `copy failed: ${(r && (r.error || r.reason)) || 'unknown'}`; }
     catch (e) { s3 = `copy failed: ${e && e.message}`; }
   }
   return { rec, s3 };
@@ -161,7 +198,8 @@ async function reconcileFromS3(archive, restart) {
   try {
     const r = await archive.getObjectRaw(S3_KEY, { quietMissing: true });   // { ok, body } | { ok:false, missing }
     if (!r || !r.ok) return { checked: true, newer: false, missing: !!(r && r.missing) };
-    rec = JSON.parse(r.body);
+    rec = open(JSON.parse(r.body));
+    if (!rec) return { checked: true, newer: false, unreadable: true };   // will not decrypt: ignore it, keep the env token
   } catch (e) { return { checked: true, error: e && e.message }; }
   if (!rec || !rec.refreshToken || rec.refreshToken === process.env.SCHWAB_REFRESH_TOKEN) return { checked: true, newer: false };
   const inUse = envIssuedMs();
@@ -172,4 +210,4 @@ async function reconcileFromS3(archive, restart) {
   return { checked: true, newer: true };
 }
 
-module.exports = { applyStoredTokenSync, handleUpdate, reconcileFromS3, fingerprint, S3_KEY, _filePath: filePath };
+module.exports = { applyStoredTokenSync, handleUpdate, reconcileFromS3, fingerprint, S3_KEY, _filePath: filePath, _seal: seal, _open: open };
