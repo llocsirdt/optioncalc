@@ -57,22 +57,22 @@ v9ob blocks nothing.
 
 ## Baselines
 
-From `server/src/candle-spread/backtest-baselines.csv` (rebuilt 2026-11-06, committed in `a635d39`, 821 trading
+From `server/src/candle-spread/backtest-baselines.csv` (rebuilt 2026-11-13, committed in `a16aa4f`, never-lower covers, live parity, 821 trading
 days; reopen after cover modelled for v9 and v9ob). Parent rows for reference.
 
 | variant | total $ | avg/day $ | worst day $ | win % | maxDD30 $ | ret/maxDD30 | avg end floor $ | locked-floor days % | opens/day |
 |---|---|---|---|---|---|---|---|---|---|
-| v9ob-10 | 441019 | 537 | -2000 | 57% | -10278 | 42.9 | -533 | 24.6 | 16.5 |
-| v9ob-20 | 1150225 | 1401 | -4460 | 70% | -13650 | 84.3 | -455 | 44.6 | 18.49 |
-| v9ob-40 | 1721681 | 2097 | -7187 | 63% | -20983 | 82.1 | -1137 | 34.1 | 26.28 |
-| v9ob-10-unc | 520262 | 634 | -7510 | 57% | -23884 | 21.8 | -908 | 23.2 | 20.74 |
-| v9ob-20-unc | 1237685 | 1508 | -14095 | 73% | -25184 | 49.1 | -725 | 46 | 20.68 |
-| v9ob-40-unc | 2096072 | 2553 | -18240 | 65% | -42442 | 49.4 | -2064 | 33.9 | 28.67 |
-| v9ob-20-cATM | 818735 | 997 | -6270 | 63% | -30920 | 26.5 | -867 | 39.1 | 19.25 |
-| v9ob-40-cATM | 946348 | 1153 | -8965 | 54% | -24435 | 38.7 | -1921 | 22.4 | 24.02 |
-| *v9-10* | 660067 | 804 | -2275 | 60% | -9506 | 69.4 | -587 | 24.7 | 25.4 |
-| *v9-20* | 1608574 | 1959 | -4650 | 71% | -15445 | 104.1 | -453 | 42 | 27.3 |
-| *v9-40* | 2513142 | 3061 | -7179 | 65% | -20705 | 121.4 | -1638 | 26.6 | 39.96 |
+| v9ob-10 | 430289 | 524 | -2070 | 56% | -11079 | 38.8 | -541 | 24.1 | 16.51 |
+| v9ob-20 | 1008259 | 1228 | -4495 | 67% | -12885 | 78.3 | -598 | 40.2 | 18.54 |
+| v9ob-40 | 1552599 | 1891 | -6605 | 61% | -24683 | 62.9 | -1251 | 34.1 | 25.95 |
+| v9ob-10-unc | 504374 | 614 | -7645 | 56% | -24545 | 20.5 | -914 | 22.3 | 20.48 |
+| v9ob-20-unc | 1068964 | 1302 | -12900 | 67% | -23250 | 46.0 | -875 | 40.4 | 20.64 |
+| v9ob-40-unc | 1966883 | 2396 | -17380 | 63% | -45964 | 42.8 | -2181 | 31.8 | 28.52 |
+| v9ob-20-cATM | 669941 | 816 | -6275 | 61% | -26919 | 24.9 | -1053 | 35 | 19.2 |
+| v9ob-40-cATM | 924597 | 1126 | -8965 | 55% | -28127 | 32.9 | -1970 | 21.6 | 24 |
+| *v9-10* | 638804 | 778 | -2335 | 58% | -8603 | 74.3 | -655 | 22.5 | 25.4 |
+| *v9-20* | 1497136 | 1824 | -4735 | 69% | -20443 | 73.2 | -649 | 38.7 | 27.4 |
+| *v9-40* | 2170115 | 2643 | -7460 | 63% | -23511 | 92.3 | -1939 | 25 | 39.59 |
 
 ## Open questions / suspected drift
 
@@ -80,7 +80,7 @@ days; reopen after cover modelled for v9 and v9ob). Parent rows for reference.
    counter-trend overextension fades and be-wrong opens *profitable on average* and concluded "do NOT block
    opens; leash them" — the open block was kept as a control arm only. v9ob is that control, now live-simulated.
 2. **The `FEATURE_FAMILIES` v9ob rationale (`index.js`) does not match current baselines.** It says "20/40W maxDD
-   much better, 10W total -27%"; on the 2026-11-06 CSV v9ob-20's maxDD30 is better than v9-20's (-13650 vs -15445),
-   v9ob-40's is slightly worse (-20983 vs -20705), and the 10W total is 33% below v9's (441019 vs 660067).
+   much better, 10W total -27%"; on the 2026-11-13 CSV v9ob-20's maxDD30 is better than v9-20's (-12885 vs -20443),
+   v9ob-40's is slightly worse (-24683 vs -23511), and the 10W total is well below v9's (430289 vs 638804).
 3. **Resolved 2026-11-06: "never armed" was a convention, not a guard** — same as v9sg. `buildFeatureFamilies`
    now sets `simulateOnly: true`, so `armableReason` refuses it.

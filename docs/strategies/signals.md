@@ -270,7 +270,7 @@ shape), then never again: the closest later miss was 10:25, 55 pts inside the hi
 8. **Reopen after cover (E2) is in the backtest since 2026-11-06** (`backtest-v6-5m.js` ports
    `trader.reopenAfterCover`; `opts-for.js` forwards `reopenOnCover` / `reopenPer5m`). Limits: it runs at the close
    of the bar the cover filled in and the order works from the next bar, so at most one bar later than live; an
-   unfilled reopen expires at the next 15m close (as live). The baselines quoted in these docs (rebuilt 2026-11-06)
+   unfilled reopen expires at the next 15m close (as live). The baselines quoted in these docs (rebuilt 2026-11-13)
    include it.
 9. **v9sg / v9ob are simulate-only since 2026-11-06** (`buildFeatureFamilies` sets `simulateOnly`). Before that,
    "never armed" was only a convention and `armableReason` would have accepted their capped shapes.

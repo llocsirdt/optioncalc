@@ -59,32 +59,34 @@ small 20W P&L difference on 11/03. Since 2026-11-06 the cover range is not appli
 ### Baselines
 
 `AVG terminal/day $` and `WORST single day $` per governed variant, copied from `backtest-baselines.csv`. That file
-was rebuilt on 2026-11-06 (committed in `a635d39`) over 821 trading days (12/27/2022–10/07/2026), with reopen after
-cover modelled and v0–v2 using their own cover geometry at 20W/40W; the 2026 era (56 days) is priced on real NDX,
+was rebuilt on 2026-11-13 (committed in `a16aa4f`; never-lower covers, live parity) over 821 trading days
+(12/27/2022–10/07/2026), with reopen after cover modelled, v0–v2 using their own cover geometry at 20W/40W, and a
+working cover never lowered (as live); the 2026 era (56 days) is priced on real NDX,
 earlier days on NQ. Each family file carries its fuller block.
 
 | | 10W avg/day | 20W avg/day | 40W avg/day | 10W worst day | 20W worst day | 40W worst day |
 |---|---|---|---|---|---|---|
-| v0 | 524 | 818 | 581 | -1940 | -4605 | -7840 |
-| v1 | 547 | 854 | 651 | -1975 | -4710 | -7770 |
-| v2 | 534 | 854 | 663 | -2300 | -4710 | -7630 |
-| v3 | 502 | 935 | 1555 | -1940 | -3595 | -6543 |
-| v4 | 582 | 1138 | 1973 | -2000 | -4500 | -6943 |
-| v5 | 631 | 1543 | 2451 | -2315 | -4715 | -7435 |
-| v6 | 559 | 881 | 2056 | -1555 | -3440 | -7457 |
-| v7 | 723 | 1144 | 2053 | -1995 | -3920 | -8379 |
-| v8 | 549 | 848 | 1977 | -1555 | -3440 | -7457 |
-| v9 | 804 | 1959 | 3061 | -2275 | -4650 | -7179 |
-| v9sg | 823 | 1904 | 2641 | -2460 | -4500 | -7495 |
-| v9ob | 537 | 1401 | 2097 | -2000 | -4460 | -7187 |
+| v0 | 547 | 655 | 202 | -1990 | -4780 | -7612 |
+| v1 | 548 | 713 | 235 | -1980 | -4780 | -7758 |
+| v2 | 541 | 598 | 120 | -2150 | -5075 | -6990 |
+| v3 | 510 | 901 | 1444 | -1990 | -3575 | -7295 |
+| v4 | 537 | 1061 | 1864 | -2000 | -4500 | -6943 |
+| v5 | 636 | 1367 | 2276 | -2155 | -4330 | -7397 |
+| v6 | 563 | 877 | 1976 | -1555 | -2800 | -7317 |
+| v7 | 700 | 1139 | 2029 | -1945 | -3920 | -6970 |
+| v8 | 553 | 842 | 1923 | -1555 | -2800 | -7317 |
+| v9 | 778 | 1824 | 2643 | -2335 | -4735 | -7460 |
+| v9sg | 839 | 1728 | 2408 | -2070 | -4715 | -8302 |
+| v9ob | 524 | 1228 | 1891 | -2070 | -4495 | -6605 |
 | v12 | 148 | 179 | 11 | -1930 | -4330 | -6790 |
-| v13 | 179 | 453 | 413 | -1985 | -5385 | -7480 |
+| v13 | 181 | 448 | 373 | -1895 | -5385 | -7480 |
 | v20 | -57 | -202 | -374 | -2000 | -4500 | -7470 |
 | v21 (f55) | -84 | -206 | -369 | -2000 | -4500 | -7485 |
 
 **Read with care:** prices are Black-Scholes with bucketed skew, not real quotes, and fills are judged on 5-minute
 bars (1m sub-bars on the 56 NDX days). These baselines include the two 2026-11-06 changes (reopen after cover
-modelled in the backtest; v0–v2 keeping their own cover geometry at 20W/40W). Backtests are directional: live v7-10 has missed these tables badly. v20/v21
+modelled in the backtest; v0–v2 keeping their own cover geometry at 20W/40W) and the 2026-11-13 one (a working cover
+is never lowered, as live; `coverNeverLower` with `coverFillAtResting`). Backtests are directional: live v7-10 has missed these tables badly. v20/v21
 are opens-only and simulate-only; they are on the roster to be *watched* on real sessions, not traded.
 
 ---
@@ -267,6 +269,8 @@ cells. The control-cell set is now empty, so all three run the ladder like every
 - **2026-11-04** — simulated-fill quoted-width gate removed (`a6bfb3d`).
 - **2026-11-06** — cover range no longer applied to v0–v2, so their geometry acts at 20W/40W again; reopen after
   cover on every v0–v9 variant (so v9sg/v9ob too) and modelled in the backtest; v9sg/v9ob made simulate-only.
+- **2026-11-13** — backtest never lowers a working cover (live parity), baselines rebuilt (`a16aa4f`); trailing
+  give-up experiment (`opts.giveUpTrail`) swept and not adopted (roughly neutral; `data/sweeps/giveup-trail-2026-11-13`).
 
 ---
 

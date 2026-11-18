@@ -63,23 +63,23 @@ nothing there either (journal 2026-11-06).
 
 ## Baselines
 
-From `server/src/candle-spread/backtest-baselines.csv` (rebuilt 2026-11-06, committed in `a635d39`, 821 trading
+From `server/src/candle-spread/backtest-baselines.csv` (rebuilt 2026-11-13, committed in `a16aa4f`, never-lower covers, live parity, 821 trading
 days; reopen after cover modelled for v9 and v9sg).
 Parent rows for reference.
 
 | variant | total $ | avg/day $ | worst day $ | win % | maxDD30 $ | ret/maxDD30 | avg end floor $ | locked-floor days % | opens/day |
 |---|---|---|---|---|---|---|---|---|---|
-| v9sg-10 | 675910 | 823 | -2460 | 61% | -6883 | 98.2 | -605 | 24.2 | 23.67 |
-| v9sg-20 | 1563510 | 1904 | -4500 | 69% | -18679 | 83.7 | -344 | 43 | 25.13 |
-| v9sg-40 | 2168332 | 2641 | -7495 | 64% | -24979 | 86.8 | -1706 | 25.7 | 37.92 |
-| v9sg-10-unc | 840958 | 1024 | -6198 | 60% | -12831 | 65.5 | -1161 | 23.6 | 29.4 |
-| v9sg-20-unc | 1784726 | 2174 | -11155 | 71% | -23962 | 74.5 | -741 | 41.7 | 27.84 |
-| v9sg-40-unc | 2913821 | 3549 | -22154 | 65% | -32072 | 90.9 | -3232 | 24.2 | 42.26 |
-| v9sg-20-cATM | 1027334 | 1251 | -6490 | 60% | -21083 | 48.7 | -1197 | 33.3 | 28.35 |
-| v9sg-40-cATM | 932263 | 1136 | -9107 | 50% | -46239 | 20.2 | -3163 | 11.8 | 37.39 |
-| *v9-10* | 660067 | 804 | -2275 | 60% | -9506 | 69.4 | -587 | 24.7 | 25.4 |
-| *v9-20* | 1608574 | 1959 | -4650 | 71% | -15445 | 104.1 | -453 | 42 | 27.3 |
-| *v9-40* | 2513142 | 3061 | -7179 | 65% | -20705 | 121.4 | -1638 | 26.6 | 39.96 |
+| v9sg-10 | 688543 | 839 | -2070 | 61% | -8546 | 80.6 | -651 | 22.8 | 23.84 |
+| v9sg-20 | 1418807 | 1728 | -4715 | 68% | -15379 | 92.3 | -535 | 38.6 | 25.38 |
+| v9sg-40 | 1976946 | 2408 | -8302 | 62% | -28318 | 69.8 | -1924 | 24.1 | 37.73 |
+| v9sg-10-unc | 855714 | 1042 | -6198 | 59% | -14176 | 60.4 | -1157 | 22.4 | 29.4 |
+| v9sg-20-unc | 1606450 | 1957 | -11155 | 68% | -25467 | 63.1 | -957 | 36.8 | 28.08 |
+| v9sg-40-unc | 2790132 | 3398 | -21140 | 65% | -33757 | 82.7 | -3415 | 23 | 42.22 |
+| v9sg-20-cATM | 945130 | 1151 | -6865 | 57% | -22985 | 41.1 | -1356 | 28.1 | 28.61 |
+| v9sg-40-cATM | 794326 | 968 | -9531 | 49% | -37086 | 21.4 | -3260 | 11.1 | 37.22 |
+| *v9-10* | 638804 | 778 | -2335 | 58% | -8603 | 74.3 | -655 | 22.5 | 25.4 |
+| *v9-20* | 1497136 | 1824 | -4735 | 69% | -20443 | 73.2 | -649 | 38.7 | 27.4 |
+| *v9-40* | 2170115 | 2643 | -7460 | 63% | -23511 | 92.3 | -1939 | 25 | 39.59 |
 
 The experiments log records that the 2026-10-23 baselines reproduced the stack-gate sweep exactly (669,900 /
 1,507,682 / 1,939,505). The current rows include reopen after cover and no longer match it.
@@ -90,9 +90,10 @@ The experiments log records that the 2026-10-23 baselines reproduced the stack-g
    `simulateOnly` and `armableReason` would have accepted the capped shapes. `buildFeatureFamilies` now sets
    `simulateOnly: true` on every copy, so `armableReason` refuses it as simulate-only.
 2. **The `FEATURE_FAMILIES` v9sg rationale (`index.js`) is from the 10/17 sweep** ("better maxDD30 at 10/40W and end
-   floor at all three widths, total -1..+9%"). On the current baselines (2026-11-06) only 10W has a better maxDD30
-   than v9 (-6883 vs -9506; 20W -18679 vs -15445, 40W -24979 vs -20705), only 20W has a better avg end floor (-344
-   vs -453), and the 40W total is 13.7% below v9's (2168332 vs 2513142). The comment predates the rebuilt baselines.
+   floor at all three widths, total -1..+9%"). On the current baselines (2026-11-13) 10W and 20W have a better maxDD30
+   than v9 (-8546 vs -8603; 20W -15379 vs -20443) and 40W a worse one (-28318 vs -23511), the avg end floor is better
+   at all three widths (-651 vs -655, -535 vs -649, -1924 vs -1939), and the 40W total is below v9's (1976946 vs
+   2170115). The comment predates the rebuilt baselines.
 3. The STACK GATE NQ READ comment in `trend-state.js` (above `emaRead`) describes the NQ read as "+1 above **and
    rising**"; the code has no slope term. The slope is only in the backtest-only NDX-RTH reads (`backtest-v6-5m.js`
    `runDay5m`, `sgRt15` / `sgRt60`).
