@@ -104,7 +104,22 @@ function makeRequestCache(name, opts = {}) {
       byDay: Object.fromEntries(byDay) };
   }
 
-  return { run, health, _cache: cache, _inflight: inflight };
+  // runUncachingErrorResults: like run(), for a fetcher that RESOLVES with an error object instead of throwing
+  // (analyzeCandles does: { status: 'error' }). isError(result) marks it; it is then not cached and counted as an
+  // error, and the caller still receives that same result object. Added 2026-11-12 for /candleanalysis.
+  async function runUncachingErrorResults(key, ttlMs, fn, isError) {
+    try {
+      return await run(key, ttlMs, () => Promise.resolve(fn()).then((r) => {
+        if (isError(r)) { const e = new Error((r && (r.message || r.error)) || 'error result'); e.errorResult = r; throw e; }
+        return r;
+      }));
+    } catch (e) {
+      if (e && e.errorResult !== undefined) return e.errorResult;
+      throw e;
+    }
+  }
+
+  return { run, runUncachingErrorResults, health, _cache: cache, _inflight: inflight };
 }
 
 /**

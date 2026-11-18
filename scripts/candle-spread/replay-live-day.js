@@ -37,6 +37,9 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(DATE || '')) { console.error('--date YYYY-MM-DD 
 const TENS = arg('--tens') ? arg('--tens').split('-').map(Number) : null;
 const WANT = arg('--variants') ? arg('--variants').split(',') : null;
 const JSON_OUT = arg('--json');
+// --freeze-after HH:MM (ET): from that minute on, NDX repeats its last close (the 2026-09-07 Labor Day failure: a
+// frozen pricing feed). The modelled chain still quotes, so only the price-freshness check can see it.
+const FREEZE_AFTER = arg('--freeze-after') ? (([h, m]) => (+h) * 60 + (+m))(arg('--freeze-after').split(':')) : null;
 const GRID_REACH = 2500, TENS_REACH = 1000;
 const RAW = path.join(ROOT, 'signal-lab-data', 'raw-1m');
 
@@ -76,6 +79,14 @@ function loadSeries(prefix) {
 const NQ = loadSeries('NQ');
 const NDX = loadSeries('NDX').filter((c) => { const m = etMin(c.datetime); return m >= 570 && m < 960; });
 const ndxToday = NDX.filter((c) => etIso(c.datetime) === DATE);
+if (FREEZE_AFTER != null) {
+  let frozen = null;
+  for (const c of NDX) {
+    if (etIso(c.datetime) !== DATE) continue;
+    if (etMin(c.datetime) < FREEZE_AFTER) { frozen = c.close; continue; }
+    if (frozen != null) { c.open = c.high = c.low = c.close = frozen; }
+  }
+}
 if (!ndxToday.length) { console.error(`no NDX 1m bars for ${DATE} in ${RAW}`); process.exit(1); }
 if (!NQ.some((c) => etIso(c.datetime) === DATE)) { console.error(`no NQ 1m bars for ${DATE} in ${RAW}`); process.exit(1); }
 
@@ -194,7 +205,7 @@ idx._replay.markStarted();
 
 (async () => {
   const T0 = Date.now ? RealDate.now() : 0;
-  const ticks = { acted: 0, pending: {} };
+  const ticks = { acted: 0, pending: {}, freshnessWouldBlock: 0, freshnessMode: null, notTradable: 0 };
   for (let mark = OPEN_MS; mark <= OPEN_MS + (6 * 60 + 25) * 60000; mark += 300000) {
     // THE CANDLE TICK at boundary + 5 s, retried every 5 s while pending (attemptTick).
     let r = null;
@@ -204,6 +215,11 @@ idx._replay.markStarted();
       if (!(r && r.pending)) break;
     }
     if (r && r.pending) ticks.pending[r.pending] = (ticks.pending[r.pending] || 0) + 1; else ticks.acted++;
+    try {
+      const t = idx.status().tradability || {};
+      if (t.priceFreshness) { ticks.freshnessMode = t.priceFreshness.mode; if (t.priceFreshness.wouldBlock) ticks.freshnessWouldBlock++; }
+      if (t.ok === false) ticks.notTradable++;
+    } catch (e) { /* status is a report; never break the replay */ }
     // THE SUB-BAR WORKER every 30 s until the next boundary.
     for (let s = 30000; s < 300000; s += 30000) { NOW = mark + s; await idx._replay.runRestingWork(); }
   }
