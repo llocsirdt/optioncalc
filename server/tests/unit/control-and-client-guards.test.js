@@ -40,5 +40,11 @@ for (const f of fs.readdirSync(libDir).filter((x) => x.endsWith('.js'))) {
 ok(/if \(document\.hidden\) \{\s*liveDataLoopActive = false;/.test(read('client/lib/oc.js')), 'oc.js live loop parks while hidden');
 ok(/visibilitychange[\s\S]{0,200}startLiveDataUpdates\(\)/.test(read('client/lib/oc.js')), 'oc.js restarts the live loop when the tab is shown');
 
+// 4) the broker CSV picker accepts the MIME types phones record for a CSV download (a .csv-only filter greyed out a
+//    Fidelity export on a phone, 2026-11-18)
+const acc = (/id="broker-csv-file" accept="([^"]+)"/.exec(read('index.html')) || [])[1] || '';
+for (const t of ['.csv', 'text/csv', 'text/comma-separated-values', 'application/vnd.ms-excel', 'text/plain', 'application/octet-stream'])
+  ok(acc.split(',').includes(t), `broker CSV input accepts ${t}`);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

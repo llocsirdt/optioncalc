@@ -47,7 +47,7 @@
 </style>
 <div id="header">
   <div style="display:flex; align-items:baseline; gap:2px; flex-wrap:wrap; max-width: 90%;">
-    <h1 style="margin:0">Option Calc v3.16.0 <span id="csEngineStatus" title="candle-spread engine status"></span></h1>
+    <h1 style="margin:0">Option Calc v3.16.1 <span id="csEngineStatus" title="candle-spread engine status"></span></h1>
     
     <!-- The activity rollup and the compare link are grouped so they WRAP AS A UNIT. On desktop the whole
          header sits on one line; when the row runs out of room this pair drops to the next line together
@@ -94,7 +94,11 @@
       </span>
       <span id="ps-affordance-manual" class="ps-affordance ps-muted">hand-enter positions below</span>
       <span id="ps-affordance-fidelity" class="ps-affordance" style="display:none">
-        <input type="file" id="broker-csv-file" accept=".csv">
+        <!-- ACCEPT EVERY TYPE A CSV ARRIVES AS (2026-11-18). A phone's file picker turns accept=".csv" into a MIME
+             filter (text/csv) and greys out a download the browser recorded under another type, e.g. a Fidelity
+             export saved as application/octet-stream or application/vnd.ms-excel, even with a .csv name and
+             identical bytes. The importer parses the contents, so a broad filter cannot load a wrong file. -->
+        <input type="file" id="broker-csv-file" accept=".csv,text/csv,text/comma-separated-values,application/csv,application/x-csv,application/vnd.ms-excel,text/plain,application/octet-stream">
         <button type="button" onclick="importBrokerCsv()">Import CSV</button>
         <button type="button" class="ps-more" onclick="toggleBrokerImportPanel()" title="paste CSV / format options">⋯</button>
       </span>
